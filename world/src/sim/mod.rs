@@ -3316,6 +3316,25 @@ impl WorldSim {
         self.authored_procedural_layers
     }
 
+    /// Replace this world's procedural-layer policy, for a test that generates
+    /// the same chunks under two policies and diffs them.
+    ///
+    /// The alternative — replicating in the test whatever the layer under
+    /// examination would have done — tests the replica. This runs the real
+    /// `World::generate_chunk` both times, so the diff is between two things
+    /// the engine actually produces.
+    ///
+    /// Reached through
+    /// [`crate::World::set_authored_procedural_layers_for_test`],
+    /// which is where the reasoning for the shape of this lives.
+    #[cfg(test)]
+    pub(crate) fn set_authored_procedural_layers_for_test(
+        &mut self,
+        layers: AuthoredProceduralLayers,
+    ) {
+        self.authored_procedural_layers = Some(layers);
+    }
+
     /// Whether this world's *region* allows the purely-procedural
     /// cave/tunnel layer. Only half the answer — the global
     /// `Features::caves` toggle is the other half, and callers must `&&`

@@ -78,10 +78,21 @@ fn node_at(cell: Vec2<i32>, level: u32, land: &Land) -> Option<Node> {
     }
 }
 
-pub fn surface_entrances<'a>(
+/// Every surface cave mouth in the world, paired with **the descent behind
+/// it** -- the `level 0 -> level 1` tunnel a player who walks into that mouth
+/// actually follows.
+///
+/// [`surface_entrances`] (and therefore every `MarkerKind::Cave` on the map) is
+/// *derived* from this rather than being a second copy of the predicate, so
+/// "the mouths that are marked" and "the descents that must stay open" can
+/// never be two different sets. That equality is what makes
+/// `no_marked_surface_mouth_is_plugged_by_a_seal` (in
+/// [`crate::layer::cromatolis_cave_features`]) a statement about the markers
+/// and not merely about some descents.
+pub(crate) fn surface_descents<'a>(
     land: &'a Land,
     index: IndexRef<'a>,
-) -> impl Iterator<Item = Vec2<i32>> + 'a {
+) -> impl Iterator<Item = (Vec2<i32>, Tunnel)> + 'a {
     let sz_cells = to_cell(land.size().as_::<i32>().cpos_to_wpos(), 0);
     (0..sz_cells.x + 1)
         .flat_map(move |x| (0..sz_cells.y + 1).map(move |y| Vec2::new(x, y)))
@@ -92,11 +103,18 @@ pub fn surface_entrances<'a>(
                 .column_sample(tunnel.a.wpos, index)
                 .is_some_and(|c| c.water_dist.is_none_or(|d| d > 5.0))
             {
-                Some(tunnel.a.wpos)
+                Some((tunnel.a.wpos, tunnel))
             } else {
                 None
             }
         })
+}
+
+pub fn surface_entrances<'a>(
+    land: &'a Land,
+    index: IndexRef<'a>,
+) -> impl Iterator<Item = Vec2<i32>> + 'a {
+    surface_descents(land, index).map(|(mouth, _)| mouth)
 }
 
 #[derive(Copy, Clone)]
@@ -363,6 +381,18 @@ pub(crate) fn tunnels_at<'a>(
         })
 }
 
+/// The descent from a node at `level` to one at `level + 1`.
+///
+/// At `level == 0` this is the **surface descent** behind a map-marked cave
+/// mouth: its upper node sits at `depth = -6`, i.e. above the terrain, which
+/// is what makes it a mouth rather than a junction. It is not a shaft --- its
+/// lower node is in a *different* cell, up to ~1 536 blocks away at
+/// `depth = 114` --- so it is a long, shallow **ramp** across the whole
+/// 0-114 m band rather than a shaft, and anything authored inside that band is
+/// something it can run into. [`surface_descents`] enumerates the marked ones;
+/// an authored region that wants to know whether the guard plugs any of them
+/// walks them (Cromatolis does, in
+/// [`crate::layer::cromatolis_cave_features`]).
 fn tunnel_below_from_cell(cell: Vec2<i32>, level: u32, land: &Land) -> Option<Tunnel> {
     let wpos = to_wpos(cell, level);
     Some(Tunnel {
@@ -513,6 +543,40 @@ pub(crate) fn tunnel_bounds_at_unguarded<'a>(
     land: &'a Land,
 ) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
     tunnel_bounds_at_from_guarded_by(wpos2d, info, land, all_tunnels_at(wpos2d, info, land), None)
+}
+
+/// [`tunnel_bounds_at`] and [`tunnel_bounds_at_unguarded`] for one column, from
+/// a sample the caller already holds --- both sides of a before/after
+/// measurement without paying for the column twice.
+///
+/// Generating a `ColumnSample` is the most expensive thing done per column in
+/// world-gen and `CanvasInfo::col_or_gen` does not cache, so calling both
+/// public entry points on the same column costs two of them.
+/// [`tunnel_bounds_at_col_guarded_by`] already documents that rule for
+/// production callers; this is how a measurement obeys it.
+#[cfg(test)]
+pub(crate) fn tunnel_bounds_at_col_both<'a>(
+    wpos2d: Vec2<i32>,
+    info: &'a CanvasInfo,
+    land: &'a Land,
+    col: &ColumnSample,
+) -> (
+    impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a,
+    impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a,
+) {
+    let (alt, water_dist) = (col.alt, col.water_dist);
+    let make = move |voids| {
+        tunnel_bounds_at_col_guarded_by(
+            wpos2d,
+            info,
+            land,
+            alt,
+            water_dist,
+            all_tunnels_at(wpos2d, info, land),
+            voids,
+        )
+    };
+    (make(None), make(authored_voids(info)))
 }
 
 pub fn tunnel_bounds_at<'a>(
@@ -2205,4 +2269,406 @@ fn apply_entity_spawns<R: Rng>(canvas: &mut Canvas, wpos: Vec3<i32>, biome: &Bio
     if RandomField::new(canvas.info().index().seed).chance(wpos, 0.000005) {
         canvas.spawn(EntityInfo::at(wpos.map(|e| e as f32)).into_waypoint());
     } */
+}
+
+/// Measurement harnesses for the authored-void guard: they walk the lattice
+/// the way a player would and report what the guard did to it.
+///
+/// Kept in one block at the end of the file, rather than beside the functions
+/// they exercise, because this module is inherited from upstream Veloren and
+/// is edited there: a few hundred lines wedged into the middle of it turns
+/// every future upstream merge into a conflict, where a tail append does not.
+#[cfg(test)]
+pub(crate) mod measure {
+    use super::*;
+
+    /// What the authored-void guard does to **one** tunnel, walked end to end.
+    ///
+    /// Reported per tunnel rather than aggregated because the failures this
+    /// exists to find are per tunnel: a map marker whose corridor stops at
+    /// a wall (V13), and a lattice edge that cannot be used to get anywhere
+    /// (V17).
+    #[derive(Debug)]
+    pub(crate) struct TunnelWalk {
+        /// Columns along the tunnel's own centreline that carry a tunnel at all
+        /// with the guard off. Not simply the axis length: the centreline runs
+        /// past the ends of the carved volume, and the water lerp can empty the
+        /// range near the surface.
+        pub(crate) open_columns: u32,
+        /// ...of those, how many the guard drops entirely. Each one is a solid
+        /// plug straight across the corridor, because the clip's unit is a
+        /// whole `(column, tunnel)` entry. **This is the number V13 is
+        /// about, and its target is zero.**
+        pub(crate) sealed_columns: u32,
+        /// ...and how many an authored void claims with
+        /// [`ProceduralContact::Connect`]: the tunnel runs into an authored cave
+        /// and is deliberately left to open into it.
+        pub(crate) connect_columns: u32,
+        /// Columns lying in a chunk that holds *any* authored shape at all,
+        /// whatever its policy and whatever z-band it claims.
+        ///
+        /// This is V13's **positive control** and it is the reason that
+        /// measurement's zero is worth anything. `sealed_columns == 0` is only
+        /// evidence that the guard spares the descents if the descents were
+        /// somewhere the guard could have fired; a run where every descent
+        /// sailed past the authored region entirely would report
+        /// exactly the same zero and mean nothing.
+        pub(crate) near_authored_columns: u32,
+        /// How far along the tunnel, in blocks from its upper node, the first
+        /// plug sits: for a descent, how far a player gets before the
+        /// wall.
+        pub(crate) first_seal_at: Option<i32>,
+    }
+
+    impl TunnelWalk {
+        /// Whether this tunnel survives the guard along its whole length ---
+        /// i.e. whether it can still be used to get from one of its
+        /// nodes to the other.
+        pub(crate) fn is_open(&self) -> bool { self.sealed_columns == 0 }
+    }
+
+    /// Walk one tunnel's centreline column by column and report what the guard
+    /// does to it. Test-only; this is the harness behind V13 and V17.
+    ///
+    /// The walk follows the **spline**, not the chord. A descent's `curve` is
+    /// exactly `0.0` (see [`tunnel_below_from_cell`]) so for those the two
+    /// coincide, but a lateral edge bows well off its chord, and hard-coding
+    /// the chord would make the measurement quietly wrong --- the same trap
+    /// [`crate::layer::authored_voids`] calls out for capsules.
+    pub(crate) fn walk_tunnel(
+        tunnel: &Tunnel,
+        level: u32,
+        info: &CanvasInfo,
+        land: &Land,
+        voids: Option<&AuthoredVoids>,
+    ) -> TunnelWalk {
+        let start = tunnel.a.wpos.map(|e| e as f64 + 0.5);
+        let end = tunnel.b.wpos.map(|e| e as f64 + 0.5);
+        let spline = river_spline_coeffs(start, tunnel.ctrl_offset(), end);
+        // 1.5 samples per block of chord: enough that consecutive samples are
+        // never more than a block apart even where the spline bows, so a plug
+        // cannot hide between two of them.
+        let steps = (start.distance(end) * 1.5).ceil().max(1.0) as i32;
+
+        let mut verdict = TunnelWalk {
+            open_columns: 0,
+            sealed_columns: 0,
+            connect_columns: 0,
+            near_authored_columns: 0,
+            first_seal_at: None,
+        };
+        let mut travelled = 0.0_f64;
+        let mut previous = start;
+        let mut last_sampled = None;
+
+        for step in 0..=steps {
+            let t = f64::from(step) / f64::from(steps);
+            let point = spline.x * t * t + spline.y * t + spline.z;
+            travelled += point.distance(previous);
+            previous = point;
+            let wpos2d = point.map(|e| e.round() as i32);
+            // Consecutive samples land in the same column more often than not at
+            // this density; sampling a column twice would double-count it.
+            if last_sampled == Some(wpos2d) {
+                continue;
+            }
+            last_sampled = Some(wpos2d);
+
+            let Some(col) = info.col_or_gen(wpos2d) else {
+                continue;
+            };
+            let bounds = |voids| {
+                tunnel_bounds_at_col_guarded_by(
+                    wpos2d,
+                    info,
+                    land,
+                    col.alt,
+                    col.water_dist,
+                    std::iter::once((level, *tunnel)),
+                    voids,
+                )
+                .next()
+            };
+            let Some((_, z_range, ..)) = bounds(None) else {
+                continue;
+            };
+            verdict.open_columns += 1;
+            if voids.is_some_and(|voids| !voids.in_chunk(wpos2d).is_empty()) {
+                verdict.near_authored_columns += 1;
+            }
+            let contact =
+                voids.and_then(|voids| voids.contact_at_column(wpos2d, col.alt, &z_range));
+            // The plug count is read off the production guard, not re-derived from
+            // the contact: a column the guard drops is a column the corridor loses,
+            // whatever the reason. The two can only differ if the guard grows a
+            // second reason to drop an entry, and then this is the assertion that
+            // says so rather than the count quietly drifting.
+            let plugged = bounds(voids).is_none();
+            // A plain `assert_eq!`, not `debug_assert_eq!`: every caller documents
+            // itself as `cargo test --release`, and the workspace release profile
+            // sets `debug-assertions = false` -- so a debug assertion here would be
+            // compiled out of precisely the run it is meant to guard, and the
+            // counts really would drift quietly. One comparison per column is
+            // nothing next to the `col_or_gen` above it.
+            assert_eq!(
+                plugged,
+                contact == Some(ProceduralContact::Seal),
+                "the tunnel walk and the production guard disagree at {wpos2d:?}"
+            );
+            if plugged {
+                verdict.sealed_columns += 1;
+                verdict
+                    .first_seal_at
+                    .get_or_insert_with(|| travelled.round() as i32);
+            } else if contact == Some(ProceduralContact::Connect) {
+                verdict.connect_columns += 1;
+            }
+        }
+        verdict
+    }
+
+    /// A node of the cave lattice, as a key: the level it sits on and the cell
+    /// it was drawn in. Test-only, for V17's reachability walk.
+    type LatticeNode = (u32, Vec2<i32>);
+
+    /// Which level a node was drawn on, recovered from its depth.
+    ///
+    /// `node_at` sets `depth = AVG_LEVEL_DEPTH * level - 6` and nothing else in
+    /// the lattice writes a depth, so this inverts exactly. Recovered rather
+    /// than passed around because a [`Tunnel`]'s two nodes are not always
+    /// on the same level --- a descent joins one level to the next --- so a
+    /// single `level` argument cannot describe both ends.
+    fn node_level(node: &Node) -> u32 { ((node.depth + 6) / AVG_LEVEL_DEPTH).max(0) as u32 }
+
+    /// The lattice key of one end of a tunnel.
+    fn lattice_node(node: &Node) -> LatticeNode {
+        let level = node_level(node);
+        (level, to_cell(node.wpos, level))
+    }
+
+    /// Whether a procedural tunnel's own network still reaches a marked surface
+    /// mouth once the authored-void guard has plugged what it plugs ---
+    /// **V17**.
+    ///
+    /// # What this is and is not
+    ///
+    /// It is a *characterisation*. Spec §5.2.3 derives from the lattice's own
+    /// parameters that the mean degree is ≈ 1.35, below percolation, so the
+    /// procedural cave network would be small clusters rather than one
+    /// connected system, and roughly one breach in four would land on a
+    /// cluster with no way out. That estimate counts only the **lateral**
+    /// edges [`tunnels_at`] produces. It is not the whole lattice:
+    /// [`tunnels_down_from`] also joins every level to the next *at the
+    /// same cell index* (the arithmetic in [`tunnel_below_from_cell`] lands
+    /// a descent back on the cell it left), so each node also has an
+    /// up-edge and a down-edge whenever the nodes at those levels exist ---
+    /// roughly `2 x 0.75` more degree, which takes the real lattice over
+    /// the percolation threshold rather than under it. This measures
+    /// what that works out to.
+    ///
+    /// **A dead end is not a bug.** An authored cave reached by a tunnel that
+    /// goes nowhere else is still carved, still has its own authored
+    /// entrance, and is still minable --- exactly what it was before this
+    /// row existed. Nothing in the engine reads this; it exists so the
+    /// number in the PR body is measured rather than assumed, and so nobody
+    /// builds avoidance logic for a non-problem.
+    ///
+    /// # The walk
+    ///
+    /// Breadth-first over the lattice from the breached tunnel's two nodes,
+    /// crossing an edge only if [`walk_tunnel`] says the guard leaves it open
+    /// along its whole length --- so a cluster whose only way out is plugged
+    /// correctly reports unreachable. A level-1 node reaches daylight when its
+    /// own cell has a surface descent that is both *marked* (the water test
+    /// [`surface_descents`] applies) and unplugged.
+    ///
+    /// Returns the verdict and **how many lattice nodes the walk had to visit**
+    /// to reach it. That second number is the measurement's evidence: a
+    /// verdict of "reachable" is only worth something if the walk was doing
+    /// real work, and a walk that answered from the starting node every
+    /// time would be reporting the starting node's cell rather than the
+    /// network.
+    pub(crate) fn breach_reaches_surface(
+        from: &Tunnel,
+        level: u32,
+        info: &CanvasInfo,
+        land: &Land,
+        voids: Option<&AuthoredVoids>,
+        open_edges: &mut OpenEdgeCache,
+    ) -> (bool, usize) {
+        let index = info.index();
+        // A guarded edge the walk cannot cross is not a way out of anywhere.
+        if !edge_is_open(from, level, info, land, voids, open_edges) {
+            return (false, 0);
+        }
+
+        let mut seen: hashbrown::HashSet<LatticeNode> = hashbrown::HashSet::new();
+        let mut queue: std::collections::VecDeque<LatticeNode> =
+            [lattice_node(&from.a), lattice_node(&from.b)].into();
+        // A cap, so a characterisation over a lattice that turns out to percolate
+        // cannot become a hang. Reaching it reports `false`, which understates
+        // reachability rather than overstating it -- the safe direction for a
+        // number whose only use is deciding there is nothing to fix.
+        //
+        // It binds: the lattice is ~21x21 cells over 5 levels. That is exactly why
+        // the traversal below must be breadth-first -- a depth-first walk spends
+        // the budget wandering to the far side of the map before it tries the
+        // level-1 node two hops away, so the cap would start deciding the answer.
+        const MAX_NODES: usize = 512;
+
+        while let Some(node) = queue.pop_front() {
+            if !seen.insert(node) {
+                continue;
+            }
+            if seen.len() > MAX_NODES {
+                break;
+            }
+            let (level_here, cell) = node;
+            let Some(here) = node_at(cell, level_here, land) else {
+                continue;
+            };
+            // `lattice_node` recovers a node's level by inverting `node_at`'s
+            // `depth = AVG_LEVEL_DEPTH * level - 6`. Checked here, against a real
+            // node, rather than asserted in a doc comment: if that formula ever
+            // changes, the whole walk would otherwise keep running and silently
+            // classify every node onto the wrong level.
+            assert_eq!(
+                node_level(&here),
+                level_here,
+                "a node's depth no longer encodes the level it was drawn on"
+            );
+
+            // Daylight: this node's own cell has a marked, unplugged descent from
+            // the surface. Only cells one level below the surface have one.
+            if level_here == 1
+                && let Some(descent) = tunnel_below_from_cell(cell, 0, land)
+                && land
+                    .column_sample(descent.a.wpos, index)
+                    .is_some_and(|c| c.water_dist.is_none_or(|d| d > 5.0))
+                && edge_is_open(&descent, 1, info, land, voids, open_edges)
+            {
+                return (true, seen.len());
+            }
+
+            // Every edge below is one `all_tunnels_at` actually carves, and only
+            // those. An edge this walk can cross that the world never digs would
+            // let a breach "reach" daylight by a route no player can take, and
+            // would bias the reported fraction *upwards* -- the opposite direction
+            // from `MAX_NODES`, so the two would not even cancel into a known sign.
+            //
+            // Lateral edges. `all_tunnels_at` asks `tunnels_at` for levels
+            // `1..=LAYERS` only, so **level 0 has no laterals**: the surface nodes
+            // are joined to the world by their descents alone. `tunnels_at(_, 0, _)`
+            // would happily invent some, and level-0 nodes are dense (`node_at`
+            // skips the chance roll at level 0), so this gate is load-bearing
+            // rather than tidy.
+            //
+            // For the levels that do have them, `tunnels_at` enumerates every edge
+            // whose upper node lies in the 3x3 cell neighbourhood -- a superset of
+            // this node's own incident edges in both directions; filtering on the
+            // node position is what narrows it back down.
+            let lateral = (level_here >= 1)
+                .then(|| {
+                    tunnels_at(here.wpos, level_here, land)
+                        .filter(move |edge| edge.a.wpos == here.wpos || edge.b.wpos == here.wpos)
+                        .map(move |edge| {
+                            let other = if edge.a.wpos == here.wpos {
+                                edge.b.wpos
+                            } else {
+                                edge.a.wpos
+                            };
+                            (edge, level_here, (level_here, to_cell(other, level_here)))
+                        })
+                })
+                .into_iter()
+                .flatten();
+            // Descents: the one leaving this node downwards, and the one arriving
+            // from the level above.
+            //
+            // Both are single edges, because a descent always lands back on the
+            // cell index it left: `tunnel_below_from_cell` offsets by half a cell
+            // and `to_cell` shifts by a quarter on odd levels, which together stay
+            // inside the same cell whichever parity the level has. So the node
+            // above `(L, cell)` is exactly `(L - 1, cell)` -- no neighbourhood
+            // search, and the same arithmetic this function's own doc describes.
+            //
+            // `all_tunnels_at` carves descents for source levels `0..LAYERS` only,
+            // so the bottom level has no down-edge.
+            let down = (level_here < LAYERS)
+                .then(|| tunnel_below_from_cell(cell, level_here, land))
+                .flatten()
+                .map(|edge| {
+                    (
+                        edge,
+                        level_here + 1,
+                        (level_here + 1, to_cell(edge.b.wpos, level_here + 1)),
+                    )
+                });
+            let up = (level_here > 0)
+                .then(|| tunnel_below_from_cell(cell, level_here - 1, land))
+                .flatten()
+                .map(|edge| {
+                    assert_eq!(
+                        to_cell(edge.b.wpos, level_here),
+                        cell,
+                        "a descent no longer lands on the cell index it left"
+                    );
+                    (edge, level_here, (level_here - 1, cell))
+                });
+
+            for (edge, edge_level, other) in lateral.chain(down).chain(up) {
+                if !seen.contains(&other)
+                    && edge_is_open(&edge, edge_level, info, land, voids, open_edges)
+                {
+                    queue.push_back(other);
+                }
+            }
+        }
+        (false, seen.len())
+    }
+
+    /// Memo of which lattice edges the guard leaves open, shared across every
+    /// [`breach_reaches_surface`] call of one measurement.
+    ///
+    /// Keyed on the edge's two node positions in sorted order, so the same edge
+    /// reached from either end is one entry.
+    ///
+    /// The key deliberately drops the level. It can, because `level` is inert
+    /// in [`walk_tunnel`]: it is carried through as the tuple tag and nothing
+    /// else, and the z-range comes from [`Tunnel::z_range_at`], which never
+    /// sees it. If [`tunnel_bounds_at_col_guarded_by`] ever starts reading
+    /// `level`, this key has to grow one.
+    pub(crate) type OpenEdgeCache = hashbrown::HashMap<(Vec2<i32>, Vec2<i32>), bool>;
+
+    /// [`walk_tunnel`]`(..).is_open()`, memoised.
+    ///
+    /// Not an optimisation so much as what makes the measurement affordable at
+    /// all. Walking one edge costs a `ColumnSample` per column over its whole
+    /// ~1 500-block length, and `CanvasInfo::col_or_gen` does not cache, so an
+    /// edge walk is on the order of a thousand full column generations. Without
+    /// this, every breach in a cluster re-walks that cluster's entire edge set
+    /// from scratch: the cost is `O(breaches x cluster size)` over a lattice
+    /// that only holds a few thousand distinct edges, and it grows with the
+    /// breach count rather than with the map.
+    fn edge_is_open(
+        edge: &Tunnel,
+        level: u32,
+        info: &CanvasInfo,
+        land: &Land,
+        voids: Option<&AuthoredVoids>,
+        cache: &mut OpenEdgeCache,
+    ) -> bool {
+        let (a, b) = (edge.a.wpos, edge.b.wpos);
+        let key = if (a.x, a.y) <= (b.x, b.y) {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        if let Some(&open) = cache.get(&key) {
+            return open;
+        }
+        let open = walk_tunnel(edge, level, info, land, voids).is_open();
+        cache.insert(key, open);
+        open
+    }
 }

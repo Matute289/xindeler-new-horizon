@@ -723,6 +723,24 @@ impl AuthoredVoids {
         )
     }
 
+    /// Every chunk the grid holds a bucket for.
+    ///
+    /// This is exactly the set of chunks in which the guard can fire at all:
+    /// outside them [`Self::in_chunk`] returns an empty slice and
+    /// `contact_at_column` is `None` by construction. A measurement of what
+    /// the guard *costs* therefore only has to sweep these, which turns "what
+    /// fraction of the world do we have to regenerate to be sure" into a few
+    /// thousand chunks. Tests only.
+    #[cfg(test)]
+    pub(crate) fn occupied_chunks(&self) -> Vec<Vec2<i32>> {
+        let mut chunks: Vec<Vec2<i32>> = self.grid.keys().copied().collect();
+        // The grid is a hash map, so its iteration order is not stable across
+        // runs; a measurement that reports "the first N chunks" of an unstable
+        // order is not reproducible.
+        chunks.sort_unstable_by_key(|cpos| (cpos.y, cpos.x));
+        chunks
+    }
+
     /// How many indexed shapes carry each policy, as `(seal, connect)`. Tests
     /// only.
     #[cfg(test)]

@@ -15,22 +15,38 @@
     // gameplay-visible rather than cosmetic, and are tracked as an open
     // decision in COW-15:
     //   - `caves: false` removes the region's entire *procedural*
-    //     underground -- cave biomes, cave fauna, cave loot, and nearly
-    //     all mineral wealth. `world/src/layer/cave.rs` is the only place
-    //     in world-gen that puts Iron, Coal, Cobalt and Silver anywhere,
-    //     and likewise every gem (Gold, Ruby, Emerald, Diamond, Sapphire,
-    //     Topaz, Amethyst, Bloodstone). What survives: surface scatter
-    //     still yields Copper and Tin (`layer/scatter.rs`), and Gnarling
-    //     huts and town plazas still place Velorite/VeloriteFrag
-    //     (`site/plot/gnarling.rs`, `site/plot/plaza.rs`) -- Cromatolis
-    //     has ~50 suitable Gnarling locations. So the smithing ladder
-    //     stops after Copper/Tin, and `ChunkResource::Ore` -- which feeds
-    //     the sim2 economy's blacksmith inputs -- goes to zero. The
-    //     authored cave replacement carves geometry only and backfills
-    //     none of it.
+    //     underground: cave biomes (most of the underground's visual
+    //     identity), cave fauna (`apply_entity_spawns` in
+    //     `world/src/layer/cave.rs`, which is biome-driven and entirely
+    //     separate from `layer/wildlife.rs`), and cave loot (the
+    //     structure-tied tables inside `write_column`).
+    //   - It does NOT cost the region its mineral wealth, and this comment
+    //     used to claim it did ("`ChunkResource::Ore` goes to zero", "the
+    //     authored replacement backfills none of it"). That has been false
+    //     since COW-15/COW-20 (2026-09-13): the authored catalogue declares
+    //     minerals for the large majority of its caves -- Iron, Coal,
+    //     Cobalt, Silver, Gold and every gem included -- and they are placed
+    //     as real sprites, nearly all of which map to
+    //     `TerrainResource::Ore`/`::Gem`. The smithing ladder does not stop
+    //     at Copper/Tin and the sim2 blacksmith inputs are not zero.
+    //     (One exception worth knowing: `Velorite`/`VeloriteFrag` account to
+    //     rtsim's `Loot` bucket rather than `Ore`/`Gem` -- still minable,
+    //     still authored deliberately, just not part of the ore pools. See
+    //     `world/src/layer/cromatolis_cave_features.rs`'s module doc.) The retraction is kept rather than
+    //     just deleted because the old claim was load-bearing in COW-15's
+    //     decision and people have read it.
+    //     The live counts are whatever `cromatolis_v0_cave_features.ron`
+    //     currently says -- deliberately NOT copied here, since that file is
+    //     regenerated from the sibling repo's catalogue and a hand-copied
+    //     tally would go stale silently. COW-23's spec section 8 has the
+    //     2026-09-19 breakdown (657 declarations across 250 of 281 caves).
     //   - `caves: false` also means the world map shows no cave markers at
     //     all here: the authored cave catalogue has no marker emitter yet,
     //     so the map's "show caves" filter is inert on this region.
+    //     **150** markers would appear with `caves: true` -- the count
+    //     pinned by `the_real_region_still_derives_its_surface_cave_markers`
+    //     in `world/src/layer/cromatolis_cave_features.rs`, which is the
+    //     figure to trust if a doc anywhere still says 149.
     // `spots: true` (flipped 2026-09-17, COW-16 -- see
     // `world/src/layer/spot.rs`'s `cromatolis_real_world` tests for the
     // measured before/after): `Spot::generate`'s early return on
@@ -52,10 +68,32 @@
     // enabling this does not require its own exclusion guard. Measured on
     // the real map: 7630 spot markers across 681560 land chunks (~1.1%),
     // 7075 of them (~93%) carrying a non-empty entity list.
+    // `caverns` is off for two INDEPENDENT reasons, so nobody has to
+    // re-investigate this one (COW-23 spec section 3, whose >= 300-block
+    // figure is wrong -- see below):
+    //   1. features.ron has `caverns: false` globally, so this composes to
+    //      off whatever it says here.
+    //   2. Even if that global switch were flipped, caverns could not reach
+    //      the authored volumes. In `apply_caverns_to`
+    //      (`world/src/layer/mod.rs`) a cavern's *reference* altitude is
+    //      `min(sea_level, alt/4) - height_range.end - surface_clearance`,
+    //      but its CEILING is that plus `cavern_height`, which is bounded by
+    //      `height_range.end` -- so the highest a cavern can reach is
+    //      `min(sea_level, alt/4) - surface_clearance`. Against a deepest
+    //      authored floor of `alt - SURFACE_MARGIN - GIANT_DEPTH`, the
+    //      clearance works out to at least `0.75 * alt + 5` blocks: ~110 at
+    //      sea level, more above it, and never zero for alt >= 0.
+    //      NOTE: that is ~110, NOT the ">= 300" this comment and the spec
+    //      both used to claim -- 300 is the separation to the reference
+    //      altitude, which is not where the cavern's ceiling is. The
+    //      conclusion (no collision, ever) survives; the margin is a third of
+    //      what was advertised, so do not spend it.
+    // In other words this line is not the thing keeping caverns out of the
+    // authored volumes, and flipping it is not the risk it looks like.
+    caverns: false,
     // Flipping any of these is a one-line change with no recompile; the
     // engine keeps the world-map cave markers and the tree/shrub
     // tunnel-avoidance consistent with whichever way these point.
-    caverns: false,  // no-op today: features.ron has caverns off globally
     caves: false,
     rocks: false,
     spots: true,
