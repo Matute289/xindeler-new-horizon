@@ -59,4 +59,11 @@
     caves: false,
     rocks: false,
     spots: true,
+    // On, so Cromatolis is already covered the moment `rocks` flips: a rock
+    // wedged in a cave ceiling or wall is wanted here, a rock that seals the
+    // way through is not, and this is what tells them apart. Inert while
+    // `rocks: false`. Why boulders reach carved voids at all, and why this
+    // one is opt-in where the four above are opt-out, are both on the field
+    // in world/src/sim/mod.rs.
+    rock_traversal_repair: true,
 )

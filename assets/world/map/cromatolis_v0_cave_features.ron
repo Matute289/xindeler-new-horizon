@@ -399,7 +399,7 @@
             source_marker: "cave_mark.035",
             position: (x: 0.431335, y: 0.127360),
             size_class: Medium,
-            procedural_contact: Connect,
+            procedural_contact: Seal,
             minerals: [
                 (kind: Amethyst, abundance: Sparse),
             ],

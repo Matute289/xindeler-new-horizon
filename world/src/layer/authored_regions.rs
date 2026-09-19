@@ -34,6 +34,7 @@ use crate::{
     layer::{
         authored_voids::{AuthoredVoids, AuthoredVoidsBuilder},
         cromatolis_cave_features, cromatolis_interior,
+        traversal::AccommodationTier,
     },
     sim::WorldSim,
 };
@@ -117,10 +118,15 @@ fn build(index: &Index, sim: &WorldSim) -> Option<AuthoredVoids> {
         // policy. The index supports splitting it per shape; no authored map
         // needs that yet.
         let contact = cave.procedural_contact();
+        // Catalog-parameterised: a human chose the anchor, the size class and
+        // the contents, and the shape was derived from those. Air may be
+        // opened inside one, but its floor may never be dug -- content is
+        // placed on that floor at carve time.
+        let tier = AccommodationTier::Catalog;
         let id = cave.id();
-        builder.push_disc(cave.hub_void_disc(), contact, id);
+        builder.push_disc(cave.hub_void_disc(), contact, tier, id);
         for capsule in cave.branch_void_capsules() {
-            builder.push_capsule(capsule, contact, id);
+            builder.push_capsule(capsule, contact, tier, id);
         }
     }
 
@@ -132,15 +138,20 @@ fn build(index: &Index, sim: &WorldSim) -> Option<AuthoredVoids> {
         // stamped on here, because their shape accessors deliberately
         // *over*-approximate the carved volume -- which is only sound for a
         // dilated (`Seal`) shape. See the accessors' own docs.
+        // Hand-authored architecture: named rooms, gates, authored surface
+        // accesses, and a navigation graph derived from the authored splines.
+        // Never edited by anything hash-placed; the intruder is kept out
+        // instead.
+        let tier = AccommodationTier::HandAuthored;
         let id = interior.id();
         for (disc, contact) in interior.void_discs() {
-            builder.push_disc(disc, contact, id);
+            builder.push_disc(disc, contact, tier, id);
         }
         for (capsule, contact) in interior.void_capsules() {
-            builder.push_capsule(capsule, contact, id);
+            builder.push_capsule(capsule, contact, tier, id);
         }
         for (disc, contact) in interior.void_waterfall_discs() {
-            builder.push_disc(disc, contact, id);
+            builder.push_disc(disc, contact, tier, id);
         }
     }
 

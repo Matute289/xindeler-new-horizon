@@ -1933,7 +1933,7 @@ mod tests {
                         let Some(col_alt) = info.col_or_gen(wpos2d).map(|col| col.alt) else {
                             continue;
                         };
-                        let bands = voids.carved_bands_at_column(wpos2d, col_alt);
+                        let bands = voids.carved_contact_bands_at_column(wpos2d, col_alt);
                         if bands.is_empty() {
                             continue;
                         }
@@ -2028,28 +2028,31 @@ mod tests {
     /// --nocapture`. The always-on signal is the `info!` world generation
     /// emits.
     ///
-    /// # Why this list is not empty, and why that is not an engine bug
+    /// # The list is empty, and that was not free
     ///
-    /// `cave.cave_035` is an ordinary natural cave (`cueva_natural` /
-    /// `natural` / `activa`, so correctly derived `Connect`) that happens to
-    /// sit under Vaelindra Dorei, beside an urban cave the authoring rules
-    /// seal. A sealed neighbour's protection margin reaches ~39 blocks, so
-    /// a natural cave closer than that is inside it and the tie-break
-    /// resolves the overlap to `Seal`. The rule is right; what is
-    /// unfortunate is the adjacency, and that is authored content, not
-    /// code.
+    /// It found one when it was written: `cave.cave_035`, a natural cave
+    /// (`cueva_natural` / `natural` / `activa`, so correctly derived `Connect`)
+    /// sitting under Vaelindra Dorei right beside `cave.cave_034`, las Bóvedas
+    /// de Raíz, which seals. A sealed neighbour's protection margin reaches
+    /// ~39 blocks, so the `Connect` never had any effect: the guard sealed it
+    /// regardless, and the asset was claiming something that does not happen.
     ///
-    /// **It costs nothing in game.** An inert `Connect` cave is still carved,
-    /// still has its own authored surface entrance, and is still minable --
-    /// accessibility was deliberately decoupled from this policy. The loss is
-    /// fidelity to what the catalog says, not anything a player can miss.
+    /// The catalog now says `sellar` for that one entry, through the per-entry
+    /// override its own derivation rule supports. The two caves were
+    /// deliberately *not* separated: they are a narrative pair — the royal and
+    /// hero necropolis beside the commoners' cold store, cross-referenced in
+    /// each other's authored notes — and a communal cellar reached only through
+    /// its own authored root clearing reads well in the world. So the
+    /// adjacency stayed and the data was corrected to match it.
     ///
-    /// Resolving it is a **content decision left to the catalog's author**, and
-    /// the two options are not equivalent: moving the cave clear of its
-    /// neighbour would give its `Connect` an effect, while marking it `sellar`
-    /// would only make the asset describe what already happens -- and would
-    /// erase the record that someone wanted it connectable. That is why this
-    /// pass did not take the decision.
+    /// **What an entry appearing here would mean.** Not an engine bug: the
+    /// tie-break is right (see the index's own doc). It means a catalog pass
+    /// has put a connectable cave inside a sealed neighbour's margin, where its
+    /// `conectar` cannot do anything. Either move it clear, or write
+    /// `contacto_procedural: sellar` so the asset says what happens. Note that
+    /// it costs nothing in game either way — an inert `Connect` cave is still
+    /// carved, still has its own authored entrance, and is still minable, since
+    /// accessibility was deliberately decoupled from this policy.
     ///
     /// The sampling behind this uses `f32` trigonometry, so the exact sampled
     /// columns are not guaranteed bit-identical across hosts; a feature sitting
@@ -2058,9 +2061,9 @@ mod tests {
     #[test]
     #[ignore]
     fn the_real_catalog_has_no_new_inert_connect_features() {
-        // Sits under Vaelindra Dorei, beside an urban cave the authoring rules
-        // seal. See this test's doc comment.
-        const KNOWN_INERT: &[&str] = &["cave.cave_035"];
+        // Empty, and it has to stay that way by fixing the *catalog*, not by
+        // adding a name here. See this test's doc comment.
+        const KNOWN_INERT: &[&str] = &[];
 
         let (world, index) = cromatolis_world();
         let voids = index
