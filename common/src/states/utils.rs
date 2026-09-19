@@ -8,6 +8,7 @@ use crate::{
             SpecifiedAbility, Stance,
         },
         arthropod, biped_large, biped_small, bird_medium,
+        body::traversal::TraversalCapabilities,
         buff::{Buff, BuffCategory, BuffChange, BuffData, BuffSource, DestInfo},
         character_state::OutputEvents,
         class::{CharacterClass, ClassKind},
@@ -384,7 +385,25 @@ impl Body {
         .map(|f| f * GRAVITY)
     }
 
-    pub fn can_climb(&self) -> bool { matches!(self, Body::Humanoid(_)) }
+    /// Whether this body can hold a vertical surface.
+    ///
+    /// Answered from the per-species build in
+    /// `assets/common/body_traversal.ron` rather than from a body-kind
+    /// match: an eight-legged spider and a twenty-tonne dragon both climb,
+    /// a ten-tonne stone construct does not, and each of those is a
+    /// consequence of how the creature is put together rather than a line
+    /// somebody wrote about that creature.
+    pub fn can_climb(&self) -> bool {
+        self.traversal_capabilities()
+            .contains(TraversalCapabilities::CLIMB)
+    }
+
+    /// Whether this body can wallrun — strictly harder than climbing, and so
+    /// strictly rarer: it needs the grip *and* an upright, light build.
+    pub fn can_wallrun(&self) -> bool {
+        self.traversal_capabilities()
+            .contains(TraversalCapabilities::WALLRUN)
+    }
 
     /// Returns how well a body can move backwards while strafing (0.0 = not at
     /// all, 1.0 = same as forward)
@@ -1076,7 +1095,7 @@ pub fn handle_wallrun(data: &JoinData<'_>, update: &mut StateUpdate) -> bool {
     if data.physics.on_wall.is_some()
         && data.physics.on_ground.is_none()
         && data.physics.in_liquid().is_none()
-        && data.body.can_climb()
+        && data.body.can_wallrun()
     {
         update.character = CharacterState::Wallrun(wallrun::Data {
             was_wielded: data.character.is_wield() || data.character.was_wielded(),

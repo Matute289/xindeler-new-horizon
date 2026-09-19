@@ -18,6 +18,7 @@ pub mod quadruped_medium;
 pub mod quadruped_small;
 pub mod ship;
 pub mod theropod;
+pub mod traversal;
 
 use crate::{
     assets::{BoxedError, FileAsset, load_ron},
