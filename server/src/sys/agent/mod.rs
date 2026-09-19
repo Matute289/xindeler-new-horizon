@@ -12,7 +12,7 @@ use common::{
         inventory::slot::EquipSlot, item::ItemDesc,
     },
     mounting::Volume,
-    path::TraversalConfig,
+    path::{TraversalConfig, TraversalDims},
 };
 use common_base::prof_span;
 use common_ecs::{Job, Origin, ParMode, Phase, System};
@@ -190,6 +190,20 @@ impl<'a> System<'a> for Sys {
                     let node_tolerance = scale * 1.5;
                     let slow_factor =
                         moving_body.map_or(0.0, |b| 1.0 - 1.0 / (1.0 + b.base_accel() * 0.01));
+                    // How much room this agent actually needs, taken from the
+                    // same collider the physics will judge it by rather than
+                    // from the two-block constant the pathfinder used to assume
+                    // for everybody. `Body::collider()` is what `state_ext`
+                    // builds the entity's `Collider` component from, so this
+                    // agrees with the component without needing to read it.
+                    let dims = moving_body.map_or_else(TraversalDims::default, |body| {
+                        let collider = body.collider();
+                        TraversalDims::from_collider(
+                            collider.get_height(),
+                            collider.bounding_radius(),
+                            scale,
+                        )
+                    });
                     let traversal_config = TraversalConfig {
                         node_tolerance,
                         slow_factor,
@@ -200,6 +214,7 @@ impl<'a> System<'a> for Sys {
                         can_fly: moving_body.is_some_and(|b| b.fly_thrust().is_some()),
                         vectored_propulsion: moving_body.is_some_and(|b| b.vectored_propulsion()),
                         is_target_loaded: true,
+                        dims,
                     };
                     let health_fraction = health.map_or(1.0, Health::fraction);
 

@@ -176,13 +176,66 @@ impl AgentData<'_> {
         controller.inputs.move_dir =
             bearing.xy().try_normalized().unwrap_or_else(Vec2::zero) * speed;
 
+        let scramble = self.should_scramble(bearing);
+
         // Only jump if we are grounded and can't blockhop or if we can fly
         self.jump_if(
             (self.physics_state.on_ground.is_some() && bearing.z > 1.5)
-                || self.traversal_config.can_fly,
+                || self.traversal_config.can_fly
+                || scramble,
             controller,
         );
         controller.inputs.move_z = bearing.z;
+    }
+
+    /// Should this agent try to climb the wall it is currently walking into?
+    ///
+    /// The pathfinder cannot plan a climb — its neighbour set tops out at a
+    /// two-block step — so an obstacle that only opens up above that is not a
+    /// route to it, it is a wall, and the agent presses into it until something
+    /// else distracts it. This does not fix that (planning climb edges is a
+    /// separate phase, gated on measuring what it costs the A\*); it stops the
+    /// grinding. An agent that *can* climb and is pressed against a wall
+    /// standing between it and where it is going jumps into the wall instead.
+    ///
+    /// Leaving the ground is the entire gesture. `handle_climb` waits for
+    /// `on_wall` + airborne + movement into the wall, and `Climb` then derives
+    /// its upward velocity from `move_dir · wall_dir` — which the caller has
+    /// already set from the bearing. There is no climb input to add and no
+    /// state for the agent to drive.
+    fn should_scramble(&self, bearing: Vec3<f32>) -> bool {
+        /// Below this, `handle_climb` would let go almost immediately and the
+        /// agent would just bunny-hop at the wall on an empty bar.
+        const MIN_SCRAMBLE_ENERGY: f32 = 10.0;
+        /// How closely the bearing must point into the wall: ~60°. Without it,
+        /// an agent walking *along* a wall would launch itself at it.
+        const INTO_WALL_DOT: f32 = 0.5;
+
+        // Already climbing: `Climb` sustains itself from `move_dir`, and
+        // jumping again would do nothing regardless — `climb::Data::on_input`
+        // handles only `WallJump`.
+        if !self.traversal_config.can_climb
+            || matches!(self.char_state, CharacterState::Climb(_))
+            || self.physics_state.on_ground.is_none()
+        {
+            return false;
+        }
+
+        // Swimming up a wall already works, through `handle_climb`'s own
+        // in-liquid escape hatch. Not ours to second-guess.
+        if self.physics_state.in_liquid().is_some() {
+            return false;
+        }
+
+        let Some(wall_dir) = self.physics_state.on_wall else {
+            return false;
+        };
+
+        bearing
+            .xy()
+            .try_normalized()
+            .is_some_and(|dir| dir.dot(wall_dir.xy()) > INTO_WALL_DOT)
+            && self.energy.current() > MIN_SCRAMBLE_ENERGY
     }
 
     pub fn unstuck_if(&self, condition: bool, controller: &mut Controller) {
