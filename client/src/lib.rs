@@ -2439,15 +2439,21 @@ impl Client {
         self.send_msg(ClientGeneral::ControlEvent(ControlEvent::Utterance(kind)));
     }
 
+    /// Crouch, or stand back up from whatever posture is currently held.
+    ///
+    /// Prone counts as "currently held": the crouch key is the way into a
+    /// posture and so it has to be the way out of one, otherwise a character
+    /// that reached the floor by holding it can only get up with the separate
+    /// prone keybind. `Crawl` does not implement `sneak`, so without this arm
+    /// the key would silently do nothing while lying down.
     pub fn toggle_sneak(&mut self) {
-        let is_sneaking = self
-            .state
-            .ecs()
-            .read_storage::<CharacterState>()
+        let char_states = self.state.ecs().read_storage::<CharacterState>();
+        let posture_held = char_states
             .get(self.entity())
-            .map(CharacterState::is_stealthy);
+            .map(|cs| cs.is_stealthy() || matches!(cs, CharacterState::Crawl));
+        drop(char_states);
 
-        match is_sneaking {
+        match posture_held {
             Some(true) => self.control_action(ControlAction::Stand),
             Some(false) => self.control_action(ControlAction::Sneak),
             None => warn!("Can't toggle sneak, client entity doesn't have a `CharacterState`"),
