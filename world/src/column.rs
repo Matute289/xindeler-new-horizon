@@ -3,8 +3,8 @@ use crate::{
     all::ForestKind,
     biome_profile::BiomeProfile,
     sim::{
-        AuthoredGroundCoverProfile, CROMATOLIS_V0_REGION_ID, GroundCoverBand, GroundSubstrate,
-        Path, RiverKind, SimChunk, WorldSim, local_cells,
+        AuthoredGroundCoverProfile, CROMATOLIS_V0_REGION_ID, GroundSubstrate, Path, RiverKind,
+        SimChunk, WorldSim, local_cells,
     },
     site::SpawnRules,
     util::{RandomField, RandomPerm, Sampler},
@@ -1482,6 +1482,13 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         // structure placement) see cratered terrain too.
         let riverless_alt = riverless_alt + damage.rim - damage.depth;
 
+        let surface_is_physical = water_dist.is_some_and(|dist| dist <= 3.0)
+            || snow_cover
+            || temp <= CONFIG.snow_temp
+            || alt >= 500.0
+            || cliff_offset > 0.0
+            || surface_block_override.is_some();
+
         Some(ColumnSample {
             alt,
             riverless_alt,
@@ -1503,14 +1510,13 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                     authored_region_id: sim_chunk.authored_region_id,
                     ground_cover: authored_ground_cover,
                     ground_substrate: sim_chunk.ground_substrate,
-                    physical_exclusion: water_dist.is_some_and(|dist| dist <= 3.0)
-                        || snow_cover
-                        || temp <= CONFIG.snow_temp
-                        || alt >= 500.0
-                        || cliff_offset > 0.0
-                        || surface_block_override.is_some(),
+                    physical_exclusion: surface_is_physical,
                 },
             ),
+            // The map generator consumes this resolved column fact so it
+            // never paints an ecological tint over physical snow, rock,
+            // cliffs, forced material, or shoreline surface treatment.
+            surface_is_physical,
             sub_surface_color,
             // No growing directly on bedrock.
             // And, no growing on sites that don't want them TODO: More precise than this when we
@@ -1615,9 +1621,6 @@ fn resolve_final_column_surface_color(
         return Rgb::new(0.61, 0.47, 0.28);
     }
     let band = profile.classify(context.ground_cover);
-    if band == GroundCoverBand::BareDry {
-        return base;
-    }
     let definition = profile
         .bands
         .iter()
@@ -1639,6 +1642,7 @@ pub struct ColumnSample<'a> {
     pub water_level: f32,
     pub warp_factor: f32,
     pub surface_color: Rgb<f32>,
+    pub surface_is_physical: bool,
     pub sub_surface_color: Rgb<f32>,
     pub tree_density: f32,
     pub forest_kind: ForestKind,
@@ -1748,7 +1752,7 @@ mod tests {
     }
 
     #[test]
-    fn bare_dry_profile_leaves_the_existing_dry_surface_unchanged() {
+    fn bare_dry_profile_is_earthy_not_thermal_sand() {
         let generic_sand = Rgb::new(0.86, 0.73, 0.43);
         let resolved = resolve_final_column_surface_color(
             generic_sand,
@@ -1763,7 +1767,11 @@ mod tests {
             cover_context(Some(CROMATOLIS_V0_REGION_ID), 0.10, None, false),
         );
 
-        assert_rgb_near(resolved, generic_sand);
+        assert_ne!(resolved, generic_sand);
+        assert!(
+            resolved.g > resolved.r,
+            "a non-sand BareDry Cromatolis column must resolve toward earth/grass, not beach sand"
+        );
     }
 
     #[test]

@@ -50,6 +50,16 @@ fn authored_map_post_processing_applies(
         && true_alt >= true_sea_level
 }
 
+/// Physical column material always outranks authored map presentation. The
+/// optional column fact is absent only at an unavailable map boundary; the
+/// compact regional alpine fact remains available there.
+fn authored_preview_has_physical_surface(
+    authored_alpine_snowland: bool,
+    column_surface_is_physical: Option<bool>,
+) -> bool {
+    authored_alpine_snowland || column_surface_is_physical.unwrap_or(false)
+}
+
 /// Applies the authored ground-cover band's map-preview tint. Physical map
 /// layers deliberately bypass this stage: their water/mountain rendering is
 /// applied by `sample_pos` and must not inherit a vegetation tint. An explicit
@@ -282,14 +292,14 @@ pub fn sample_pos(
                 .map(|e| e as f64)
             };
 
-            (rgb, alt, sample.ice_depth)
+            (rgb, alt, sample.ice_depth, sample.surface_is_physical)
         });
 
     let downhill_wpos = downhill.unwrap_or(wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32));
     let alt = if is_basement {
         basement
     } else {
-        column_data.map_or(alt, |(_, alt, _)| alt)
+        column_data.map_or(alt, |(_, alt, _, _)| alt)
     };
 
     let depth_m = (alt.max(water_alt) - alt).max(0.0) as f64;
@@ -306,7 +316,7 @@ pub fn sample_pos(
         if is_shaded { 1.0 } else { alt },
         if is_shaded || is_humidity { 1.0 } else { 0.0 },
     );
-    let column_rgb = column_data.map(|(rgb, _, _)| rgb).unwrap_or(default_rgb);
+    let column_rgb = column_data.map(|(rgb, _, _, _)| rgb).unwrap_or(default_rgb);
     let mut connections = [None; 8];
     let mut has_connections = false;
     // TODO: Support non-river connections.
@@ -330,42 +340,42 @@ pub fn sample_pos(
                 });
             });
     };
-    let rgb = if is_water && is_ice && column_data.is_some_and(|(_, _, ice_depth)| ice_depth > 0.0)
-    {
-        CONFIG.ice_color
-    } else {
-        match (river_kind, (is_water, true_alt >= true_sea_level)) {
-            (_, (false, _)) | (None, (_, true)) | (Some(RiverKind::River { .. }), _) => {
-                let (r, g, b) = (
-                    (column_rgb.r
-                        * if is_temperature {
-                            temperature as f64
-                        } else {
-                            column_rgb.r
-                        })
-                    .sqrt(),
-                    column_rgb.g,
-                    (column_rgb.b
-                        * if is_humidity {
-                            humidity as f64
-                        } else {
-                            column_rgb.b
-                        })
-                    .sqrt(),
-                );
-                Rgb::new((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
-            },
-            (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => match depth_m {
-                depth if depth < 5.0 => Rgb::new(0, 0xa8, 0xc9),
-                depth if depth < 15.0 => Rgb::new(0, 0x91, 0xbd),
-                depth if depth < 30.0 => Rgb::new(0, 0x78, 0xab),
-                depth if depth < 70.0 => Rgb::new(0, 0x61, 0x99),
-                depth if depth < 150.0 => Rgb::new(0, 0x4b, 0x82),
-                depth if depth < 300.0 => Rgb::new(0, 0x36, 0x6b),
-                _ => Rgb::new(0, 0x22, 0x52),
-            },
-        }
-    };
+    let rgb =
+        if is_water && is_ice && column_data.is_some_and(|(_, _, ice_depth, _)| ice_depth > 0.0) {
+            CONFIG.ice_color
+        } else {
+            match (river_kind, (is_water, true_alt >= true_sea_level)) {
+                (_, (false, _)) | (None, (_, true)) | (Some(RiverKind::River { .. }), _) => {
+                    let (r, g, b) = (
+                        (column_rgb.r
+                            * if is_temperature {
+                                temperature as f64
+                            } else {
+                                column_rgb.r
+                            })
+                        .sqrt(),
+                        column_rgb.g,
+                        (column_rgb.b
+                            * if is_humidity {
+                                humidity as f64
+                            } else {
+                                column_rgb.b
+                            })
+                        .sqrt(),
+                    );
+                    Rgb::new((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+                },
+                (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => match depth_m {
+                    depth if depth < 5.0 => Rgb::new(0, 0xa8, 0xc9),
+                    depth if depth < 15.0 => Rgb::new(0, 0x91, 0xbd),
+                    depth if depth < 30.0 => Rgb::new(0, 0x78, 0xab),
+                    depth if depth < 70.0 => Rgb::new(0, 0x61, 0x99),
+                    depth if depth < 150.0 => Rgb::new(0, 0x4b, 0x82),
+                    depth if depth < 300.0 => Rgb::new(0, 0x36, 0x6b),
+                    _ => Rgb::new(0, 0x22, 0x52),
+                },
+            }
+        };
     let rgb = if let Some(sample) = sampler
         .get(pos)
         .filter(|sample| sample.authored_cromatolis_v0)
@@ -378,15 +388,30 @@ pub fn sample_pos(
             || true_alt < true_sea_level;
         let profile = sampler.authored_ground_cover_profile.as_ref();
 
+        // Cromatolis's alpine policy is expressed in real relief metres and
+        // starts at 700 m.  Do not use the old preview-only `altitude > 0.28`
+        // cutoff here: it corresponds to roughly 294 m of relief and used to
+        // erase the authored soil and forest language from valid sub-alpine
+        // woodland.  `authored_alpine_snowland` is the already-resolved,
+        // region-scoped physical fact, so it preserves the rock/snow column
+        // result without reinterpreting altitude a second time. The column
+        // contributes its broader physical-surface fact too: cold snow,
+        // cliffs, forced rock and shoreline material must outrank the visual
+        // ground-cover/ecology layers even below the authored alpine band.
+        let is_physical_alpine = sample.authored_alpine_snowland;
+        let is_physical_surface = authored_preview_has_physical_surface(
+            is_physical_alpine,
+            column_data.map(|(_, _, _, is_physical)| is_physical),
+        );
         let mut out = rgb;
-        if sample.temp >= 0.0 && profile.is_some() {
+        if profile.is_some() {
             (_, out) = authored_ground_cover_preview_tint(
                 out,
                 profile,
                 sample.ground_cover,
                 sample.ground_substrate,
                 is_physical_water,
-                altitude > 0.28,
+                is_physical_surface,
             );
             out = authored_ecology_preview_tint(
                 out,
@@ -394,18 +419,8 @@ pub fn sample_pos(
                 sample.get_biome(),
                 vegetation,
                 is_physical_water,
-                altitude > 0.28,
+                is_physical_surface,
             );
-            if !is_physical_water && altitude > 0.28 {
-                let mountain_t = ((altitude - 0.28) / 0.46).clamp(0.0, 1.0);
-                let mountain = if mountain_t > 0.6 {
-                    Rgb::new(0x3d, 0x28, 0x1a)
-                } else {
-                    Rgb::new(0x78, 0x55, 0x32)
-                };
-                let mountain_blend = mountain_t * (1.0 - vegetation * 0.42) * 0.95;
-                out = blend_rgb(out, mountain, mountain_blend);
-            }
         }
         let neighbor_alt = |offset: Vec2<i32>| {
             sampler
@@ -503,6 +518,11 @@ mod tests {
             .expect("the shipped Cromatolis ground-cover profile must load")
     }
 
+    fn cromatolis_ecology_profile() -> AuthoredMapEcologyProfile {
+        AuthoredMapEcologyProfile::load_owned("world.map.cromatolis_v0_map_ecology")
+            .expect("the shipped Cromatolis map ecology profile must load")
+    }
+
     #[test]
     fn hot_authored_forest_preview_uses_its_profile_band_tint() {
         let profile = cromatolis_profile();
@@ -512,15 +532,17 @@ mod tests {
             authored_ground_cover_preview_tint(dry_beige, Some(&profile), 0.50, None, false, false);
 
         assert_eq!(band, Some(GroundCoverBand::Forest));
-        assert_eq!(color, Rgb::new(0x63, 0x82, 0x43));
         assert_ne!(color, dry_beige);
+        assert!(
+            color.g > color.r && color.g > color.b,
+            "forest preview must remain visibly green after a data-only palette retune"
+        );
     }
 
     #[test]
     fn ecology_preview_keeps_relief_base_but_makes_authored_zones_distinct() {
         let base = Rgb::new(0x69, 0x7d, 0x43);
-        let profile = AuthoredMapEcologyProfile::load_owned("world.map.cromatolis_v0_map_ecology")
-            .expect("the shipped Cromatolis map ecology profile must load");
+        let profile = cromatolis_ecology_profile();
         let forest = authored_ecology_preview_tint(
             base,
             Some(&profile),
@@ -647,6 +669,14 @@ mod tests {
         ));
         assert!(!authored_map_post_processing_applies(None, 0.49, sea_level));
         assert!(authored_map_post_processing_applies(None, 0.5, sea_level));
+    }
+
+    #[test]
+    fn a_real_column_physical_surface_outranks_authored_green_presentation() {
+        assert!(authored_preview_has_physical_surface(false, Some(true)));
+        assert!(authored_preview_has_physical_surface(true, Some(false)));
+        assert!(!authored_preview_has_physical_surface(false, Some(false)));
+        assert!(!authored_preview_has_physical_surface(false, None));
     }
 
     #[test]

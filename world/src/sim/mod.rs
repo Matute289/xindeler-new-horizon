@@ -7353,6 +7353,131 @@ mod tests {
         )
     }
 
+    /// COW-18.3 phase A discovery probe. It deliberately records generated
+    /// facts and the exact server RGBA, rather than interpreting a TIFF or a
+    /// client screenshot. Once these canonical positions are reviewed, this
+    /// becomes the fixed eight-zone regression table.
+    #[test]
+    #[ignore]
+    fn cromatolis_cartographic_baseline_discovery_against_real_lfs_assets() {
+        use crate::index::{Index, IndexOwned};
+
+        let sim = generate_cromatolis_world();
+        let size = sim.map_size_lg();
+        let index = IndexOwned::new(Index::new(0));
+        let map = sim.get_map(index.as_index_ref(), None);
+        let mut map_config = MapConfig::orthographic(
+            sim.map_size_lg(),
+            CONFIG.sea_level..=CONFIG.sea_level + sim.max_height,
+        );
+        map_config.is_shaded = false;
+        let profile = sim
+            .authored_ground_cover_profile
+            .as_ref()
+            .expect("real Cromatolis carries its ground-cover profile");
+        let is_dry = |chunk: &SimChunk| chunk.river.river_kind.is_none();
+        let locate = |name: &str, predicate: &dyn Fn(Vec2<i32>, &SimChunk) -> bool| {
+            let pos = (0..size.chunks_len())
+                .map(|idx| uniform_idx_as_vec2(size, idx))
+                .find(|&pos| predicate(pos, sim.get(pos).expect("in-bounds chunk")))
+                .unwrap_or_else(|| panic!("no real Cromatolis chunk matched baseline zone {name}"));
+            let chunk = sim.get(pos).unwrap();
+            let rgba = map.rgba[pos].to_le_bytes();
+            let flipped_y = Vec2::new(pos.x, size.chunks().y as i32 - 1 - pos.y);
+            let rgba_flipped_y = map.rgba[flipped_y].to_le_bytes();
+            let mut samples = Vec::with_capacity(size.chunks_len());
+            samples.resize_with(size.chunks_len(), || None);
+            let column = ColumnGen::new(&sim).get((
+                pos * TerrainChunkSize::RECT_SIZE.map(|edge| edge as i32),
+                index.as_index_ref(),
+                None,
+            ));
+            let column_alt = column.as_ref().map(|sample| sample.alt);
+            let column_water = column.as_ref().map(|sample| sample.water_level);
+            let column_surface = column.as_ref().map(|sample| sample.surface_color);
+            let column_surface_is_physical =
+                column.as_ref().map(|sample| sample.surface_is_physical);
+            if let Some(column) = column {
+                samples[vec2_as_uniform_idx(size, pos)] = Some(column);
+            }
+            let direct =
+                sample_pos(&map_config, &sim, index.as_index_ref(), Some(&samples), pos).rgb;
+            println!(
+                "{name}: pos=({},{}) relief={:.1} alt_internal={:.1} water_alt={:.1} cover={:.3} \
+                 density={:.3} temp={:.3} authored={} column_alt={:?} column_water={:?} \
+                 column_surface={:?} column_physical={:?} biome={:?} river={:?} water={:?} \
+                 substrate={:?} snowland={} direct=#{:02x}{:02x}{:02x} \
+                 rgba=#{:02x}{:02x}{:02x}{:02x} rgba_flipped_y=#{:02x}{:02x}{:02x}{:02x}",
+                pos.x,
+                pos.y,
+                chunk.alt - CONFIG.sea_level,
+                chunk.alt,
+                chunk.water_alt,
+                chunk.ground_cover,
+                chunk.tree_density,
+                chunk.temp,
+                chunk.authored_cromatolis_v0,
+                column_alt,
+                column_water,
+                column_surface,
+                column_surface_is_physical,
+                chunk.get_biome(),
+                chunk.river.river_kind,
+                chunk.water_body,
+                chunk.ground_substrate,
+                chunk.authored_alpine_snowland,
+                direct.r,
+                direct.g,
+                direct.b,
+                rgba[0],
+                rgba[1],
+                rgba[2],
+                rgba[3],
+                rgba_flipped_y[0],
+                rgba_flipped_y[1],
+                rgba_flipped_y[2],
+                rgba_flipped_y[3],
+            );
+        };
+
+        locate("waning_moon", &|pos, chunk| {
+            pos == Vec2::new(684, 599) && is_dry(chunk)
+        });
+        locate("central_grassland", &|pos, chunk| {
+            (300..700).contains(&pos.x)
+                && (350..700).contains(&pos.y)
+                && is_dry(chunk)
+                && profile.classify(chunk.ground_cover) == GroundCoverBand::Grassland
+        });
+        locate("southern_jungle", &|pos, chunk| {
+            pos.y < 450 && is_dry(chunk) && chunk.get_biome() == BiomeKind::Jungle
+        });
+        locate("wetland", &|_pos, chunk| {
+            is_dry(chunk) && chunk.get_biome() == BiomeKind::Swamp
+        });
+        locate("north_interior", &|pos, chunk| {
+            pos.y > 700
+                && is_dry(chunk)
+                && chunk.ground_substrate != Some(GroundSubstrate::Sand)
+                && chunk.alt - CONFIG.sea_level < 500.0
+                && chunk.get_biome() != BiomeKind::Swamp
+                && chunk.ground_cover < 0.30
+                && chunk.tree_density < 0.45
+        });
+        locate("northwall_exterior", &|_pos, chunk| {
+            chunk.ground_substrate == Some(GroundSubstrate::Sand)
+        });
+        locate("alpine_transition", &|_pos, chunk| {
+            is_dry(chunk) && (700.0..1010.0).contains(&(chunk.alt - CONFIG.sea_level))
+        });
+        locate("persistent_snow", &|pos, chunk| {
+            (4..1020).contains(&pos.x)
+                && (4..1020).contains(&pos.y)
+                && is_dry(chunk)
+                && chunk.alt - CONFIG.sea_level >= 1010.0
+        });
+    }
+
     /// Always runs (no `#[ignore]`, unlike the real-data regression below):
     /// must not panic and must produce a full chunk grid, whether or not the
     /// real (LFS-hosted) Cromatolis assets are actually available. CI never

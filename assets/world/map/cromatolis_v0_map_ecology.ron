@@ -6,11 +6,17 @@
     // base map keeps hillshade, contours and altitude texture.
     voxel_minimap_overlay_alpha: 112,
     zones: [
-        (biome: Grassland, map_tint: (0.41176471, 0.53725490, 0.24705882), base_blend: 0.06, tree_density_blend: 0.00),
-        (biome: Savannah, map_tint: (0.56862745, 0.55294118, 0.27058824), base_blend: 0.07, tree_density_blend: 0.00),
-        (biome: Forest, map_tint: (0.18431373, 0.43921569, 0.21960784), base_blend: 0.08, tree_density_blend: 0.10),
-        (biome: Jungle, map_tint: (0.10588235, 0.36862745, 0.23137255), base_blend: 0.24, tree_density_blend: 0.00),
-        (biome: Swamp, map_tint: (0.23921569, 0.43529412, 0.36078431), base_blend: 0.27, tree_density_blend: 0.00),
-        (biome: Taiga, map_tint: (0.21176471, 0.38431373, 0.29803922), base_blend: 0.12, tree_density_blend: 0.00),
+        // This is a second, independent presentation layer: ground-cover
+        // remains responsible for visible soil, while the resolved biome and
+        // the already-authored tree density make ecological regions legible.
+        // The two layers compose sequentially. Their maxima retain at least
+        // 44% of the physical base before hillshade/contours, avoiding a
+        // flat green wash while still making zones legible.
+        (biome: Grassland, map_tint: (0.35686275, 0.54901961, 0.19215686), base_blend: 0.12, tree_density_blend: 0.00),
+        (biome: Savannah, map_tint: (0.45882353, 0.49019608, 0.19215686), base_blend: 0.12, tree_density_blend: 0.00),
+        (biome: Forest, map_tint: (0.09411765, 0.40392157, 0.16470588), base_blend: 0.08, tree_density_blend: 0.12),
+        (biome: Jungle, map_tint: (0.04705882, 0.30980392, 0.15294118), base_blend: 0.20, tree_density_blend: 0.04),
+        (biome: Swamp, map_tint: (0.10980392, 0.38431373, 0.31372549), base_blend: 0.22, tree_density_blend: 0.00),
+        (biome: Taiga, map_tint: (0.12549020, 0.33333333, 0.25490196), base_blend: 0.12, tree_density_blend: 0.10),
     ],
 )
