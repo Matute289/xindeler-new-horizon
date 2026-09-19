@@ -49,7 +49,7 @@
 //! physical space only.
 
 use crate::{
-    Canvas, CanvasInfo, IndexRef,
+    Canvas, IndexRef,
     layer::authored_voids::{
         CapsuleShape, CapsuleSpan, DiscShape, EDGE_SOFTNESS, ProceduralContact, SURFACE_MARGIN,
     },
@@ -628,6 +628,9 @@ pub(crate) struct InteriorLayout {
 const INTERIOR_PROCEDURAL_CONTACT: ProceduralContact = ProceduralContact::Seal;
 
 impl InteriorLayout {
+    /// The authored interior id (e.g. `interior.the_undercompact`).
+    pub(crate) fn id(&self) -> &str { &self.id }
+
     /// This interior's rooms as protection shapes for the authored-void index,
     /// paired with their policy, mirroring what [`carve_level_room`] carves.
     ///
@@ -675,11 +678,10 @@ impl InteriorLayout {
     /// * a terraced connection's floor quantization is not reproduced, and
     ///   `.round()` can put the carved floor up to half a terrace step *below*
     ///   the un-terraced floor reported here (an *under*-approximation, the
-    ///   only one, and well inside the margin);
-    /// * the narrow waterfall column [`carve_water`] paints at a water
-    ///   feature's downstream end is not indexed at all -- it hangs below the
-    ///   segment's own capsule, so a `drop_m` deeper than the margin leaves its
-    ///   lower part unguarded. No authored waterfall is that deep today.
+    ///   only one, and well inside the margin).
+    ///
+    /// The narrow waterfall column a water feature can also carve is **not**
+    /// here -- it is its own disc, see [`Self::void_waterfall_discs`].
     pub(crate) fn void_capsules(
         &self,
     ) -> impl Iterator<Item = (CapsuleShape, ProceduralContact)> + '_ {
@@ -706,6 +708,42 @@ impl InteriorLayout {
         connections
             .chain(water)
             .map(|capsule| (capsule, INTERIOR_PROCEDURAL_CONTACT))
+    }
+
+    /// The narrow vertical water columns [`carve_water`] raises at the
+    /// downstream end of a water feature that authored a `drop_m`, as
+    /// protection shapes paired with their policy.
+    ///
+    /// A waterfall is *not* part of its segment's capsule: the capsule follows
+    /// the water surface along the segment, and the fall is a separate column
+    /// standing at one endpoint and rising `drop_m` above it. A tall one
+    /// therefore reaches well outside the capsule it belongs to, and left
+    /// unindexed it would be the one authored volume a procedural tunnel could
+    /// cross without the guard noticing.
+    ///
+    /// It maps exactly onto a [`DiscShape`], because the carve is a plain
+    /// cylinder: the same radius test, floor at the segment's endpoint `z`,
+    /// ceiling `drop_m` above it, and the same surface cap the disc already
+    /// applies. Two boundary details differ from the carve by less than a
+    /// block -- the carve includes its exact radius and truncates the capped
+    /// ceiling toward zero where the disc floors it -- both of which the
+    /// 19-block seal dilation absorbs many times over, and interior shapes are
+    /// always sealed.
+    pub(crate) fn void_waterfall_discs(
+        &self,
+    ) -> impl Iterator<Item = (DiscShape, ProceduralContact)> + '_ {
+        self.water.iter().filter_map(|seg| {
+            let drop_m = seg.drop_m?;
+            Some((
+                DiscShape {
+                    centre: seg.b.xy(),
+                    radius: waterfall_radius(seg.radius),
+                    floor_z: seg.b.z,
+                    ceiling_z: seg.b.z + drop_m.ceil() as i32,
+                },
+                INTERIOR_PROCEDURAL_CONTACT,
+            ))
+        })
     }
 }
 
@@ -1338,16 +1376,13 @@ pub fn interior_nav_graphs<'a>(
         .filter_map(|layout| layout.nav.as_ref())
 }
 
-pub(crate) fn build_all_layouts(info: &CanvasInfo) -> Vec<InteriorLayout> {
-    build_all_layouts_for_map_size(info.chunks().map_size_lg())
-}
-
-/// The `map_size`-only core of [`build_all_layouts`], split out so it can
-/// also be called by [`undercompact_gate_antechamber_world_geometry`]'s
-/// `Index::cromatolis_interiors` cache-population closure below -- that
-/// runtime accessor has a `WorldSim` (hence a `MapSizeLg`) but no live
-/// `CanvasInfo`.
-fn build_all_layouts_for_map_size(map_size: MapSizeLg) -> Vec<InteriorLayout> {
+/// Resolve every enabled authored interior into ready-to-carve geometry.
+///
+/// Takes only the map size, never a `CanvasInfo`, because a chunk is not what
+/// this needs and two callers do not have one: the runtime gate accessor below
+/// (which has a `WorldSim`) and the authored-void index, which is built once at
+/// world generation rather than from inside a chunk.
+pub(crate) fn build_all_layouts_for_map_size(map_size: MapSizeLg) -> Vec<InteriorLayout> {
     let graphs = match InteriorGraphsAsset::load_owned(INTERIOR_GRAPHS_ASSET) {
         Ok(graphs) => graphs,
         Err(err) => {
@@ -1744,7 +1779,7 @@ pub fn apply_cromatolis_interiors_to(canvas: &mut Canvas) {
     let index_ref = info.index();
     let interiors = index_ref
         .cromatolis_interiors
-        .get_or_init(|| build_all_layouts(&info));
+        .get_or_init(|| build_all_layouts_for_map_size(info.chunks().map_size_lg()));
     if interiors.is_empty() {
         return;
     }
@@ -2054,6 +2089,12 @@ fn carve_gate_levers(canvas: &mut Canvas, wpos2d: Vec2<i32>, level: &LevelGeom) 
 /// volume can never disagree about how deep the water is.
 fn water_depth(radius: f32) -> f32 { (radius * 0.6).clamp(3.0, 10.0) }
 
+/// The radius of the vertical fall column at a water feature's downstream end,
+/// from that feature's own radius. Shared by [`carve_water`] and
+/// [`InteriorLayout::void_waterfall_discs`] so the carved volume and the
+/// protected volume can never disagree about how wide the fall is.
+fn waterfall_radius(radius: f32) -> f32 { (radius * 0.5).max(2.0) }
+
 fn carve_water(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &WaterSeg) {
     let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
     let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
@@ -2081,7 +2122,7 @@ fn carve_water(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &Water
         let dist_to_b = wpos2d
             .map(|e| e as f32)
             .distance(seg.b.xy().map(|e| e as f32));
-        let fall_radius = (seg.radius * 0.5).max(2.0);
+        let fall_radius = waterfall_radius(seg.radius);
         if dist_to_b <= fall_radius {
             let fill = Block::new(BlockKind::Water, Rgb::zero());
             let top = (seg.b.z as f32 + drop_m).min(col_alt - SURFACE_MARGIN) as i32;
@@ -2807,6 +2848,55 @@ mod tests {
             parse_place_scale(&place.scale)
                 .unwrap_or_else(|err| panic!("place {}: {err}", place.id));
         }
+    }
+
+    /// A water feature that authored a `drop_m` carves a narrow vertical
+    /// column at its downstream end, *outside* the capsule that follows its
+    /// surface -- so it needs its own protection shape or it is the one
+    /// authored volume a procedural tunnel could cross unnoticed.
+    ///
+    /// Pinned against the carve it mirrors rather than against a literal: the
+    /// disc must stand at the segment's `b` endpoint, span `drop_m` upward
+    /// from it, and use the carve's own fall radius.
+    #[test]
+    fn a_waterfall_gets_its_own_protection_disc() {
+        let with_fall = WaterSeg {
+            a: Vec3::new(0, 0, 100),
+            b: Vec3::new(200, 0, 100),
+            curve: 0.0,
+            radius: 9.0,
+            drop_m: Some(30.0),
+        };
+        let without_fall = WaterSeg {
+            drop_m: None,
+            ..WaterSeg {
+                a: Vec3::new(0, 0, 100),
+                b: Vec3::new(200, 0, 100),
+                curve: 0.0,
+                radius: 9.0,
+                drop_m: None,
+            }
+        };
+        let layout = InteriorLayout {
+            water: vec![with_fall, without_fall],
+            ..Default::default()
+        };
+
+        let falls: Vec<_> = layout.void_waterfall_discs().collect();
+        assert_eq!(
+            falls.len(),
+            1,
+            "only the segment that authored a drop_m carves a fall column"
+        );
+        let (disc, contact) = &falls[0];
+        assert_eq!(*contact, INTERIOR_PROCEDURAL_CONTACT);
+        assert_eq!(disc.centre, Vec2::new(200, 0), "the fall stands at `b`");
+        assert_eq!(disc.floor_z, 100, "and rises from `b.z`");
+        assert_eq!(disc.ceiling_z, 130, "by drop_m");
+        assert!(
+            (disc.radius - waterfall_radius(9.0)).abs() < f32::EPSILON,
+            "the protection disc must use the carve's own fall radius"
+        );
     }
 
     /// [`compute_bounds`] derives an interior's bounding circle from segment

@@ -1,7 +1,7 @@
 use crate::{
     Canvas, CanvasInfo, ColumnSample, IndexRef, Land,
     layer::{
-        authored_regions::authored_voids,
+        authored_regions::authored_voids_for as authored_voids,
         authored_voids::{AuthoredVoids, ChunkVoids, ProceduralContact},
         traversal::{AccommodationTier, PassageColumn, PassageQuery},
     },

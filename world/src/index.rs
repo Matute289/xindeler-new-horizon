@@ -32,14 +32,15 @@ pub struct Index {
     pub trade: TradeInformation,
     pub wildlife_spawns: Vec<(AssetHandle<Ron<SpawnEntry>>, DensityFn)>,
     /// Authored Cromatolis interior geometry (`the_undercompact`,
-    /// `kharvun_reach`), lazily built and cached the first time a chunk
-    /// needs it. Per-`Index` rather than a process-global `static` so a
-    /// fresh world (a new `Index::new` call) never reuses a previous
-    /// world's layout.
+    /// `kharvun_reach`), built and cached once. For an authored world that is
+    /// at world generation, alongside `authored_voids` below, which needs this
+    /// geometry to build; otherwise the first chunk that needs it. Per-`Index`
+    /// rather than a process-global `static` so a fresh world (a new
+    /// `Index::new` call) never reuses a previous world's layout.
     pub(crate) cromatolis_interiors: OnceLock<Vec<InteriorLayout>>,
-    /// Generic, size-class-scaled Cromatolis cave geometry, lazily built and
-    /// cached the first time a chunk needs it. Same per-`Index` rationale as
-    /// `cromatolis_interiors` above.
+    /// Generic, size-class-scaled Cromatolis cave geometry, built and cached
+    /// once -- at world generation for an authored world, for the same reason
+    /// as `cromatolis_interiors` above, whose rationale this shares.
     pub(crate) cromatolis_cave_features: OnceLock<Vec<GeneratedCave>>,
     /// The authored Aerial Citadel's geometry config, lazily loaded and
     /// cached the first time a chunk needs it (`None` if the asset fails to
@@ -47,12 +48,19 @@ pub struct Index {
     /// above.
     pub(crate) cromatolis_aerial_citadel: OnceLock<Option<AerialCitadelConfig>>,
     /// The shared authored-void protection index (see
-    /// [`crate::layer::authored_voids`]), lazily built and cached the first
-    /// time a purely-procedural layer asks whether a column belongs to an
-    /// authored feature. `None` when no authored region is loaded, which is
-    /// what makes every consumer of it a no-op -- and generation therefore
-    /// bit-identical -- for a purely procedural world. Same per-`Index`
-    /// rationale as `cromatolis_interiors` above.
+    /// [`crate::layer::authored_voids`]).
+    ///
+    /// Resolved **eagerly**, once, at the end of `World::generate` (see
+    /// `crate::layer::authored_regions::warm`), because it is read from a
+    /// per-column query every generated chunk reaches: left lazy, the first
+    /// wave of chunk-generation workers would block on this `OnceLock` while
+    /// one of them loaded a whole region's assets. Building it on demand still
+    /// works and is the fallback for tests and embedders that skip the warm.
+    ///
+    /// `None` when no authored region is loaded, which is what makes every
+    /// consumer of it a no-op -- and generation therefore bit-identical -- for
+    /// a purely procedural world. Same per-`Index` rationale as
+    /// `cromatolis_interiors` above.
     pub(crate) authored_voids: OnceLock<Option<AuthoredVoids>>,
     colors: AssetHandle<Arc<Colors>>,
     features: AssetHandle<Arc<Features>>,

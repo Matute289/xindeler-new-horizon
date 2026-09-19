@@ -16,7 +16,7 @@
 use crate::{
     CanvasInfo, Land,
     layer::{
-        authored_regions::authored_voids,
+        authored_regions::authored_voids_for as authored_voids,
         authored_voids::AuthoredVoidPassage,
         cave,
         rock::Rock,

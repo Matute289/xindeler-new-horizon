@@ -72,10 +72,11 @@
 //!   the ore/gem depletion pools.
 
 use crate::{
-    Canvas, CanvasInfo, Land,
+    Canvas, Land,
     layer::authored_voids::{
         CapsuleShape, CapsuleSpan, DiscShape, EDGE_SOFTNESS, ProceduralContact, SURFACE_MARGIN,
     },
+    sim::WorldSim,
     util::{RandomField, SQUARE_4},
 };
 use common::{
@@ -497,6 +498,10 @@ struct BranchSeg {
 /// A fully-resolved, ready-to-carve generic cave. See the module doc for
 /// why this doesn't reuse `cave.rs::Tunnel` directly.
 pub(crate) struct GeneratedCave {
+    /// The authored catalog id (e.g. `cave.cave_001`). Carried so a diagnostic
+    /// can name the feature a reader would have to go and edit; generation
+    /// itself never looks at it.
+    id: String,
     hub: HubGeom,
     branches: Vec<BranchSeg>,
     /// Authored minerals, pre-flattened to `(sprite, cumulative chance)` so
@@ -528,6 +533,9 @@ impl GeneratedCave {
     /// How many branch tunnels this cave carved. Tests only.
     #[cfg(test)]
     pub(crate) fn branch_count(&self) -> usize { self.branches.len() }
+
+    /// The authored catalog id this cave was generated from.
+    pub(crate) fn id(&self) -> &str { &self.id }
 
     /// This cave's authored procedural-contact policy.
     pub(crate) fn procedural_contact(&self) -> ProceduralContact { self.procedural_contact }
@@ -562,7 +570,16 @@ impl GeneratedCave {
     }
 }
 
-pub(crate) fn build_all_generated_caves(info: &CanvasInfo) -> Vec<GeneratedCave> {
+/// Resolve every authored cave in the catalog into ready-to-carve geometry.
+///
+/// Takes the `WorldSim` rather than a `CanvasInfo` because it never needed a
+/// chunk: the map size and the terrain sampler are all it reads, and both come
+/// from the world. That matters for more than tidiness -- it is what lets the
+/// authored-void index be built once, eagerly, at world generation, instead of
+/// lazily from inside a per-column query on whichever chunk happens to be
+/// generated first. Mirrors the split `cromatolis_interior` already makes for
+/// the same reason.
+pub(crate) fn build_all_generated_caves(sim: &WorldSim) -> Vec<GeneratedCave> {
     let asset = match CaveFeaturesAsset::load_owned(CAVE_FEATURES_ASSET) {
         Ok(asset) => asset,
         Err(err) => {
@@ -583,8 +600,8 @@ pub(crate) fn build_all_generated_caves(info: &CanvasInfo) -> Vec<GeneratedCave>
         );
     }
 
-    let map_size = info.chunks().map_size_lg();
-    let land = info.land();
+    let map_size = sim.map_size_lg();
+    let land = Land::from_sim(sim);
 
     asset
         .features
@@ -639,6 +656,7 @@ fn build_generated_cave(
     }
 
     GeneratedCave {
+        id: feature.id.clone(),
         hub,
         branches,
         minerals: flatten_minerals(&feature.id, &feature.minerals, feature.size_class),
@@ -788,7 +806,7 @@ pub fn apply_cromatolis_cave_features_to(canvas: &mut Canvas) {
     let index_ref = info.index();
     let caves = index_ref
         .cromatolis_cave_features
-        .get_or_init(|| build_all_generated_caves(&info));
+        .get_or_init(|| build_all_generated_caves(info.chunks()));
     if caves.is_empty() {
         return;
     }
@@ -976,6 +994,7 @@ fn carve_branch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CanvasInfo;
 
     fn sample_asset() -> CaveFeaturesAsset {
         CaveFeaturesAsset {
@@ -1700,6 +1719,7 @@ mod tests {
             max_reach = max_reach.max(profile.branch_length + profile.branch_radius);
         }
         GeneratedCave {
+            id: feature_id.to_string(),
             hub,
             branches,
             minerals: Vec::new(),
@@ -1867,7 +1887,7 @@ mod tests {
     #[ignore]
     fn no_procedural_tunnel_survives_inside_a_sealed_authored_void() {
         use crate::layer::{
-            authored_regions::authored_voids,
+            authored_regions::authored_voids_for as authored_voids,
             cave::{tunnel_bounds_at, tunnel_bounds_at_unguarded},
         };
 
@@ -1995,6 +2015,76 @@ mod tests {
         });
     }
 
+    /// Pins exactly which features of *this catalog* the `Seal` tie-break
+    /// currently makes inert, so a catalog pass that swallows a **new** one is
+    /// caught by name.
+    ///
+    /// It lives here, beside the catalog it names, and not with the index: the
+    /// index is engine-general and must not know that `cave.cave_035` exists.
+    ///
+    /// **This is a manual gate, not a CI one.** No workflow runs `--ignored`,
+    /// so run it after any catalog pass:
+    /// `cargo test -p xindeler-world --release the_real_catalog -- --ignored
+    /// --nocapture`. The always-on signal is the `info!` world generation
+    /// emits.
+    ///
+    /// # The list is empty, and that was not free
+    ///
+    /// It found one when it was written: `cave.cave_035`, a natural cave
+    /// (`cueva_natural` / `natural` / `activa`, so correctly derived `Connect`)
+    /// sitting under Vaelindra Dorei right beside `cave.cave_034`, las Bóvedas
+    /// de Raíz, which seals. A sealed neighbour's protection margin reaches
+    /// ~39 blocks, so the `Connect` never had any effect: the guard sealed it
+    /// regardless, and the asset was claiming something that does not happen.
+    ///
+    /// The catalog now says `sellar` for that one entry, through the per-entry
+    /// override its own derivation rule supports. The two caves were
+    /// deliberately *not* separated: they are a narrative pair — the royal and
+    /// hero necropolis beside the commoners' cold store, cross-referenced in
+    /// each other's authored notes — and a communal cellar reached only through
+    /// its own authored root clearing reads well in the world. So the
+    /// adjacency stayed and the data was corrected to match it.
+    ///
+    /// **What an entry appearing here would mean.** Not an engine bug: the
+    /// tie-break is right (see the index's own doc). It means a catalog pass
+    /// has put a connectable cave inside a sealed neighbour's margin, where its
+    /// `conectar` cannot do anything. Either move it clear, or write
+    /// `contacto_procedural: sellar` so the asset says what happens. Note that
+    /// it costs nothing in game either way — an inert `Connect` cave is still
+    /// carved, still has its own authored entrance, and is still minable, since
+    /// accessibility was deliberately decoupled from this policy.
+    ///
+    /// The sampling behind this uses `f32` trigonometry, so the exact sampled
+    /// columns are not guaranteed bit-identical across hosts; a feature sitting
+    /// exactly on the boundary could in principle differ elsewhere. Nothing in
+    /// the diagnostic feeds generation, so this cannot affect world content.
+    #[test]
+    #[ignore]
+    fn the_real_catalog_has_no_new_inert_connect_features() {
+        // Empty, and it has to stay that way by fixing the *catalog*, not by
+        // adding a name here. See this test's doc comment.
+        const KNOWN_INERT: &[&str] = &[];
+
+        let (world, index) = cromatolis_world();
+        let voids = index
+            .authored_voids
+            .get()
+            .expect("World::generate must have warmed the index")
+            .as_ref()
+            .expect("the authored region must index its voids");
+        let land = Land::from_sim(world.sim());
+
+        let inert = voids.inert_connect_features(|wpos| land.get_alt_approx(wpos));
+        println!("inert Connect features in the real catalog: {inert:?}");
+        assert_eq!(
+            inert, KNOWN_INERT,
+            "the set of authored features whose Connect policy does nothing has changed. A NEW \
+             entry means a catalog pass put a connectable cave inside a sealed neighbour's margin \
+             -- move it clear, or mark it `sellar` so the asset says what it does. A MISSING \
+             entry means the adjacency was resolved; drop it from KNOWN_INERT."
+        );
+    }
+
     /// The guard cannot change which surface cave entrances exist, and this
     /// pins that it did not: markers come from the node lattice
     /// (`surface_entrances` never calls the tunnel query at all), so a change
@@ -2024,18 +2114,28 @@ mod tests {
     /// bucket and each one costs a spline solve -- the worst case, and the one
     /// a whole-map average hides completely.
     ///
-    /// Reported rather than tightly asserted: wall time on a shared machine is
-    /// noisy enough that a percent-level threshold would flake. The assertion
-    /// still catches the failure mode that matters -- a guard that scans every
-    /// indexed shape per column instead of rejecting on a bounding box.
+    /// Each sweep is run repeatedly and interleaved, and the **minimum** of
+    /// each side is reported. Noise on a shared machine is one-sided -- nothing
+    /// makes a run faster than an undisturbed one -- so the minimum is the
+    /// estimator for "what does this cost when nothing interferes", and
+    /// interleaving stops thermal or frequency drift landing entirely on
+    /// whichever side runs last. A single-shot version of this test once
+    /// reported +1.26 % on the uniform sweep for a change that provably cannot
+    /// touch it; that is what this shape exists to stop.
+    ///
+    /// Still reported rather than tightly asserted: a percent-level threshold
+    /// would flake regardless. The assertion catches the failure mode that
+    /// matters -- a guard that scans every indexed shape per column instead of
+    /// rejecting on a bounding box, which shows up as a multiple, not a
+    /// percent.
     #[test]
     #[ignore]
     fn the_guard_costs_little_on_the_per_column_query() {
         use crate::layer::{
-            authored_regions::authored_voids,
+            authored_regions::authored_voids_for as authored_voids,
             cave::{tunnel_bounds_at, tunnel_bounds_at_unguarded},
         };
-        use std::time::Instant;
+        use std::time::{Duration, Instant};
 
         let (world, index) = cromatolis_world();
         let index_ref = index.as_index_ref();
@@ -2083,15 +2183,64 @@ mod tests {
                 (start.elapsed(), sink)
             };
 
+            // How many of the uniform columns land in a non-empty bucket. It
+            // should be ~none: authored caves cover a percent or two of the
+            // map. That is *why* the uniform sweep is insensitive to anything
+            // about the shape array -- it never indexes one -- and asserting it
+            // here stops the next reader attributing a noise wobble on that
+            // sweep to a change in `VoidShape`.
+            let uniform_hits = uniform
+                .iter()
+                .filter(|&&wpos2d| !voids.in_chunk(wpos2d).is_empty())
+                .count();
+            let in_footprint_hits = in_footprint
+                .iter()
+                .filter(|&&wpos2d| !voids.in_chunk(wpos2d).is_empty())
+                .count();
+            println!(
+                "bucket hits: uniform {uniform_hits}/{}, in-footprint {in_footprint_hits}/{}",
+                uniform.len(),
+                in_footprint.len()
+            );
+            assert!(
+                uniform_hits * 50 < uniform.len(),
+                "the uniform sweep is supposed to miss the authored region almost entirely, but \
+                 {uniform_hits} of {} columns hit a bucket -- it is no longer measuring the \
+                 empty-bucket path",
+                uniform.len()
+            );
+            assert!(
+                in_footprint_hits * 2 > in_footprint.len(),
+                "the in-footprint sweep is supposed to land inside authored footprints, but only \
+                 {in_footprint_hits} of {} columns hit a bucket",
+                in_footprint.len()
+            );
+
             for (name, columns) in [("uniform", &uniform), ("in-footprint", &in_footprint)] {
-                // One untimed pass to warm whatever caches either path shares.
-                let _ = time(columns, false);
-                let (unguarded, _) = time(columns, false);
-                let (guarded, sink) = time(columns, true);
-                let overhead = guarded.as_secs_f64() / unguarded.as_secs_f64() - 1.0;
+                // Interleaved and repeated, reporting the MINIMUM of each.
+                // Noise here is one-sided -- scheduling, frequency scaling and
+                // core migration can only ever make a run slower -- so the
+                // minimum is the right estimator for "what does this cost when
+                // nothing interferes". A single shot with the unguarded run
+                // always first hands every monotonic drift to the guarded side,
+                // which is exactly how this harness produced a +1.26 % reading
+                // for a change that touches nothing on the uniform path.
+                const REPEATS: usize = 9;
+                let mut best_unguarded = Duration::MAX;
+                let mut best_guarded = Duration::MAX;
+                let mut sink = 0_i64;
+                for _ in 0..REPEATS {
+                    let (unguarded, s) = time(columns, false);
+                    best_unguarded = best_unguarded.min(unguarded);
+                    sink += s;
+                    let (guarded, s) = time(columns, true);
+                    best_guarded = best_guarded.min(guarded);
+                    sink += s;
+                }
+                let overhead = best_guarded.as_secs_f64() / best_unguarded.as_secs_f64() - 1.0;
                 println!(
-                    "{name}: {} columns, unguarded {unguarded:?}, guarded {guarded:?} ({:+.2} %) \
-                     [sink {sink}]",
+                    "{name}: {} columns, best-of-{REPEATS} unguarded {best_unguarded:?}, guarded \
+                     {best_guarded:?} ({:+.2} %) [sink {sink}]",
                     columns.len(),
                     overhead * 100.0
                 );
