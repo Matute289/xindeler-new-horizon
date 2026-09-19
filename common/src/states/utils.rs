@@ -1000,6 +1000,48 @@ pub fn attempt_wield(data: &JoinData<'_>, update: &mut StateUpdate) {
     }
 }
 
+/// Is the space a cylinder of `radius` and `z_max` would occupy at `pos` clear
+/// of solid terrain?
+///
+/// Samples every column the radius covers, not just the one the centre is in:
+/// standing near a block boundary straddles two, and checking only the centre
+/// would happily clear a body into a ceiling one column over.
+///
+/// Shared so that everything which can put a body upright asks the same
+/// question — a character standing up under its own power, and the server
+/// standing up somebody else's rescued character.
+pub fn terrain_column_is_clear<V>(terrain: &V, pos: Vec3<f32>, radius: f32, z_max: f32) -> bool
+where
+    V: ReadVol<Vox = Block>,
+{
+    let feet = pos.z.floor() as i32;
+    // The topmost block the body would occupy, inclusive.
+    let head = (pos.z + z_max - f32::EPSILON).floor() as i32;
+
+    let (x0, x1) = (
+        (pos.x - radius).floor() as i32,
+        (pos.x + radius).floor() as i32,
+    );
+    let (y0, y1) = (
+        (pos.y - radius).floor() as i32,
+        (pos.y + radius).floor() as i32,
+    );
+
+    (x0..=x1).all(|x| {
+        (y0..=y1).all(|y| {
+            (feet..=head).all(|z| {
+                terrain
+                    .get(Vec3::new(x, y, z))
+                    // Unloaded terrain is assumed clear. The collision solver
+                    // only visits loaded blocks, so this matches what the
+                    // physics would actually do there.
+                    .map(|block| !block.is_solid())
+                    .unwrap_or(true)
+            })
+        })
+    })
+}
+
 /// Is there room above this entity to hold itself in `posture`?
 ///
 /// A momentary shrink like a roll can grow back without asking, because the
@@ -1011,41 +1053,10 @@ pub fn attempt_wield(data: &JoinData<'_>, update: &mut StateUpdate) {
 ///
 /// So standing up is a request that can be refused. That contract is not new
 /// here: `crawl.rs` already refuses to let a downed player stand.
-///
-/// Samples every column the body's own radius covers, not just the one its
-/// centre is in: standing near a block boundary straddles two, and checking
-/// only the centre would happily clear a body into a ceiling one column over —
-/// producing exactly the jitter this refusal exists to prevent.
 pub fn has_room_for_posture(data: &JoinData<'_>, posture: Posture) -> bool {
     let scale = data.scale.map_or(1.0, |s| s.0);
     let (radius, _, z_max) = data.body.collider().terrain_cylinder_in(scale, posture);
-
-    let base = data.pos.0;
-    let feet = base.z.floor() as i32;
-    // The topmost block the body would occupy, inclusive.
-    let head = (base.z + z_max - f32::EPSILON).floor() as i32;
-
-    let (x0, x1) = (
-        (base.x - radius).floor() as i32,
-        (base.x + radius).floor() as i32,
-    );
-    let (y0, y1) = (
-        (base.y - radius).floor() as i32,
-        (base.y + radius).floor() as i32,
-    );
-
-    (x0..=x1).all(|x| {
-        (y0..=y1).all(|y| {
-            (feet..=head).all(|z| {
-                data.terrain
-                    .get(Vec3::new(x, y, z))
-                    // Unloaded terrain is assumed clear, matching every other
-                    // free-space check in the movement code.
-                    .map(|block| !block.is_solid())
-                    .unwrap_or(true)
-            })
-        })
-    })
+    terrain_column_is_clear(data.terrain, data.pos.0, radius, z_max)
 }
 
 /// Checks that player can `Sit` and updates `CharacterState` if so
