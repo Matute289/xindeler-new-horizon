@@ -75,9 +75,10 @@ use crate::{
     Canvas, Land,
     layer::authored_voids::{
         CapsuleShape, CapsuleSpan, DiscShape, EDGE_SOFTNESS, ProceduralContact, SURFACE_MARGIN,
+        chunk_query_rect, dist_to_rect, spline_reaches_rect,
     },
     sim::WorldSim,
-    util::{RandomField, SQUARE_4},
+    util::RandomField,
 };
 use common::{
     assets::{AssetExt, BoxedError, FileAsset, load_ron},
@@ -295,6 +296,14 @@ pub(crate) enum SizeClass {
 }
 
 impl SizeClass {
+    /// Every size class, in descending order. The single place the set is
+    /// enumerated for the tests below, so adding a class covers it in all of
+    /// them rather than in whichever ones someone remembers to update.
+    /// Generation itself never needs this -- it dispatches through
+    /// exhaustive `match`es, which the compiler checks.
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 4] = [Self::Giant, Self::Large, Self::Medium, Self::Small];
+
     /// See the `*_MINERAL_SCALE` constants: corrects the per-column mineral
     /// chance for how much carved floor this class actually has.
     fn mineral_scale(self) -> f32 {
@@ -790,8 +799,11 @@ fn apply_minerals_to_floor(
 /// The subset of one [`GeneratedCave`]'s shapes that can plausibly touch
 /// the chunk currently being generated, mirroring
 /// `cromatolis_interior.rs`'s `RelevantInterior` two-stage pruning (and,
-/// further back, `cave.rs::apply_caves_to`'s own `SQUARE_4`-based
-/// proximity filter).
+/// further back, `cave.rs::apply_caves_to`'s own proximity filter -- which
+/// is corner-based, but pads by the chunk diagonal first, so four corners
+/// stand in for the whole chunk there; see the banner above
+/// `chunk_query_rect` in `authored_voids.rs` for why dropping that slack is
+/// what made the copies here wrong).
 struct RelevantCave<'a> {
     hub: Option<&'a HubGeom>,
     branches: Vec<&'a BranchSeg>,
@@ -816,13 +828,11 @@ pub fn apply_cromatolis_cave_features_to(canvas: &mut Canvas) {
     let chunk_size = chunk_size_i.map(|e| e as f32);
     let chunk_center = chunk_wpos.map(|e| e as f32) + chunk_size / 2.0;
     let chunk_diag = (chunk_size.map(|e| e * e).sum()).sqrt() / 2.0;
-    let corners_i32 = SQUARE_4.map(|rpos| chunk_wpos + rpos * chunk_size_i);
-    let corners_f32 = corners_i32.map(|c| c.map(|e| e as f32));
-    let corners_f64 = corners_i32.map(|c| c.map(|e| e as f64 + 0.5));
+    let chunk_rect = chunk_query_rect(chunk_wpos);
 
     // Two-stage pruning: first reject whole caves whose overall bounding
     // circle can't reach this chunk at all, then reject individual
-    // hub/branch shapes that don't touch any of the chunk's 4 corners.
+    // hub/branch shapes that can't reach the chunk's column rectangle.
     let relevant: Vec<RelevantCave> = caves
         .iter()
         .filter(|cave| {
@@ -830,11 +840,11 @@ pub fn apply_cromatolis_cave_features_to(canvas: &mut Canvas) {
                 <= cave.bounds.1 + chunk_diag + 32.0
         })
         .filter_map(|cave| {
-            let hub = hub_touches_chunk(&cave.hub, &corners_f32).then_some(&cave.hub);
+            let hub = hub_touches_chunk(&cave.hub, chunk_rect).then_some(&cave.hub);
             let branches: Vec<&BranchSeg> = cave
                 .branches
                 .iter()
-                .filter(|branch| branch_touches_chunk(branch, &corners_f64))
+                .filter(|branch| branch_touches_chunk(branch, chunk_rect))
                 .collect();
             if hub.is_none() && branches.is_empty() {
                 None
@@ -875,21 +885,28 @@ pub fn apply_cromatolis_cave_features_to(canvas: &mut Canvas) {
     });
 }
 
-fn hub_touches_chunk(hub: &HubGeom, corners: &[Vec2<f32>; 4]) -> bool {
-    let max_radius = hub.radius + EDGE_SOFTNESS;
-    let anchor = hub.anchor2d.map(|e| e as f32);
-    corners
-        .iter()
-        .any(|corner| corner.distance(anchor) <= max_radius)
+/// Conservative reach of a hub chamber against the chunk's column
+/// rectangle.
+///
+/// Deliberately *not* a test of the chunk's four corners: a hub anchor sits
+/// at a chunk centre (`cpos_to_wpos_center`), 22.63 blocks from every
+/// corner, so every class but `Giant` used to be pruned out of the very
+/// chunk it sits in and only survived at all because its branch roots
+/// re-carved part of the chamber. See the COW-23 spec, section 7.1.
+fn hub_touches_chunk(hub: &HubGeom, chunk_rect: Aabr<f64>) -> bool {
+    let max_radius = (hub.radius + EDGE_SOFTNESS) as f64;
+    let anchor = hub.anchor2d.map(|e| e as f64);
+    dist_to_rect(chunk_rect, anchor) <= max_radius
 }
 
-fn branch_touches_chunk(seg: &BranchSeg, corners: &[Vec2<f64>; 4]) -> bool {
+/// Conservative reach of a branch tunnel against the chunk's column
+/// rectangle -- the capsule counterpart of [`hub_touches_chunk`], measured
+/// along the branch's real bowed spline rather than its chord.
+fn branch_touches_chunk(seg: &BranchSeg, chunk_rect: Aabr<f64>) -> bool {
     let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
     let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
     let max_dist = seg.a_radius.max(seg.b_radius) as f64 + EDGE_SOFTNESS as f64 + 1.0;
-    corners.iter().any(|&corner| {
-        spline_sample(a2, b2, seg.curve, corner).is_some_and(|(_, dist)| dist <= max_dist)
-    })
+    spline_reaches_rect(a2, b2, seg.curve, chunk_rect, max_dist)
 }
 
 fn edge_weight(dist: f32, radius: f32) -> f32 { ((radius - dist) / EDGE_SOFTNESS).clamp(0.0, 1.0) }
@@ -994,7 +1011,173 @@ fn carve_branch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CanvasInfo;
+    use crate::{CanvasInfo, util::SQUARE_4};
+
+    /// Every size class's hub chamber must be recognised as touching the
+    /// very chunk it is anchored in.
+    ///
+    /// This is the regression the whole change exists for. A hub anchor
+    /// sits at a chunk *centre* (`cpos_to_wpos_center`), 22.63 blocks from
+    /// all four corners, while `Large`/`Medium`/`Small` reach only
+    /// 22 / 16 / 11 blocks (`*_HUB_RADIUS + EDGE_SOFTNESS`). The corner-only
+    /// test this replaced therefore answered "no" for every class but
+    /// `Giant`, in *every* chunk, and those chambers survived only because
+    /// their branch roots re-carved part of them -- 39.5 % of the intended
+    /// chamber, for `Small`. COW-23 §7.1.
+    #[test]
+    fn every_size_class_hub_touches_its_own_chunk() {
+        let chunk_wpos = Vec2::new(4096, 4096);
+        let anchor = chunk_wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32) / 2;
+        let chunk_rect = chunk_query_rect(chunk_wpos);
+        // At least one class must still be small enough for the corner test
+        // to have missed it, or this test has stopped testing anything --
+        // asserted on the radii as they are, so retuning a class for
+        // *balance* reasons cannot silently defuse it.
+        let mut any_corner_blind = false;
+        for class in SizeClass::ALL {
+            let radius = class.profile().hub_radius;
+            let hub = HubGeom {
+                anchor2d: anchor,
+                floor_z: 0,
+                ceiling_z: 20,
+                radius,
+            };
+            assert!(
+                hub_touches_chunk(&hub, chunk_rect),
+                "{class:?} hub (radius {radius}) must touch the chunk it is anchored in"
+            );
+            any_corner_blind |= SQUARE_4.iter().all(|offset| {
+                let corner = (chunk_wpos + offset * TerrainChunkSize::RECT_SIZE.map(|e| e as i32))
+                    .map(|e| e as f32);
+                corner.distance(anchor.map(|e| e as f32)) > radius + EDGE_SOFTNESS
+            });
+        }
+        assert!(
+            any_corner_blind,
+            "no size class is small enough to sit clear of every chunk corner any more, so this \
+             test no longer covers the defect it was written for"
+        );
+    }
+
+    #[test]
+    fn a_hub_far_from_the_chunk_is_still_pruned() {
+        let hub = HubGeom {
+            anchor2d: Vec2::new(4096, 4096),
+            floor_z: 0,
+            ceiling_z: 20,
+            radius: GIANT_HUB_RADIUS,
+        };
+        assert!(!hub_touches_chunk(
+            &hub,
+            chunk_query_rect(Vec2::new(8192, 8192))
+        ));
+    }
+
+    /// The capsule counterpart: a branch whose whole span sits inside one
+    /// chunk, touching none of its corners.
+    #[test]
+    fn a_branch_wholly_inside_the_chunk_is_not_pruned() {
+        let chunk_wpos = Vec2::new(4096, 4096);
+        let centre = chunk_wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32) / 2;
+        let seg = BranchSeg {
+            a: (centre - Vec2::new(4, 4)).with_z(0),
+            b: (centre + Vec2::new(4, 4)).with_z(0),
+            a_radius: SMALL_HUB_RADIUS,
+            b_radius: SMALL_BRANCH_RADIUS,
+            headroom: SMALL_HEADROOM,
+            curve: 0.0,
+        };
+        assert!(branch_touches_chunk(&seg, chunk_query_rect(chunk_wpos)));
+        assert!(!branch_touches_chunk(
+            &seg,
+            chunk_query_rect(Vec2::new(8192, 8192))
+        ));
+    }
+
+    /// The pruning must never decline a chunk the carve would have written
+    /// to. Brute-forced against the carve's own predicates over every
+    /// column of a chunk, for a spread of hub/branch geometries and chunk
+    /// offsets -- including the bowed branches, whose curve is what makes a
+    /// chord-based shortcut wrong.
+    #[test]
+    fn pruning_never_declines_a_chunk_the_carve_would_touch() {
+        let chunk_size = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+        let origin = Vec2::new(4096, 4096);
+        let centre = origin + chunk_size / 2;
+        let chunk_rect = chunk_query_rect(origin);
+
+        // Hubs: every class, walked across the chunk and out past its edge.
+        for class in SizeClass::ALL {
+            let radius = class.profile().hub_radius;
+            for dx in (-64..=64).step_by(7) {
+                for dy in (-64..=64).step_by(7) {
+                    let hub = HubGeom {
+                        anchor2d: centre + Vec2::new(dx, dy),
+                        floor_z: 0,
+                        ceiling_z: 20,
+                        radius,
+                    };
+                    let carved = columns_of(origin).any(|wpos2d| {
+                        wpos2d
+                            .map(|e| e as f32)
+                            .distance(hub.anchor2d.map(|e| e as f32))
+                            <= hub.radius + EDGE_SOFTNESS
+                    });
+                    assert!(
+                        !carved || hub_touches_chunk(&hub, chunk_rect),
+                        "{class:?} hub at +({dx}, {dy}) carves this chunk but was pruned"
+                    );
+                }
+            }
+        }
+
+        // Branches: straight and bowed both ways, at a spread of lengths,
+        // orientations and offsets.
+        for curve in [-0.4f32, -0.15, 0.0, 0.15, 0.4] {
+            for length in [12i32, 40, 96, 180] {
+                for angle_step in 0..8 {
+                    let angle = angle_step as f32 / 8.0 * TAU;
+                    let dir = Vec2::new(angle.cos(), angle.sin());
+                    for offset in [-72i32, -24, 0, 24, 72] {
+                        let a = centre + Vec2::new(offset, offset / 2);
+                        let b = a + (dir * length as f32).map(|e| e as i32);
+                        let seg = BranchSeg {
+                            a: a.with_z(0),
+                            b: b.with_z(0),
+                            a_radius: MEDIUM_HUB_RADIUS,
+                            b_radius: MEDIUM_BRANCH_RADIUS,
+                            headroom: MEDIUM_HEADROOM,
+                            curve,
+                        };
+                        let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
+                        let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
+                        let carved = columns_of(origin).any(|wpos2d| {
+                            let point = wpos2d.map(|e| e as f64 + 0.5);
+                            spline_sample(a2, b2, seg.curve, point).is_some_and(|(t, dist)| {
+                                let radius = Lerp::lerp_unclamped(
+                                    seg.a_radius as f64,
+                                    seg.b_radius as f64,
+                                    t,
+                                );
+                                dist <= radius + EDGE_SOFTNESS as f64
+                            })
+                        });
+                        assert!(
+                            !carved || branch_touches_chunk(&seg, chunk_rect),
+                            "branch curve {curve} len {length} angle {angle_step}/8 offset \
+                             {offset} carves this chunk but was pruned"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every column `Canvas::foreach_col` visits for the chunk at `origin`.
+    fn columns_of(origin: Vec2<i32>) -> impl Iterator<Item = Vec2<i32>> {
+        let size = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+        (0..size.y).flat_map(move |y| (0..size.x).map(move |x| origin + Vec2::new(x, y)))
+    }
 
     fn sample_asset() -> CaveFeaturesAsset {
         CaveFeaturesAsset {
@@ -1861,6 +2044,355 @@ mod tests {
             &threadpool,
             &|_| {},
         )
+    }
+
+    /// **T19 of the COW-23 task board.** How much of each authored cave's
+    /// *intended* hub chamber is actually air in the real generated world.
+    ///
+    /// This is the measurement the corner-pruning fix is accepted against.
+    /// Its baseline, taken on the corner-only predicates before the fix
+    /// (spec section 7.1, n = 10 per class): Giant 100.0 %, Large 99.9 %,
+    /// Medium 93.4 %, **Small 39.5 %** -- a hub anchor sits at a chunk
+    /// centre, 22.63 blocks from every corner, so every class but `Giant`
+    /// was pruned out of its own chunk and survived only on what its branch
+    /// roots happened to re-carve.
+    ///
+    /// The chamber is defined exactly as [`carve_hub`] defines it (`dist <
+    /// radius`, `floor_z ..= min(ceiling_z, col_alt - SURFACE_MARGIN)`), and
+    /// only columns whose band is genuinely below that surface cap are
+    /// counted -- a column the cap closes entirely was never intended to be
+    /// carved and would drag the fraction down for a reason that has
+    /// nothing to do with pruning.
+    ///
+    /// Ignored by default: it generates the real Cromatolis world and every
+    /// chunk the measured chambers touch.
+    /// `cargo test -p xindeler-world --lib
+    /// cave_features::tests::realised_hub_chamber -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn realised_hub_chamber_is_at_least_99_percent_in_every_size_class() {
+        use common::vol::ReadVol;
+        use hashbrown::HashMap;
+
+        /// Sample size per class for the headline fraction, matching the
+        /// baseline the spec measured.
+        const SAMPLE_PER_CLASS: usize = 10;
+
+        let (world, index) = cromatolis_world();
+        let index_ref = index.as_index_ref();
+        let sim = world.sim();
+
+        let asset = CaveFeaturesAsset::load_owned(CAVE_FEATURES_ASSET).unwrap();
+        let class_of: HashMap<&str, SizeClass> = asset
+            .features
+            .iter()
+            .map(|f| (f.id.as_str(), f.size_class))
+            .collect();
+        let caves = build_all_generated_caves(sim);
+
+        // Every cave whose chamber this run measures: all of `Medium` and
+        // `Small` (the classes the fix changes, so their voxel totals are
+        // reportable in full) plus `SAMPLE_PER_CLASS` of the other two.
+        let class_index =
+            |class: SizeClass| SizeClass::ALL.iter().position(|c| *c == class).unwrap();
+        let mut per_class_seen = [0_usize; SizeClass::ALL.len()];
+        let measured: Vec<(&GeneratedCave, SizeClass)> = caves
+            .iter()
+            .filter_map(|cave| {
+                let class = *class_of.get(cave.id())?;
+                let seen = &mut per_class_seen[class_index(class)];
+                *seen += 1;
+                let keep = matches!(class, SizeClass::Medium | SizeClass::Small)
+                    || *seen <= SAMPLE_PER_CLASS;
+                keep.then_some((cave, class))
+            })
+            .collect();
+
+        // The intended chamber, column by column, resolved against the same
+        // `col.alt` the carve sees. Collected first so the (expensive)
+        // chunk generation below can be done once per chunk.
+        struct Column {
+            cave: usize,
+            wpos2d: Vec2<i32>,
+            col_alt: f32,
+            floor_z: i32,
+            top_z: i32,
+        }
+        let columns: Vec<Column> = CanvasInfo::with_mock_canvas_info(index_ref, sim, |info| {
+            let mut columns = Vec::new();
+            for (i, (cave, _)) in measured.iter().enumerate() {
+                let hub = &cave.hub;
+                let reach = (hub.radius + EDGE_SOFTNESS).ceil() as i32;
+                let anchor = hub.anchor2d.map(|e| e as f32);
+                for dx in -reach..=reach {
+                    for dy in -reach..=reach {
+                        let wpos2d = hub.anchor2d + Vec2::new(dx, dy);
+                        if wpos2d.map(|e| e as f32).distance(anchor) >= hub.radius {
+                            continue;
+                        }
+                        let Some(col_alt) = info.col_or_gen(wpos2d).map(|col| col.alt) else {
+                            continue;
+                        };
+                        let top_z = hub.ceiling_z.min((col_alt - SURFACE_MARGIN).floor() as i32);
+                        if top_z <= hub.floor_z {
+                            continue;
+                        }
+                        columns.push(Column {
+                            cave: i,
+                            wpos2d,
+                            col_alt,
+                            floor_z: hub.floor_z,
+                            top_z,
+                        });
+                    }
+                }
+            }
+            columns
+        });
+
+        // Group by chunk so each chunk is generated exactly once.
+        let mut by_chunk: HashMap<Vec2<i32>, Vec<&Column>> = HashMap::new();
+        for column in &columns {
+            by_chunk
+                .entry(column.wpos2d.wpos_to_cpos())
+                .or_default()
+                .push(column);
+        }
+
+        let mut intended = vec![0_u64; measured.len()];
+        // What the pruning lets the carve reach, under the old corner-only
+        // predicate and under the new rectangle one. Both are evaluated on
+        // the same voxels in the same run, so the before/after is a
+        // measurement rather than a quotation of the spec's baseline.
+        let mut reached_before = vec![0_u64; measured.len()];
+        let mut reached_after = vec![0_u64; measured.len()];
+        // Actually air in the finished chunk. This is the *shipped* result
+        // and is always a little under `reached_after`: later passes write
+        // boulders and tree trunks back into a shallow chamber, which is a
+        // separate (already-logged) topic and affects both runs identically.
+        let mut air_in_world = vec![0_u64; measured.len()];
+
+        // A chunk this measurement cannot generate (a cave whose chamber
+        // reaches past the map edge, say) is skipped and counted, not a
+        // panic: the numbers below are meant to survive the asset changing
+        // under them.
+        let mut chunks_skipped = 0_usize;
+        for (chunk_pos, columns) in by_chunk {
+            let Ok((chunk, _supplement)) =
+                world.generate_chunk(index_ref, chunk_pos, None, || false, None, None)
+            else {
+                chunks_skipped += 1;
+                continue;
+            };
+            let chunk_wpos = chunk_pos * TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+            let chunk_rect = chunk_query_rect(chunk_wpos);
+            let corners_i32 = SQUARE_4
+                .map(|rpos| chunk_wpos + rpos * TerrainChunkSize::RECT_SIZE.map(|e| e as i32));
+            let corners_f32 = corners_i32.map(|c| c.map(|e| e as f32));
+            let corners_f64 = corners_i32.map(|c| c.map(|e| e as f64 + 0.5));
+
+            for column in columns {
+                let cave = measured[column.cave].0;
+                let local = column.wpos2d - chunk_wpos;
+                let band = column.floor_z..=column.top_z;
+                let carved_before = carved_z_set(
+                    cave,
+                    column,
+                    &band,
+                    |hub| old_hub_touches_chunk(hub, &corners_f32),
+                    |seg| old_branch_touches_chunk(seg, &corners_f64),
+                );
+                let carved_after = carved_z_set(
+                    cave,
+                    column,
+                    &band,
+                    |hub| hub_touches_chunk(hub, chunk_rect),
+                    |seg| branch_touches_chunk(seg, chunk_rect),
+                );
+
+                for (i, z) in band.clone().enumerate() {
+                    intended[column.cave] += 1;
+                    if carved_before[i] {
+                        reached_before[column.cave] += 1;
+                    }
+                    if carved_after[i] {
+                        reached_after[column.cave] += 1;
+                    }
+                    if chunk
+                        .get(Vec3::new(local.x, local.y, z))
+                        .is_ok_and(|block| !block.is_filled())
+                    {
+                        air_in_world[column.cave] += 1;
+                    }
+                }
+            }
+        }
+
+        println!(
+            "\n(headline row per class = first {SAMPLE_PER_CLASS}, matching the spec's baseline; \
+             `(all)` = every cave of that class)\n{:<9} {:>4} {:>12} {:>12} {:>8} {:>12} {:>8} \
+             {:>12} {:>8}",
+            "class",
+            "n",
+            "intended",
+            "before",
+            "before %",
+            "after",
+            "after %",
+            "world air",
+            "air %"
+        );
+        let mut failures = Vec::new();
+        for class in SizeClass::ALL {
+            let of_class: Vec<usize> = measured
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, c))| *c == class)
+                .map(|(i, _)| i)
+                .collect();
+
+            let report = |label: &str, set: &[usize]| -> (f64, f64) {
+                let sum = |v: &[u64]| -> u64 { set.iter().map(|i| v[*i]).sum() };
+                let (intended_sum, before, after, air) = (
+                    sum(&intended),
+                    sum(&reached_before),
+                    sum(&reached_after),
+                    sum(&air_in_world),
+                );
+                let pct = |n: u64| {
+                    if intended_sum == 0 {
+                        1.0
+                    } else {
+                        n as f64 / intended_sum as f64
+                    }
+                };
+                println!(
+                    "{label:<9} {:>4} {intended_sum:>12} {before:>12} {:>7.1} % {after:>12} \
+                     {:>7.1} % {air:>12} {:>7.1} %",
+                    set.len(),
+                    pct(before) * 100.0,
+                    pct(after) * 100.0,
+                    pct(air) * 100.0,
+                );
+                (pct(before), pct(after))
+            };
+
+            let (_, headline) = report(
+                &format!("{class:?}"),
+                &of_class[..of_class.len().min(SAMPLE_PER_CLASS)],
+            );
+            // The headline row exists to be comparable with the spec's own
+            // n = 10 baseline, but the gate is on *every* cave of the class:
+            // a regression in cave #40 must not be able to hide behind the
+            // first ten.
+            let gated = if of_class.len() > SAMPLE_PER_CLASS {
+                report("  (all)", &of_class).1
+            } else {
+                headline
+            };
+            if gated < 0.99 {
+                failures.push(format!(
+                    "{class:?} reaches only {:.1} % over all {} caves",
+                    gated * 100.0,
+                    of_class.len()
+                ));
+            }
+        }
+        println!();
+        assert_eq!(
+            chunks_skipped, 0,
+            "chunks could not be generated for the measured chambers, so the numbers above are \
+             incomplete"
+        );
+        assert!(
+            failures.is_empty(),
+            "T19 requires the pruning to let the carve reach >= 99 % of the intended hub chamber \
+             in every size class: {}",
+            failures.join("; ")
+        );
+
+        /// Which `z` of `band` the carve writes at this column, given a
+        /// pruning verdict for the hub and for each branch. A faithful
+        /// replay of [`carve_hub`] and [`carve_branch`], restricted to the
+        /// hub chamber's own band -- so a branch root re-carving part of a
+        /// chamber the hub was pruned out of counts, which is exactly why
+        /// the corner-only predicate scored 39.5 % rather than 0 % for
+        /// `Small`.
+        fn carved_z_set(
+            cave: &GeneratedCave,
+            column: &Column,
+            band: &std::ops::RangeInclusive<i32>,
+            hub_passes: impl Fn(&HubGeom) -> bool,
+            branch_passes: impl Fn(&BranchSeg) -> bool,
+        ) -> Vec<bool> {
+            let len = (band.end() - band.start() + 1).max(0) as usize;
+            let mut carved = vec![false; len];
+            let mut mark = |lo: i32, hi: i32| {
+                for z in lo.max(*band.start())..=hi.min(*band.end()) {
+                    carved[(z - band.start()) as usize] = true;
+                }
+            };
+
+            let hub = &cave.hub;
+            if hub_passes(hub) {
+                let dist = column
+                    .wpos2d
+                    .map(|e| e as f32)
+                    .distance(hub.anchor2d.map(|e| e as f32));
+                if edge_weight(dist, hub.radius) > 0.0 {
+                    let ceiling_z = hub
+                        .ceiling_z
+                        .min((column.col_alt - SURFACE_MARGIN).floor() as i32);
+                    if ceiling_z > hub.floor_z {
+                        mark(hub.floor_z, ceiling_z);
+                    }
+                }
+            }
+
+            let point = column.wpos2d.map(|e| e as f64 + 0.5);
+            for seg in &cave.branches {
+                if !branch_passes(seg) {
+                    continue;
+                }
+                let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
+                let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
+                let Some((t, dist)) = spline_sample(a2, b2, seg.curve, point) else {
+                    continue;
+                };
+                let radius =
+                    Lerp::lerp_unclamped(seg.a_radius as f64, seg.b_radius as f64, t) as f32;
+                if edge_weight(dist as f32, radius) <= 0.0 {
+                    continue;
+                }
+                let floor_z = Lerp::lerp_unclamped(seg.a.z as f64, seg.b.z as f64, t);
+                let ceiling_z =
+                    (floor_z + seg.headroom as f64).min((column.col_alt - SURFACE_MARGIN) as f64);
+                if ceiling_z <= floor_z {
+                    continue;
+                }
+                mark(floor_z.floor() as i32, ceiling_z.ceil() as i32);
+            }
+            carved
+        }
+
+        /// The corner-only predicates this change replaced, kept here so
+        /// the "before" column above is measured rather than quoted.
+        fn old_hub_touches_chunk(hub: &HubGeom, corners: &[Vec2<f32>; 4]) -> bool {
+            let max_radius = hub.radius + EDGE_SOFTNESS;
+            let anchor = hub.anchor2d.map(|e| e as f32);
+            corners
+                .iter()
+                .any(|corner| corner.distance(anchor) <= max_radius)
+        }
+
+        fn old_branch_touches_chunk(seg: &BranchSeg, corners: &[Vec2<f64>; 4]) -> bool {
+            let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
+            let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
+            let max_dist = seg.a_radius.max(seg.b_radius) as f64 + EDGE_SOFTNESS as f64 + 1.0;
+            corners.iter().any(|&corner| {
+                spline_sample(a2, b2, seg.curve, corner).is_some_and(|(_, dist)| dist <= max_dist)
+            })
+        }
     }
 
     /// How many blocks of `z` a carved band and a tunnel's range share.

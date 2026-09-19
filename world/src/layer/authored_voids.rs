@@ -1082,7 +1082,7 @@ fn spline_ctrl_offset(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32) -> Vec2<f32> {
 /// copies have it, and dropping it here would be the one edit that could make
 /// the protected volume stop matching the carved one.
 fn spline_sample(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32, point: Vec2<f64>) -> Option<(f64, f64)> {
-    let spline = river_spline_coeffs(a2, spline_ctrl_offset(a2, b2, curve), b2);
+    let spline = spline_coeffs(a2, b2, curve);
     let (t, closest, dist_sq) = quadratic_nearest_point(&spline, point, Vec2::new(a2, b2))?;
     if !(0.0..=1.0).contains(&t) {
         return None;
@@ -1090,9 +1090,181 @@ fn spline_sample(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32, point: Vec2<f64>) -> 
     Some((t, closest.distance(point).min(dist_sq.sqrt())))
 }
 
+/// `p(t) = x t² + y t + z`, the one definition of the quadratic an authored
+/// tunnel follows. Every consumer of the curve -- the nearest-point solve in
+/// [`spline_sample`], the rectangle walk in [`spline_reaches_rect`], and the
+/// tests that need a point actually *on* the curve -- goes through here, so
+/// there is no second place the control offset could drift.
+pub(crate) fn spline_coeffs(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32) -> Vec3<Vec2<f64>> {
+    river_spline_coeffs(a2, spline_ctrl_offset(a2, b2, curve), b2)
+}
+
 /// Chunk position of a world position, at `TerrainChunkSize` granularity.
 fn wpos_to_cpos(wpos: Vec2<i32>) -> Vec2<i32> {
     wpos.map2(TerrainChunkSize::RECT_SIZE, |e, sz| e.div_euclid(sz as i32))
+}
+
+// ---------------------------------------------------------------------
+// Shape-vs-chunk-rectangle proximity, shared by the two Cromatolis carve
+// modules' `*_touches_chunk` pruning.
+//
+// These live here, next to the engine-general `spline_sample` above, for the
+// same reason that one does: the rectangle side of the question has to agree
+// with the carve exactly, and the two carve modules getting their own copies
+// of the `+ 0.5` column convention is precisely the drift that produced the
+// defect these replace (COW-23 §7.1 -- a corner-only test is blind to a shape
+// that lies entirely *inside* a chunk, touching no corner at all).
+//
+// Why the corner form was safe where it came from, and stopped being safe
+// here: `cave.rs::apply_caves_to` also tests the four corners, but it pads its
+// radius by the chunk's own diagonal first (`cave.rs`'s `+ diagonal + 1.0`,
+// ~45.3 blocks), which makes four corners effectively stand in for the whole
+// chunk. The Cromatolis copies inherited the form and dropped the slack, then
+// used it with tight per-shape radii -- the smallest of which (11 blocks) is
+// less than half the 22.63-block centre-to-corner distance.
+// ---------------------------------------------------------------------
+
+/// The rectangle of column positions one chunk's `Canvas::foreach_col` will
+/// actually visit, as a single box covering both conventions the carvers use
+/// to address a column: `carve_hub`/`carve_level_room` query `wpos2d as f32`,
+/// the spline carvers query the column *centre*, `wpos2d as f64 + 0.5`. The
+/// visited columns run `chunk_wpos ..= chunk_wpos + RECT_SIZE - 1`, so the
+/// union of the two conventions is `[chunk_wpos, chunk_wpos + RECT_SIZE -
+/// 0.5]`.
+///
+/// Note this is *tighter* than the four `SQUARE_4` corners it replaces (whose
+/// far corner sat a full block past the last visited column) while still being
+/// exact: no column outside this box is ever queried, so nothing can be lost by
+/// pruning against it.
+pub(crate) fn chunk_query_rect(chunk_wpos: Vec2<i32>) -> Aabr<f64> {
+    let last = chunk_wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32) - 1;
+    Aabr {
+        min: chunk_wpos.map(|e| e as f64),
+        max: last.map(|e| e as f64 + 0.5),
+    }
+}
+
+/// Distance from `point` to the nearest point of `rect` -- zero when `point`
+/// lies inside it.
+///
+/// This is the whole of the fix for a *disc*: clamping the centre into the
+/// rectangle and measuring from there answers "does this shape reach this
+/// chunk", where testing the chunk's corners only answered "does this shape
+/// reach one of these four points".
+///
+/// `rect` must be non-empty and finite -- `f64::clamp` panics otherwise.
+/// Every production caller gets its rectangle from [`chunk_query_rect`],
+/// which cannot produce either.
+pub(crate) fn dist_to_rect(rect: Aabr<f64>, point: Vec2<f64>) -> f64 {
+    dist_sq_to_rect(rect, point).sqrt()
+}
+
+/// [`dist_to_rect`] without the final `sqrt`, for the sample loop below,
+/// where the `min`/`max` accumulation is monotone under squaring and only
+/// the two survivors need a root taken.
+fn dist_sq_to_rect(rect: Aabr<f64>, point: Vec2<f64>) -> f64 {
+    debug_assert!(
+        rect.min.x <= rect.max.x && rect.min.y <= rect.max.y,
+        "dist_to_rect needs a non-empty rectangle; f64::clamp panics on an inverted range"
+    );
+    let nearest = Vec2::new(
+        point.x.clamp(rect.min.x, rect.max.x),
+        point.y.clamp(rect.min.y, rect.max.y),
+    );
+    nearest.distance_squared(point)
+}
+
+/// How many points [`spline_reaches_rect`] takes along a capsule, from the
+/// capsule's own bowed length rather than as a fixed count.
+///
+/// The count only trades over-inclusion against work -- the test stays
+/// conservative at any count -- but a fixed count trades them badly at both
+/// ends. Authored capsules span two orders of magnitude: a `Small` cave
+/// branch is a couple of dozen blocks, while an interior connection is laid
+/// out at `(drop * slope).clamp(48.0, 420.0)` and the real asset's drops push
+/// many of them to the 420 ceiling. A count that keeps the long ones' halo
+/// tight is wasted on the short ones, and one that suits the short ones
+/// leaves the long ones with a halo several times the tunnel's own radius.
+///
+/// One sample per ~4 blocks of the length estimate below, floored at 9 (so a
+/// very short capsule is still sampled properly) and capped at 129 (so nothing
+/// can make this unbounded). Measured over the real length × curve range that
+/// holds the slack term to **1.1 – 3.2 blocks** everywhere, against the 8.5 –
+/// 20 block thresholds the callers pass.
+///
+/// The estimate is a rough one, not a bound: `|b - a| * (1 + 3|curve|)`
+/// under-reads a straight capsule (whose true arc length is 1.5 × the chord),
+/// so a straight one really gets a sample per ~6 blocks. That is deliberate
+/// and safe -- the slack term uses the *measured* widest gap, never this
+/// estimate, so getting the count wrong can only cost accuracy, never
+/// correctness.
+fn spline_rect_samples(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32) -> usize {
+    let bowed = a2.distance(b2) * (1.0 + 3.0 * curve.abs() as f64);
+    ((bowed / 4.0).ceil() as usize).clamp(9, 129)
+}
+
+/// Does the tube of radius `max_dist` around the bowed `a2` -> `b2` spline
+/// reach the rectangle `rect`?
+///
+/// Sampled along the curve rather than solved, because [`spline_sample`]
+/// answers the opposite question: given one *point*, how far is it from the
+/// curve. That cannot say whether any point of a rectangle is near the curve,
+/// which is what pruning needs. So the curve is walked instead and each sample
+/// measured against the rectangle with [`dist_to_rect`].
+///
+/// **Conservative at any sample count**, by construction rather than by
+/// tuning. Distance-to-a-rectangle is 1-Lipschitz, so a point of the curve
+/// between two samples can be no nearer the rectangle than the closer sample
+/// is, minus how far that point strays from the two samples. Two terms bound
+/// that stray, and both are added back to the threshold:
+///
+/// * **half the widest chord** between consecutive samples -- the most a point
+///   of the straight line joining them can be from the nearer end;
+/// * **the sub-arc's sagitta**, how far the *curve* bows off that chord. For
+///   `p(t) = A t² + B t + C` over a step `h` the deviation is exactly `|A| h²
+///   u(u - 1)`, maximal `|A| h² / 4` at the midpoint -- so a bowed capsule is
+///   covered without assuming the chord approximates it.
+///
+/// Over-inclusion only costs a chunk a per-column carve attempt that declines;
+/// under-inclusion is what silently loses geometry, which is the defect this
+/// replaces.
+///
+/// The sampled parameter range is `[0, 1]`, matching [`spline_sample`]'s own
+/// rejection of `t` outside it -- i.e. the same segment the carve will draw.
+pub(crate) fn spline_reaches_rect(
+    a2: Vec2<f64>,
+    b2: Vec2<f64>,
+    curve: f32,
+    rect: Aabr<f64>,
+    max_dist: f64,
+) -> bool {
+    debug_assert!(max_dist >= 0.0, "a capsule's reach cannot be negative");
+    let spline = spline_coeffs(a2, b2, curve);
+    let samples = spline_rect_samples(a2, b2, curve);
+    let step = 1.0 / (samples - 1) as f64;
+    let max_dist_sq = max_dist * max_dist;
+    // Accumulated squared: `min` and `max` are monotone under squaring, so
+    // only the two survivors need a root taken instead of one per sample.
+    let mut prev: Option<Vec2<f64>> = None;
+    let mut widest_gap_sq = 0.0f64;
+    let mut nearest_sq = f64::INFINITY;
+    for i in 0..samples {
+        let t = i as f64 * step;
+        let point = spline.x * t * t + spline.y * t + spline.z;
+        // A sample already inside the threshold settles it; the slack terms
+        // below only ever matter for the negative verdict.
+        let dist_sq = dist_sq_to_rect(rect, point);
+        if dist_sq <= max_dist_sq {
+            return true;
+        }
+        if let Some(prev) = prev {
+            widest_gap_sq = widest_gap_sq.max(prev.distance_squared(point));
+        }
+        prev = Some(point);
+        nearest_sq = nearest_sq.min(dist_sq);
+    }
+    let sagitta = spline.x.magnitude() * step * step / 4.0;
+    nearest_sq.sqrt() <= max_dist + widest_gap_sq.sqrt() / 2.0 + sagitta
 }
 
 #[cfg(test)]
