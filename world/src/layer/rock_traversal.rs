@@ -65,11 +65,9 @@ pub(crate) fn probe_rocks_in(
     max: Vec2<i32>,
     stride: i32,
 ) -> Vec<ProbedRock> {
-    use crate::util::StructureGen2d;
-
     let land = info.land();
     let params = TraversalParams::ENGINE;
-    StructureGen2d::new(info.index().seed, 24, 10)
+    crate::layer::rock::rock_lattice(info.index().seed)
         .iter(min, max)
         .filter_map(|(wpos, seed)| {
             let rock = crate::layer::rock::rock_at(wpos, seed, info.col_or_gen(wpos)?.as_ref())?;
@@ -432,6 +430,41 @@ mod tests {
                  {player_only}",
                 classes[0], classes[1], classes[2]
             );
+
+            // Locators for the in-client visual pass (COW-23 T28), which is
+            // the only part of this row a test cannot answer. Capped, and
+            // ordered repaired-first within the probe's own lattice sweep
+            // order, so the list is short, stable and copy-pasteable into a
+            // `/goto`. Repaired rocks lead because R2's cut channel is the
+            // operation T28 exists to look at.
+            //
+            // This counts rocks the analysis *classified* in an authored cave,
+            // which is a subset of the `rocks intersecting an AUTHORED cave`
+            // line above: a rock whose verdict came back `Clear` reaches the
+            // cave but has nothing to look at.
+            let mut locators: Vec<(bool, Vec3<i32>, f32, &str)> = Vec::new();
+            for rock in &probed {
+                let Some(verdict) = &rock.cave else { continue };
+                let class = match verdict.class {
+                    ObstructionClass::Clear => continue,
+                    ObstructionClass::CeilingPendant => "ceiling pendant",
+                    ObstructionClass::FloorRooted => "floor-rooted",
+                    ObstructionClass::Sealed => "candidate seal",
+                };
+                locators.push((verdict.repair.is_some(), rock.wpos, rock.size, class));
+            }
+            locators.sort_by_key(|(repaired, ..)| !repaired);
+            println!(
+                "boulders CLASSIFIED in an authored cave, for the in-client look ({} of them; the \
+                 rest of the {cave_hits} reach one but come back Clear):",
+                locators.len()
+            );
+            for (repaired, wpos, size, class) in locators.iter().take(24) {
+                println!(
+                    "  rock@{wpos:?} size {size:.1} -- {class}{}",
+                    if *repaired { ", REPAIRED (R2)" } else { "" }
+                );
+            }
 
             // Every rock that genuinely obstructs a passage either gets a
             // repair that restores the route or is kept out; and a passage

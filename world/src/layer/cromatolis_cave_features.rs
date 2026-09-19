@@ -171,10 +171,13 @@ const MAX_BRANCH_FLOOR_DRIFT: i32 = 24;
 /// ~6.1e-4 ore + 1.5e-4 gem = **~7.6e-4 mineral per floor column**,
 /// depth-averaged (peak ~1.4e-3 in the shallow layers). So `Trace` here is
 /// still well above the procedural rate and `Abundant` is roughly 12x it:
-/// an authored, named-vein-grade deposit, which is the point -- `cave.rs`
-/// does not run in Cromatolis at all (`cromatolis_v0_procedural_layers.ron`,
-/// `caves: false`), so these 281 finite caves carry the region's entire
-/// mineral economy.
+/// an authored, named-vein-grade deposit, which is the point. Until COW-23
+/// T15 flipped `cromatolis_v0_procedural_layers.ron` to `caves: true`
+/// (2026-09-19), `cave.rs` did not run in Cromatolis at all and these 281
+/// finite caves carried the region's entire mineral economy on their own.
+/// They now sit alongside the procedural layer's own, far sparser roll, and
+/// the authored carve still runs afterwards -- so the authored deposits are
+/// unaffected by the flip, they are simply no longer the only ones.
 ///
 /// `Trace` carries a slightly bigger proportional weight than the other
 /// three tiers so it stays a real, findable deposit rather than fading into
@@ -2907,8 +2910,9 @@ mod tests {
     /// call and are covered by the same `is_solid` guard, so nothing about the
     /// conclusion changes — but they are not in these counts.
     /// Each sampled chunk is generated twice, once with the region's
-    /// procedural cave layer off (as it ships today) and once with it forced
-    /// on, and the two ore/gem sprite sets are diffed. A sprite that the
+    /// procedural cave layer forced off and once with it forced on (and
+    /// boulders forced off on both sides, so the only variable is the cave
+    /// layer), and the two ore/gem sprite sets are diffed. A sprite that the
     /// authored carve places with the layer off and does not place with it on
     /// is a *declined* placement: the guard firing. A sprite standing over a
     /// non-solid block is a floating one: the guard failing.
@@ -3028,12 +3032,24 @@ mod tests {
             .sim()
             .authored_procedural_layers()
             .expect("the authored region must declare its procedural layer policy");
-        assert!(
-            !layers.caves,
-            "this test forces the procedural cave layer on itself, so that the two generations it \
-             diffs differ by exactly that. If the region already ships `caves: true` the 'off' \
-             side is no longer the shipped configuration and this needs rewriting."
-        );
+        // Both sides are forced explicitly rather than leaning on whatever the
+        // region currently ships, so this keeps measuring exactly one variable
+        // whichever way COW-23's toggles point. `rocks` is forced *off* on both
+        // sides for the same reason: since COW-23 T15 the region ships
+        // `rocks: true`, and `apply_rocks_to` runs after the authored carve, so
+        // a boulder stamped over an authored ore sprite would read as a
+        // "declined" placement and be blamed on the cave guard, which had
+        // nothing to do with it.
+        let caves_off = crate::sim::AuthoredProceduralLayers {
+            caves: false,
+            rocks: false,
+            ..layers
+        };
+        let caves_on = crate::sim::AuthoredProceduralLayers {
+            caves: true,
+            rocks: false,
+            ..layers
+        };
         // The region policy is only half the gate -- `World::generate_chunk`
         // runs the layer when the global toggle allows it too. With the global
         // one off, "caves on" would generate the identical chunk and every
@@ -3079,12 +3095,10 @@ mod tests {
                     .map(|(chunk, _)| chunk)
                     .expect("generating a land chunk of the authored region must succeed")
             };
+            world.set_authored_procedural_layers_for_test(caves_off);
             let without = ore_sprites(&generate(&world));
 
-            world.set_authored_procedural_layers_for_test(crate::sim::AuthoredProceduralLayers {
-                caves: true,
-                ..layers
-            });
+            world.set_authored_procedural_layers_for_test(caves_on);
             let with_chunk = generate(&world);
             world.set_authored_procedural_layers_for_test(layers);
 
