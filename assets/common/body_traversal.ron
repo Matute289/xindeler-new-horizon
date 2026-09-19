@@ -30,9 +30,27 @@
 // `Body::Humanoid` is not here -- it is a single body plan with a continuous
 // scaler rather than a roster, and lives in `HUMANOID_MORPHOLOGY`.
 //
+// The `tuning` block below is the rule's own numbers -- the knobs a balance
+// pass reaches for, kept beside the roster so a row and the rule that judges it
+// cannot drift into different files.
+//
 // Edits hot-reload, but capabilities are read per entity rather than cached,
 // so a change reaches creatures already alive.
 (
+    tuning: (
+        // A humanoid hauls its own weight up a wall; a siege construct does not.
+        hands_mass_ceiling: 1500.0,
+        // A bear climbs a tree at half a tonne, and the drakes are not much
+        // more, so claws have to carry well past what hands can.
+        claws_mass_ceiling: 5000.0,
+        // Wallrunning carries momentum sideways across a face, which stops
+        // working long before a hang does.
+        wallrun_mass_limit: 200.0,
+        // Below these, folding buys nothing: the body is already shorter than
+        // the gap the posture would open.
+        min_crouch_height: 1.0,
+        min_prone_height: 0.8,
+    ),
     arthropod: (
         tarantula:      (grip: Hooks, frame: Flexible, limbs: 8),
         black_widow:    (grip: Hooks, frame: Flexible, limbs: 8),
@@ -105,6 +123,8 @@
         husk:               (grip: Hands, frame: Flexible, limbs: 2),
         // ice construct
         boreal:             (grip: Hands, frame: Rigid, limbs: 2),
+        // the rest of the walking plants, same reasoning as mandragora:
+        // woody bodies with no joints to fold
         bushly:             (grip: Pads, frame: Rigid, limbs: 2),
         irrwurz:            (grip: Pads, frame: Rigid, limbs: 2),
         iron_dwarf:         (grip: Hands, frame: Rigid, limbs: 2),
@@ -120,6 +140,7 @@
         goblin_thug:        (grip: Hands, frame: Flexible, limbs: 2),
         goblin_chucker:     (grip: Hands, frame: Flexible, limbs: 2),
         goblin_ruffian:     (grip: Hands, frame: Flexible, limbs: 2),
+        // the five legooms are vegetable-folk, on the same reasoning
         green_legoom:       (grip: Pads, frame: Rigid, limbs: 2),
         ochre_legoom:       (grip: Pads, frame: Rigid, limbs: 2),
         purple_legoom:      (grip: Pads, frame: Rigid, limbs: 2),
@@ -184,7 +205,10 @@
         coralgolem:    (grip: Hands, frame: Rigid, limbs: 2),
         gravewarden:   (grip: Hands, frame: Rigid, limbs: 2),
         ancienteffigy: (grip: Hands, frame: Rigid, limbs: 2),
-        mogwai:        (grip: Claws, frame: Rigid, limbs: 2),
+        // a small fiend that borrows the golem skeleton rather than a
+        // construct: it bends where its blockmates do not. Still off walls,
+        // but on the 10 t mass every golem-bodied creature currently shares
+        mogwai:        (grip: Claws, frame: Flexible, limbs: 2),
         irongolem:     (grip: Hands, frame: Rigid, limbs: 2),
     ),
     quadruped_low: (
@@ -252,6 +276,11 @@
         dreadhorn:   (grip: Hooves, frame: Flexible, limbs: 4),
         moose:       (grip: Hooves, frame: Flexible, limbs: 4),
         snowleopard: (grip: Claws, frame: Flexible, limbs: 4),
+        // the megafauna are rigid for what the flag actually means: not
+        // "cannot lie down" -- an elephant plainly can -- but "cannot hold a
+        // lowered posture while moving", which is the only thing a posture
+        // buys here. A prone mammoth crawling through a gap is not a
+        // capability anybody wants
         mammoth:     (grip: Pads, frame: Rigid, limbs: 4),
         elephant:    (grip: Pads, frame: Rigid, limbs: 4),
         ngoubou:     (grip: Hooves, frame: Rigid, limbs: 4),
@@ -259,6 +288,7 @@
         alpaca:      (grip: Pads, frame: Flexible, limbs: 4),
         akhlut:      (grip: Pads, frame: Flexible, limbs: 4),
         bristleback: (grip: Hooves, frame: Flexible, limbs: 4),
+        // a clay construct wearing a horse's shape
         claysteed:   (grip: Hooves, frame: Rigid, limbs: 4),
     ),
     quadruped_small: (
@@ -305,7 +335,9 @@
         sunlizard:   (grip: Talons, frame: Flexible, limbs: 2),
         yale:        (grip: Claws, frame: Flexible, limbs: 4),
         dodarock:    (grip: Claws, frame: Rigid, limbs: 2),
-        ntouka:      (grip: Talons, frame: Rigid, limbs: 4),
+        // quadrupedal and blunt-footed despite the theropod skeleton;
+        // talons are a raptor's tool and this is not a raptor
+        ntouka:      (grip: Hooves, frame: Rigid, limbs: 4),
         axebeak:     (grip: Talons, frame: Flexible, limbs: 2),
     ),
 )
