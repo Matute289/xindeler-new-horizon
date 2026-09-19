@@ -52,9 +52,10 @@ use crate::{
     Canvas, IndexRef,
     layer::authored_voids::{
         CapsuleShape, CapsuleSpan, DiscShape, EDGE_SOFTNESS, ProceduralContact, SURFACE_MARGIN,
+        chunk_query_rect, dist_to_rect, spline_reaches_rect,
     },
     sim::WorldSim,
-    util::{FastNoise2d, SQUARE_4, sampler::Sampler},
+    util::{FastNoise2d, sampler::Sampler},
 };
 use common::{
     assets::{AssetExt, BoxedError, FileAsset, load_ron},
@@ -1789,20 +1790,18 @@ pub fn apply_cromatolis_interiors_to(canvas: &mut Canvas) {
     let chunk_size = chunk_size_i.map(|e| e as f32);
     let chunk_center = chunk_wpos.map(|e| e as f32) + chunk_size / 2.0;
     let chunk_diag = (chunk_size.map(|e| e * e).sum()).sqrt() / 2.0;
-    // The 4 corners of this chunk, same set `world/src/layer/cave.rs` uses
-    // to pre-filter tunnels before its own `foreach_col`.
-    let corners_i32 = SQUARE_4.map(|rpos| chunk_wpos + rpos * chunk_size_i);
-    let corners_f32 = corners_i32.map(|c| c.map(|e| e as f32));
-    let corners_f64 = corners_i32.map(|c| c.map(|e| e as f64 + 0.5));
+    // The rectangle of columns this chunk's `foreach_col` will visit -- the
+    // exact domain every shape below is pruned against.
+    let chunk_rect = chunk_query_rect(chunk_wpos);
 
     // Two-stage pruning: first reject whole interiors whose overall
     // bounding circle can't reach this chunk at all, then -- within each
     // surviving interior -- reject individual rooms/connections/water
-    // features that don't touch any of the chunk's 4 corners. Without this
-    // second stage, a chunk anywhere inside a large interior's overall
-    // bounding circle (e.g. `kharvun_reach`'s, spanning many chained
-    // BFS-offset connections) would pay the cost of every shape in that
-    // interior, even ones nowhere near it.
+    // features that can't reach that rectangle. Without this second stage,
+    // a chunk anywhere inside a large interior's overall bounding circle
+    // (e.g. `kharvun_reach`'s, spanning many chained BFS-offset
+    // connections) would pay the cost of every shape in that interior, even
+    // ones nowhere near it.
     let relevant: Vec<RelevantInterior> = interiors
         .iter()
         .filter(|interior| {
@@ -1814,17 +1813,17 @@ pub fn apply_cromatolis_interiors_to(canvas: &mut Canvas) {
             levels: interior
                 .levels
                 .iter()
-                .filter(|level| level_touches_chunk(level, &corners_f32))
+                .filter(|level| level_touches_chunk(level, chunk_rect))
                 .collect(),
             connections: interior
                 .connections
                 .iter()
-                .filter(|conn| connection_touches_chunk(conn, &corners_f64))
+                .filter(|conn| connection_touches_chunk(conn, chunk_rect))
                 .collect(),
             water: interior
                 .water
                 .iter()
-                .filter(|water| water_touches_chunk(water, &corners_f64))
+                .filter(|water| water_touches_chunk(water, chunk_rect))
                 .collect(),
         })
         .filter(|relevant| {
@@ -1865,54 +1864,60 @@ pub fn apply_cromatolis_interiors_to(canvas: &mut Canvas) {
     });
 }
 
-/// Conservative (never under-counts) reach of a level room, for the
-/// chunk-corner pruning above: base radius, plus the max the
-/// procedural-dressing edge jitter could ever add, plus the edge-softness
-/// fade.
-fn level_touches_chunk(level: &LevelGeom, corners: &[Vec2<f32>; 4]) -> bool {
-    let max_radius = level.radius
+/// Conservative (never under-counts) reach of a level room: base radius,
+/// plus the max the procedural-dressing edge jitter could ever add, plus the
+/// edge-softness fade.
+///
+/// Its own function so the pruning below and the measurement test that
+/// scores the pruning cannot drift apart on what a room's reach is.
+fn level_reach(level: &LevelGeom) -> f32 {
+    level.radius
         + EDGE_SOFTNESS
         + if level.generation.allows_dressing() {
             MAX_ROOM_JITTER
         } else {
             0.0
-        };
-    let anchor = level.anchor2d.map(|e| e as f32);
-    corners
-        .iter()
-        .any(|corner| corner.distance(anchor) <= max_radius)
+        }
+}
+
+/// Does a level room reach the chunk's column rectangle?
+///
+/// Measured from the anchor clamped into the rectangle, not from the
+/// chunk's four corners -- a room lying entirely inside one chunk is near
+/// no corner of it, and the corner form used to prune exactly that case
+/// away. For today's two interiors that cost no whole room, but it *was*
+/// clipping 8 of the 20 connections out of individual chunks along their
+/// span; the generic caves were losing 60 % of a `Small` chamber to the same
+/// defect. COW-23 §7.1.
+fn level_touches_chunk(level: &LevelGeom, chunk_rect: Aabr<f64>) -> bool {
+    let anchor = level.anchor2d.map(|e| e as f64);
+    dist_to_rect(chunk_rect, anchor) <= level_reach(level) as f64
 }
 
 /// Conservative reach of a connection tunnel (covers its carved passage,
 /// bridge deck, and -- for a sealed connection -- the slightly wider gate
-/// plug) for the chunk-corner pruning above.
-fn connection_touches_chunk(conn: &ConnectionSeg, corners: &[Vec2<f64>; 4]) -> bool {
+/// plug) against the chunk's column rectangle, measured along the
+/// connection's real bowed spline rather than its chord.
+fn connection_touches_chunk(conn: &ConnectionSeg, chunk_rect: Aabr<f64>) -> bool {
     let a2 = conn.a.xy().map(|e| e as f64 + 0.5);
     let b2 = conn.b.xy().map(|e| e as f64 + 0.5);
     let max_dist = conn.style.radius as f64 + EDGE_SOFTNESS as f64 + 1.0;
-    corners.iter().any(|&corner| {
-        spline_sample(a2, b2, conn.curve, corner).is_some_and(|(_, dist)| dist <= max_dist)
-    })
+    spline_reaches_rect(a2, b2, conn.curve, chunk_rect, max_dist)
 }
 
 /// Conservative reach of a water feature (its carved fill plus its
-/// waterfall column) for the chunk-corner pruning above.
-fn water_touches_chunk(seg: &WaterSeg, corners: &[Vec2<f64>; 4]) -> bool {
+/// waterfall column) against the chunk's column rectangle.
+fn water_touches_chunk(seg: &WaterSeg, chunk_rect: Aabr<f64>) -> bool {
     let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
     let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
     let max_dist = seg.radius as f64 + EDGE_SOFTNESS as f64;
-    let near_spline = corners.iter().any(|&corner| {
-        spline_sample(a2, b2, seg.curve, corner).is_some_and(|(_, dist)| dist <= max_dist)
-    });
-    if near_spline {
+    if spline_reaches_rect(a2, b2, seg.curve, chunk_rect, max_dist) {
         return true;
     }
     // A waterfall's vertical column sits at endpoint `b` and isn't
     // necessarily close to the spline itself once `t` truncates at 1.0.
-    seg.drop_m.is_some_and(|_| {
-        let b = seg.b.xy().map(|e| e as f64 + 0.5);
-        corners.iter().any(|&corner| corner.distance(b) <= max_dist)
-    })
+    seg.drop_m
+        .is_some_and(|_| dist_to_rect(chunk_rect, b2) <= max_dist)
 }
 
 fn edge_weight(dist: f32, radius: f32) -> f32 { ((radius - dist) / EDGE_SOFTNESS).clamp(0.0, 1.0) }
@@ -2290,6 +2295,7 @@ fn plug_bounding_aabb(seg: &ConnectionSeg) -> Aabb<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{layer::authored_voids::spline_coeffs, util::SQUARE_4};
     use common::vol::ReadVol;
 
     fn sample_graph() -> InteriorGraph {
@@ -2488,25 +2494,46 @@ mod tests {
             medium: Medium::Air,
             generation: Generation::AuthoredGeometry,
         };
-        // A chunk overlapping the room (well within radius + edge
-        // softness, even accounting for the diagonal distance of a
-        // corner): should touch.
-        let near_corners = [
-            Vec2::new(990.0, 1000.0),
-            Vec2::new(1010.0, 1000.0),
-            Vec2::new(990.0, 1010.0),
-            Vec2::new(1010.0, 1010.0),
-        ];
-        assert!(level_touches_chunk(&level, &near_corners));
+        // A chunk overlapping the room: should touch.
+        let near = rect(Vec2::new(990.0, 1000.0), Vec2::new(1010.0, 1010.0));
+        assert!(level_touches_chunk(&level, near));
 
         // A chunk far outside the room's radius: should not touch.
-        let far_corners = [
-            Vec2::new(5000.0, 5000.0),
-            Vec2::new(5032.0, 5000.0),
-            Vec2::new(5000.0, 5032.0),
-            Vec2::new(5032.0, 5032.0),
-        ];
-        assert!(!level_touches_chunk(&level, &far_corners));
+        let far = rect(Vec2::new(5000.0, 5000.0), Vec2::new(5032.0, 5032.0));
+        assert!(!level_touches_chunk(&level, far));
+    }
+
+    /// The case the corner-only form got wrong: a room small enough to sit
+    /// entirely inside one chunk, near none of its corners. This is
+    /// `Small`'s exact situation in `cromatolis_cave_features` -- an anchor
+    /// at the chunk centre, 22.63 blocks from every corner, with a reach
+    /// well under that.
+    #[test]
+    fn level_touches_chunk_sees_a_room_wholly_inside_the_chunk() {
+        let chunk_wpos = Vec2::new(1024, 1024);
+        let centre = chunk_wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32) / 2;
+        let level = LevelGeom {
+            id: "level.test".to_string(),
+            anchor2d: centre,
+            floor_z: 0,
+            ceiling_z: 40,
+            // Reach (11 + EDGE_SOFTNESS = 14) is comfortably under the
+            // 22.63-block centre-to-corner distance, so every one of the
+            // four corners is outside this room.
+            radius: 11.0,
+            medium: Medium::Air,
+            generation: Generation::AuthoredGeometry,
+        };
+        let chunk_rect = chunk_query_rect(chunk_wpos);
+        for corner in SQUARE_4 {
+            let corner_wpos = (chunk_wpos + corner * TerrainChunkSize::RECT_SIZE.map(|e| e as i32))
+                .map(|e| e as f32);
+            assert!(
+                corner_wpos.distance(centre.map(|e| e as f32)) > level.radius + EDGE_SOFTNESS,
+                "the test's premise: no corner is inside the room"
+            );
+        }
+        assert!(level_touches_chunk(&level, chunk_rect));
     }
 
     #[test]
@@ -2515,13 +2542,9 @@ mod tests {
         // max jitter a procedurally-dressed room could add: a
         // `authored_geometry` room (no jitter) should reject this, while
         // an `authored_core_procedural_dressing` room should not.
-        let reach = 20.0 + EDGE_SOFTNESS + 1.0;
-        let corners = [
-            Vec2::new(1000.0 + reach, 1000.0),
-            Vec2::new(1000.0 + reach, 1000.0),
-            Vec2::new(1000.0 + reach, 1000.0),
-            Vec2::new(1000.0 + reach, 1000.0),
-        ];
+        let reach = (20.0 + EDGE_SOFTNESS + 1.0) as f64;
+        let probe = Vec2::new(1000.0 + reach, 1000.0);
+        let chunk_rect = rect(probe, probe);
         let base = LevelGeom {
             id: "level.test".to_string(),
             anchor2d: Vec2::new(1000, 1000),
@@ -2531,13 +2554,13 @@ mod tests {
             medium: Medium::Air,
             generation: Generation::AuthoredGeometry,
         };
-        assert!(!level_touches_chunk(&base, &corners));
+        assert!(!level_touches_chunk(&base, chunk_rect));
 
         let dressed = LevelGeom {
             generation: Generation::AuthoredCoreProceduralDressing,
             ..base
         };
-        assert!(level_touches_chunk(&dressed, &corners));
+        assert!(level_touches_chunk(&dressed, chunk_rect));
     }
 
     #[test]
@@ -2553,16 +2576,52 @@ mod tests {
         // The curve bends away from the straight `a`-`b` line (see
         // `spline_sample`'s `ctrl_offset`), so a point actually on the
         // curve -- not just the straight-line midpoint -- is needed here.
-        let near = [curve_midpoint(conn.a, conn.b, conn.curve); 4];
-        assert!(connection_touches_chunk(conn, &near));
+        let mid = curve_midpoint(conn.a, conn.b, conn.curve);
+        assert!(connection_touches_chunk(conn, rect(mid, mid)));
 
-        let far = [Vec2::new(1.0e6, 1.0e6); 4];
-        assert!(!connection_touches_chunk(conn, &far));
+        let far = rect(Vec2::new(1.0e6, 1.0e6), Vec2::new(1.0e6, 1.0e6));
+        assert!(!connection_touches_chunk(conn, far));
 
-        let water_near = [curve_midpoint(water.a, water.b, water.curve); 4];
-        assert!(water_touches_chunk(water, &water_near));
-        assert!(!water_touches_chunk(water, &far));
+        let water_mid = curve_midpoint(water.a, water.b, water.curve);
+        assert!(water_touches_chunk(water, rect(water_mid, water_mid)));
+        assert!(!water_touches_chunk(water, far));
     }
+
+    /// The capsule counterpart of
+    /// `level_touches_chunk_sees_a_room_wholly_inside_the_chunk`: a
+    /// connection whose whole bowed span sits inside one chunk, so the
+    /// corner-only form saw nothing. Built directly rather than from the
+    /// sample graph, whose connections all span several chunks.
+    #[test]
+    fn connection_touches_chunk_sees_a_span_wholly_inside_the_chunk() {
+        let chunk_wpos = Vec2::new(2048, 2048);
+        let centre = chunk_wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32) / 2;
+        let conn = ConnectionSeg {
+            id: "connection.test".to_string(),
+            a: (centre - Vec2::new(5, 5)).with_z(0),
+            b: (centre + Vec2::new(5, 5)).with_z(0),
+            a_ceiling: 8,
+            b_ceiling: 8,
+            curve: 0.0,
+            style: TraversalStyle {
+                radius: 3.0,
+                headroom: 6.0,
+                terraced: false,
+                bridge_deck: false,
+                slope: 4.0,
+            },
+            sealed: false,
+        };
+        assert!(connection_touches_chunk(
+            &conn,
+            chunk_query_rect(chunk_wpos)
+        ));
+    }
+
+    /// A rectangle from two opposite points, for the `*_touches_chunk`
+    /// tests -- `min`/`max` rather than a real chunk when the test is about
+    /// the shape's reach, not about chunk geometry.
+    fn rect(min: Vec2<f64>, max: Vec2<f64>) -> Aabr<f64> { Aabr { min, max } }
 
     /// A point actually on the quadratic curve `spline_sample` uses
     /// (`a`-to-`b`, bent by `curve`), evaluated at `t = 0.5`.
@@ -2701,6 +2760,183 @@ mod tests {
         assert!(geometry.plug_aabb.min.y <= midpoint.y && midpoint.y <= geometry.plug_aabb.max.y);
         let (floor_z, ceiling_z) = geometry.plug_contains_column(midpoint).unwrap();
         assert!(geometry.plug_aabb.min.z <= floor_z && ceiling_z <= geometry.plug_aabb.max.z);
+    }
+
+    /// **T19 of the COW-23 task board, interior half.** Nothing in either
+    /// authored interior may be pruned out of a chunk it carves.
+    ///
+    /// "Lost" here is per *shape, per chunk*: a chunk where the carve would
+    /// write at least one column of the shape, but the predicate prunes the
+    /// shape out of that chunk. That is deliberately stricter than the
+    /// spec's own "0 of 22 rooms and 0 of 20 connections are lost today",
+    /// which counted shapes that vanish *entirely* -- and the difference
+    /// shows: 22/22 rooms were indeed intact under the corner-only
+    /// predicate, but **8 of the 20 connections were being clipped out of
+    /// at least one chunk they run through**, surviving elsewhere along
+    /// their span and so never showing up as a lost connection. The
+    /// interior defect was latent as a whole-shape loss, not as a
+    /// per-chunk one.
+    ///
+    /// The surface cap is ignored on purpose: a column the cap closes is
+    /// not written either way, so counting it only makes the claim
+    /// stronger.
+    #[test]
+    fn neither_interior_loses_a_room_or_a_connection_to_pruning() {
+        /// The corner-only predicates this change replaced, so the
+        /// before/after is measured here rather than quoted.
+        fn old_disc_touches(anchor: Vec2<i32>, max_radius: f32, corners: &[Vec2<f32>; 4]) -> bool {
+            let anchor = anchor.map(|e| e as f32);
+            corners
+                .iter()
+                .any(|corner| corner.distance(anchor) <= max_radius)
+        }
+        fn old_spline_touches(
+            a: Vec3<i32>,
+            b: Vec3<i32>,
+            curve: f32,
+            max_dist: f64,
+            corners: &[Vec2<f64>; 4],
+        ) -> bool {
+            let a2 = a.xy().map(|e| e as f64 + 0.5);
+            let b2 = b.xy().map(|e| e as f64 + 0.5);
+            corners.iter().any(|&corner| {
+                spline_sample(a2, b2, curve, corner).is_some_and(|(_, dist)| dist <= max_dist)
+            })
+        }
+
+        let graphs = InteriorGraphsAsset::load_owned(INTERIOR_GRAPHS_ASSET).unwrap();
+        let map_size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
+        let world_size =
+            TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
+        let chunk_size = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+
+        let (mut rooms, mut connections) = (0_usize, 0_usize);
+        let (mut rooms_lost_before, mut rooms_lost_after) = (0_usize, 0_usize);
+        let (mut conns_lost_before, mut conns_lost_after) = (0_usize, 0_usize);
+
+        for graph in &graphs.interiors {
+            let layout = build_layout(graph, map_size, world_size).unwrap();
+
+            for level in &layout.levels {
+                rooms += 1;
+                // The production formula, not a copy of it, so the two
+                // cannot drift apart.
+                let reach = level_reach(level);
+                let (mut lost_before, mut lost_after) = (false, false);
+                for chunk_pos in chunks_over(level.anchor2d, reach.ceil() as i32, chunk_size) {
+                    let chunk_wpos = chunk_pos * chunk_size;
+                    // Would the carve write any column of this chunk?
+                    let writes = columns_of(chunk_wpos, chunk_size).any(|wpos2d| {
+                        wpos2d
+                            .map(|e| e as f32)
+                            .distance(level.anchor2d.map(|e| e as f32))
+                            < level.radius
+                    });
+                    if !writes {
+                        continue;
+                    }
+                    let corners = corners_f32(chunk_wpos, chunk_size);
+                    lost_before |= !old_disc_touches(level.anchor2d, reach, &corners);
+                    lost_after |= !level_touches_chunk(level, chunk_query_rect(chunk_wpos));
+                }
+                rooms_lost_before += usize::from(lost_before);
+                rooms_lost_after += usize::from(lost_after);
+            }
+
+            for conn in &layout.connections {
+                connections += 1;
+                let max_dist = conn.style.radius as f64 + EDGE_SOFTNESS as f64 + 1.0;
+                let a2 = conn.a.xy().map(|e| e as f64 + 0.5);
+                let b2 = conn.b.xy().map(|e| e as f64 + 0.5);
+                // Which chunks to look at: the bounding box of the real
+                // bowed centreline, walked rather than bounded by a
+                // hand-picked constant, then dilated by the shape's reach.
+                let (mut lo, mut hi) = (a2.map2(b2, f64::min), a2.map2(b2, f64::max));
+                let spline = spline_coeffs(a2, b2, conn.curve);
+                for i in 0..=32 {
+                    let t = i as f64 / 32.0;
+                    let point = spline.x * t * t + spline.y * t + spline.z;
+                    lo = lo.map2(point, f64::min);
+                    hi = hi.map2(point, f64::max);
+                }
+                let centre = ((lo + hi) * 0.5).map(|e| e.round() as i32);
+                let reach = ((hi - lo) * 0.5).reduce_partial_max().ceil() as i32
+                    + max_dist.ceil() as i32
+                    + 1;
+                let (mut lost_before, mut lost_after) = (false, false);
+                for chunk_pos in chunks_over(centre, reach, chunk_size) {
+                    let chunk_wpos = chunk_pos * chunk_size;
+                    let writes = columns_of(chunk_wpos, chunk_size).any(|wpos2d| {
+                        let point = wpos2d.map(|e| e as f64 + 0.5);
+                        spline_sample(a2, b2, conn.curve, point)
+                            .is_some_and(|(_, dist)| dist < conn.style.radius as f64)
+                    });
+                    if !writes {
+                        continue;
+                    }
+                    let corners = corners_f64(chunk_wpos, chunk_size);
+                    lost_before |=
+                        !old_spline_touches(conn.a, conn.b, conn.curve, max_dist, &corners);
+                    lost_after |= !connection_touches_chunk(conn, chunk_query_rect(chunk_wpos));
+                }
+                conns_lost_before += usize::from(lost_before);
+                conns_lost_after += usize::from(lost_after);
+            }
+        }
+
+        println!(
+            "\ninteriors: {rooms} rooms, {connections} connections\n  rooms lost       before \
+             {rooms_lost_before}  after {rooms_lost_after}\n  connections lost before \
+             {conns_lost_before}  after {conns_lost_after}\n"
+        );
+        assert_eq!(
+            rooms_lost_after, 0,
+            "a room is pruned out of a chunk it carves"
+        );
+        assert_eq!(
+            conns_lost_after, 0,
+            "a connection is pruned out of a chunk it carves"
+        );
+        // The rectangle test admits everything the corner test admitted
+        // (a chunk corner lies inside the chunk rectangle, so its distance
+        // to a shape can never be the smaller of the two), so neither
+        // figure may ever go up.
+        assert!(rooms_lost_after <= rooms_lost_before);
+        assert!(conns_lost_after <= conns_lost_before);
+        // And the baseline these numbers are compared against is real: the
+        // corner form did lose connections here. If this ever reads 0, the
+        // "before" arm has stopped exercising the old predicate and the
+        // before/after columns above mean nothing.
+        assert!(
+            conns_lost_before > 0,
+            "the corner-only baseline should still lose connections; it lost 8 of 20 when this              was written"
+        );
+    }
+
+    /// Chunk positions whose chunk can overlap the square of half-width
+    /// `reach` around `centre`.
+    fn chunks_over(
+        centre: Vec2<i32>,
+        reach: i32,
+        chunk_size: Vec2<i32>,
+    ) -> impl Iterator<Item = Vec2<i32>> {
+        let min = (centre - reach).map2(chunk_size, |e, sz| e.div_euclid(sz));
+        let max = (centre + reach).map2(chunk_size, |e, sz| e.div_euclid(sz));
+        (min.y..=max.y).flat_map(move |y| (min.x..=max.x).map(move |x| Vec2::new(x, y)))
+    }
+
+    /// Every column `Canvas::foreach_col` visits for the chunk at `chunk_wpos`.
+    fn columns_of(chunk_wpos: Vec2<i32>, chunk_size: Vec2<i32>) -> impl Iterator<Item = Vec2<i32>> {
+        (0..chunk_size.y)
+            .flat_map(move |y| (0..chunk_size.x).map(move |x| chunk_wpos + Vec2::new(x, y)))
+    }
+
+    fn corners_f32(chunk_wpos: Vec2<i32>, chunk_size: Vec2<i32>) -> [Vec2<f32>; 4] {
+        SQUARE_4.map(|rpos| (chunk_wpos + rpos * chunk_size).map(|e| e as f32))
+    }
+
+    fn corners_f64(chunk_wpos: Vec2<i32>, chunk_size: Vec2<i32>) -> [Vec2<f64>; 4] {
+        SQUARE_4.map(|rpos| (chunk_wpos + rpos * chunk_size).map(|e| e as f64 + 0.5))
     }
 
     /// Loads the real authored asset (not a hand-written fixture) and
