@@ -488,29 +488,27 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
         }),
         // Cromatolis ocean animals -- scoped to the authored region rather
         // than widening an existing window (same pattern as `not_cromatolis`
-        // below, just the positive case): Cromatolis's authored climate
-        // curve (`cromatolis_baseline_temp`, gated on `authored_cromatolis_v0`)
-        // pins real ocean temperature at ~0.90 (`CONFIG.desert_temp + 0.1`),
-        // which none of the three windows above cover -- temperate.ocean is
-        // (-1.4, 0.6), tropical.ocean is (0.3, 0.5), arctic.ocean is well
-        // below zero. Verified against the real generated world: 0 of
-        // 328,231 sampled real Cromatolis ocean columns got any nonzero
-        // density from any of the three entries above (all sampled at
-        // temp == 0.900, since ocean sits at/below sea level where the
-        // curve is flat). Widening a shared entry's window instead would
-        // change ocean-fauna density for every other world using this
-        // manifest, not just Cromatolis. The three general entries above
+        // below, just the positive case). The region's authored climate puts
+        // its water outside every general ocean window: while the baseline was
+        // one flat hot value, real ocean columns measured 0.792 ..= 0.920
+        // against temperate.ocean's (-1.4, 0.6), tropical.ocean's (0.3, 0.5)
+        // and arctic.ocean's far colder band, and 0 of 328,231 sampled columns
+        // got density from any of the three. Per-zone temperatures moved that
+        // range to -0.270 ..= 0.570 -- now overlapping two of the three, which
+        // is why the `not_cromatolis` gates on them are load-bearing rather
+        // than defensive. Widening a shared entry instead would change
+        // ocean-fauna density for every other world using this manifest, not
+        // just Cromatolis. The three general entries above
         // (and `tropical.river` below, which also matches Lake columns) are
-        // now gated with `not_cromatolis(c)` -- their windows don't overlap
-        // this entry's today, but the gate makes that non-overlap structural
-        // rather than an incidental byproduct of today's `CONFIG` constants,
-        // so a future engine-wide temp-window retune can't silently
-        // reintroduce double-counted density on Cromatolis ocean/lake
-        // columns. Same defensive pattern the desert entries below already
-        // use for the reverse direction.
+        // now gated with `not_cromatolis(c)`, which is what keeps that
+        // non-overlap structural rather than an accident of where the
+        // temperature happens to sit -- a retune on either side can no longer
+        // silently double-count density on Cromatolis ocean/lake columns. Same
+        // defensive pattern the desert entries below use for the reverse
+        // direction.
         ("world.wildlife.spawn.cromatolis.ocean", |c, col| {
             f32::from(c.authored_region_id == Some(CROMATOLIS_V0_REGION_ID))
-                * close(col.temp, CONFIG.desert_temp + 0.1, 0.2)
+                * cromatolis_aquatic_temp_window(col.temp)
                 / 10.0
                 * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
                     && matches!(col.chunk.get_biome(), BiomeKind::Ocean)
@@ -541,7 +539,7 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
         //    that function's doc comment.
         ("world.wildlife.spawn.cromatolis.lake", |c, col| {
             f32::from(c.authored_region_id == Some(CROMATOLIS_V0_REGION_ID))
-                * close(col.temp, CONFIG.desert_temp + 0.1, 0.2)
+                * cromatolis_aquatic_temp_window(col.temp)
                 * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
                     && cromatolis_freshwater(col.chunk)
                 {
@@ -637,16 +635,57 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
 
 /// `1.0` outside the authored Cromatolis region, `0.0` inside it. Used to
 /// gate density/feature formulas that key off `chunk.temp`/`chunk.humidity`
-/// crossing `CONFIG`'s desert thresholds -- Cromatolis's authored baseline
-/// temperature curve intentionally lets real coastal chunks reach those
-/// thresholds (see `cromatolis_baseline_temp`'s doc comment), which would
-/// otherwise paint literal desert wildlife/terrain onto lore-authored
-/// tropical/Caribbean ground. Same scoping pattern as `SimChunk::get_biome`'s
-/// `Snowland`/`Desert` checks, extracted here since multiple density
-/// formulas need it.
+/// crossing `CONFIG`'s desert thresholds, so that literal desert wildlife
+/// never appears on lore-authored tropical/Caribbean ground. Same scoping
+/// pattern as `SimChunk::get_biome`'s `Snowland`/`Desert` checks, extracted
+/// here since several density formulas need it.
+///
+/// What it protects against changed with the per-zone climate, but it is
+/// still load-bearing. It used to hold back the whole coastline: one flat hot
+/// sea-level baseline put ~86% of the grid inside the ungated
+/// `world.wildlife.spawn.desert.hot` window. No *climatic* zone reaches
+/// `CONFIG.desert_temp` any more (the warmest anchor lands at abstract 0.533),
+/// but an authored microclimate pocket does, by design -- so without this gate
+/// the magically-warmed ground around a dungeon would spawn desert fauna.
 pub(crate) fn not_cromatolis(c: &SimChunk) -> f32 {
     f32::from(c.authored_region_id != Some(CROMATOLIS_V0_REGION_ID))
 }
+
+/// Temperature factor shared by the two Cromatolis aquatic spawn entries: the
+/// whole abstract range a water column on this map can occupy.
+///
+/// **This is a placeholder for a per-water-body ecology profile, not a
+/// habitat model.** A real one selects fauna by water kind, salinity, depth
+/// *and* a narrow temperature band; this deliberately selects none of that,
+/// because the alternative -- a narrow window tuned to today's numbers -- is
+/// exactly what broke last time.
+///
+/// # Deletion trigger
+///
+/// **COW-22 `C22-5`** (`cromatolis_v0_aquatic_ecology.ron` and its two
+/// consumers, tracked in the `COW-22` row of
+/// `docs/design/backlog/cromatolis-open-world.md`) replaces this function and
+/// both of its callers -- `world.wildlife.spawn.cromatolis.ocean` and
+/// `.lake` -- with a single manifest entry driven by that asset's profile
+/// table. Removing all three is part of that task, not a follow-up to it.
+/// This function exists only because the climate rework landed first and, on
+/// its own, would have zeroed both entries; it is a bridge with a named end,
+/// not an accepted design.
+///
+/// The two entries previously used `close(col.temp, CONFIG.desert_temp + 0.1,
+/// 0.2)`, i.e. a window of `[0.7, 1.1]`. That fitted a map whose every water
+/// column sat at a flat, artificially hot sea-level baseline. Measured against
+/// real generated columns after the climate-zone rework, ocean runs
+/// `-0.270 ..= 0.570` and freshwater `-0.653 ..= 0.569`; the old window covers
+/// **none** of that, so both entries would have gone to hard zero and the map
+/// would be fishless again.
+///
+/// `close(t, 0.0, 1.0)` is nonzero across `(-1.0, 1.0)` -- the entire abstract
+/// scale -- and its 0.125-power falloff keeps the factor between 0.87 and 1.0
+/// over the range actually observed, against the ~0.917 the old window
+/// produced on ocean. So coverage goes to 100% of wet ocean and freshwater
+/// columns without inflating density.
+fn cromatolis_aquatic_temp_window(temp: f32) -> f32 { close(temp, 0.0, 1.0) }
 
 /// Chunk-level gate for the `cromatolis.lake` spawn entry: the authored map's
 /// *freshwater* -- everything that is water but not sea.
