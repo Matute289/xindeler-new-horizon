@@ -1012,24 +1012,39 @@ pub fn attempt_wield(data: &JoinData<'_>, update: &mut StateUpdate) {
 /// So standing up is a request that can be refused. That contract is not new
 /// here: `crawl.rs` already refuses to let a downed player stand.
 ///
-/// Samples the column the body occupies. Terrain collision treats the body as a
-/// cylinder no wider than half a block, so the entity's own column is the only
-/// one that can stop it.
+/// Samples every column the body's own radius covers, not just the one its
+/// centre is in: standing near a block boundary straddles two, and checking
+/// only the centre would happily clear a body into a ceiling one column over —
+/// producing exactly the jitter this refusal exists to prevent.
 pub fn has_room_for_posture(data: &JoinData<'_>, posture: Posture) -> bool {
     let scale = data.scale.map_or(1.0, |s| s.0);
-    let (_, _, z_max) = data.body.collider().terrain_cylinder_in(scale, posture);
+    let (radius, _, z_max) = data.body.collider().terrain_cylinder_in(scale, posture);
 
     let base = data.pos.0;
     let feet = base.z.floor() as i32;
     // The topmost block the body would occupy, inclusive.
     let head = (base.z + z_max - f32::EPSILON).floor() as i32;
-    (feet..=head).all(|z| {
-        data.terrain
-            .get(Vec3::new(base.x.floor() as i32, base.y.floor() as i32, z))
-            // Unloaded terrain is assumed clear, matching every other
-            // free-space check in the movement code.
-            .map(|block| !block.is_solid())
-            .unwrap_or(true)
+
+    let (x0, x1) = (
+        (base.x - radius).floor() as i32,
+        (base.x + radius).floor() as i32,
+    );
+    let (y0, y1) = (
+        (base.y - radius).floor() as i32,
+        (base.y + radius).floor() as i32,
+    );
+
+    (x0..=x1).all(|x| {
+        (y0..=y1).all(|y| {
+            (feet..=head).all(|z| {
+                data.terrain
+                    .get(Vec3::new(x, y, z))
+                    // Unloaded terrain is assumed clear, matching every other
+                    // free-space check in the movement code.
+                    .map(|block| !block.is_solid())
+                    .unwrap_or(true)
+            })
+        })
     })
 }
 
