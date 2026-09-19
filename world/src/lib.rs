@@ -171,6 +171,33 @@ impl World {
 
     pub fn sim(&self) -> &sim::WorldSim { &self.sim }
 
+    /// Replace this world's procedural-layer policy, for a test that
+    /// regenerates the same chunks under two policies and diffs them.
+    ///
+    /// Deliberately this one narrow setter and not a `sim_mut()`: the only
+    /// thing any test has needed to change is which purely-procedural layers
+    /// run, and handing back `&mut WorldSim` would let a future test mutate
+    /// arbitrary sim state that the rest of the world has already been built
+    /// from.
+    ///
+    /// Not `Option`, for the same reason. `None` would mean "no authored
+    /// region", but `layer::authored_regions::warm` has already populated the
+    /// void index by the time any test could call this, so clearing it would
+    /// leave that index alive while telling every other reader the region is
+    /// gone -- a world inconsistent with itself.
+    ///
+    /// There is deliberately no production counterpart at all: these toggles
+    /// are content decisions loaded from the region's own asset, and anything
+    /// able to change them at runtime would make a chunk's contents depend on
+    /// *when* it was generated rather than on where it is.
+    #[cfg(test)]
+    pub(crate) fn set_authored_procedural_layers_for_test(
+        &mut self,
+        layers: sim::AuthoredProceduralLayers,
+    ) {
+        self.sim.set_authored_procedural_layers_for_test(layers);
+    }
+
     pub fn civs(&self) -> &civ::Civs { &self.civs }
 
     pub fn tick(&self, _dt: Duration) {

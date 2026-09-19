@@ -2395,6 +2395,37 @@ mod tests {
         }
     }
 
+    /// Histogram resolution for V14's breach seam: 4-block buckets over
+    /// ±20 blocks, with a catch-all at each end. 4 blocks because that is
+    /// roughly a body height and a bit — the scale at which a seam stops being
+    /// a step and starts being a drop — and ±20 because an authored ceiling is
+    /// clamped only 16 blocks below the surface, so offsets much beyond that
+    /// cannot be about the two floors at all.
+    const SEAM_BUCKET_BLOCKS: i32 = 4;
+    const SEAM_BUCKET_REACH: i32 = 20;
+    const SEAM_BUCKETS: usize = (2 * SEAM_BUCKET_REACH / SEAM_BUCKET_BLOCKS) as usize + 2;
+
+    fn seam_bucket(offset: i32) -> usize {
+        if offset < -SEAM_BUCKET_REACH {
+            return 0;
+        }
+        if offset >= SEAM_BUCKET_REACH {
+            return SEAM_BUCKETS - 1;
+        }
+        (((offset + SEAM_BUCKET_REACH) / SEAM_BUCKET_BLOCKS) + 1) as usize
+    }
+
+    fn seam_bucket_label(bucket: usize) -> String {
+        if bucket == 0 {
+            return format!("< {}", -SEAM_BUCKET_REACH);
+        }
+        if bucket == SEAM_BUCKETS - 1 {
+            return format!(">= {SEAM_BUCKET_REACH}");
+        }
+        let low = (bucket as i32 - 1) * SEAM_BUCKET_BLOCKS - SEAM_BUCKET_REACH;
+        format!("{low} .. {}", low + SEAM_BUCKET_BLOCKS)
+    }
+
     /// How many blocks of `z` a carved band and a tunnel's range share.
     fn overlap_blocks(band: &std::ops::RangeInclusive<f32>, z: &std::ops::Range<i32>) -> i32 {
         let lo = band.start().ceil() as i32;
@@ -2634,6 +2665,612 @@ mod tests {
             markers, EXPECTED_MARKERS,
             "the authored region's surface cave marker count moved"
         );
+    }
+
+    /// **V13 — no orphaned surface mouth.** Every mouth the map marks must
+    /// still lead somewhere.
+    ///
+    /// The previous test pins that the *markers* survive the guard, and they
+    /// do: they come from the node lattice, which the guard never reads. But a
+    /// marker marks a mouth, and a mouth is only worth marking because of the
+    /// corridor behind it — and that corridor the guard very much does touch.
+    /// The descent behind a mouth is a ~1 536-block shallow **ramp** across
+    /// the whole 0–114 m band, not a shaft, and the authored caves sit at
+    /// 18–55 m, squarely inside it. A 16-block `Seal` shell lying across such
+    /// a ramp drops the `(column, tunnel)` entry and plugs it mid-slope,
+    /// leaving an open, map-marked mouth that stops at a wall a few dozen
+    /// metres in. Spec §7.3.
+    ///
+    /// So this walks every marked descent's own centreline, column by column,
+    /// through the production guard, and asserts none of them is plugged.
+    ///
+    /// `cargo test -p xindeler-world --release no_marked_surface_mouth -- \
+    /// --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn no_marked_surface_mouth_is_plugged_by_a_seal() {
+        use crate::layer::{
+            authored_regions::authored_voids_for as authored_voids,
+            cave::{
+                measure::{TunnelWalk, walk_tunnel},
+                surface_descents,
+            },
+        };
+
+        let (world, index) = cromatolis_world();
+        let index_ref = index.as_index_ref();
+        let sim = world.sim();
+
+        CanvasInfo::with_mock_canvas_info(index_ref, sim, |info| {
+            let land = info.land();
+            let voids =
+                authored_voids(info).expect("the authored Cromatolis region must index its voids");
+
+            // A surface descent is a `tunnels_down_from(_, 0)` entry, which
+            // `all_tunnels_at` presents at level 1.
+            let verdicts: Vec<(Vec2<i32>, TunnelWalk)> = surface_descents(&land, index_ref)
+                .map(|(mouth, tunnel)| (mouth, walk_tunnel(&tunnel, 1, info, &land, Some(voids))))
+                .collect();
+
+            let plugged: Vec<_> = verdicts
+                .iter()
+                .filter(|(_, walk)| !walk.is_open())
+                .collect();
+            let total = |pick: fn(&TunnelWalk) -> u32| -> u64 {
+                verdicts.iter().map(|(_, walk)| u64::from(pick(walk))).sum()
+            };
+            let near_authored = total(|v| v.near_authored_columns);
+            println!(
+                "surface descents walked: {}\n  descent columns carrying a tunnel: {}\n  ...in a \
+                 chunk holding authored shapes (the positive control): {near_authored}\n  \
+                 ...opening into a Connect void: {}\n  ...plugged by a Seal shell: {}\n  mouths \
+                 whose descent is plugged: {}",
+                verdicts.len(),
+                total(|v| v.open_columns),
+                total(|v| v.connect_columns),
+                total(|v| v.sealed_columns),
+                plugged.len(),
+            );
+            for (mouth, walk) in &plugged {
+                println!(
+                    "  mouth {mouth:?}: {} of {} columns plugged, first at {:?} blocks in",
+                    walk.sealed_columns, walk.open_columns, walk.first_seal_at,
+                );
+            }
+
+            assert!(
+                !verdicts.is_empty(),
+                "the measurement is worthless if the region has no marked mouths at all"
+            );
+            // Without this the headline zero would also be what a run reports
+            // where no descent goes anywhere near the authored region, which
+            // proves nothing about the guard.
+            assert!(
+                near_authored > 0,
+                "no marked descent passes through a chunk that holds an authored shape, so this \
+                 test could not have detected a plug even if there were one"
+            );
+            assert!(
+                plugged.is_empty(),
+                "{} marked surface mouth(s) lead to a corridor the guard plugs — an open, \
+                 map-marked mouth that dead-ends. The documented remedy is spec §7.3's descent \
+                 exemption: skip the Seal clip for the `tunnels_down_from(_, 0)` entries at the \
+                 choke point, trading a handful of shallow breaches for keeping every advertised \
+                 mouth honest. It is deliberately NOT implemented while this count is zero.",
+                plugged.len(),
+            );
+        });
+    }
+
+    /// **V16 — the realised guard cost**, with the real `Seal`/`Connect` split
+    /// rather than the all-`Seal` sweep the margin was chosen from.
+    ///
+    /// Spec §2's 16-block row (1 153 932 suppressed voxels, 0.0277 % of the
+    /// region's procedural cave volume) was measured with every authored cave
+    /// sealing, because at the time there was no other option. `Connect` caves
+    /// are exempt from the guard entirely, so that figure is now an **upper
+    /// bound** and the realised cost is whatever this measures. §5.4's "near a
+    /// quarter" was a guess; this is the number.
+    ///
+    /// # Why this sweep is exhaustive rather than sampled
+    ///
+    /// The guard can only fire in a chunk the index holds a bucket for —
+    /// everywhere else `contact_at_column` is `None` by construction — so
+    /// sweeping [`AuthoredVoids::occupied_chunks`] column by column covers
+    /// every block the guard could possibly suppress, with no stride and no
+    /// extrapolation. That is a few thousand chunks rather than a million.
+    ///
+    /// `cargo test -p xindeler-world --release the_realised_guard_cost -- \
+    /// --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn the_realised_guard_cost_stays_under_the_all_seal_upper_bound() {
+        use crate::layer::{
+            authored_regions::authored_voids_for as authored_voids, cave::tunnel_bounds_at_col_both,
+        };
+
+        /// Spec §2's 16-block sweep row, measured with every authored cave
+        /// sealing. An upper bound now, not a target.
+        const ALL_SEAL_UPPER_BOUND: u64 = 1_153_932;
+        /// M11: the region's total procedural cave volume, for the percentage.
+        const REGION_CAVE_VOLUME: f64 = 4.17e9;
+
+        let (world, index) = cromatolis_world();
+        let index_ref = index.as_index_ref();
+        let sim = world.sim();
+
+        CanvasInfo::with_mock_canvas_info(index_ref, sim, |info| {
+            let land = info.land();
+            let voids =
+                authored_voids(info).expect("the authored Cromatolis region must index its voids");
+            let (seal_shapes, connect_shapes) = voids.policy_counts();
+            let chunks = voids.occupied_chunks();
+
+            let mut suppressed = 0_u64;
+            let mut carved_before = 0_u64;
+            let mut columns_clipped = 0_u64;
+            for cpos in &chunks {
+                let origin = cpos.cpos_to_wpos();
+                for y in 0..TerrainChunkSize::RECT_SIZE.y as i32 {
+                    for x in 0..TerrainChunkSize::RECT_SIZE.x as i32 {
+                        let wpos2d = origin + Vec2::new(x, y);
+                        // One `ColumnSample` for both sides: generating it is
+                        // the expensive part of this sweep by a wide margin,
+                        // and the two public entry points would each make
+                        // their own.
+                        let Some(col) = info.col_or_gen(wpos2d) else {
+                            continue;
+                        };
+                        let blocks = |bounds: &mut dyn Iterator<
+                            Item = (u32, std::ops::Range<i32>, f32, f32, f32, _),
+                        >|
+                         -> u64 {
+                            bounds
+                                .map(|(_, z_range, ..)| (z_range.end - z_range.start).max(0) as u64)
+                                .sum()
+                        };
+                        let (mut unguarded, mut guarded) =
+                            tunnel_bounds_at_col_both(wpos2d, info, &land, &col);
+                        let before = blocks(&mut unguarded);
+                        if before == 0 {
+                            continue;
+                        }
+                        let after = blocks(&mut guarded);
+                        carved_before += before;
+                        suppressed += before - after;
+                        columns_clipped += u64::from(before != after);
+                    }
+                }
+            }
+
+            println!(
+                "V16 realised guard cost, over the {} chunks the index can fire in ({seal_shapes} \
+                 Seal / {connect_shapes} Connect shapes)\n  procedural tunnel blocks in those \
+                 chunks, guard off: {carved_before}\n  ...suppressed by the guard: {suppressed}\n  \
+                 columns where the guard clipped something: {columns_clipped}\n  as a fraction of \
+                 the all-Seal upper bound ({ALL_SEAL_UPPER_BOUND}): {:.1} %\n  as a fraction of \
+                 the region's procedural cave volume ({REGION_CAVE_VOLUME:.3e}): {:.5} %",
+                chunks.len(),
+                suppressed as f64 / ALL_SEAL_UPPER_BOUND as f64 * 100.0,
+                suppressed as f64 / REGION_CAVE_VOLUME * 100.0,
+            );
+
+            assert!(
+                suppressed > 0,
+                "the guard suppressed nothing at all, so either the authored data stopped sealing \
+                 or this sweep is looking in the wrong place"
+            );
+            assert!(
+                suppressed <= ALL_SEAL_UPPER_BOUND,
+                "the guard suppressed {suppressed} procedural tunnel blocks, above the \
+                 {ALL_SEAL_UPPER_BOUND} an all-Seal region costs. Exempting caves cannot cost \
+                 more than not exempting them, so this means the margin, the shapes or the sweep \
+                 changed."
+            );
+        });
+    }
+
+    /// **V14 — the breach seam**, and **V15 — no floating ore.**
+    ///
+    /// A `Connect` cave is one the catalog says a procedural tunnel may open
+    /// into. Nothing joins the two: the authored carve simply runs *after*
+    /// `apply_caves_to` and overwrites every block in its own footprint, so
+    /// the join a player walks through is produced by pass ordering alone
+    /// (spec §5.2.2). That is the right design — a blend would be a second
+    /// system with an opinion about the same voxels — but it means the seam's
+    /// shape is whatever the two independent geometries happen to agree on,
+    /// and nobody has looked at it.
+    ///
+    /// So this characterises it. Two questions, one sweep:
+    ///
+    /// * **V14** — at every breach column, how far is the tunnel's floor above
+    ///   or below the authored floor it opens onto? A histogram, no assertion:
+    ///   the deliverable is numbers the first in-game look can be compared
+    ///   against. Columns whose drop exceeds the tunnel's own half-height at
+    ///   that column are counted separately as manual-inspection candidates.
+    /// * **V15** — `apply_minerals_to_floor`'s `is_solid` guard was written so
+    ///   that where two *authored* caves overlap, the upper one's ore is not
+    ///   left hanging over the lower one's carved air. A breach column is the
+    ///   same situation with a procedural tunnel underneath, which is a case
+    ///   the guard was never written for and simply happens to cover. This
+    ///   asserts that it does.
+    ///
+    /// # How V15 is measured
+    ///
+    /// Differentially, on real generated chunks, rather than by re-deriving
+    /// the guard's predicate — a replica of a guard cannot test the guard.
+    ///
+    /// The sprite set is everything mapping to `TerrainResource::Ore`/`::Gem`,
+    /// which leaves out the catalog's `Velorite`/`VeloriteFrag` declarations:
+    /// those account to rtsim's `Loot` bucket instead (this module's own doc
+    /// explains why). They are placed by the same `apply_minerals_to_floor`
+    /// call and are covered by the same `is_solid` guard, so nothing about the
+    /// conclusion changes — but they are not in these counts.
+    /// Each sampled chunk is generated twice, once with the region's
+    /// procedural cave layer off (as it ships today) and once with it forced
+    /// on, and the two ore/gem sprite sets are diffed. A sprite that the
+    /// authored carve places with the layer off and does not place with it on
+    /// is a *declined* placement: the guard firing. A sprite standing over a
+    /// non-solid block is a floating one: the guard failing.
+    ///
+    /// `cargo test -p xindeler-world --release the_connect_breach_seam -- \
+    /// --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn the_connect_breach_seam_is_bounded_and_leaves_no_floating_ore() {
+        use crate::layer::{
+            authored_regions::authored_voids_for as authored_voids,
+            cave::tunnel_bounds_at_unguarded,
+        };
+        use common::{rtsim::TerrainResource, vol::ReadVol};
+
+        /// How many distinct chunks to regenerate for V15. Chunk generation
+        /// is the expensive part of this test by a wide margin, and the
+        /// question it answers is "does an existing guard cover a new case",
+        /// which a spread across many different caves answers as well as an
+        /// exhaustive pass would.
+        const V15_CHUNK_SAMPLE: usize = 24;
+
+        let (world, index) = cromatolis_world();
+        let index_ref = index.as_index_ref();
+
+        // Every breach column, exhaustively: the guard's own bucket grid
+        // bounds where an authored shape can claim a column at all, so
+        // sweeping those chunks needs no stride and no extrapolation.
+        let mut breaches: Vec<Vec2<i32>> = Vec::new();
+        let mut histogram = [0_u64; SEAM_BUCKETS];
+        let mut deep_drops = 0_u64;
+        let mut connect_columns = 0_u64;
+
+        CanvasInfo::with_mock_canvas_info(index_ref, world.sim(), |info| {
+            let land = info.land();
+            let voids =
+                authored_voids(info).expect("the authored Cromatolis region must index its voids");
+
+            for cpos in voids.occupied_chunks() {
+                let origin = cpos.cpos_to_wpos();
+                for y in 0..TerrainChunkSize::RECT_SIZE.y as i32 {
+                    for x in 0..TerrainChunkSize::RECT_SIZE.x as i32 {
+                        let wpos2d = origin + Vec2::new(x, y);
+                        let Some(col_alt) = info.col_or_gen(wpos2d).map(|col| col.alt) else {
+                            continue;
+                        };
+                        let bands = voids.carved_contact_bands_at_column(wpos2d, col_alt);
+                        if bands.is_empty() {
+                            continue;
+                        }
+                        let mut breached_here = false;
+                        for (_, z_range, ..) in tunnel_bounds_at_unguarded(wpos2d, info, &land) {
+                            for (band, contact) in &bands {
+                                if *contact != ProceduralContact::Connect
+                                    || overlap_blocks(band, &z_range) == 0
+                                {
+                                    continue;
+                                }
+                                // Positive: the tunnel floor sits above the
+                                // authored floor, i.e. walking in from the
+                                // tunnel is a step *down* into the cave.
+                                let authored_floor = band.start().ceil() as i32;
+                                let offset = z_range.start - authored_floor;
+                                // The tunnel's realised height in this column,
+                                // which is what a body actually has to work
+                                // with here -- not its nominal axis height.
+                                let half_height = (z_range.end - z_range.start) / 2;
+                                deep_drops += u64::from(offset.abs() > half_height);
+                                histogram[seam_bucket(offset)] += 1;
+                                breached_here = true;
+                            }
+                        }
+                        if breached_here {
+                            connect_columns += 1;
+                            breaches.push(wpos2d);
+                        }
+                    }
+                }
+            }
+        });
+
+        println!(
+            "V14 breach seam over {connect_columns} Connect breach columns ({} tunnel x authored \
+             band pairs; one column can breach more than one of each)",
+            histogram.iter().sum::<u64>(),
+        );
+        for (bucket, count) in histogram.iter().enumerate() {
+            if *count > 0 {
+                println!("  {:>12} : {count}", seam_bucket_label(bucket));
+            }
+        }
+        println!(
+            "  tunnel x band pairs offset by more than the tunnel's own half-height there: \
+             {deep_drops}"
+        );
+        assert!(
+            connect_columns > 0,
+            "no procedural tunnel breaches any Connect cave, so there is no seam to characterise \
+             -- either the catalog stopped declaring Connect or this sweep is looking in the \
+             wrong place"
+        );
+
+        // ---- V15, on real chunks ----
+        let mut chunks: Vec<Vec2<i32>> = breaches
+            .iter()
+            .map(|wpos2d| wpos2d.wpos_to_cpos())
+            .collect();
+        chunks.sort_unstable_by_key(|cpos| (cpos.y, cpos.x));
+        chunks.dedup();
+        // Spread the sample across the whole breach set rather than taking a
+        // prefix, which would be one corner of the map.
+        let stride = chunks.len().div_ceil(V15_CHUNK_SAMPLE).max(1);
+        let sampled: Vec<Vec2<i32>> = chunks.iter().copied().step_by(stride).collect();
+
+        let mut world = world;
+        let layers = world
+            .sim()
+            .authored_procedural_layers()
+            .expect("the authored region must declare its procedural layer policy");
+        assert!(
+            !layers.caves,
+            "this test forces the procedural cave layer on itself, so that the two generations it \
+             diffs differ by exactly that. If the region already ships `caves: true` the 'off' \
+             side is no longer the shipped configuration and this needs rewriting."
+        );
+        // The region policy is only half the gate -- `World::generate_chunk`
+        // runs the layer when the global toggle allows it too. With the global
+        // one off, "caves on" would generate the identical chunk and every
+        // count below would be a silent zero.
+        assert!(
+            index_ref.features.caves,
+            "`assets/world/features.ron` has `caves: false`, so forcing the region policy on \
+             changes nothing and this measurement cannot run"
+        );
+
+        let ore_sprites = |chunk: &common::terrain::TerrainChunk| {
+            let mut found: Vec<(Vec3<i32>, SpriteKind)> = Vec::new();
+            for z in chunk.get_min_z()..chunk.get_max_z() {
+                for y in 0..TerrainChunkSize::RECT_SIZE.y as i32 {
+                    for x in 0..TerrainChunkSize::RECT_SIZE.x as i32 {
+                        // `Chonk::get` takes chunk-relative x/y with
+                        // *absolute* world z.
+                        let pos = Vec3::new(x, y, z);
+                        let Ok(block) = chunk.get(pos) else { continue };
+                        if !matches!(
+                            block.get_rtsim_resource(),
+                            Some(TerrainResource::Ore | TerrainResource::Gem)
+                        ) {
+                            continue;
+                        }
+                        found.push((
+                            pos,
+                            block.get_sprite().expect("a resource implies a sprite"),
+                        ));
+                    }
+                }
+            }
+            found
+        };
+
+        let mut declined = 0_usize;
+        let mut floating = Vec::new();
+        let mut sprites_with_caves_on = 0_usize;
+        for cpos in &sampled {
+            let generate = |world: &crate::World| {
+                world
+                    .generate_chunk(index_ref, *cpos, None, || false, None, None)
+                    .map(|(chunk, _)| chunk)
+                    .expect("generating a land chunk of the authored region must succeed")
+            };
+            let without = ore_sprites(&generate(&world));
+
+            world.set_authored_procedural_layers_for_test(crate::sim::AuthoredProceduralLayers {
+                caves: true,
+                ..layers
+            });
+            let with_chunk = generate(&world);
+            world.set_authored_procedural_layers_for_test(layers);
+
+            let with = ore_sprites(&with_chunk);
+            sprites_with_caves_on += with.len();
+            let kept: hashbrown::HashSet<Vec3<i32>> = with.iter().map(|(pos, _)| *pos).collect();
+            declined += without
+                .iter()
+                .filter(|(pos, _)| !kept.contains(pos))
+                .count();
+            // Only the sprites `apply_minerals_to_floor` is responsible for.
+            // With the layer on, `apply_caves_to` places ore of its own, and
+            // the authored carve runs afterwards and overwrites its own
+            // footprint -- so a *procedural* sprite just outside that footprint
+            // can be left over air by the authored carve. That would be a real
+            // finding, but about a different guard, and blaming it on this one
+            // would send the next person to the wrong file.
+            let authored: hashbrown::HashSet<Vec3<i32>> =
+                without.iter().map(|(pos, _)| *pos).collect();
+            for (pos, sprite) in with.iter().filter(|(pos, _)| authored.contains(pos)) {
+                if !with_chunk
+                    .get(*pos - Vec3::unit_z())
+                    .is_ok_and(|below| below.is_solid())
+                {
+                    floating.push((cpos.cpos_to_wpos(), *pos, *sprite));
+                }
+            }
+        }
+
+        println!(
+            "V15 over {} of {} chunks holding a breach column\n  authored mineral sprites the \
+             procedural layer caused to be declined: {declined}\n  ore/gem sprites present with \
+             the layer on (authored and procedural both): {sprites_with_caves_on}\n  ...standing \
+             over a non-solid block: {}",
+            sampled.len(),
+            chunks.len(),
+            floating.len(),
+        );
+        for (chunk_origin, pos, sprite) in floating.iter().take(10) {
+            println!("  floating {sprite:?} at chunk {chunk_origin:?} block {pos:?}");
+        }
+        assert!(
+            floating.is_empty(),
+            "{} ore/gem sprite(s) are standing over air once the procedural cave layer is on. \
+             `apply_minerals_to_floor`'s is_solid guard (written for authored-cave overlap) does \
+             not cover the breach case after all, and needs to.",
+            floating.len(),
+        );
+        assert!(
+            declined > 0,
+            "not one authored mineral placement was declined, which would mean no breach column \
+             in the sample has a procedural tunnel under its authored floor -- so this run says \
+             nothing about whether the guard fires"
+        );
+    }
+
+    /// **V17 — breach reachability.** Of the procedural tunnels that open into
+    /// a `Connect` cave, what fraction belong to a network that still reaches
+    /// daylight once the guard has plugged what it plugs?
+    ///
+    /// Spec §5.2.3 derives ≈ 0.77 from the lattice's own parameters: mean
+    /// degree ≈ 1.35 is below percolation, so the procedural cave network is
+    /// small clusters rather than one system, and each cluster has roughly a
+    /// 0.44-per-node chance of carrying a surface descent. That arithmetic
+    /// assumes a cluster-size distribution it only approximates, and it
+    /// ignores the second policy entirely — a `Seal` plug can sever the very
+    /// edge a `Connect` breach was counting on. This is the real figure with
+    /// both live.
+    ///
+    /// **Characterisation only. There is no threshold and no gate**, and a
+    /// dead-end pocket is a recorded limitation rather than a defect: the cave
+    /// was reachable only by mining before this row, it still has its own
+    /// authored entrance, and it now has more explorable volume attached, so
+    /// there is no state in which `Connect` leaves a cave worse off than
+    /// `Seal`. Detection or avoidance logic for it would be a feature nobody
+    /// asked for, built on a flood fill at chunk-generation time, for a
+    /// cosmetic property.
+    ///
+    /// `cargo test -p xindeler-world --release breach_reachability -- \
+    /// --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn breach_reachability_matches_what_the_lattice_predicts() {
+        use crate::layer::{
+            authored_regions::authored_voids_for as authored_voids,
+            cave::{
+                Tunnel,
+                measure::{OpenEdgeCache, breach_reaches_surface},
+                tunnel_bounds_at_unguarded,
+            },
+        };
+
+        let (world, index) = cromatolis_world();
+        let index_ref = index.as_index_ref();
+        let sim = world.sim();
+
+        CanvasInfo::with_mock_canvas_info(index_ref, sim, |info| {
+            let land = info.land();
+            let voids =
+                authored_voids(info).expect("the authored Cromatolis region must index its voids");
+
+            // A breach is a *tunnel*, not a column: one tunnel grazing a
+            // chamber for eighty columns is one way in, not eighty.
+            let mut breaching: hashbrown::HashMap<(u32, Vec2<i32>, Vec2<i32>), Tunnel> =
+                hashbrown::HashMap::new();
+            for cpos in voids.occupied_chunks() {
+                let origin = cpos.cpos_to_wpos();
+                for y in 0..TerrainChunkSize::RECT_SIZE.y as i32 {
+                    for x in 0..TerrainChunkSize::RECT_SIZE.x as i32 {
+                        let wpos2d = origin + Vec2::new(x, y);
+                        let Some(col_alt) = info.col_or_gen(wpos2d).map(|col| col.alt) else {
+                            continue;
+                        };
+                        let bands = voids.carved_contact_bands_at_column(wpos2d, col_alt);
+                        if bands.is_empty() {
+                            continue;
+                        }
+                        for (level, z_range, _, _, _, tunnel) in
+                            tunnel_bounds_at_unguarded(wpos2d, info, &land)
+                        {
+                            let breaches = bands.iter().any(|(band, contact)| {
+                                *contact == ProceduralContact::Connect
+                                    && overlap_blocks(band, &z_range) > 0
+                            });
+                            if breaches {
+                                let (a, b) = tunnel.nodes();
+                                breaching.insert((level, a.wpos, b.wpos), tunnel);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let mut reaching = 0_usize;
+            // How many breaching tunnels *are* a surface descent, rather than
+            // merely being connected to one. A level-0 node sits at
+            // `depth = -6`; every other level is at `120 * level - 6`.
+            let mut are_descents = 0_usize;
+            let mut visited = Vec::new();
+            // Shared across every breach: the lattice holds only a few thousand
+            // edges, and without this each breach re-walks its whole cluster
+            // from scratch at ~1 500 column generations per edge.
+            let mut open_edges = OpenEdgeCache::new();
+            for ((level, ..), tunnel) in &breaching {
+                let (a, _) = tunnel.nodes();
+                are_descents += usize::from(a.depth < 0);
+                let (reached, nodes) = breach_reaches_surface(
+                    tunnel,
+                    *level,
+                    info,
+                    &land,
+                    Some(voids),
+                    &mut open_edges,
+                );
+                reaching += usize::from(reached);
+                visited.push(nodes);
+            }
+            visited.sort_unstable();
+
+            println!(
+                "V17 breach reachability\n  distinct procedural tunnels breaching a Connect cave: \
+                 {}\n  ...which are themselves a surface descent: {are_descents}\n  ...whose \
+                 network still reaches a marked surface mouth: {reaching}\n  realised fraction: \
+                 {:.3} (spec §5.2.3 derives ~0.77 from the lattice alone)\n  lattice nodes the \
+                 walk had to visit: min {} / median {} / max {}",
+                breaching.len(),
+                reaching as f64 / breaching.len().max(1) as f64,
+                visited.first().copied().unwrap_or(0),
+                visited.get(visited.len() / 2).copied().unwrap_or(0),
+                visited.last().copied().unwrap_or(0),
+            );
+            assert!(
+                !breaching.is_empty(),
+                "no procedural tunnel breaches any Connect cave, so there is no reachability to \
+                 characterise"
+            );
+            // The number above is only a measurement of the *network* if the
+            // walk actually traversed one. A walk that answered from its
+            // starting node every time would be reporting that node's own cell
+            // and nothing else, and would report the same fraction.
+            assert!(
+                visited.iter().any(|&nodes| nodes > 2),
+                "every reachability verdict came from the breached tunnel's own two nodes, so the \
+                 lattice walk contributed nothing and the fraction above is not about the network"
+            );
+        });
     }
 
     /// What the guard costs on the hot path, measured where it actually runs:
