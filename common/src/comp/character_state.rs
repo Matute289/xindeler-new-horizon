@@ -417,15 +417,26 @@ impl CharacterState {
     /// creatures — constructs, armoured shells — never fold, so they never
     /// shrink.
     pub fn posture(&self, body: &Body) -> Posture {
-        let caps = body.traversal_capabilities();
-        if matches!(self, CharacterState::Crawl) {
-            if caps.contains(TraversalCapabilities::PRONE) {
-                return Posture::Prone;
-            }
-        } else if self.is_stealthy() && caps.contains(TraversalCapabilities::CROUCH) {
-            return Posture::Crouch;
+        // Decide from the state first. This runs per entity per tick in the
+        // physics terrain arm, and almost every entity on almost every tick is
+        // neither crouching nor prone — so the overwhelmingly common case must
+        // not pay for the capability lookup behind it, which reads an asset.
+        let wanted = if matches!(self, CharacterState::Crawl) {
+            (Posture::Prone, TraversalCapabilities::PRONE)
+        } else if self.is_stealthy() {
+            (Posture::Crouch, TraversalCapabilities::CROUCH)
+        } else {
+            return Posture::Stand;
+        };
+
+        // Only now: can this body actually hold itself that way? A rigid
+        // construct keeps its standing cylinder, which is both correct and the
+        // historical behaviour.
+        if body.traversal_capabilities().contains(wanted.1) {
+            wanted.0
+        } else {
+            Posture::Stand
         }
-        Posture::Stand
     }
 
     pub fn is_stealthy(&self) -> bool {
