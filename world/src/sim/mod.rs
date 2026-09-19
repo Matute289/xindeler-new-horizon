@@ -1525,6 +1525,25 @@ pub(crate) struct AuthoredProceduralLayers {
     pub rocks: bool,
     #[serde(default = "layer_enabled_by_default")]
     pub spots: bool,
+    /// Whether a boulder that lands inside a carved void must keep that void
+    /// traversable.
+    ///
+    /// They do land in them: a boulder's bounding box is symmetric in `z`
+    /// and reaches roughly twenty blocks below the surface, a carved ceiling
+    /// is clamped only [`crate::layer::VOID_SURFACE_MARGIN`] blocks below
+    /// it, and the rock pass runs *after* every carve — so the rock wins.
+    /// With this on, one that would seal the way through instead gets a
+    /// locally carved channel, or is not placed at all.
+    ///
+    /// Unlike the four toggles above, this is **opt-in** rather than
+    /// opt-out, and its absence means "off". The four above suppress a layer
+    /// a region does not want, so their permissive value is the upstream
+    /// behaviour; this one *adds* geometry (it opens air a carve did not),
+    /// so its upstream-behaviour value is the disabled one. A region that
+    /// never mentions it -- including every plain procedural world -- keeps
+    /// generating exactly the terrain it generated before.
+    #[serde(default)]
+    pub rock_traversal_repair: bool,
 }
 
 /// See [`AuthoredProceduralLayers::default`] for why an absent toggle
@@ -1562,6 +1581,11 @@ impl Default for AuthoredProceduralLayers {
             caves: true,
             rocks: true,
             spots: true,
+            // Not part of the permissive fallback: see the field's doc
+            // comment. "Nothing is suppressed" is the safe direction for the
+            // four above; for this one the safe direction is "nothing extra
+            // is carved".
+            rock_traversal_repair: false,
         }
     }
 }
@@ -5773,6 +5797,7 @@ mod tests {
                         caves: false,
                         rocks: false,
                         spots: true,
+                        rock_traversal_repair: true,
                     },
                     "{specifier} has changed Cromatolis's procedural-layer policy. That is a real \
                      content decision (notably, `caves` gates the region's entire procedural \

@@ -1913,7 +1913,7 @@ mod tests {
                         let Some(col_alt) = info.col_or_gen(wpos2d).map(|col| col.alt) else {
                             continue;
                         };
-                        let bands = voids.carved_bands_at_column(wpos2d, col_alt);
+                        let bands = voids.carved_contact_bands_at_column(wpos2d, col_alt);
                         if bands.is_empty() {
                             continue;
                         }

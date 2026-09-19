@@ -52,6 +52,10 @@
 //! the guard is a slice-is-empty test per column rather than a scan over every
 //! shape.
 
+use crate::{
+    CanvasInfo,
+    layer::traversal::{AccommodationTier, PassageColumn, PassageQuery},
+};
 use common::{
     terrain::{TerrainChunkSize, quadratic_nearest_point, river_spline_coeffs},
     vol::RectVolSize,
@@ -253,6 +257,15 @@ struct VoidShape {
     /// authored value -- the per-shape split is capability, not a decision
     /// anyone has to make now.
     contact: ProceduralContact,
+    /// How much of this shape's geometry a human actually chose.
+    ///
+    /// A second per-shape authored property, for the same reason `contact` is
+    /// one and set at the same registration site: a consumer asks the index
+    /// what it may do here, not which module the shape came from. It answers a
+    /// different question from `contact` and the two must not be conflated --
+    /// `contact` decides whether two *generators* may join, this decides how
+    /// much a *repair* may change. See [`AccommodationTier`].
+    tier: AccommodationTier,
 }
 
 impl VoidShape {
@@ -379,7 +392,12 @@ pub(crate) struct AuthoredVoidsBuilder {
 }
 
 impl AuthoredVoidsBuilder {
-    pub(crate) fn push_disc(&mut self, disc: DiscShape, contact: ProceduralContact) {
+    pub(crate) fn push_disc(
+        &mut self,
+        disc: DiscShape,
+        contact: ProceduralContact,
+        tier: AccommodationTier,
+    ) {
         self.push(
             VoidGeom::Disc {
                 centre: disc.centre,
@@ -388,10 +406,16 @@ impl AuthoredVoidsBuilder {
                 ceiling_z: disc.ceiling_z,
             },
             contact,
+            tier,
         );
     }
 
-    pub(crate) fn push_capsule(&mut self, capsule: CapsuleShape, contact: ProceduralContact) {
+    pub(crate) fn push_capsule(
+        &mut self,
+        capsule: CapsuleShape,
+        contact: ProceduralContact,
+        tier: AccommodationTier,
+    ) {
         self.push(
             VoidGeom::Capsule {
                 a: capsule.a,
@@ -402,15 +426,17 @@ impl AuthoredVoidsBuilder {
                 span: capsule.span,
             },
             contact,
+            tier,
         );
     }
 
-    fn push(&mut self, geom: VoidGeom, contact: ProceduralContact) {
+    fn push(&mut self, geom: VoidGeom, contact: ProceduralContact, tier: AccommodationTier) {
         let aabr = shape_aabr(&geom, margin_for(contact));
         self.shapes.push(VoidShape {
             geom,
             aabr,
             contact,
+            tier,
         });
     }
 
@@ -491,26 +517,58 @@ impl AuthoredVoids {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize { self.shapes.len() }
 
+    /// Every disc of one tier, as `(centre, carved floor)`. Tests only: it is
+    /// how a test gets at real authored anchors to aim a synthetic intruder
+    /// at, without any layer having to expose its resolved geometry twice.
+    #[cfg(test)]
+    pub(crate) fn disc_anchors(&self, tier: AccommodationTier) -> Vec<(Vec2<i32>, i32)> {
+        self.shapes
+            .iter()
+            .filter(|shape| shape.tier == tier)
+            .filter_map(|shape| match shape.geom {
+                VoidGeom::Disc {
+                    centre, floor_z, ..
+                } => Some((centre, floor_z)),
+                VoidGeom::Capsule { .. } => None,
+            })
+            .collect()
+    }
+
     /// Every shape's **carved** (undilated) z-band at this column, paired with
-    /// that shape's policy.
+    /// whatever of that shape the caller asked for.
     ///
     /// This is the volume the authored carve actually produces, not the
     /// dilated protection shell -- so it is what an overlap measurement must
-    /// compare a procedural feature's z-range against. Tests only.
-    #[cfg(test)]
-    pub(crate) fn carved_bands_at_column(
+    /// compare a procedural feature's z-range against, and what an
+    /// obstruction-aware consumer must model as the air a body could stand in.
+    ///
+    /// Parameterised on what to read off each shape rather than returning the
+    /// shape, because `VoidShape` is private and should stay that way: a
+    /// consumer gets the one property it is entitled to, not the geometry.
+    fn carved_bands_at_column<T>(
         &self,
         wpos2d: Vec2<i32>,
         col_alt: f32,
-    ) -> Vec<(RangeInclusive<f32>, ProceduralContact)> {
+        pick: impl Fn(&VoidShape) -> T,
+    ) -> Vec<(RangeInclusive<f32>, T)> {
         self.in_chunk(wpos2d)
             .shapes
             .iter()
             .filter_map(|&idx| {
                 let shape = &self.shapes[idx as usize];
-                band_dilated_by(&shape.geom, 0.0, wpos2d, col_alt).map(|band| (band, shape.contact))
+                band_dilated_by(&shape.geom, 0.0, wpos2d, col_alt).map(|band| (band, pick(shape)))
             })
             .collect()
+    }
+
+    /// [`Self::carved_bands_at_column`] paired with each shape's policy.
+    #[cfg(test)]
+    pub(crate) fn carved_contact_bands_at_column(
+        &self,
+        wpos2d: Vec2<i32>,
+        col_alt: f32,
+    ) -> Vec<(RangeInclusive<f32>, ProceduralContact)> {
+        self.carved_bands_at_column(wpos2d, col_alt, |shape| shape.contact)
     }
 
     /// `(chunk buckets, total bucket entries, largest bucket)`.
@@ -627,6 +685,106 @@ fn band_dilated_by(
             }
             Some((floor - margin)..=(ceiling + margin))
         },
+    }
+}
+
+// ---------------------------------------------------------------------
+// Traversal view.
+//
+// The same index, read as "what air is open here" rather than "may a
+// generator join here". Both questions are asked of the same authored
+// geometry, and answering them from one index is the whole point of having
+// one: a second copy of the band maths would be a second thing to keep in
+// step with the carve.
+// ---------------------------------------------------------------------
+
+/// One accommodation tier's worth of authored voids, as a passage the
+/// traversal analysis can ask about.
+///
+/// One per tier rather than one for the whole index, because a tier is a
+/// *budget* -- how much a repair may change -- and the analysis needs a single
+/// answer for the geometry it is looking at. An intruder landing in shapes of
+/// two tiers at once is analysed once per tier, and the strictest verdict
+/// wins by construction, since keeping the intruder out is unconditional.
+pub(crate) struct AuthoredVoidPassage<'a> {
+    voids: &'a AuthoredVoids,
+    /// Held for one reason: the carved band at a column depends on that
+    /// column's ground height, through the surface cap every authored carve
+    /// applies.
+    info: CanvasInfo<'a>,
+    tier: AccommodationTier,
+}
+
+impl AuthoredVoids {
+    /// This index read as a passage of one tier, or `None` when it holds no
+    /// shape of that tier at all.
+    pub(crate) fn passage<'a>(
+        &'a self,
+        info: &CanvasInfo<'a>,
+        tier: AccommodationTier,
+    ) -> Option<AuthoredVoidPassage<'a>> {
+        self.shapes
+            .iter()
+            .any(|shape| shape.tier == tier)
+            .then_some(AuthoredVoidPassage {
+                voids: self,
+                info: *info,
+                tier,
+            })
+    }
+}
+
+impl AuthoredVoidPassage<'_> {
+    /// The open bands at this column *without* the surface clamp, which
+    /// over-reports slightly. Only for a cheap "is this intruder worth
+    /// analysing at all" pre-check, where over-reporting costs one wasted
+    /// analysis and under-reporting would miss a real obstruction.
+    pub(crate) fn coarse_bands(&self, wpos2d: Vec2<i32>, out: &mut Vec<(i32, i32)>) {
+        self.bands_at(wpos2d, f32::INFINITY, out);
+    }
+
+    fn bands_at(&self, wpos2d: Vec2<i32>, col_alt: f32, out: &mut Vec<(i32, i32)>) {
+        for (band, shape_tier) in self
+            .voids
+            .carved_bands_at_column(wpos2d, col_alt, |shape| shape.tier)
+        {
+            if shape_tier == self.tier {
+                // The carve rounds a floor down and a ceiling up; matching
+                // that keeps the modelled air from being narrower than the
+                // air that ships.
+                out.push((band.start().floor() as i32, band.end().ceil() as i32));
+            }
+        }
+    }
+}
+
+impl PassageQuery for AuthoredVoidPassage<'_> {
+    fn tier(&self) -> AccommodationTier { self.tier }
+
+    fn column(&self, wpos2d: Vec2<i32>) -> Option<PassageColumn> {
+        // Deliberately not consulted here: `ProceduralContact`. Whether two
+        // generators may join at a point says nothing about whether a body
+        // fits through it -- an intruder dropped into a void someone was happy
+        // to have a tunnel break into is just as stuck as one dropped into a
+        // sealed one.
+        let col_alt = self.info.col_or_gen(wpos2d)?.alt;
+        let mut bands = Vec::new();
+        self.bands_at(wpos2d, col_alt, &mut bands);
+        if bands.is_empty() {
+            return None;
+        }
+        bands.sort_unstable();
+        let mut merged: Vec<(i32, i32)> = Vec::with_capacity(bands.len());
+        for (lo, hi) in bands {
+            match merged.last_mut() {
+                Some(last) if lo <= last.1 + 1 => last.1 = last.1.max(hi),
+                _ => merged.push((lo, hi)),
+            }
+        }
+        Some(PassageColumn {
+            bands: merged,
+            ceiling_limit: (col_alt - SURFACE_MARGIN).floor() as i32,
+        })
     }
 }
 
@@ -784,8 +942,12 @@ mod tests {
         let mut builder = AuthoredVoidsBuilder::default();
         for shape in shapes {
             match shape {
-                TestShape::Disc(disc, contact) => builder.push_disc(disc, contact),
-                TestShape::Capsule(capsule, contact) => builder.push_capsule(capsule, contact),
+                TestShape::Disc(disc, contact) => {
+                    builder.push_disc(disc, contact, AccommodationTier::Catalog)
+                },
+                TestShape::Capsule(capsule, contact) => {
+                    builder.push_capsule(capsule, contact, AccommodationTier::Catalog)
+                },
             }
         }
         builder.finish().expect("the fixture registered no shapes")

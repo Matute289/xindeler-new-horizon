@@ -5,10 +5,12 @@ pub mod cromatolis_aerial_citadel;
 pub mod cromatolis_cave_features;
 pub mod cromatolis_interior;
 pub mod rock;
+pub(crate) mod rock_traversal;
 pub mod scatter;
 pub mod shrub;
 pub mod spot;
 pub mod terrain_damage;
+pub mod traversal;
 pub mod tree;
 pub mod wildlife;
 
