@@ -77,6 +77,12 @@ bitflags::bitflags! {
         const PRONE   = 1 << 3;
         /// The cross-section compresses, so the body can enter a passage
         /// narrower than its resting width.
+        ///
+        /// ⚪ Derived but **not consumed yet** — nothing narrows a collision
+        /// cylinder or admits a body to a tight gap on the strength of it. It
+        /// is derived anyway because it is a property of the build the rest of
+        /// the table already describes, so leaving it out would mean deriving
+        /// it from scratch later rather than reading it.
         const SQUEEZE = 1 << 4;
         /// May cross a gap by jumping.
         const JUMP    = 1 << 5;
@@ -114,7 +120,35 @@ pub enum Grip {
     Hooks,
 }
 
-impl Grip {
+/// The numbers the derivation rule weighs the roster against.
+///
+/// Authored rather than compiled in, because these are the knobs a balance pass
+/// reaches for — *"bears should top out heavier"*, *"wallrunning is too
+/// generous"* — and needing a Rust change and a release to answer that is the
+/// thing this table exists to avoid. They live in the same file as the roster
+/// so that a row and the rule it is judged by cannot drift into different
+/// assets.
+///
+/// `None`/`Fins`/`Hooves`/`Pads` have no entry: they are not "very heavy", they
+/// are *no grip at all*, which is a fact about the limb rather than a number to
+/// tune.
+#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraversalTuning {
+    /// Heaviest body hands can hold against a wall.
+    pub hands_mass_ceiling: f32,
+    /// Heaviest body claws can hold. A bear climbs a tree at half a tonne.
+    pub claws_mass_ceiling: f32,
+    /// Heaviest body that can wallrun. A wallrun carries momentum sideways
+    /// across a face, which stops working long before a hang does.
+    pub wallrun_mass_limit: f32,
+    /// Shortest body for which crouching buys anything.
+    pub min_crouch_height: f32,
+    /// Shortest body for which lying down buys anything.
+    pub min_prone_height: f32,
+}
+
+impl TraversalTuning {
     /// The heaviest body this contact structure can hold against a vertical
     /// surface, in kilograms.
     ///
@@ -122,18 +156,15 @@ impl Grip {
     /// and it is deliberately concentrated here rather than scattered as 224
     /// exceptions: a twenty-tonne dragon holds a cliff on talons that sink into
     /// the rock, while a ten-tonne stone construct with hands does not.
-    pub const fn mass_ceiling(self) -> f32 {
-        match self {
+    pub fn mass_ceiling(&self, grip: Grip) -> f32 {
+        match grip {
             // Nothing to grip with. Not "very heavy" — none.
             Grip::None | Grip::Fins | Grip::Hooves | Grip::Pads => 0.0,
-            // A humanoid hauls its own weight; a siege construct does not.
-            Grip::Hands => 1500.0,
-            // A bear climbs a tree at half a tonne; drakes are not much more.
-            Grip::Claws => 5000.0,
-            // Penetrating, so limited by the rock rather than by the grip.
-            Grip::Talons => f32::INFINITY,
-            // Chitin plus adhesion, at the scales creatures here come in.
-            Grip::Hooks => f32::INFINITY,
+            Grip::Hands => self.hands_mass_ceiling,
+            Grip::Claws => self.claws_mass_ceiling,
+            // Penetrating or adhesive, so limited by the surface rather than by
+            // the grip. Not a tunable: no number would mean anything here.
+            Grip::Talons | Grip::Hooks => f32::INFINITY,
         }
     }
 }
@@ -167,21 +198,18 @@ pub struct TraversalMorphology {
     pub limbs: u8,
 }
 
-/// Heaviest body that can wallrun. A wallrun carries momentum sideways across a
-/// face, which stops working long before a hang does.
-const WALLRUN_MASS_LIMIT: f32 = 200.0;
-/// Shortest body for which crouching buys anything.
-const MIN_CROUCH_HEIGHT: f32 = 1.0;
-/// Shortest body for which lying down buys anything.
-const MIN_PRONE_HEIGHT: f32 = 0.8;
-
 impl TraversalMorphology {
     /// Turn a build into a set of capabilities.
     ///
     /// The **only** place a traversal capability is decided. Everything else in
     /// the engine asks this, directly or through
     /// [`Body::traversal_capabilities`].
-    pub fn derive(&self, mass_kg: f32, height: f32) -> TraversalCapabilities {
+    pub fn derive(
+        &self,
+        mass_kg: f32,
+        height: f32,
+        tuning: &TraversalTuning,
+    ) -> TraversalCapabilities {
         let mut caps = TraversalCapabilities::empty();
 
         // Climbing needs three things at once: something to grip with that can
@@ -189,24 +217,27 @@ impl TraversalMorphology {
         // that folds against the wall. A rigid body fails the last one however
         // good its claws are, which is why an armoured snapper and a stone
         // construct both stay on the ground.
-        if self.frame == Frame::Flexible && self.limbs >= 2 && mass_kg <= self.grip.mass_ceiling() {
+        if self.frame == Frame::Flexible
+            && self.limbs >= 2
+            && mass_kg <= tuning.mass_ceiling(self.grip)
+        {
             caps |= TraversalCapabilities::CLIMB;
             // Wallrunning is a run, not a hang: upright, and light enough to
             // carry its own momentum across the face.
-            if self.limbs == 2 && mass_kg <= WALLRUN_MASS_LIMIT {
+            if self.limbs == 2 && mass_kg <= tuning.wallrun_mass_limit {
                 caps |= TraversalCapabilities::WALLRUN;
             }
         }
 
         // Posture. Both are pointless on a body already shorter than the gap
         // they would buy, so each is gated on having somewhere to fold to.
-        if self.frame == Frame::Flexible && height >= MIN_CROUCH_HEIGHT {
+        if self.frame == Frame::Flexible && height >= tuning.min_crouch_height {
             caps |= TraversalCapabilities::CROUCH;
         }
         if matches!(
             self.frame,
             Frame::Flexible | Frame::Serpentine | Frame::Amorphous
-        ) && height >= MIN_PRONE_HEIGHT
+        ) && height >= tuning.min_prone_height
         {
             caps |= TraversalCapabilities::PRONE;
         }
@@ -235,6 +266,7 @@ impl TraversalMorphology {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BodyTraversal {
+    pub tuning: TraversalTuning,
     pub arthropod: arthropod::AllSpecies<TraversalMorphology>,
     pub biped_large: biped_large::AllSpecies<TraversalMorphology>,
     pub biped_small: biped_small::AllSpecies<TraversalMorphology>,
@@ -302,11 +334,12 @@ impl Body {
     /// class-innate or spell-granted capability would later be unioned in, and
     /// a consumer that reaches around it welds that door shut.
     pub fn traversal_capabilities(&self) -> TraversalCapabilities {
-        let mut caps = body_traversal()
-            .read()
+        let handle = body_traversal();
+        let table = handle.read();
+        let mut caps = table
             .0
             .get(self)
-            .map(|morph| morph.derive(self.mass().0, self.height()))
+            .map(|morph| morph.derive(self.mass().0, self.height(), &table.0.tuning))
             .unwrap_or_else(TraversalCapabilities::empty);
 
         if self.fly_thrust().is_some() {
@@ -488,28 +521,39 @@ mod tests {
         }
     }
 
-    /// No golem climbs today — but because every one of them is a rigid
-    /// ten-tonne construct on hands, not because it is a golem.
+    /// No golem-bodied creature climbs today — but for its build, not for its
+    /// body kind. The eight actual constructs are rigid; `Mogwai` is a fiend
+    /// borrowing the same skeleton and is *not* rigid, and it stays off walls
+    /// purely on the ten-tonne mass every golem-bodied creature currently
+    /// shares. That distinction is the point: if those masses are ever given
+    /// real per-species values, the fiend is the one that should start
+    /// climbing, and it will, with no engine change.
     #[test]
-    fn no_shipped_golem_climbs_and_the_reason_is_its_build() {
+    fn no_golem_bodied_creature_climbs_and_the_reason_is_its_build() {
         for species in golem::ALL_SPECIES {
             let body = Body::Golem(golem::Body {
                 species,
                 body_type: golem::BodyType::Male,
             });
             assert!(
-                !caps_of(&body).intersects(
-                    TraversalCapabilities::CLIMB
-                        | TraversalCapabilities::CROUCH
-                        | TraversalCapabilities::PRONE
-                ),
-                "{species:?} should not climb or change posture",
+                !caps_of(&body).contains(TraversalCapabilities::CLIMB),
+                "{species:?} should not climb",
             );
-            assert_eq!(
-                morph_of(&body).unwrap().frame,
-                Frame::Rigid,
-                "{species:?} should be rigid",
-            );
+            let morph = morph_of(&body).unwrap();
+            if species == golem::Species::Mogwai {
+                assert_eq!(morph.frame, Frame::Flexible, "the fiend bends");
+                assert!(
+                    caps_of(&body).contains(TraversalCapabilities::CROUCH),
+                    "…and therefore has a posture, unlike the constructs",
+                );
+            } else {
+                assert_eq!(morph.frame, Frame::Rigid, "{species:?} should be rigid");
+                assert!(
+                    !caps_of(&body)
+                        .intersects(TraversalCapabilities::CROUCH | TraversalCapabilities::PRONE),
+                    "{species:?} should have no posture",
+                );
+            }
         }
     }
 
@@ -527,9 +571,12 @@ mod tests {
             frame: Frame::Flexible,
             limbs: 4,
         };
+        let handle = body_traversal();
+        let table = handle.read();
+        let tuning = &table.0.tuning;
         assert!(
             clawed_construct
-                .derive(800.0, 2.4)
+                .derive(800.0, 2.4, tuning)
                 .contains(TraversalCapabilities::CLIMB),
         );
         // …and the shipped humanoid-shaped construct still does not, purely on
@@ -541,7 +588,7 @@ mod tests {
         };
         assert!(
             !stone_construct
-                .derive(10_000.0, 4.0)
+                .derive(10_000.0, 4.0, tuning)
                 .contains(TraversalCapabilities::CLIMB),
         );
     }
