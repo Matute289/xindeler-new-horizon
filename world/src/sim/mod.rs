@@ -117,6 +117,7 @@ struct GenCdf {
     /// any), or `AuthoredCromatolisClimate::default()` if none is loaded /
     /// the asset failed to parse. See `cromatolis_baseline_temp`.
     pub(crate) cromatolis_climate: AuthoredCromatolisClimate,
+    authored_alpine_policy: Option<(&'static str, AuthoredAlpinePolicy)>,
     /// Per-chunk "adjacent to authored water" signal, see
     /// `SimChunk::authored_near_water`.
     authored_near_water: Box<[bool]>,
@@ -994,6 +995,7 @@ struct AuthoredRegion {
     ground_substrate_zones: &'static str,
     fortifications: &'static str,
     tree_candidate_policy: &'static str,
+    alpine_policy: Option<&'static str>,
 }
 
 /// Threshold above which an authored water/elevated-lake/river-channel mask
@@ -1030,7 +1032,90 @@ const AUTHORED_REGIONS: &[AuthoredRegion] = &[AuthoredRegion {
     ground_substrate_zones: "world.map.cromatolis_v0_ground_substrate_zones",
     fortifications: "world.map.cromatolis_v0_fortifications",
     tree_candidate_policy: "world.map.cromatolis_v0_tree_candidate_policy",
+    alpine_policy: Some("world.map.cromatolis_v0_alpine"),
 }];
+
+/// One regional alpine policy, loaded once per authored world. All heights
+/// are real relief metres above sea level, never `SimChunk::alt`.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub(crate) struct AuthoredAlpinePolicy {
+    schema: u32,
+    pub tree_line_altitude_m: f32,
+    pub snow_start_altitude_m: f32,
+    pub persistent_snow_altitude_m: f32,
+    pub transition_rock_blend: f32,
+    pub slope_rock_blend: f32,
+}
+
+impl AuthoredAlpinePolicy {
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != 1 {
+            return Err(format!(
+                "unsupported authored alpine policy schema {}",
+                self.schema
+            ));
+        }
+        for value in [
+            self.tree_line_altitude_m,
+            self.snow_start_altitude_m,
+            self.persistent_snow_altitude_m,
+            self.transition_rock_blend,
+            self.slope_rock_blend,
+        ] {
+            if !value.is_finite() {
+                return Err("alpine policy values must be finite".into());
+            }
+        }
+        if self.tree_line_altitude_m < 0.0
+            || self.tree_line_altitude_m > self.snow_start_altitude_m
+            || self.persistent_snow_altitude_m <= self.snow_start_altitude_m
+        {
+            return Err("alpine policy altitudes must be ordered".into());
+        }
+        if !(0.0..=1.0).contains(&self.transition_rock_blend)
+            || !(0.0..=1.0).contains(&self.slope_rock_blend)
+        {
+            return Err("alpine policy rock blends must be within 0..=1".into());
+        }
+        if self.transition_rock_blend + self.slope_rock_blend > 1.0 {
+            return Err("alpine policy rock blend weights may not exceed 1.0 together".into());
+        }
+        Ok(())
+    }
+
+    /// Returns the explicit authored surface weights for a real relief and
+    /// normalized slope. `None` means the column is below this policy's
+    /// alpine transition and must keep its inherited terrain appearance.
+    pub(crate) fn surface_at(&self, relief_m: f32, slope: f32) -> Option<AlpineSurface> {
+        (relief_m >= self.snow_start_altitude_m).then(|| {
+            let progress = ((relief_m - self.snow_start_altitude_m)
+                / (self.persistent_snow_altitude_m - self.snow_start_altitude_m))
+                .clamped(0.0, 1.0);
+            let slope = slope.clamped(0.0, 1.0);
+            AlpineSurface {
+                rock: ((1.0 - progress) * self.transition_rock_blend
+                    + slope * self.slope_rock_blend)
+                    .clamped(0.0, 1.0),
+                snow: (progress * (1.0 - slope * self.slope_rock_blend)).clamped(0.0, 1.0),
+            }
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct AlpineSurface {
+    pub(crate) rock: f32,
+    pub(crate) snow: f32,
+}
+
+impl FileAsset for AuthoredAlpinePolicy {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> {
+        let policy: Self = load_ron(&bytes)?;
+        policy.validate().map_err(Into::into).map(|_| policy)
+    }
+}
 
 fn authored_region_for_map_asset(specifier: &str) -> Option<&'static AuthoredRegion> {
     AUTHORED_REGIONS
@@ -1057,9 +1142,8 @@ struct AuthoredCromatolisClimate {
     /// is a climate/content policy, not a generic engine invariant.
     #[serde(default = "default_cromatolis_tree_min_temp")]
     tree_min_temp: f32,
-    /// At or above this relief in meters, trees are physically excluded even
-    /// when the authored mask is white. This is authored regional policy,
-    /// rather than a response curve for the biome mask.
+    /// Legacy climate fallback cap. The exact Cromatolis alpine policy is
+    /// loaded separately, so a missing policy preserves the previous path.
     #[serde(default = "default_cromatolis_max_tree_altitude_m")]
     max_tree_altitude_m: f32,
 }
@@ -1068,10 +1152,31 @@ const fn default_cromatolis_tree_min_temp() -> f32 { 0.0 }
 
 const fn default_cromatolis_max_tree_altitude_m() -> f32 { 970.0 }
 
+impl AuthoredCromatolisClimate {
+    fn validate(&self) -> Result<(), String> {
+        for (name, value) in [
+            ("sea_level_temp_c", self.sea_level_temp_c),
+            ("lapse_rate_c_per_m", self.lapse_rate_c_per_m),
+            ("max_tree_altitude_m", self.max_tree_altitude_m),
+        ] {
+            if !value.is_finite() {
+                return Err(format!("Cromatolis climate {name} must be finite"));
+            }
+        }
+        if self.max_tree_altitude_m < 0.0 {
+            return Err("Cromatolis max tree altitude must be non-negative".into());
+        }
+        Ok(())
+    }
+}
+
 impl FileAsset for AuthoredCromatolisClimate {
     const EXTENSION: &'static str = "ron";
 
-    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> {
+        let climate: Self = load_ron(&bytes)?;
+        climate.validate().map_err(Into::into).map(|_| climate)
+    }
 }
 
 impl Default for AuthoredCromatolisClimate {
@@ -1741,6 +1846,7 @@ pub struct WorldSim {
     /// Procedural worlds intentionally leave this empty and retain the exact
     /// upstream `StructureGen2d` candidate sequence.
     authored_tree_candidate_policy: Option<RegionalTreeCandidatePolicy>,
+    pub(crate) authored_alpine_policy: Option<(&'static str, AuthoredAlpinePolicy)>,
 }
 
 /// The forest-species lottery for a position, given the [`Environment`]
@@ -1810,6 +1916,7 @@ impl WorldSim {
                 authored_near_water: false,
                 water_body: None,
                 salinity: None,
+                authored_alpine_snowland: false,
                 chaos: 0.0,
                 alt: 0.0,
                 basement: 0.0,
@@ -1842,6 +1949,7 @@ impl WorldSim {
             authored_ground_cover_profile: None,
             authored_map_ecology_profile: None,
             authored_tree_candidate_policy: None,
+            authored_alpine_policy: None,
         }
     }
 
@@ -1921,6 +2029,7 @@ impl WorldSim {
         // Not a raster layer (`AuthoredLayerKind`), so loaded separately: a
         // couple of scalar tuning values, not a per-chunk array.
         let cromatolis_climate = authored_region
+            .filter(|region| region.id == CROMATOLIS_V0_REGION_ID)
             .and_then(|region| {
                 let specifier = format!("{}_climate", region.map_asset);
                 match AuthoredCromatolisClimate::load_owned(&specifier) {
@@ -1937,6 +2046,24 @@ impl WorldSim {
                 }
             })
             .unwrap_or_default();
+        // Never apply an authored terrain policy to the procedural fallback
+        // produced when its binary map cannot load.
+        let authored_alpine_policy = authored_region
+            .filter(|_| parsed_world_file.is_some())
+            .and_then(|region| region.alpine_policy.map(|specifier| (region.id, specifier)))
+            .and_then(
+                |(region_id, specifier)| match AuthoredAlpinePolicy::load_owned(specifier) {
+                    Ok(policy) => Some((region_id, policy)),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            specifier,
+                            "Could not load authored alpine policy; preserving legacy terrain path"
+                        );
+                        None
+                    },
+                },
+            );
         // Also not a raster layer: which purely-procedural voxel layers are
         // still allowed to run inside this region (see
         // `AuthoredProceduralLayers`). `None` for a procedural world.
@@ -3130,6 +3257,7 @@ impl WorldSim {
             authored_ground_cover_layer,
             authored_ground_substrate_zones,
             cromatolis_climate,
+            authored_alpine_policy,
             authored_near_water,
             authored_water_body,
             authored_salinity,
@@ -3164,6 +3292,7 @@ impl WorldSim {
             authored_ground_cover_profile,
             authored_map_ecology_profile,
             authored_tree_candidate_policy,
+            authored_alpine_policy,
         };
 
         this.generate_cliffs();
@@ -4109,6 +4238,8 @@ pub struct SimChunk {
     /// otherwise leave the expectation unfulfilled in the test build.
     #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) salinity: Option<Salinity>,
+    /// Compact post-generation fact. The policy remains owned by `WorldSim`.
+    pub(crate) authored_alpine_snowland: bool,
     pub chaos: f32,
     pub alt: f32,
     pub basement: f32,
@@ -4209,8 +4340,10 @@ fn cromatolis_authored_tree_density(
     temp: f32,
     alt_pre: f32,
     climate: AuthoredCromatolisClimate,
+    alpine_policy: Option<AuthoredAlpinePolicy>,
 ) -> f32 {
-    if is_underwater || temp < climate.tree_min_temp || alt_pre >= climate.max_tree_altitude_m {
+    let tree_line = alpine_policy.map_or(climate.max_tree_altitude_m, |p| p.tree_line_altitude_m);
+    if is_underwater || temp < climate.tree_min_temp || alt_pre >= tree_line {
         0.0
     } else {
         painted_density
@@ -5230,7 +5363,7 @@ impl SimChunk {
         // Convert to [-1, 1]
         .sub(0.5)
         .mul(2.0);
-        if gen_cdf.authored_cromatolis_v0 {
+        if gen_cdf.authored_region_id == Some(CROMATOLIS_V0_REGION_ID) {
             temp = cromatolis_baseline_temp(alt_pre, gen_cdf.cromatolis_climate);
         }
 
@@ -5289,6 +5422,10 @@ impl SimChunk {
                         temp,
                         alt_pre,
                         gen_cdf.cromatolis_climate,
+                        gen_cdf
+                            .authored_alpine_policy
+                            .filter(|(region_id, _)| gen_cdf.authored_region_id == Some(*region_id))
+                            .map(|(_, policy)| policy),
                     )
                 });
         let authored_ground_cover =
@@ -5416,6 +5553,22 @@ impl SimChunk {
                 }
             };
 
+        // `alt_pre` above governed the authored mask before local surface
+        // undulation. Enforce the same data-owned tree line against the
+        // final chunk altitude as well: soil/tree warping must not carry a
+        // painted tree a few metres across the physical 700m boundary.
+        let authored_alpine = gen_cdf
+            .authored_alpine_policy
+            .filter(|(region_id, _)| gen_cdf.authored_region_id == Some(*region_id))
+            .map(|(_, policy)| policy);
+        let tree_density = if authored_alpine
+            .is_some_and(|policy| alt - CONFIG.sea_level >= policy.tree_line_altitude_m)
+        {
+            0.0
+        } else {
+            tree_density
+        };
+
         let authored_path = gen_cdf
             .authored_route_layer
             .as_ref()
@@ -5433,6 +5586,8 @@ impl SimChunk {
             authored_near_water: gen_cdf.authored_near_water[posi],
             water_body: gen_cdf.authored_water_body[posi],
             salinity: gen_cdf.authored_salinity[posi],
+            authored_alpine_snowland: authored_alpine
+                .is_some_and(|policy| alt - CONFIG.sea_level >= policy.snow_start_altitude_m),
             chaos,
             flux,
             alt,
@@ -5512,13 +5667,13 @@ impl SimChunk {
             // wire-synced, upstream-shared enum for a distinction
             // `SimChunk::water_body` already carries losslessly.
             BiomeKind::Lake
-        } else if self.authored_region_id != Some(CROMATOLIS_V0_REGION_ID)
-            && self.temp < CONFIG.snow_temp
+        } else if self.authored_alpine_snowland
+            || (self.authored_region_id != Some(CROMATOLIS_V0_REGION_ID)
+                && self.temp < CONFIG.snow_temp)
         {
-            // Cromatolis is lore-authored as tropical/caribbean -- no real
-            // snow -- so this check is scoped to that specific region rather
-            // than "any authored region is loaded" (COW-2 debt: a future
-            // region shouldn't silently inherit Cromatolis's no-snow rule).
+            // An authored region supplies its alpine threshold in real
+            // relief metres. Procedural worlds retain the inherited
+            // temperature-derived Snowland path exactly.
             BiomeKind::Snowland
         } else if self.alt > 500.0 && self.chaos > 0.3 && self.tree_density < 0.6 {
             BiomeKind::Mountain
@@ -6141,7 +6296,7 @@ mod tests {
         ] {
             let painted_density = 1.0 - blackness_percent / 100.0;
             assert_eq!(
-                cromatolis_authored_tree_density(painted_density, false, 0.5, 300.0, climate),
+                cromatolis_authored_tree_density(painted_density, false, 0.5, 300.0, climate, None),
                 painted_density,
                 "{blackness_percent}% black must retain its authored vegetation density"
             );
@@ -6150,29 +6305,49 @@ mod tests {
         // No gradual altitude attenuation or response curve is permitted:
         // a mid-gray forest value remains mid-gray up to the hard cap.
         assert_eq!(
-            cromatolis_authored_tree_density(0.50, false, 0.5, 700.0, climate),
+            cromatolis_authored_tree_density(0.50, false, 0.5, 699.9, climate, None),
             0.50
         );
         assert_eq!(
-            cromatolis_authored_tree_density(0.82, false, 0.5, 300.0, climate),
+            cromatolis_authored_tree_density(1.0, false, 0.5, 970.0, climate, None),
+            0.0,
+            "the legacy climate cap remains a physical exclusion"
+        );
+        assert_eq!(
+            cromatolis_authored_tree_density(0.82, false, 0.5, 300.0, climate, None),
             0.82
         );
         assert_eq!(
-            cromatolis_authored_tree_density(0.83, false, 0.5, 300.0, climate),
+            cromatolis_authored_tree_density(0.83, false, 0.5, 300.0, climate, None),
             0.83
         );
 
         assert_eq!(
-            cromatolis_authored_tree_density(1.0, true, 0.5, 300.0, climate),
+            cromatolis_authored_tree_density(1.0, true, 0.5, 300.0, climate, None),
             0.0
         );
         assert_eq!(
-            cromatolis_authored_tree_density(1.0, false, -0.01, 300.0, climate),
+            cromatolis_authored_tree_density(1.0, false, -0.01, 300.0, climate, None),
             0.0
         );
         assert_eq!(
-            cromatolis_authored_tree_density(1.0, false, 0.5, 970.0, climate),
-            0.0
+            cromatolis_authored_tree_density(
+                1.0,
+                false,
+                0.5,
+                700.0,
+                climate,
+                Some(AuthoredAlpinePolicy {
+                    schema: 1,
+                    tree_line_altitude_m: 700.0,
+                    snow_start_altitude_m: 700.0,
+                    persistent_snow_altitude_m: 1010.0,
+                    transition_rock_blend: 0.62,
+                    slope_rock_blend: 0.22,
+                }),
+            ),
+            0.0,
+            "the separate authored alpine policy applies its 700m tree line"
         );
 
         // The regional asset owns the two non-water exclusions. A different
@@ -6184,8 +6359,46 @@ mod tests {
             ..climate
         };
         assert_eq!(
-            cromatolis_authored_tree_density(0.50, false, -0.25, 1_000.0, permissive_climate),
+            cromatolis_authored_tree_density(0.50, false, -0.25, 1_000.0, permissive_climate, None),
             0.50
+        );
+    }
+
+    #[test]
+    fn alpine_surface_policy_has_no_effect_below_start_and_composes_valid_weights() {
+        let policy = AuthoredAlpinePolicy {
+            schema: 1,
+            tree_line_altitude_m: 700.0,
+            snow_start_altitude_m: 700.0,
+            persistent_snow_altitude_m: 1010.0,
+            transition_rock_blend: 0.62,
+            slope_rock_blend: 0.22,
+        };
+        assert_eq!(policy.surface_at(699.9, 0.0), None);
+        assert_eq!(
+            policy.surface_at(700.0, 0.0),
+            Some(AlpineSurface {
+                rock: 0.62,
+                snow: 0.0
+            })
+        );
+        for (relief, slope) in [(700.0, 0.0), (855.0, 0.5), (1010.0, 0.0), (1010.0, 1.0)] {
+            let surface = policy.surface_at(relief, slope).unwrap();
+            assert!(surface.rock >= 0.0 && surface.snow >= 0.0);
+            assert!(surface.rock + surface.snow <= 1.0 + f32::EPSILON);
+        }
+        assert_eq!(policy.surface_at(1010.0, 0.0).unwrap().snow, 1.0);
+        let mut incompatible_schema = policy;
+        incompatible_schema.schema = 2;
+        assert!(
+            incompatible_schema.validate().is_err(),
+            "an incompatible alpine policy schema must fail closed"
+        );
+        let mut invalid_altitudes = policy;
+        invalid_altitudes.persistent_snow_altitude_m = invalid_altitudes.snow_start_altitude_m;
+        assert!(
+            invalid_altitudes.validate().is_err(),
+            "an unordered alpine transition must fail closed"
         );
     }
 
@@ -6615,6 +6828,8 @@ mod tests {
             .expect("real Cromatolis LFS assets must be pulled locally to run this test");
         let climate = AuthoredCromatolisClimate::load_owned("world.map.cromatolis_v0_climate")
             .expect("Cromatolis climate asset must load for the biome-mask regression");
+        let alpine = AuthoredAlpinePolicy::load_owned("world.map.cromatolis_v0_alpine")
+            .expect("Cromatolis alpine policy asset must load for the biome-mask regression");
         assert_eq!(vegetation.values.len(), map_size_lg.chunks_len());
 
         let mut checked = 0usize;
@@ -6626,7 +6841,7 @@ mod tests {
             let alt_pre = chunk.alt - CONFIG.sea_level;
             if underwater
                 || chunk.temp < climate.tree_min_temp
-                || alt_pre >= climate.max_tree_altitude_m
+                || alt_pre >= alpine.tree_line_altitude_m
             {
                 continue;
             }
@@ -6648,6 +6863,67 @@ mod tests {
             checked > 100_000,
             "expected a substantial sample of temperate, above-water Cromatolis chunks, got \
              {checked}"
+        );
+    }
+
+    /// Requires the real Cromatolis LFS assets. The alpine contract is in
+    /// authored real metres: trees stop exactly at 700m, Snowland begins at
+    /// 700m, and the world contains a real persistent-snow band at 1010m.
+    #[test]
+    #[ignore]
+    fn cromatolis_alpine_policy_regression_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let alpine = AuthoredAlpinePolicy::load_owned("world.map.cromatolis_v0_alpine")
+            .expect("Cromatolis alpine policy asset must load for alpine regression");
+        assert_eq!(alpine.tree_line_altitude_m, 700.0);
+        assert_eq!(alpine.snow_start_altitude_m, 700.0);
+        assert_eq!(alpine.persistent_snow_altitude_m, 1010.0);
+
+        let mut transition_chunks = 0usize;
+        let mut persistent_chunks = 0usize;
+        let mut below_transition_chunks = 0usize;
+        for chunk in &sim.chunks {
+            if chunk.is_underwater() {
+                continue;
+            }
+            let alt_pre = chunk.alt - CONFIG.sea_level;
+            if alt_pre >= alpine.tree_line_altitude_m {
+                assert_eq!(
+                    chunk.tree_density, 0.0,
+                    "tree density survives at {alt_pre:.1}m despite Cromatolis's 700m tree line"
+                );
+            }
+            if alt_pre >= alpine.snow_start_altitude_m {
+                transition_chunks += 1;
+                assert_eq!(
+                    chunk.get_biome(),
+                    BiomeKind::Snowland,
+                    "Cromatolis must resolve Snowland from its authored alpine threshold at \
+                     {alt_pre:.1}m"
+                );
+            }
+            if alt_pre < alpine.snow_start_altitude_m {
+                below_transition_chunks += 1;
+                assert!(
+                    !chunk.authored_alpine_snowland,
+                    "Cromatolis lowland was incorrectly marked alpine at {alt_pre:.1}m"
+                );
+            }
+            if alt_pre >= alpine.persistent_snow_altitude_m {
+                persistent_chunks += 1;
+            }
+        }
+        assert!(
+            transition_chunks > 0,
+            "real Cromatolis must contain a 700m alpine transition"
+        );
+        assert!(
+            persistent_chunks > 0,
+            "real Cromatolis must contain persistent-snow terrain"
+        );
+        assert!(
+            below_transition_chunks > 0,
+            "real Cromatolis must contain land below the alpine transition"
         );
     }
 
@@ -6697,6 +6973,8 @@ mod tests {
             .expect("real Cromatolis LFS assets must be pulled locally to run this test");
         let climate = AuthoredCromatolisClimate::load_owned("world.map.cromatolis_v0_climate")
             .expect("Cromatolis climate asset must load for the biome-mask regression");
+        let alpine = AuthoredAlpinePolicy::load_owned("world.map.cromatolis_v0_alpine")
+            .expect("Cromatolis alpine policy asset must load for the preview regression");
         let profile = sim.authored_ground_cover_profile.as_ref().expect(
             "generated Cromatolis WorldSim must retain its configured ground-cover profile",
         );
@@ -6731,7 +7009,7 @@ mod tests {
                 "{position:?} must stay below preview mountain treatment"
             );
             assert!(
-                alt_pre < climate.max_tree_altitude_m,
+                alt_pre < alpine.tree_line_altitude_m,
                 "{position:?} must stay below the tree altitude cap"
             );
 

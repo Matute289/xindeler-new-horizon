@@ -1277,6 +1277,17 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             humidity.sub(CONFIG.jungle_hum).mul(1.0),
         );
 
+        // The regional policy uses real relief, never the engine's internal
+        // `+ sea_level` altitude. It is applied only to the exact authored
+        // region which loaded it; below its threshold the inherited terrain
+        // pipeline remains byte-for-byte unchanged.
+        let authored_alpine = sim
+            .authored_alpine_policy
+            .filter(|(region_id, _)| sim_chunk.authored_region_id == Some(*region_id))
+            .and_then(|(_, policy)| {
+                policy.surface_at(alt - CONFIG.sea_level, gradient.unwrap_or_default())
+            });
+
         // Snow covering
         let thematic_snow = calendar.is_some_and(|c| c.is_event(CalendarEvent::Christmas));
         let snow_factor = temp
@@ -1299,16 +1310,48 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         // regardless of what the ambient snow formula above would otherwise
         // say.
         let profile_force_no_snow = biome_profile.is_some_and(|rp| rp.profile.force_no_snow);
-        let snow_cover = snow_factor <= 0.0 && !damage.force_no_snow && !profile_force_no_snow;
+        let snow_cover = (snow_factor <= 0.0
+            || authored_alpine.is_some_and(|surface| surface.snow > 0.0))
+            && !damage.force_no_snow
+            && !profile_force_no_snow;
         let (alt, ground, sub_surface_color) = if snow_cover && alt > water_level {
             // Allow snow cover.
+            let (snow_height, ground, sub_surface_color) = if let Some(surface) = authored_alpine {
+                // Compose the three materials exactly once. In particular,
+                // don't first tint ground toward rock and then lerp that
+                // result toward snow: that silently changes both weights.
+                let snow_weight = surface.snow;
+                let rock_weight = surface.rock.clamped(0.0, 1.0 - snow_weight);
+                let mineral_weight = if snow_weight < 1.0 {
+                    rock_weight / (1.0 - snow_weight)
+                } else {
+                    0.0
+                };
+                let compose =
+                    |base| Rgb::lerp(Rgb::lerp(base, cliff, mineral_weight), snow, snow_weight);
+                (snow_weight, compose(ground), compose(sub_surface_color))
+            } else {
+                (
+                    1.0 - snow_factor.max(0.0),
+                    Rgb::lerp(snow, ground, snow_factor),
+                    sub_surface_color,
+                )
+            };
             (
-                alt + 1.0 - snow_factor.max(0.0),
-                Rgb::lerp(snow, ground, snow_factor),
+                alt + snow_height,
+                ground,
                 Lerp::lerp(sub_surface_color, ground, alt.sub(basement).mul(0.15)),
             )
         } else {
-            (alt, ground, sub_surface_color)
+            if let Some(surface) = authored_alpine {
+                (
+                    alt,
+                    Rgb::lerp(ground, cliff, surface.rock),
+                    Rgb::lerp(sub_surface_color, cliff, surface.rock),
+                )
+            } else {
+                (alt, ground, sub_surface_color)
+            }
         };
 
         // Make river banks not have grass
