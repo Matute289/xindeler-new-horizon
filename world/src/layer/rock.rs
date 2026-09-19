@@ -86,8 +86,15 @@ pub(crate) fn rock_at(wpos: Vec2<i32>, seed: u32, col: &ColumnSample) -> Option<
     })
 }
 
+/// The candidate lattice every rock in the world is placed on.
+///
+/// One definition, because a second copy of the spacing would let a test, a
+/// probe or a measurement quietly describe a different world the day someone
+/// retunes the density.
+pub(crate) fn rock_lattice(seed: u32) -> StructureGen2d { StructureGen2d::new(seed, 24, 10) }
+
 pub fn apply_rocks_to(canvas: &mut Canvas, _dynamic_rng: &mut impl Rng) {
-    let mut rock_gen = StructureGenCache::new(StructureGen2d::new(canvas.index().seed, 24, 10));
+    let mut rock_gen = StructureGenCache::new(rock_lattice(canvas.index().seed));
 
     let info = canvas.info();
     let repair_traversal = rock_traversal::repair_enabled(&info);

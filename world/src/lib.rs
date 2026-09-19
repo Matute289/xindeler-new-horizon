@@ -16,6 +16,10 @@ pub mod canvas;
 pub mod civ;
 mod column;
 pub mod config;
+/// Fork-only full-world tests for the authored region. Its own file so the
+/// fork's delta to upstream's `lib.rs` stays one line -- see the module doc.
+#[cfg(test)]
+mod cromatolis_generation_tests;
 pub mod index;
 pub mod land;
 pub mod layer;
@@ -1025,84 +1029,5 @@ impl World {
         let chunk_pos = wpos2d.wpos_to_cpos();
         let sim_chunk = self.sim.get(chunk_pos)?;
         sim_chunk.get_location_name(&index.sites, &self.civs.pois, wpos2d)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Requires the real Cromatolis LFS assets to be pulled locally (`git lfs
-    /// pull` against the VPS store); not run automated, matching this
-    /// crate's existing precedent for tests whose meaningful assertion
-    /// depends on real, environment-specific data. Recommended command:
-    /// `cargo test -p xindeler-world
-    /// ineligible_authored_settlements_never_appear_as_possible_starting_sites
-    /// -- --ignored`
-    #[test]
-    #[ignore]
-    fn ineligible_authored_settlements_never_appear_as_possible_starting_sites() {
-        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
-        let (mut world, index) = World::generate(
-            0,
-            sim::WorldOpts {
-                seed_elements: true,
-                world_file: sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
-                calendar: None,
-            },
-            &threadpool,
-            &|_| {},
-        );
-        let index_ref = index.as_index_ref();
-
-        // No settlement in the real export is currently marked
-        // `start_eligible: false`, so this test exercises the exclusion
-        // mechanism directly: take the *baseline* `possible_starting_sites`
-        // result, pick a real authored settlement that's actually part of
-        // it (not just any authored settlement -- most of the 65 wouldn't
-        // rank in the top slots anyway, so excluding an arbitrary one
-        // wouldn't move the result), force-exclude it, and confirm it drops
-        // out.
-        let baseline = world.get_map_data(index_ref, &threadpool);
-        let site_tmp_to_civ_site_id: std::collections::HashMap<_, _> = world
-            .civs
-            .sites
-            .iter()
-            .filter_map(|(civ_site_id, site)| Some((site.site_tmp?.id(), civ_site_id)))
-            .collect();
-        let target_site_id = *baseline
-            .possible_starting_sites
-            .iter()
-            .find(|site_tmp| {
-                site_tmp_to_civ_site_id
-                    .get(site_tmp)
-                    .is_some_and(|&civ_site_id| {
-                        world
-                            .civs
-                            .sites
-                            .get(civ_site_id)
-                            .is_authored_starting_settlement()
-                    })
-            })
-            .expect(
-                "at least one real authored settlement must rank as a possible starting site for \
-                 this test to be meaningful",
-            );
-        let target_civ_site_id = site_tmp_to_civ_site_id[&target_site_id];
-
-        world
-            .civs
-            .sites
-            .get_mut(target_civ_site_id)
-            .set_start_eligible_for_test(false);
-
-        let after_exclusion = world.get_map_data(index_ref, &threadpool);
-        assert!(
-            !after_exclusion
-                .possible_starting_sites
-                .contains(&target_site_id),
-            "an authored settlement explicitly marked start_eligible: false was still returned as \
-             a possible starting site"
-        );
     }
 }

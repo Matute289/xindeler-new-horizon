@@ -5968,8 +5968,8 @@ mod tests {
                     layers,
                     AuthoredProceduralLayers {
                         caverns: false,
-                        caves: false,
-                        rocks: false,
+                        caves: true,
+                        rocks: true,
                         spots: true,
                         rock_traversal_repair: true,
                     },

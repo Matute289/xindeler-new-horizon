@@ -11,15 +11,19 @@
     // hash-derived geometry into its block volumes without reading any
     // authored data -- so whether a given layer runs here is a content
     // decision made one layer at a time, not an all-or-nothing switch.
-    // `caverns`/`caves`/`rocks` are still off; their consequences are
-    // gameplay-visible rather than cosmetic, and are tracked as an open
-    // decision in COW-15:
-    //   - `caves: false` removes the region's entire *procedural*
+    // `caves`/`rocks` were off from COW-15 until 2026-09-19, when COW-23
+    // flipped both after building the two guards that make them safe here
+    // (the policy-aware authored-void guard in `world/src/layer/cave.rs`,
+    // and boulder traversal accommodation in
+    // `world/src/layer/rock_traversal.rs`). `caverns` stays off, for the
+    // two independent reasons below. What each of the two flips bought,
+    // and what it cost while it was off:
+    //   - `caves: false` removed the region's entire *procedural*
     //     underground: cave biomes (most of the underground's visual
     //     identity), cave fauna (`apply_entity_spawns` in
     //     `world/src/layer/cave.rs`, which is biome-driven and entirely
     //     separate from `layer/wildlife.rs`), and cave loot (the
-    //     structure-tied tables inside `write_column`).
+    //     structure-tied tables inside `write_column`). All three are back.
     //   - It does NOT cost the region its mineral wealth, and this comment
     //     used to claim it did ("`ChunkResource::Ore` goes to zero", "the
     //     authored replacement backfills none of it"). That has been false
@@ -40,13 +44,17 @@
     //     regenerated from the sibling repo's catalogue and a hand-copied
     //     tally would go stale silently. COW-23's spec section 8 has the
     //     2026-09-19 breakdown (657 declarations across 250 of 281 caves).
-    //   - `caves: false` also means the world map shows no cave markers at
+    //   - `caves: false` also meant the world map showed no cave markers at
     //     all here: the authored cave catalogue has no marker emitter yet,
-    //     so the map's "show caves" filter is inert on this region.
-    //     **150** markers would appear with `caves: true` -- the count
-    //     pinned by `the_real_region_still_derives_its_surface_cave_markers`
-    //     in `world/src/layer/cromatolis_cave_features.rs`, which is the
-    //     figure to trust if a doc anywhere still says 149.
+    //     so the map's "show caves" filter was inert on this region.
+    //     With `caves: true` it emits one marker per surface entrance the
+    //     tunnel lattice derives. That count is pinned in exactly one place,
+    //     `the_real_region_still_derives_its_surface_cave_markers` in
+    //     `world/src/layer/cromatolis_cave_features.rs` -- not repeated here,
+    //     so the two cannot drift. It reads **150** as of 2026-09-19; any
+    //     doc still saying 149 predates that test and is wrong. COW-23's T20
+    //     test (`world/src/lib.rs`) confirms the map publishes all of them
+    //     end-to-end through `World::get_map_data`.
     // `spots: true` (flipped 2026-09-17, COW-16 -- see
     // `world/src/layer/spot.rs`'s `cromatolis_real_world` tests for the
     // measured before/after): `Spot::generate`'s early return on
@@ -94,14 +102,44 @@
     // Flipping any of these is a one-line change with no recompile; the
     // engine keeps the world-map cave markers and the tree/shrub
     // tunnel-avoidance consistent with whichever way these point.
-    caves: false,
-    rocks: false,
+    //
+    // `caves: true` (flipped 2026-09-19, COW-23 T15). Safe because
+    // `tunnel_bounds_at_from` consults the `AuthoredVoids` index before it
+    // carves: a procedural tunnel is clipped out of any authored volume
+    // whose entry in `cromatolis_v0_cave_features.ron` says
+    // `procedural_contact: Seal`, and left alone where it says `Connect`.
+    // The split between the two is deliberately NOT written here, for the
+    // same reason the mineral tally above is not: it is regenerated from
+    // the sibling repo's catalogue. `AuthoredVoids::policy_counts()` has
+    // the live figure, and note it counts *indexed shapes*, which is a
+    // different population from catalogue entries.
+    // The authored carve also still runs *after* `apply_caves_to` and
+    // rewrites its own footprint unconditionally, so no authored void can
+    // be taken away by pass ordering either. That ordering is measured
+    // end-to-end on real generated chunks by COW-23's T20 test in
+    // `world/src/cromatolis_generation_tests.rs`; the guard itself is
+    // measured separately (sealed caves breached: 6 before, 0 after) by the
+    // real-asset tests in `world/src/layer/cromatolis_cave_features.rs`.
+    // The two are different claims and neither substitutes for the other.
+    //
+    // NOTE for deploys: this changes generated terrain on a region that is
+    // already live. `server/src/terrain_persistence.rs` re-applies stored
+    // player block edits over regenerated terrain, so existing underground
+    // builds or mined areas can now sit next to fresh tunnels and boulders.
+    caves: true,
+    // `rocks: true` (flipped 2026-09-19, COW-23 T15). Boulders land in
+    // carved voids here -- deliberately: a rock wedged in a cave wall is
+    // wanted. What is not wanted is one that seals the way through, and
+    // `rock_traversal_repair` below is what tells those two apart. Unlike
+    // `caves`, `apply_rocks_to` runs AFTER the authored carve, so a boulder
+    // can legitimately occupy authored void; the guarantee is a walkable
+    // bypass, not an untouched volume.
+    rocks: true,
     spots: true,
-    // On, so Cromatolis is already covered the moment `rocks` flips: a rock
-    // wedged in a cave ceiling or wall is wanted here, a rock that seals the
-    // way through is not, and this is what tells them apart. Inert while
-    // `rocks: false`. Why boulders reach carved voids at all, and why this
-    // one is opt-in where the four above are opt-out, are both on the field
-    // in world/src/sim/mod.rs.
+    // On, and no longer inert now that `rocks` is on above: a rock wedged in
+    // a cave ceiling or wall is wanted here, a rock that seals the way
+    // through is not, and this is what tells them apart. Why boulders reach
+    // carved voids at all, and why this one is opt-in where the four above
+    // are opt-out, are both on the field in world/src/sim/mod.rs.
     rock_traversal_repair: true,
 )
