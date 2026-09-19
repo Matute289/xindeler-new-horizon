@@ -1038,19 +1038,8 @@ impl PhysicsData<'_> {
                                 );
                                 tgt_pos = cpos.0;
                             },
-                            Collider::CapsulePrism(CapsulePrism {
-                                z_min: _,
-                                z_max,
-                                p0: _,
-                                p1: _,
-                                radius: _,
-                            }) => {
-                                // Scale collider
-                                let radius = collider.bounding_radius().min(0.45) * scale;
-                                let z_min = 0.0;
-                                let z_max = z_max.clamped(1.2, 1.95) * scale;
-
-                                let cylinder = (radius, z_min, z_max);
+                            Collider::CapsulePrism(_) => {
+                                let cylinder = collider.terrain_cylinder(scale);
                                 let mut cpos = *pos;
                                 collision::box_voxel_collision(
                                     cylinder,
@@ -1164,12 +1153,7 @@ impl PhysicsData<'_> {
                                     // use bounding cylinder regardless of our collider
                                     // TODO: extract point-terrain collision above to its own
                                     // function
-                                    let radius = collider.bounding_radius();
-                                    let (_, z_max) = collider.get_z_limits(1.0);
-
-                                    let radius = radius.min(0.45) * scale;
-                                    let z_min = 0.0;
-                                    let z_max = z_max.clamped(1.2, 1.95) * scale;
+                                    let (radius, z_min, z_max) = collider.terrain_cylinder(scale);
 
                                     if let Some(voxel_collider) = voxel_collider {
                                         // TODO: cache/precompute sphere?

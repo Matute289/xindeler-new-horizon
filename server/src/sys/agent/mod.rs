@@ -191,19 +191,35 @@ impl<'a> System<'a> for Sys {
                     let slow_factor =
                         moving_body.map_or(0.0, |b| 1.0 - 1.0 / (1.0 + b.base_accel() * 0.01));
                     // How much room this agent actually needs, taken from the
-                    // same collider the physics will judge it by rather than
+                    // same cylinder the physics will judge it by rather than
                     // from the two-block constant the pathfinder used to assume
-                    // for everybody. `Body::collider()` is what `state_ext`
-                    // builds the entity's `Collider` component from, so this
-                    // agrees with the component without needing to read it.
-                    let dims = moving_body.map_or_else(TraversalDims::default, |body| {
-                        let collider = body.collider();
-                        TraversalDims::from_collider(
-                            collider.get_height(),
-                            collider.bounding_radius(),
-                            scale,
-                        )
-                    });
+                    // for everybody.
+                    //
+                    // This derives from `Body` rather than reading the entity's
+                    // `Collider` component, which is an *invariant that has
+                    // been checked*, not a structural guarantee: the server
+                    // also inserts a hand-written capsule for player characters
+                    // and `Collider::Point` for incorporeal and projectile
+                    // NPCs, and all three happen to clamp to the same terrain
+                    // cylinder as `body.collider()` does. If a future collider
+                    // override breaks that, this silently mis-paths rather than
+                    // failing to compile — read the component instead at that
+                    // point.
+                    //
+                    // 🔴 Ships and items are excluded before `collider()` is
+                    // called, not after. Their arm of it allocates — a `String`
+                    // for a manifest id, or for a `Volume` ship a freshly
+                    // randomised 11³ voxel collider — and this runs per agent
+                    // per tick, for airship NPCs among others. Both map back to
+                    // exactly the default dims anyway, since a voxel collider
+                    // reports a flat `(0.0, 2.0)` z-range and a radius of 1.0.
+                    let dims = match moving_body {
+                        None | Some(Body::Ship(_) | Body::Item(_)) => TraversalDims::default(),
+                        Some(body) => {
+                            let (_, _, z_max) = body.collider().terrain_cylinder(scale);
+                            TraversalDims::from_terrain_cylinder(z_max)
+                        },
+                    };
                     let traversal_config = TraversalConfig {
                         node_tolerance,
                         slow_factor,

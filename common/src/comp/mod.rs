@@ -146,7 +146,8 @@ pub use self::{
     phantom_illusion::PhantomIllusion,
     phys::{
         CapsulePrism, Collider, Density, ForceUpdate, Immovable, Mass, PhysicsState, Pos,
-        PosVelOriDefer, PreviousPhysCache, Scale, Sticky, Vel,
+        PosVelOriDefer, PreviousPhysCache, Scale, Sticky, TERRAIN_CYLINDER_MAX_HEIGHT,
+        TERRAIN_CYLINDER_MAX_RADIUS, TERRAIN_CYLINDER_MIN_HEIGHT, Vel,
     },
     player::{AliasError, DisconnectReason, MAX_ALIAS_LEN, Player},
     poise::{Poise, PoiseChange, PoiseState},

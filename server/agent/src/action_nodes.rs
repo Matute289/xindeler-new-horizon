@@ -36,7 +36,11 @@ use common::{
     mounting::VolumePos,
     path::TraversalConfig,
     rtsim::NpcActivity,
-    states::{basic_beam, utils::StageSection},
+    states::{
+        basic_beam,
+        climb::MIN_CLIMB_COMMIT_ENERGY,
+        utils::{StageSection, can_climb_surface},
+    },
     terrain::Block,
     time::DayPeriod,
     uid::Uid,
@@ -193,10 +197,28 @@ impl AgentData<'_> {
     /// The pathfinder cannot plan a climb — its neighbour set tops out at a
     /// two-block step — so an obstacle that only opens up above that is not a
     /// route to it, it is a wall, and the agent presses into it until something
-    /// else distracts it. This does not fix that (planning climb edges is a
-    /// separate phase, gated on measuring what it costs the A\*); it stops the
-    /// grinding. An agent that *can* climb and is pressed against a wall
-    /// standing between it and where it is going jumps into the wall instead.
+    /// else distracts it. This does not make such a route *plannable*; it stops
+    /// the grinding. An agent that can climb, is pressed against a wall that
+    /// stands between it and where it is going, and is **getting nowhere**,
+    /// jumps into the wall instead.
+    ///
+    /// That last condition is load-bearing: `on_wall` is `Some` whenever the
+    /// cylinder touches anything, which for a town NPC following a street is
+    /// most of the time. Without a progress test, villagers climb the houses
+    /// they were about to walk around.
+    ///
+    /// This lives here rather than in `unstuck_if` for three reasons, none of
+    /// which is a matter of taste: `unstuck_if` never receives `bearing`, so it
+    /// structurally cannot tell "into the wall" from "along it"; it fires on a
+    /// 5% × 50% roll, so a deterministic behaviour is unreachable through it;
+    /// and `traverse` owns `move_dir`, which is exactly what `Climb` consumes
+    /// to derive its upward velocity.
+    ///
+    /// ⚠️ Scope: only the three path-following call sites of `traverse` reach
+    /// this. Combat repositioning in `attack.rs` drives `move_dir` directly and
+    /// still grinds against a wall — deliberate for now, since a creature
+    /// breaking off mid-fight to scale a cliff reads worse than one that does
+    /// not.
     ///
     /// Leaving the ground is the entire gesture. `handle_climb` waits for
     /// `on_wall` + airborne + movement into the wall, and `Climb` then derives
@@ -204,20 +226,27 @@ impl AgentData<'_> {
     /// already set from the bearing. There is no climb input to add and no
     /// state for the agent to drive.
     fn should_scramble(&self, bearing: Vec3<f32>) -> bool {
-        /// Below this, `handle_climb` would let go almost immediately and the
-        /// agent would just bunny-hop at the wall on an empty bar.
-        const MIN_SCRAMBLE_ENERGY: f32 = 10.0;
-        /// How closely the bearing must point into the wall: ~60°. Without it,
-        /// an agent walking *along* a wall would launch itself at it.
-        const INTO_WALL_DOT: f32 = 0.5;
+        /// How closely the bearing must point into the wall: ~30°. Anything
+        /// looser admits bearings that are mostly *along* the wall, which is
+        /// what a street-following NPC has all day.
+        const INTO_WALL_DOT: f32 = 0.85;
+        /// Horizontal speed below which the agent counts as getting nowhere.
+        /// Walking is on the order of several blocks per second, so this is
+        /// comfortably "pressed against something".
+        const STALLED_SPEED: f32 = 0.5;
 
         // Already climbing: `Climb` sustains itself from `move_dir`, and
         // jumping again would do nothing regardless — `climb::Data::on_input`
         // handles only `WallJump`.
-        if !self.traversal_config.can_climb
-            || matches!(self.char_state, CharacterState::Climb(_))
+        if matches!(self.char_state, CharacterState::Climb(_))
             || self.physics_state.on_ground.is_none()
         {
+            return false;
+        }
+
+        // Still making headway? Then the wall is not in the way, whatever
+        // `on_wall` says. Checked before anything more expensive.
+        if self.vel.0.xy().magnitude_squared() > STALLED_SPEED.powi(2) {
             return false;
         }
 
@@ -227,6 +256,20 @@ impl AgentData<'_> {
             return false;
         }
 
+        let Some(body) = self.body else {
+            return false;
+        };
+        // Ask the state machine's own predicate rather than re-deriving it, so
+        // this cannot fall out of step with what `handle_climb` will actually
+        // allow when the jump lands.
+        if !can_climb_surface(body, self.physics_state) {
+            return false;
+        }
+
+        // `agent::Sys` declares no dependency on `phys::Sys`, so whether this
+        // is this tick's `on_wall` or last tick's is unspecified. That is
+        // already true of `on_ground` next door; a tick of staleness only
+        // delays the hop.
         let Some(wall_dir) = self.physics_state.on_wall else {
             return false;
         };
@@ -235,7 +278,10 @@ impl AgentData<'_> {
             .xy()
             .try_normalized()
             .is_some_and(|dir| dir.dot(wall_dir.xy()) > INTO_WALL_DOT)
-            && self.energy.current() > MIN_SCRAMBLE_ENERGY
+            // `handle_climb` only refuses below 1.0, which is enough to enter
+            // the state and be dropped out of it moments later. An NPC should
+            // not commit to a wall it will fall off.
+            && self.energy.current() > MIN_CLIMB_COMMIT_ENERGY
     }
 
     pub fn unstuck_if(&self, condition: bool, controller: &mut Controller) {

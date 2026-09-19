@@ -168,7 +168,35 @@ impl Collider {
             Collider::Point => (0.0, 0.0),
         }
     }
+
+    /// The cylinder this collider presents to **terrain**, as
+    /// `(radius, z_min, z_max)`, already clamped and scaled.
+    ///
+    /// This is the single definition of that envelope. It used to be written
+    /// out by hand at each of its call sites in `common_systems::phys`, and
+    /// the pathfinder then needed a fourth copy to agree with them — three
+    /// hand-kept-in-step copies of a number whose whole job is to be the same
+    /// everywhere. A body outside `[MIN_HEIGHT, MAX_HEIGHT]` or wider than
+    /// `MAX_RADIUS` is deliberately lied about here, which is why a rat and an
+    /// eight-metre cyclops occupy the same box in the world.
+    pub fn terrain_cylinder(&self, scale: f32) -> (f32, f32, f32) {
+        let (_, z_max) = self.get_z_limits(1.0);
+        (
+            self.bounding_radius().min(TERRAIN_CYLINDER_MAX_RADIUS) * scale,
+            0.0,
+            z_max.clamped(TERRAIN_CYLINDER_MIN_HEIGHT, TERRAIN_CYLINDER_MAX_HEIGHT) * scale,
+        )
+    }
 }
+
+/// Shortest body terrain collision will represent. A body below this is
+/// treated as this tall, so nothing shipped fits through a one-block gap.
+pub const TERRAIN_CYLINDER_MIN_HEIGHT: f32 = 1.2;
+/// Tallest body terrain collision will represent, however large the creature.
+pub const TERRAIN_CYLINDER_MAX_HEIGHT: f32 = 1.95;
+/// Widest body terrain collision will represent. Under half a block, so every
+/// creature at default scale fits a one-block-wide corridor.
+pub const TERRAIN_CYLINDER_MAX_RADIUS: f32 = 0.45;
 
 impl Component for Collider {
     type Storage = DerefFlaggedStorage<Self, VecStorage<Self>>;

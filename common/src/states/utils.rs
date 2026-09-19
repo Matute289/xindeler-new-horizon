@@ -1028,21 +1028,40 @@ pub fn attempt_sneak(data: &JoinData<'_>, update: &mut StateUpdate) {
 }
 
 /// Checks that player can `Climb` and updates `CharacterState` if so
+/// Whether this body could climb this surface, ignoring what it is currently
+/// doing about it.
+///
+/// Split out of [`handle_climb`] so that an observer — an NPC deciding whether
+/// it is worth jumping at a wall — can ask the same question the state machine
+/// will actually answer, instead of keeping a second copy of these rules that
+/// silently goes stale when this one gains a condition. Callers add their own
+/// intent on top: `handle_climb` requires being airborne and pressing into the
+/// wall, an NPC requires the opposite (still grounded, so it can jump).
+pub fn can_climb_surface(body: &Body, physics: &crate::comp::PhysicsState) -> bool {
+    if physics.on_wall.is_none() {
+        return false;
+    }
+    // Only allow climbing if we are near the surface
+    let underwater = physics
+        .in_liquid()
+        .map(|depth| depth > 2.0)
+        .unwrap_or(false);
+    let can_climb = body.can_climb() || physics.in_liquid().is_some();
+    can_climb && !underwater
+}
+
 pub fn handle_climb(data: &JoinData<'_>, update: &mut StateUpdate) -> bool {
     let Some(wall_dir) = data.physics.on_wall else {
         return false;
     };
 
     let towards_wall = data.inputs.move_dir.dot(wall_dir.xy()) > 0.0;
-    // Only allow climbing if we are near the surface
-    let underwater = data
-        .physics
-        .in_liquid()
-        .map(|depth| depth > 2.0)
-        .unwrap_or(false);
-    let can_climb = data.body.can_climb() || data.physics.in_liquid().is_some();
     let in_air = data.physics.on_ground.is_none();
-    if towards_wall && in_air && !underwater && can_climb && update.energy.current() > 1.0 {
+    if towards_wall
+        && in_air
+        && can_climb_surface(data.body, data.physics)
+        && update.energy.current() > 1.0
+    {
         update.character = CharacterState::Climb(
             climb::Data::create_adjusted_by_skills(data)
                 .with_wielded(data.character.is_wield() || data.character.was_wielded()),
