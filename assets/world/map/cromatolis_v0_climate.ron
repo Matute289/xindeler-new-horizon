@@ -1,20 +1,110 @@
 (
-    schema: "xindeler_open_world.authored_climate.v2",
-    // Baseline temperature curve for Cromatolis's world-gen (see
-    // `AuthoredCromatolisClimate`/`cromatolis_baseline_temp` in
-    // world/src/sim/mod.rs): real degrees Celsius at sea level, cooling
-    // linearly with altitude, then converted onto the engine's abstract
-    // world-gen temperature scale. sea_level_temp_c is a hot tropical
-    // coastal baseline; lapse_rate_c_per_m is deliberately steeper than
-    // Earth's ~6.5 C/km average tropospheric rate, chosen so Cromatolis's
-    // real, modest relief (tops out around 1.3km) still spans the
-    // temperature scale's full practical range instead of staying
-    // clustered in the warm end.
-    sea_level_temp_c: 36.0,
-    lapse_rate_c_per_m: 0.023,
+    schema: "xindeler_open_world.authored_climate.v3",
+
+    // Sea-level temperature per authored climate class, in real degrees
+    // Celsius. Which class a chunk is in comes from the categorical
+    // `cromatolis_v0_climate_zone.f32le` raster (painted as flat gray bands in
+    // `climate_zone_mask_manual_v1.tif`), not from latitude: this region's
+    // warm jungles sit in the SOUTH and its subtropical coast in the north, so
+    // no monotonic north-south curve can describe it.
+    //
+    // The engine's own abstract-scale landmarks, for reference
+    // (`celsius_to_abstract_temp(c) = (c - 20) / 15`):
+    //   snow_temp 8 C = -0.8, temperate_temp 14 C = -0.4,
+    //   tropical_temp 26 C = +0.4, desert_temp 32 C = +0.8.
+    //
+    // The v1 mask paints only three of the six: Temperate (75.2% of the grid),
+    // Subtropical (13.0%, the northern band above the Tree-of-Life line) and
+    // Tropical (11.8%, the southern jungles). Polar and Subpolar are declared
+    // anyway so the class scale is complete and stable; nothing selects them
+    // here.
+    zone_anchors: (
+        // Below the abstract scale's -1.0 floor on purpose: a genuinely polar
+        // band should saturate the cold end rather than sit just inside it.
+        polar_c:        2.0,
+        // Exactly CONFIG.snow_temp: the snowline, by construction.
+        subpolar_c:     8.0,
+        // -0.2 abstract. Inside the close(temp, temperate_temp, 0.7..0.8)
+        // window the temperate underwater flora need, and outside the
+        // close(temp, 1.0, 0.9) coral window.
+        temperate_c:    17.0,
+        // +0.267 abstract. The deliberate overlap band: both the temperate
+        // flora window and the coral window are nonzero here, which is what
+        // makes the subtropical shelf a real transition rather than a seam.
+        // Below tropical_temp, so BiomeKind::Jungle's temp > 0.45 is not
+        // satisfied by climate alone.
+        subtropical_c:  24.0,
+        // +0.533 abstract. A real Caribbean sea-surface temperature; above
+        // tropical_temp, so it drives coral and tropical species.
+        tropical_c:     28.0,
+        equatorial_c:   30.0,
+    ),
+
+    // Used only if the climate-zone raster is missing entirely (an LFS-free
+    // checkout). Temperate, because that is what three quarters of the map is.
+    fallback_sea_level_temp_c: 17.0,
+
+    // Named local anomalies that override the zone answer inside a polygon and
+    // fade out linearly over `falloff_chunks`. Overlaps resolve by greatest
+    // weight, not greatest temperature, so a cold anomaly may sit beside a
+    // warm one; on equal weight the earlier row wins.
+    //
+    // A dungeon that should be unnaturally hot -- or unnaturally cold -- is a
+    // row here, not an engine change. In-world these are magical: ambient
+    // arcana or a dungeon's own curse bending the local climate, which is
+    // consistent with the setting and is why they are allowed to contradict
+    // the regional mask outright rather than blending into it.
+    microclimate_zones: [
+        (
+            // The carved elevated lake around chunk (832, 768). The Myrmidon
+            // and Terracotta dungeon predicates both require a chunk
+            // temperature in [0.9, 1.0), which the regional temperate anchor
+            // cannot produce anywhere: without this pocket both site types
+            // become structurally unplaceable on this map, not merely rare.
+            //
+            // 35.0 C is derived from the shoreline itself, not picked: the 161
+            // dry, non-cliff shore chunks inside radius 12 of (832, 768) span
+            // 99.9 m to 145.2 m of relief, and with a 0.0075 C/m lapse rate
+            // that band maps to abstract 0.950 down to 0.927 -- inside [0.9,
+            // 1.0) at both ends, with margin either side. Anything below
+            // ~34.6 C loses the highest shore chunks; anything at or above
+            // ~35.7 C pushes the lowest ones to a saturated 1.0, which the
+            // half-open range excludes.
+            id: "microclimate.myrmidon_terracotta_lake",
+            forced_sea_level_temp_c: 35.0,
+            falloff_chunks: 8.0,
+            polygon_normalized_top_left: [
+                (x: 0.799805, y: 0.237305),
+                (x: 0.825195, y: 0.237305),
+                (x: 0.825195, y: 0.262695),
+                (x: 0.799805, y: 0.262695),
+            ],
+        ),
+    ],
+
+    // 7.5 C/km, close to Earth's ~6.5 C/km moist average. This is now the only
+    // thing altitude does to temperature, and it must stay gentle: Cromatolis
+    // is a mesa whose median dry relief is ~107 m, so at the previous 0.023
+    // C/m the 17 C temperate baseline put BiomeKind::Taiga's -0.7..-0.3 window
+    // just 65 m above sea level and ~96% of the landmass would have classified
+    // as Taiga. At 0.0075 Taiga opens at 200 m in the temperate zone, 1133 m
+    // in the subtropical one and above the map's maximum relief in the
+    // tropical one -- i.e. cold ground only where there is a real mountain.
+    lapse_rate_c_per_m: 0.0075,
+
     // The biome mask is a linear authored vegetation-density scale. These
     // are only hard physical exclusions, deliberately data-driven so map
     // authoring never has an undocumented response curve.
-    tree_min_temp: 0.0,
+    //
+    // -0.8 is CONFIG.snow_temp (8 C): the point at which trees stop being a
+    // plausible cover type at all, not a mid-range cut. It used to be 0.0
+    // (= 20 C), which only ever looked harmless because the old flat
+    // sea_level_temp_c of 36 C clamped every low-altitude chunk to abstract
+    // 1.0. With a real per-zone baseline the temperate zone sits at 17 C
+    // (abstract -0.2) at sea level, i.e. *below* the old threshold -- 0.0
+    // here would have deforested the entire temperate zone outright.
+    // Excluding trees by altitude is max_tree_altitude_m's job; this is only
+    // the cold cut-off.
+    tree_min_temp: -0.8,
     max_tree_altitude_m: 970.0,
 )

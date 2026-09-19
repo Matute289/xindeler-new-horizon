@@ -5563,6 +5563,13 @@ mod tests {
             }
         }
 
+        // Both predicates need `chunk.temp` in `[0.9, 1.0)`, which no climate
+        // *zone* on this map produces -- the warmest anchor lands at 0.533. The
+        // only thing that puts these chunks in range is the
+        // `microclimate.myrmidon_terracotta_lake` entry in
+        // `cromatolis_v0_climate.ron`. If these go to zero, check that entry
+        // before looking at the terrain: without it both site types are
+        // structurally unplaceable on this map, not merely rare.
         assert!(
             myrmidon_lake_shore >= 1,
             "Myrmidon: expected at least one dry, flat, non-cliff shoreline location at the \
@@ -5574,6 +5581,22 @@ mod tests {
              carved elevated lake around chunk (832,768), got {terracotta_lake_shore}."
         );
 
+        // Printed before any assertion so that a re-baseline reads every
+        // number off one run instead of one per failing assert.
+        for (name, count) in [
+            ("Gnarling", gnarling),
+            ("ChapelSite", chapel_site),
+            ("Adlet", adlet),
+            ("Sahagin", sahagin),
+            ("VampireCastle", vampire_castle),
+            ("Cultist", cultist),
+            ("DwarvenMine", dwarven_mine),
+            ("Myrmidon(lake)", myrmidon_lake_shore),
+            ("Terracotta(lake)", terracotta_lake_shore),
+        ] {
+            println!("{name:<18} {count:>8}  {:.6}", count as f64 / n);
+        }
+
         let assert_fraction_in = |name: &str, count: usize, range: std::ops::Range<f64>| {
             let fraction = count as f64 / n;
             assert!(
@@ -5581,13 +5604,37 @@ mod tests {
                 "{name}: expected coverage fraction in {range:?}, got {fraction:.6} ({count}/{n})"
             );
         };
-        // The linear biome-mask contract intentionally expands this from
-        // the former response-curve baseline (50 suitable chunks) to 249.
-        // Keep a generous range around the measured authored coverage while
-        // still catching a return of the non-linear curve.
-        assert_fraction_in("Gnarling", gnarling, 0.00015..0.0004);
+        // ⚠️ Re-baselined wholesale by the climate-zone rework. Every
+        // temperature-gated row below moved, and by a lot, because the region
+        // stopped having one flat sea-level temperature: three quarters of the
+        // map is now a temperate zone whose sea-level chunks sit at abstract
+        // -0.2 instead of a saturated +1.0. Measured before -> after, on the
+        // same real assets and the same seed:
+        //
+        //   Gnarling         291 -> 102,588   temp band [-0.3, 0.4) used to sit
+        //                                     435-891 m up; it now contains the
+        //                                     temperate sea-level anchor itself
+        //   Adlet         13,057 -> 137,222   `temp < -0.2`, likewise
+        //   Cultist       85,912 -> 200,081   `temp < 0.5`: nearly all land
+        //   VampireCastle     48 ->     142   `temp <= -0.8`: a little more
+        //                                     genuinely cold high ground
+        //   DwarvenMine  142,606 -> 270,395   no temp term; follows
+        //                                     `BiomeKind::Forest`, +79%
+        //   Myrmidon/Terracotta  4 ->    106  the authored microclimate pocket
+        //   ChapelSite       343 ->     343   no temp or biome term
+        //   Sahagin          638 ->     638   no temp or biome term
+        //
+        // The last two are the control: both predicates read only geometry and
+        // `BiomeKind::Ocean`, and both are bit-identical, which is what says
+        // the move above is the climate and not a shifted map.
+        //
+        // These are *eligibility* counts, not placements. A large fraction
+        // here means "this predicate no longer excludes most of the map", which
+        // for a temperate forest region is the intended reading of Gnarling and
+        // Adlet, not an error to tune away.
+        assert_fraction_in("Gnarling", gnarling, 0.05..0.15);
         assert_fraction_in("ChapelSite", chapel_site, 0.00005..0.0006);
-        assert_fraction_in("Adlet", adlet, 0.005..0.03);
+        assert_fraction_in("Adlet", adlet, 0.08..0.20);
         // Re-baselined by COW-22 `C22-1c`. `Sahagin` is `BiomeKind::Ocean` at
         // 40-45 m below sea level, and until that row every inland water body
         // whose authored bed is painted below sea level reported `Ocean` --
@@ -5595,8 +5642,8 @@ mod tests {
         // chunks before, 285 after: the 265 that dropped out were the deep
         // middles of lakes, not sea, and a sahuagin lair belongs in the latter.
         assert_fraction_in("Sahagin", sahagin, 0.0002..0.003);
-        assert_fraction_in("VampireCastle", vampire_castle, 0.00002..0.0005);
-        assert_fraction_in("Cultist", cultist, 0.05..0.2);
-        assert_fraction_in("DwarvenMine", dwarven_mine, 0.05..0.15);
+        assert_fraction_in("VampireCastle", vampire_castle, 0.00005..0.0005);
+        assert_fraction_in("Cultist", cultist, 0.12..0.28);
+        assert_fraction_in("DwarvenMine", dwarven_mine, 0.18..0.35);
     }
 }

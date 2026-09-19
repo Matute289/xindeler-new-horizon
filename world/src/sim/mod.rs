@@ -109,6 +109,11 @@ struct GenCdf {
     /// Independent authored visual-ground-cover signal. Unlike
     /// `authored_vegetation_layer`, this is never consumed by tree placement.
     authored_ground_cover_layer: Option<Box<[f32]>>,
+    /// Categorical climate-zone raster: which [`ClimateZone`] each chunk sits
+    /// in. Selects the chunk's sea-level temperature anchor -- the reason two
+    /// chunks at opposite ends of the map at the same elevation no longer get
+    /// bit-identical temperature.
+    authored_climate_zone_layer: Option<Box<[f32]>>,
     /// Categorical terrain exceptions (currently only the small sand area
     /// outside Northwall Stone). Kept separate from the continuous cover
     /// raster because "bare" never implicitly means "sand".
@@ -939,17 +944,19 @@ enum AuthoredLayerKind {
     Water,
     ElevatedLakes,
     RiverChannels,
+    ClimateZone,
 }
 
 impl AuthoredLayerKind {
     /// All layer kinds a region can ship, in the order they're loaded.
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Routes,
         Self::Vegetation,
         Self::GroundCover,
         Self::Water,
         Self::ElevatedLakes,
         Self::RiverChannels,
+        Self::ClimateZone,
     ];
 
     fn asset_suffix(self) -> &'static str {
@@ -960,6 +967,7 @@ impl AuthoredLayerKind {
             Self::Water => "water",
             Self::ElevatedLakes => "elevated_lakes",
             Self::RiverChannels => "river_channels",
+            Self::ClimateZone => "climate_zone",
         }
     }
 }
@@ -1123,6 +1131,191 @@ fn authored_region_for_map_asset(specifier: &str) -> Option<&'static AuthoredReg
         .find(|region| region.map_asset == specifier)
 }
 
+/// One climate class the authored `climate_zone` raster can carry, in the
+/// order the mask's gray ramp paints them (`0` black -> `5` white; the
+/// exporter ships them as `class / 5`).
+///
+/// All six exist even though the current Cromatolis mask only paints three:
+/// the two cold classes are unreachable at this region's latitude, but keeping
+/// the scale complete means a region that does reach them needs no new class
+/// ids, and a mask that accidentally carries one decodes to something named
+/// rather than to whichever neighbour happened to be nearest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClimateZone {
+    Polar,
+    Subpolar,
+    Temperate,
+    Subtropical,
+    Tropical,
+    Equatorial,
+}
+
+impl ClimateZone {
+    const ALL: [Self; 6] = [
+        Self::Polar,
+        Self::Subpolar,
+        Self::Temperate,
+        Self::Subtropical,
+        Self::Tropical,
+        Self::Equatorial,
+    ];
+
+    /// Decodes a sampled `climate_zone` layer value (`class / 5`, see
+    /// `AuthoredLayerKind::ClimateZone`) back into its class.
+    ///
+    /// Rounds rather than truncates: the raster is categorical but travels
+    /// through an f32 layer, so `0.6` may arrive as `0.5999999`. Rounding also
+    /// means a value that somehow *was* interpolated resolves to the nearer
+    /// painted class instead of always falling to the colder one -- though
+    /// that case is prevented upstream rather than repaired here (the mask
+    /// importer votes by majority and the layer exporter resamples nearest-
+    /// neighbour, both specifically so that no unpainted value can reach this
+    /// function).
+    fn from_layer_value(value: f32) -> Self {
+        let index = (value * 5.0).round().clamp(0.0, 5.0) as usize;
+        Self::ALL[index]
+    }
+}
+
+/// Sea-level temperature, in real degrees Celsius, for each [`ClimateZone`].
+///
+/// Absolute temperatures rather than deltas from some baseline: an absolute
+/// value is what a map author is actually choosing ("the northern sea is
+/// 28 C"), whereas a delta makes the result depend on a number they are not
+/// looking at.
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct AuthoredClimateZoneAnchors {
+    polar_c: f32,
+    subpolar_c: f32,
+    temperate_c: f32,
+    subtropical_c: f32,
+    tropical_c: f32,
+    equatorial_c: f32,
+}
+
+impl AuthoredClimateZoneAnchors {
+    fn sea_level_temp_c(&self, zone: ClimateZone) -> f32 {
+        match zone {
+            ClimateZone::Polar => self.polar_c,
+            ClimateZone::Subpolar => self.subpolar_c,
+            ClimateZone::Temperate => self.temperate_c,
+            ClimateZone::Subtropical => self.subtropical_c,
+            ClimateZone::Tropical => self.tropical_c,
+            ClimateZone::Equatorial => self.equatorial_c,
+        }
+    }
+
+    fn named(&self) -> [(&'static str, f32); 6] {
+        [
+            ("polar_c", self.polar_c),
+            ("subpolar_c", self.subpolar_c),
+            ("temperate_c", self.temperate_c),
+            ("subtropical_c", self.subtropical_c),
+            ("tropical_c", self.tropical_c),
+            ("equatorial_c", self.equatorial_c),
+        ]
+    }
+}
+
+/// A named local override of the zone raster's answer: "this area is `X` C at
+/// sea level regardless of which band it sits in", with a linear fade outward.
+///
+/// Areal with a gradient, rather than site-anchored like the nearest existing
+/// precedent for locally-exceptional ground
+/// (`cromatolis_v0_ground_substrate_zones.ron`, a half-plane relative to a
+/// named fortification). That precedent's shape cannot express "cold for N
+/// chunks around a cursed vault, fading outward"; this one can, in either
+/// direction, so a future warm *or* cold anomaly is a data row rather than an
+/// engine change.
+///
+/// Deliberately not merged into the substrate zones: that asset answers "what
+/// is the ground made of", this one answers "how warm is the air", and an
+/// anomaly may want either without the other.
+#[derive(Debug, Clone, Deserialize)]
+struct AuthoredMicroclimateZone {
+    id: String,
+    /// What sea-level temperature this zone imposes, in real degrees Celsius.
+    forced_sea_level_temp_c: f32,
+    /// How far outside the polygon the override fades to nothing, **in
+    /// chunks**. Chunks, not authoring pixels: that mapping is anisotropic
+    /// (2 px/chunk in x, 1.5 in y), so a radius expressed in authoring space
+    /// would come out an ellipse on the ground.
+    falloff_chunks: f32,
+    /// Same convention (and the same authoring tool) as
+    /// `cromatolis_v0_tree_candidate_policy.ron`: normalized `[0, 1]`, origin
+    /// top-left, `y` increasing southward.
+    polygon_normalized_top_left: Vec<NormalizedTopLeftPoint>,
+}
+
+impl AuthoredMicroclimateZone {
+    /// Blend weight at `chunk_pos`: `1.0` inside the polygon, falling
+    /// linearly to `0.0` at `falloff_chunks` outside it.
+    fn weight_at(&self, chunk_pos: Vec2<i32>, map_chunks: Vec2<u16>) -> f32 {
+        if self.polygon_normalized_top_left.len() < 3 {
+            return 0.0;
+        }
+        let vertices: Vec<Vec2<f32>> = self
+            .polygon_normalized_top_left
+            .iter()
+            .map(|point| {
+                Vec2::new(
+                    point.x * map_chunks.x as f32,
+                    // Normalized space is top-left origin, chunk space is
+                    // bottom-left. Flip once here rather than at each
+                    // geometry call site below.
+                    (1.0 - point.y) * map_chunks.y as f32,
+                )
+            })
+            .collect();
+        let point = chunk_pos.map(|e| e as f32) + 0.5;
+        if point_in_polygon(point, &vertices) {
+            return 1.0;
+        }
+        if self.falloff_chunks <= 0.0 {
+            return 0.0;
+        }
+        let distance = distance_to_polygon_edge(point, &vertices);
+        (1.0 - distance / self.falloff_chunks).clamp(0.0, 1.0)
+    }
+}
+
+/// Even-odd ray cast. `vertices` must have at least 3 entries.
+fn point_in_polygon(point: Vec2<f32>, vertices: &[Vec2<f32>]) -> bool {
+    let mut inside = false;
+    let mut j = vertices.len() - 1;
+    for i in 0..vertices.len() {
+        let (a, b) = (vertices[i], vertices[j]);
+        if (a.y > point.y) != (b.y > point.y)
+            && point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x
+        {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Shortest distance from `point` to the polygon's boundary (not its
+/// interior): callers test containment separately, so this only has to be
+/// correct outside.
+fn distance_to_polygon_edge(point: Vec2<f32>, vertices: &[Vec2<f32>]) -> f32 {
+    let mut best = f32::INFINITY;
+    let mut j = vertices.len() - 1;
+    for i in 0..vertices.len() {
+        let (a, b) = (vertices[i], vertices[j]);
+        let edge = b - a;
+        let length_squared = edge.magnitude_squared();
+        let projected = if length_squared <= f32::EPSILON {
+            a
+        } else {
+            a + edge * ((point - a).dot(edge) / length_squared).clamp(0.0, 1.0)
+        };
+        best = best.min(point.distance(projected));
+        j = i;
+    }
+    best
+}
+
 /// Authored parameters for a region's baseline temperature curve (see
 /// `cromatolis_baseline_temp`). Cromatolis-specific tuned content, not a
 /// general engine constant, so it lives in a RON asset
@@ -1130,10 +1323,19 @@ fn authored_region_for_map_asset(specifier: &str) -> Option<&'static AuthoredReg
 /// cromatolis_v0_climate.ron`) rather than a Rust literal -- the same
 /// convention this crate already uses for every other authored Cromatolis
 /// parameter (settlements, landmarks, bridges, fortifications, ...).
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct AuthoredCromatolisClimate {
-    /// Baseline temperature at sea level, in real degrees Celsius.
-    sea_level_temp_c: f32,
+    /// Sea-level temperature per climate class, selected by the authored
+    /// `climate_zone` raster.
+    zone_anchors: AuthoredClimateZoneAnchors,
+    /// Used when the `climate_zone` layer is absent (an LFS-free CI checkout,
+    /// a partial clone, a failed export). Degrading to one flat baseline keeps
+    /// the map generable; decoding a missing layer as `0.0` instead would
+    /// silently paint the entire region Polar.
+    fallback_sea_level_temp_c: f32,
+    /// Local overrides of the zone answer. See [`AuthoredMicroclimateZone`].
+    #[serde(default)]
+    microclimate_zones: Vec<AuthoredMicroclimateZone>,
     /// How fast the curve cools with altitude, in degrees Celsius per meter
     /// of relief above sea level.
     lapse_rate_c_per_m: f32,
@@ -1148,17 +1350,25 @@ struct AuthoredCromatolisClimate {
     max_tree_altitude_m: f32,
 }
 
-const fn default_cromatolis_tree_min_temp() -> f32 { 0.0 }
+/// `CONFIG.snow_temp` (8 °C) on the abstract scale. This is the *cold*
+/// cut-off for trees, not a mid-range one: excluding trees by altitude is
+/// `max_tree_altitude_m`'s job. See `cromatolis_v0_climate.ron` for why the
+/// previous `0.0` (= 20 °C) was a latent map-wide deforestation bug that only
+/// the old flat 36 °C sea-level baseline was hiding.
+const fn default_cromatolis_tree_min_temp() -> f32 { -0.8 }
 
 const fn default_cromatolis_max_tree_altitude_m() -> f32 { 970.0 }
 
 impl AuthoredCromatolisClimate {
     fn validate(&self) -> Result<(), String> {
         for (name, value) in [
-            ("sea_level_temp_c", self.sea_level_temp_c),
+            ("fallback_sea_level_temp_c", self.fallback_sea_level_temp_c),
             ("lapse_rate_c_per_m", self.lapse_rate_c_per_m),
             ("max_tree_altitude_m", self.max_tree_altitude_m),
-        ] {
+        ]
+        .into_iter()
+        .chain(self.zone_anchors.named())
+        {
             if !value.is_finite() {
                 return Err(format!("Cromatolis climate {name} must be finite"));
             }
@@ -1166,7 +1376,82 @@ impl AuthoredCromatolisClimate {
         if self.max_tree_altitude_m < 0.0 {
             return Err("Cromatolis max tree altitude must be non-negative".into());
         }
+        // Not a style rule: the zone ids are an ordered scale, and a mask that
+        // paints the Tropical band warmer than the Equatorial one would still
+        // generate, just wrongly and silently.
+        let ordered = [
+            self.zone_anchors.polar_c,
+            self.zone_anchors.subpolar_c,
+            self.zone_anchors.temperate_c,
+            self.zone_anchors.subtropical_c,
+            self.zone_anchors.tropical_c,
+            self.zone_anchors.equatorial_c,
+        ];
+        if ordered.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(
+                "Cromatolis climate zone anchors must increase strictly from polar to equatorial"
+                    .into(),
+            );
+        }
+        for zone in &self.microclimate_zones {
+            if !zone.forced_sea_level_temp_c.is_finite() || !zone.falloff_chunks.is_finite() {
+                return Err(format!(
+                    "microclimate zone {} has a non-finite value",
+                    zone.id
+                ));
+            }
+            if zone.falloff_chunks < 0.0 {
+                return Err(format!(
+                    "microclimate zone {} has a negative falloff",
+                    zone.id
+                ));
+            }
+            if zone.polygon_normalized_top_left.len() < 3 {
+                return Err(format!(
+                    "microclimate zone {} needs at least 3 polygon points",
+                    zone.id
+                ));
+            }
+        }
         Ok(())
+    }
+
+    /// Sea-level temperature for one chunk, in real degrees Celsius: the
+    /// anchor for whatever class the authored raster painted there, then any
+    /// microclimate override blended over it.
+    ///
+    /// `zone_value` is the sampled `climate_zone` layer value, or `None` when
+    /// that layer failed to load.
+    ///
+    /// Overlapping microclimates resolve by **greatest weight**, not by
+    /// greatest temperature: a cold anomaly must be able to sit next to a warm
+    /// one and win where it is closer to its own polygon. Ties keep the
+    /// earlier declaration, so the asset's order is the tiebreak and the
+    /// result does not depend on iteration order.
+    fn resolve_sea_level_temp_c(
+        &self,
+        chunk_pos: Vec2<i32>,
+        map_chunks: Vec2<u16>,
+        zone_value: Option<f32>,
+    ) -> f32 {
+        let base = zone_value.map_or(self.fallback_sea_level_temp_c, |value| {
+            self.zone_anchors
+                .sea_level_temp_c(ClimateZone::from_layer_value(value))
+        });
+        if self.microclimate_zones.is_empty() {
+            return base;
+        }
+        let mut best: Option<(f32, f32)> = None;
+        for zone in &self.microclimate_zones {
+            let weight = zone.weight_at(chunk_pos, map_chunks);
+            if weight > 0.0 && best.is_none_or(|(best_weight, _)| weight > best_weight) {
+                best = Some((weight, zone.forced_sea_level_temp_c));
+            }
+        }
+        match best {
+            Some((weight, forced)) => Lerp::lerp(base, forced, weight),
+            None => base,
+        }
     }
 }
 
@@ -1188,8 +1473,17 @@ impl Default for AuthoredCromatolisClimate {
     /// rather than an arbitrary one.
     fn default() -> Self {
         Self {
-            sea_level_temp_c: 36.0,
-            lapse_rate_c_per_m: 0.023,
+            zone_anchors: AuthoredClimateZoneAnchors {
+                polar_c: 2.0,
+                subpolar_c: 8.0,
+                temperate_c: 17.0,
+                subtropical_c: 24.0,
+                tropical_c: 28.0,
+                equatorial_c: 30.0,
+            },
+            fallback_sea_level_temp_c: 17.0,
+            microclimate_zones: Vec::new(),
+            lapse_rate_c_per_m: 0.0075,
             tree_min_temp: default_cromatolis_tree_min_temp(),
             max_tree_altitude_m: default_cromatolis_max_tree_altitude_m(),
         }
@@ -2008,6 +2302,7 @@ impl WorldSim {
             authored_water_layer,
             authored_elevated_lakes_layer,
             authored_river_channels_layer,
+            authored_climate_zone_layer,
         ) = if let Some(region) = authored_region {
             (
                 load_authored_layer(region, AuthoredLayerKind::Routes),
@@ -2016,9 +2311,10 @@ impl WorldSim {
                 load_authored_layer(region, AuthoredLayerKind::Water),
                 load_authored_layer(region, AuthoredLayerKind::ElevatedLakes),
                 load_authored_layer(region, AuthoredLayerKind::RiverChannels),
+                load_authored_layer(region, AuthoredLayerKind::ClimateZone),
             )
         } else {
-            (None, None, None, None, None, None)
+            (None, None, None, None, None, None, None)
         };
         // Never substitute vegetation when the independent cover layer is
         // missing: that would silently restore the coupling this layer was
@@ -3255,6 +3551,7 @@ impl WorldSim {
             authored_route_layer,
             authored_vegetation_layer,
             authored_ground_cover_layer,
+            authored_climate_zone_layer,
             authored_ground_substrate_zones,
             cromatolis_climate,
             authored_alpine_policy,
@@ -4358,7 +4655,7 @@ fn cromatolis_authored_tree_density(
     is_underwater: bool,
     temp: f32,
     alt_pre: f32,
-    climate: AuthoredCromatolisClimate,
+    climate: &AuthoredCromatolisClimate,
     alpine_policy: Option<AuthoredAlpinePolicy>,
 ) -> f32 {
     let tree_line = alpine_policy.map_or(climate.max_tree_altitude_m, |p| p.tree_line_altitude_m);
@@ -5281,25 +5578,41 @@ fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<River
 }
 
 /// Humidity floor for `SimChunk::get_biome`'s `Swamp` branch (also requires
-/// `authored_near_water`). Picked empirically against real Cromatolis
-/// hydrology, not guessed: sampling `generate_cromatolis_world()` (real LFS
-/// assets pulled from the VPS) over the 17,921 land chunks flagged
-/// `authored_near_water` gives min=0.250, p10=0.501, p25=0.637, median=0.736,
-/// p75=0.846, p90=0.930, max=0.970 -- i.e. land next to authored water skews
-/// heavily humid already, with only a short tail down near the general-map
-/// floor of 0.25. 0.6 sits below the p25 (keeps most of the near-water
-/// population, matching how common coastal/riverine wetlands are meant to be
-/// for a Caribbean-coast map) while still excluding the driest sliver (the
-/// bottom ~10-25%, likely narrow river mouths on otherwise arid stretches
-/// rather than real wetland). End result measured via
-/// `cromatolis_swamp_coverage_regression_against_real_lfs_assets`: Swamp
-/// covers 1.368% of the full Cromatolis chunk grid -- rare but genuinely
-/// present, not the ~0% the biome had before this row (COW-4). The
-/// pre-existing commented-out threshold (0.8, with no water-proximity gate
-/// at all) would have kept `Swamp` effectively unreachable: it sat behind
-/// `Forest`/`Jungle` in the old branch order, and both of those already
-/// claim most tiles humid enough to clear 0.8.
-const SWAMP_HUMIDITY_THRESHOLD: f32 = 0.6;
+/// `authored_near_water`).
+///
+/// **The rule is "just below the p25 of the near-water humidity
+/// distribution", not the literal number.** Land next to authored water skews
+/// humid already, so the threshold's job is only to drop the driest tail --
+/// narrow river mouths on otherwise arid stretches rather than real wetland
+/// -- while keeping the bulk, which is how common coastal and riverine
+/// wetlands are meant to be on a Caribbean-coast map. Anything that moves the
+/// humidity field moves that distribution and this constant with it; re-derive
+/// it rather than adjusting the regression band around it.
+///
+/// Measured over the land chunks flagged `authored_near_water` in a real
+/// generated world (LFS assets, not synthetic):
+///
+/// |                  |  count |   min |   p10 |   p25 | median |   p75 |   p90 |
+/// |------------------|-------:|------:|------:|------:|-------:|------:|------:|
+/// | before the zones | 17,921 | 0.250 | 0.501 | 0.637 |  0.736 | 0.846 | 0.930 |
+/// | with the zones   | 17,957 | 0.250 | 0.578 | 0.705 |  0.812 | 0.905 | 0.959 |
+///
+/// The whole distribution shifted up ~0.07 because the evaporation dampener
+/// (`humidity *= 1 - (temp - tropical_temp)/(1 - tropical_temp)`) used to
+/// multiply coastal humidity by exactly 0 -- the old flat sea-level baseline
+/// pinned `temp` at 1.0 there -- so procedural humidity was erased at the
+/// coast and only the authored vegetation floor kept it nonzero. With real
+/// per-zone temperatures the dampener is inert over most of the map and the
+/// procedural field survives.
+///
+/// Holding 0.6 while p25 moved to 0.705 would have quietly widened the branch
+/// from "the wettest three quarters of near-water land" to "the wettest seven
+/// eighths". Re-derived to 0.70; resulting Swamp coverage is 1.32% of the full
+/// chunk grid, still rare but genuinely present. The pre-existing
+/// commented-out 0.8 (with no water-proximity gate at all) would have kept
+/// `Swamp` effectively unreachable: it sat behind `Forest`/`Jungle` in the old
+/// branch order, and both already claim most tiles humid enough to clear 0.8.
+const SWAMP_HUMIDITY_THRESHOLD: f32 = 0.70;
 
 /// Cromatolis's authored baseline temperature curve: colder with altitude,
 /// computed in real degrees Celsius via a simple lapse-rate formula and
@@ -5316,25 +5629,26 @@ const SWAMP_HUMIDITY_THRESHOLD: f32 = 0.6;
 /// chunks get the sea-level baseline temperature, same as before this
 /// change).
 ///
-/// `climate` is the authored, region-specific tuning
-/// (`AuthoredCromatolisClimate`, loaded from `cromatolis_v0_climate.ron`):
-/// `sea_level_temp_c` is a hot tropical coastal baseline (`close(...,
-/// CONFIG.desert_temp, ...)`/`(0.9..1.0).contains(&chunk.temp)`-style site
-/// predicates elsewhere in worldgen need *some* chunks to reach the hot end
-/// of the abstract scale, and the lowest-altitude chunks are the only ones
-/// this curve ever makes that hot); `lapse_rate_c_per_m` is deliberately
-/// steeper than Earth's ~6.5 °C/km average tropospheric lapse rate (still
-/// within the range real lapse rates span with humidity/region -- the dry
-/// adiabatic rate alone is ~9.8 °C/km): Cromatolis's actual relief tops out
-/// around 1.3 km above sea level, and a literal Earth-average rate over
-/// only that much relief would cool the highlands by less than 9 °C total,
-/// leaving the whole map clustered in the warm end of the scale and
-/// largely reproducing the "no usable cold/middle band" problem this curve
-/// exists to fix -- just gradually instead of via a hard clamp. The
-/// steeper rate lets Cromatolis's real, modest relief span the scale's
-/// full practical range end to end.
-fn cromatolis_baseline_temp(alt_pre: f32, climate: AuthoredCromatolisClimate) -> f32 {
-    let temp_c = climate.sea_level_temp_c - alt_pre.max(0.0) * climate.lapse_rate_c_per_m;
+/// `sea_level_temp_c` is this chunk's own sea-level baseline, already
+/// resolved from the authored climate-zone raster and any microclimate
+/// override (see `AuthoredCromatolisClimate::resolve_sea_level_temp_c`).
+/// Passing the resolved value rather than the whole asset keeps this function
+/// a pure curve, so the tests below can sweep it over altitude without
+/// building a map.
+///
+/// `lapse_rate_c_per_m` sets how much of that per-zone baseline the region's
+/// relief is allowed to spend. At `0.0075` C/m (7.5 C/km, close to Earth's
+/// ~6.5 C/km moist average) Cromatolis's 1.25 km of relief spans about 9 C,
+/// which is the intended amount: the map is a mesa whose median dry relief is
+/// ~107 m, so a steeper rate makes an ordinary plateau read as highland. At
+/// the previous `0.023` C/m, `BiomeKind::Taiga`'s `-0.7..-0.3` window opened
+/// only 65 m above sea level once the temperate baseline dropped to 17 C,
+/// which would have classified ~96% of the landmass as Taiga. The *zone*
+/// raster, not the lapse rate, is now what makes one end of the map warmer
+/// than the other; the lapse rate only has to make summits colder than
+/// valleys.
+fn cromatolis_baseline_temp(alt_pre: f32, sea_level_temp_c: f32, lapse_rate_c_per_m: f32) -> f32 {
+    let temp_c = sea_level_temp_c - alt_pre.max(0.0) * lapse_rate_c_per_m;
     config::celsius_to_abstract_temp(temp_c).clamp(-1.0, 1.0)
 }
 
@@ -5383,7 +5697,20 @@ impl SimChunk {
         .sub(0.5)
         .mul(2.0);
         if gen_cdf.authored_region_id == Some(CROMATOLIS_V0_REGION_ID) {
-            temp = cromatolis_baseline_temp(alt_pre, gen_cdf.cromatolis_climate);
+            let zone_value = gen_cdf
+                .authored_climate_zone_layer
+                .as_ref()
+                .map(|zones| authored_layer_value_for_cromatolis_v0(map_size_lg, posi, zones));
+            let sea_level_temp_c = gen_cdf.cromatolis_climate.resolve_sea_level_temp_c(
+                pos,
+                map_size_lg.chunks(),
+                zone_value,
+            );
+            temp = cromatolis_baseline_temp(
+                alt_pre,
+                sea_level_temp_c,
+                gen_cdf.cromatolis_climate.lapse_rate_c_per_m,
+            );
         }
 
         // Take the weighted average of our randomly generated base humidity, and the
@@ -5440,7 +5767,7 @@ impl SimChunk {
                         is_underwater,
                         temp,
                         alt_pre,
-                        gen_cdf.cromatolis_climate,
+                        &gen_cdf.cromatolis_climate,
                         gen_cdf
                             .authored_alpine_policy
                             .filter(|(region_id, _)| gen_cdf.authored_region_id == Some(*region_id))
@@ -5458,8 +5785,21 @@ impl SimChunk {
             .authored_ground_substrate_zones
             .as_ref()
             .and_then(|zones| zones.substrate_at(map_size_lg, pos));
+        // The authored humidity floor: ground that was painted as vegetated
+        // cannot also be arid, whatever the procedural humidity field says.
+        //
+        // Gated on the region's own cold cut-off, not on a bare `temp >= 0.0`.
+        // Abstract 0.0 is 20 C, which is not a statement about vegetation at
+        // all -- it only ever looked like one because the old flat sea-level
+        // baseline clamped nearly every chunk to abstract 1.0. Against a real
+        // per-zone baseline that literal would silently switch the floor off
+        // across the whole temperate zone (three quarters of the map), and the
+        // painted forest there would read as dry scrub. `tree_min_temp` is the
+        // threshold that actually means "too cold for this to be plant
+        // cover", and it is the same one the density exclusion uses, so the
+        // two cannot drift apart.
         if let Some(vegetation_density) = authored_vegetation_density
-            && temp >= 0.0
+            && temp >= gen_cdf.cromatolis_climate.tree_min_temp
         {
             humidity = humidity.max((0.25 + vegetation_density * 0.72).min(1.0));
         }
@@ -5703,14 +6043,18 @@ impl SimChunk {
             // Same rationale and scoping pattern as the `Snowland` check
             // above: Cromatolis is lore-authored as tropical/caribbean, not
             // arid, so this stays scoped to that specific region (not "any
-            // authored region is loaded" -- same COW-2 debt note). Without
-            // this, `cromatolis_baseline_temp`'s hot coastal end (needed so
-            // some chunks reach the `(0.9..1.0)` band several dungeon-site
-            // predicates require) drives real low-altitude coastal humidity
-            // down to ~0 via the evaporation dampener a few lines above
-            // (`humidity *= (1.0 - (temp - CONFIG.tropical_temp).max(0.0) /
-            // ...)`), which would otherwise satisfy this branch on ordinary
-            // tropical coastline and paint it as literal desert terrain.
+            // authored region is loaded" -- same COW-2 debt note).
+            //
+            // What it protects against changed, but it is still load-bearing.
+            // It used to be the whole coastline: one flat hot sea-level
+            // baseline pinned coastal `temp` at 1.0, the evaporation dampener
+            // a few lines above then crushed coastal humidity to ~0, and this
+            // branch claimed ordinary tropical shore. Per-zone sea-level
+            // temperatures ended that -- no *climatic* zone on this map
+            // reaches `desert_temp` any more (the warmest anchor lands at
+            // abstract 0.533). What still does is an authored microclimate
+            // pocket, which exists precisely to be hot; without this check the
+            // magically-warmed ground around a dungeon would render as sand.
             BiomeKind::Desert
         } else if self.authored_near_water && self.humidity > SWAMP_HUMIDITY_THRESHOLD {
             // Gated on real hydrology (`authored_near_water`, not humidity
@@ -5795,6 +6139,177 @@ impl SimChunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn microclimate(id: &str, forced: f32, falloff: f32) -> AuthoredMicroclimateZone {
+        // Chunks 10..=20 in both axes on a 100x100 grid. Normalized space has a
+        // top-left origin, so the *southern* chunk edge is the larger `y`.
+        AuthoredMicroclimateZone {
+            id: id.to_owned(),
+            forced_sea_level_temp_c: forced,
+            falloff_chunks: falloff,
+            polygon_normalized_top_left: vec![
+                NormalizedTopLeftPoint { x: 0.10, y: 0.79 },
+                NormalizedTopLeftPoint { x: 0.21, y: 0.79 },
+                NormalizedTopLeftPoint { x: 0.21, y: 0.90 },
+                NormalizedTopLeftPoint { x: 0.10, y: 0.90 },
+            ],
+        }
+    }
+
+    const TEST_MAP_CHUNKS: Vec2<u16> = Vec2::new(100, 100);
+
+    #[test]
+    fn climate_zone_decodes_every_painted_class_from_its_exported_value() {
+        for (index, expected) in ClimateZone::ALL.into_iter().enumerate() {
+            let exported = index as f32 / 5.0;
+            assert_eq!(ClimateZone::from_layer_value(exported), expected);
+        }
+        // The layer is f32, so an exported class can arrive a few ulps off.
+        assert_eq!(
+            ClimateZone::from_layer_value(0.5999999),
+            ClimateZone::Subtropical
+        );
+        assert_eq!(
+            ClimateZone::from_layer_value(0.6000001),
+            ClimateZone::Subtropical
+        );
+        // Out of range can only mean a corrupt layer; clamp rather than index
+        // out of bounds.
+        assert_eq!(ClimateZone::from_layer_value(-5.0), ClimateZone::Polar);
+        assert_eq!(ClimateZone::from_layer_value(5.0), ClimateZone::Equatorial);
+    }
+
+    #[test]
+    fn resolving_sea_level_temp_reads_the_zone_raster_and_degrades_to_the_fallback() {
+        let climate = AuthoredCromatolisClimate::default();
+        let anywhere = Vec2::new(50, 50);
+
+        assert_eq!(
+            climate.resolve_sea_level_temp_c(anywhere, TEST_MAP_CHUNKS, Some(0.4)),
+            climate.zone_anchors.temperate_c
+        );
+        assert_eq!(
+            climate.resolve_sea_level_temp_c(anywhere, TEST_MAP_CHUNKS, Some(0.8)),
+            climate.zone_anchors.tropical_c
+        );
+        // A missing layer must not read as class 0 (Polar), which is what
+        // defaulting the sampled value to 0.0 would do.
+        assert_eq!(
+            climate.resolve_sea_level_temp_c(anywhere, TEST_MAP_CHUNKS, None),
+            climate.fallback_sea_level_temp_c
+        );
+    }
+
+    #[test]
+    fn a_microclimate_overrides_its_polygon_and_fades_out_over_its_falloff() {
+        let climate = AuthoredCromatolisClimate {
+            microclimate_zones: vec![microclimate("cold.vault", 1.0, 10.0)],
+            ..AuthoredCromatolisClimate::default()
+        };
+        let temperate = climate.zone_anchors.temperate_c;
+        let zone_value = Some(0.4);
+        let at =
+            |x, y| climate.resolve_sea_level_temp_c(Vec2::new(x, y), TEST_MAP_CHUNKS, zone_value);
+
+        // Fully inside: the override wins outright, cold against a warm region.
+        assert_eq!(at(15, 15), 1.0);
+        // Well outside the falloff: the zone raster is untouched.
+        assert_eq!(at(60, 60), temperate);
+        // Inside the falloff: strictly between, and monotonic with distance.
+        let near = at(15, 6);
+        let far = at(15, 2);
+        assert!(
+            1.0 < near && near < far && far < temperate,
+            "expected a monotonic fade from the forced 1.0 up to {temperate}, got near={near} \
+             far={far}"
+        );
+    }
+
+    #[test]
+    fn overlapping_microclimates_resolve_by_weight_so_a_cold_one_can_win() {
+        // Same polygon, one cold and one hot. Resolving by greatest
+        // *temperature* would make the cold zone unexpressible wherever a warm
+        // one overlaps it; resolving by greatest weight keeps both usable.
+        let cold_first = AuthoredCromatolisClimate {
+            microclimate_zones: vec![
+                microclimate("cold", 1.0, 10.0),
+                microclimate("hot", 40.0, 10.0),
+            ],
+            ..AuthoredCromatolisClimate::default()
+        };
+        assert_eq!(
+            cold_first.resolve_sea_level_temp_c(Vec2::new(15, 15), TEST_MAP_CHUNKS, Some(0.4)),
+            1.0,
+            "equal weight must keep the earlier declaration, not the warmer one"
+        );
+
+        // A wider falloff wins outside the shared polygon, in either direction.
+        let reach = AuthoredCromatolisClimate {
+            microclimate_zones: vec![
+                microclimate("narrow", 1.0, 2.0),
+                microclimate("wide", 40.0, 20.0),
+            ],
+            ..AuthoredCromatolisClimate::default()
+        };
+        let outside = reach.resolve_sea_level_temp_c(Vec2::new(15, 4), TEST_MAP_CHUNKS, Some(0.4));
+        assert!(
+            outside > reach.zone_anchors.temperate_c,
+            "outside the narrow zone's reach the wider (hot) zone must be the one still blending, \
+             got {outside}"
+        );
+    }
+
+    #[test]
+    fn climate_validation_rejects_unordered_anchors_and_malformed_microclimates() {
+        let base = AuthoredCromatolisClimate::default();
+        assert!(base.validate().is_ok());
+
+        let mut unordered = base.clone();
+        unordered.zone_anchors.tropical_c = unordered.zone_anchors.equatorial_c + 1.0;
+        assert!(
+            unordered.validate().is_err(),
+            "a tropical band warmer than the equatorial one would still generate, silently wrong"
+        );
+
+        let mut degenerate = base.clone();
+        degenerate.microclimate_zones = vec![AuthoredMicroclimateZone {
+            polygon_normalized_top_left: vec![NormalizedTopLeftPoint { x: 0.1, y: 0.1 }],
+            ..microclimate("two.points", 30.0, 4.0)
+        }];
+        assert!(degenerate.validate().is_err());
+
+        let mut negative = base.clone();
+        negative.microclimate_zones = vec![microclimate("negative.falloff", 30.0, -1.0)];
+        assert!(negative.validate().is_err());
+    }
+
+    #[test]
+    fn the_shipped_climate_asset_keeps_every_zone_out_of_the_desert_band() {
+        // `CONFIG.desert_temp` gates both `BiomeKind::Desert` and the desert
+        // wildlife manifest entries, and both are only region-scoped away for
+        // Cromatolis. No *climatic* zone may need that scoping to hold; only a
+        // deliberately magical microclimate may.
+        let climate = AuthoredCromatolisClimate::load_owned("world.map.cromatolis_v0_climate")
+            .expect("the shipped Cromatolis climate asset must parse");
+        for (name, celsius) in climate.zone_anchors.named() {
+            let abstract_temp = config::celsius_to_abstract_temp(celsius).clamp(-1.0, 1.0);
+            assert!(
+                abstract_temp < CONFIG.desert_temp,
+                "climate anchor {name} ({celsius} C = abstract {abstract_temp}) reaches \
+                 CONFIG.desert_temp; the Cromatolis desert exemptions would become load-bearing \
+                 for ordinary terrain again"
+            );
+        }
+        // ...and no zone may be so cold that painted forest is excluded at sea
+        // level, which is the deforestation failure `tree_min_temp` guards.
+        let coldest_used = config::celsius_to_abstract_temp(climate.zone_anchors.temperate_c);
+        assert!(
+            coldest_used >= climate.tree_min_temp,
+            "the temperate anchor ({coldest_used}) is below tree_min_temp ({}), which would zero \
+             tree_density across the whole zone",
+            climate.tree_min_temp
+        );
+    }
 
     #[test]
     fn tree_candidate_zone_uses_normalized_top_left_coordinates() {
@@ -6315,7 +6830,14 @@ mod tests {
         ] {
             let painted_density = 1.0 - blackness_percent / 100.0;
             assert_eq!(
-                cromatolis_authored_tree_density(painted_density, false, 0.5, 300.0, climate, None),
+                cromatolis_authored_tree_density(
+                    painted_density,
+                    false,
+                    0.5,
+                    300.0,
+                    &climate,
+                    None
+                ),
                 painted_density,
                 "{blackness_percent}% black must retain its authored vegetation density"
             );
@@ -6324,30 +6846,67 @@ mod tests {
         // No gradual altitude attenuation or response curve is permitted:
         // a mid-gray forest value remains mid-gray up to the hard cap.
         assert_eq!(
-            cromatolis_authored_tree_density(0.50, false, 0.5, 699.9, climate, None),
+            cromatolis_authored_tree_density(0.50, false, 0.5, 699.9, &climate, None),
             0.50
         );
         assert_eq!(
-            cromatolis_authored_tree_density(1.0, false, 0.5, 970.0, climate, None),
+            cromatolis_authored_tree_density(1.0, false, 0.5, 970.0, &climate, None),
             0.0,
             "the legacy climate cap remains a physical exclusion"
         );
         assert_eq!(
-            cromatolis_authored_tree_density(0.82, false, 0.5, 300.0, climate, None),
+            cromatolis_authored_tree_density(0.82, false, 0.5, 300.0, &climate, None),
             0.82
         );
         assert_eq!(
-            cromatolis_authored_tree_density(0.83, false, 0.5, 300.0, climate, None),
+            cromatolis_authored_tree_density(0.83, false, 0.5, 300.0, &climate, None),
             0.83
         );
 
         assert_eq!(
-            cromatolis_authored_tree_density(1.0, true, 0.5, 300.0, climate, None),
+            cromatolis_authored_tree_density(1.0, true, 0.5, 300.0, &climate, None),
+            0.0
+        );
+        // The cold exclusion fires at the region's own `tree_min_temp`, not at
+        // abstract 0.0. Straddle the real threshold rather than restating the
+        // number, so a future retune of the asset moves both sides together.
+        assert_eq!(
+            cromatolis_authored_tree_density(
+                1.0,
+                false,
+                climate.tree_min_temp - 0.01,
+                300.0,
+                &climate,
+                None
+            ),
             0.0
         );
         assert_eq!(
-            cromatolis_authored_tree_density(1.0, false, -0.01, 300.0, climate, None),
-            0.0
+            cromatolis_authored_tree_density(
+                1.0,
+                false,
+                climate.tree_min_temp,
+                300.0,
+                &climate,
+                None
+            ),
+            1.0,
+            "exactly at the threshold is still warm enough -- the exclusion is `temp < min`"
+        );
+        // The temperate zone's own sea-level temperature must not be excluded:
+        // that combination (a 17 C baseline against a 20 C literal) is the
+        // deforestation bug `tree_min_temp` was moved to avoid.
+        assert_eq!(
+            cromatolis_authored_tree_density(
+                1.0,
+                false,
+                config::celsius_to_abstract_temp(climate.zone_anchors.temperate_c),
+                300.0,
+                &climate,
+                None
+            ),
+            1.0,
+            "the temperate zone's sea-level temperature must not exclude trees"
         );
         assert_eq!(
             cromatolis_authored_tree_density(
@@ -6355,7 +6914,7 @@ mod tests {
                 false,
                 0.5,
                 700.0,
-                climate,
+                &climate,
                 Some(AuthoredAlpinePolicy {
                     schema: 1,
                     tree_line_altitude_m: 700.0,
@@ -6375,10 +6934,17 @@ mod tests {
         let permissive_climate = AuthoredCromatolisClimate {
             tree_min_temp: -0.5,
             max_tree_altitude_m: 1_200.0,
-            ..climate
+            ..climate.clone()
         };
         assert_eq!(
-            cromatolis_authored_tree_density(0.50, false, -0.25, 1_000.0, permissive_climate, None),
+            cromatolis_authored_tree_density(
+                0.50,
+                false,
+                -0.25,
+                1_000.0,
+                &permissive_climate,
+                None
+            ),
             0.50
         );
     }
@@ -6638,7 +7204,13 @@ mod tests {
         let climate = AuthoredCromatolisClimate::default();
         let samples: Vec<f32> = (0..=2000)
             .step_by(20)
-            .map(|alt_pre| cromatolis_baseline_temp(alt_pre as f32, climate))
+            .map(|alt_pre| {
+                cromatolis_baseline_temp(
+                    alt_pre as f32,
+                    climate.fallback_sea_level_temp_c,
+                    climate.lapse_rate_c_per_m,
+                )
+            })
             .collect();
 
         let distinct_values = samples
@@ -6667,9 +7239,17 @@ mod tests {
     #[test]
     fn cromatolis_baseline_temp_decreases_monotonically_with_altitude() {
         let climate = AuthoredCromatolisClimate::default();
-        let mut prev = cromatolis_baseline_temp(-100.0, climate);
+        let mut prev = cromatolis_baseline_temp(
+            -100.0,
+            climate.fallback_sea_level_temp_c,
+            climate.lapse_rate_c_per_m,
+        );
         for alt_pre in (0..3000).step_by(10) {
-            let temp = cromatolis_baseline_temp(alt_pre as f32, climate);
+            let temp = cromatolis_baseline_temp(
+                alt_pre as f32,
+                climate.fallback_sea_level_temp_c,
+                climate.lapse_rate_c_per_m,
+            );
             assert!(
                 temp <= prev,
                 "temperature must never increase with altitude: alt_pre={alt_pre} gave {temp}, \
@@ -6695,7 +7275,11 @@ mod tests {
             f32::INFINITY,
             f32::NEG_INFINITY,
         ] {
-            let temp = cromatolis_baseline_temp(alt_pre, climate);
+            let temp = cromatolis_baseline_temp(
+                alt_pre,
+                climate.fallback_sea_level_temp_c,
+                climate.lapse_rate_c_per_m,
+            );
             assert!(
                 temp.is_finite(),
                 "alt_pre={alt_pre} produced non-finite temp {temp}"
@@ -6735,34 +7319,35 @@ mod tests {
     }
 
     /// Regression for `crate::layer::wildlife::not_cromatolis` gating the
-    /// desert wildlife density formulas away from Cromatolis. Before that
-    /// gate existed, the ungated `world.wildlife.spawn.desert.hot` formula
-    /// (`close(chunk.temp, CONFIG.desert_temp + 0.2, 0.3)`, no humidity
-    /// check) was nonzero for ~86% of the real generated Cromatolis grid --
-    /// this reproduces that exact formula and asserts the gate zeroes it
-    /// out everywhere.
+    /// desert wildlife density formulas away from Cromatolis. Reproduces the
+    /// `world.wildlife.spawn.desert.hot` window (`close(chunk.temp,
+    /// CONFIG.desert_temp + 0.2, 0.3)`, no humidity check) and asserts it is
+    /// zero across the real generated map.
+    ///
+    /// What the gate holds back changed with the per-zone climate, so the
+    /// bound on the ungated population is asserted too. It was ~86% of the
+    /// grid when one flat hot baseline covered the whole map; now no climatic
+    /// zone reaches the window at all and the only chunks inside it are the
+    /// authored microclimate pocket, which is hot on purpose. A *small*
+    /// nonzero ungated count is therefore the correct answer -- zero would
+    /// mean the pocket stopped being hot, and a large one would mean a zone
+    /// anchor had been raised into desert territory.
     #[test]
     #[ignore]
     fn cromatolis_desert_wildlife_density_stays_gated_out_against_real_lfs_assets() {
         let sim = generate_cromatolis_world();
-        let ungated_hits = sim
-            .chunks
-            .iter()
-            .filter(|c| (c.temp - (CONFIG.desert_temp + 0.2)).abs() < 0.3)
-            .count();
+        let in_window = |c: &&SimChunk| (c.temp - (CONFIG.desert_temp + 0.2)).abs() < 0.3;
+        let ungated_hits = sim.chunks.iter().filter(in_window).count();
         let gated_hits = sim
             .chunks
             .iter()
-            .filter(|c| {
-                crate::layer::wildlife::not_cromatolis(c) > 0.0
-                    && (c.temp - (CONFIG.desert_temp + 0.2)).abs() < 0.3
-            })
+            .filter(|c| crate::layer::wildlife::not_cromatolis(c) > 0.0 && in_window(c))
             .count();
+        let ungated_fraction = ungated_hits as f64 / sim.chunks.len() as f64;
         assert!(
-            ungated_hits as f64 / sim.chunks.len() as f64 > 0.5,
-            "sanity check failed: expected the ungated formula to still hit a large fraction of \
-             the map (regenerating this baseline confirms the gate is doing real work), got \
-             {ungated_hits}/{}",
+            (0.0001..0.01).contains(&ungated_fraction),
+            "the ungated desert window should cover only the authored microclimate pocket -- \
+             expected a small nonzero fraction, got {ungated_fraction:.6} ({ungated_hits}/{})",
             sim.chunks.len()
         );
         assert_eq!(
@@ -7124,10 +7709,34 @@ mod tests {
         let probe = &sim.chunks[probe_idx];
         let alt_pre = probe.alt - CONFIG.sea_level;
 
+        // The package identity, pinned on the *unwarped* column. `basement`
+        // comes straight from the bundle's elevation layer and, while it sits
+        // below `alt`, nothing downstream of worldgen's noise touches it -- so
+        // it moves if and only if the terrain package itself does. There is
+        // ~13.8 m of headroom before it would start clamping to `alt` (the
+        // soil term below can add at most 16 m), which is comfortable but not
+        // unlimited: a future package that raises this probe would need this
+        // assertion rechecked rather than just re-baselined.
+        let basement_pre = probe.basement - CONFIG.sea_level;
         assert!(
-            (95.5..=98.0).contains(&alt_pre),
-            "Belletoile relief must come from the v22 terrain package; expected ~96.817 m above \
-             sea level after WorldSim interpolation, got {alt_pre:.3} m"
+            (84.5..=85.5).contains(&basement_pre),
+            "Belletoile must come from the v22 terrain package; expected ~84.939 m of bundle \
+             elevation, got {basement_pre:.3} m"
+        );
+
+        // ⚠️ The surface figure was **96.817 m** until the climate-zone rework.
+        // The terrain package did not move -- `basement` above proves it. The
+        // difference is `SimChunk::generate`'s soil-undulation term, which adds
+        // `soil_nz * 16 * sqrt(tree_density) * sqrt(humidity)` to dry land.
+        // Per-zone temperatures stopped the evaporation dampener from crushing
+        // humidity (this probe now measures 1.000), so the same terrain carries
+        // ~1.9 m more of it. Any future change that moves humidity or
+        // `tree_density` moves this number too; re-measure it against
+        // `basement` rather than widening the band.
+        assert!(
+            (98.0..=99.5).contains(&alt_pre),
+            "Belletoile surface relief expected ~98.720 m above sea level after WorldSim \
+             interpolation and soil undulation, got {alt_pre:.3} m"
         );
         assert!(
             probe.river.river_kind.is_none(),
@@ -7780,37 +8389,59 @@ mod tests {
         // rather than carried over, and why a failure here is far more likely
         // to mean "the relief changed" than "the CDFs drifted".
         //
-        // Pinned exactly, deliberately *not* because these four are the steady
-        // ones -- on that package they were the most volatile of the seven
-        // (Taiga -9.9%, Mountain -5.7%, Grassland -4.9%, Savannah +2.4%). An
-        // exact number is what makes a re-measure unmissable.
-        assert_eq!(biome_count(BiomeKind::Savannah), 193_887);
-        assert_eq!(biome_count(BiomeKind::Grassland), 40_378);
-        assert_eq!(biome_count(BiomeKind::Taiga), 3_710);
-        assert_eq!(biome_count(BiomeKind::Mountain), 41_790);
-        // Banded instead: the three biomes the same package barely touched
-        // (Jungle +0.03%, Forest +0.25%, Swamp -0.05%), i.e. the ones where a
-        // move really would be CDF noise, and where an unrelated CDF change
-        // should read as one signal rather than three simultaneous "failures".
+        // ⚠️ **These numbers were stale before the climate-zone rework, and
+        // this assertion was already failing on the branch it re-baselines.**
+        // Two separate things moved them:
+        //
+        // 1. The authored alpine policy introduced `BiomeKind::Snowland` on this map (0
+        //    -> 32,983 chunks). Snowland is tested before Mountain and Taiga, so it
+        //    took most of both, and the "nothing in Snowland" partition below stopped
+        //    holding. That landed without this test being re-run.
+        // 2. The climate-zone rework. With three quarters of the map now sitting at a
+        //    temperate abstract -0.2 instead of a saturated +1.0: `Savannah` needs
+        //    `temp >= 0.3` and all but collapses, `Jungle` needs `temp > 0.45` and
+        //    retreats to the painted tropical south, `Taiga`'s `-0.7..-0.3` window
+        //    opens on real highland, and the humidity that the evaporation dampener
+        //    used to erase at the coast survives, which moves `Forest`/`Grassland`
+        //    wholesale.
+        //
+        // Measured before -> after the rework (both on the post-alpine branch):
+        //
+        //   Savannah   193,887 ->   2,419    Grassland   25,308 -> 179,722
+        //   Jungle     215,727 ->  68,339    Forest     173,668 -> 310,459
+        //   Taiga            0 ->  46,052    Mountain    27,997 ->  27,879
+        //   Snowland    32,607 ->  32,983    Swamp       12,445 ->  13,786
+        //
+        // Pinned exactly, deliberately: an exact number is what makes the next
+        // re-measure unmissable.
+        assert_eq!(biome_count(BiomeKind::Savannah), 2_419);
+        assert_eq!(biome_count(BiomeKind::Grassland), 179_722);
+        assert_eq!(biome_count(BiomeKind::Taiga), 46_052);
+        assert_eq!(biome_count(BiomeKind::Mountain), 27_879);
+        assert_eq!(biome_count(BiomeKind::Snowland), 32_983);
+        // Banded instead: the biomes where a small move really would be the CDF
+        // knock-on rather than a design change, so that an unrelated CDF shift
+        // reads as one signal instead of three simultaneous "failures".
         for (biome, measured) in [
-            (BiomeKind::Jungle, 215_727.0),
-            (BiomeKind::Forest, 173_686.0),
-            (BiomeKind::Swamp, 12_461.0),
+            (BiomeKind::Jungle, 68_339.0),
+            (BiomeKind::Forest, 310_459.0),
+            (BiomeKind::Swamp, 13_786.0),
         ] {
             let counted = biome_count(biome) as f64;
             assert!(
                 (counted - measured).abs() / measured < 0.005,
                 "{biome:?} moved from the measured {measured} to {counted}, more than the 0.5% \
-                 band the CDF knock-on accounts for -- check whether the corridor raster or the \
-                 relief moved"
+                 band the CDF knock-on accounts for -- check whether the corridor raster, the \
+                 relief or a climate anchor moved"
             );
         }
 
-        // The nine biomes above account for the whole map, with nothing in
-        // `Desert`, `Snowland` or any other variant. Two things fall out of
-        // this for free: a transcription slip in any of the pinned counts above
-        // cannot balance, and the ~2,200 chunks of slack the three bands carry
-        // cannot quietly hide a tenth biome appearing.
+        // The ten biomes above account for the whole map, with nothing in
+        // `Desert` or any other variant. Two things fall out of this for free:
+        // a transcription slip in any of the pinned counts above cannot
+        // balance, and the slack the three bands carry cannot quietly hide an
+        // eleventh biome appearing -- which is exactly how `Snowland` slipped
+        // in unnoticed while it was excluded from this list.
         let partitioned: usize = [
             BiomeKind::Ocean,
             BiomeKind::Lake,
@@ -7818,6 +8449,7 @@ mod tests {
             BiomeKind::Grassland,
             BiomeKind::Taiga,
             BiomeKind::Mountain,
+            BiomeKind::Snowland,
             BiomeKind::Jungle,
             BiomeKind::Forest,
             BiomeKind::Swamp,
