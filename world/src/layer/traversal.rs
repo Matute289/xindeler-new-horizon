@@ -625,6 +625,23 @@ fn port_groups(strip: &Strip, before: &SlotLabels, after: &SlotLabels) -> Vec<Ve
         .collect()
 }
 
+/// Every column [`analyse`] will sample for an intruder of these bounds: its
+/// own 2D footprint, dilated so the analysis sees clear passage on both sides
+/// of it rather than starting flush against the obstruction.
+///
+/// Exposed, and read by `analyse` itself rather than duplicated, because a
+/// caller deciding *which passages are worth building* for this intruder has
+/// to cover exactly the columns the analysis will ask about. Two copies of the
+/// padding rule would make that guarantee depend on nobody editing one of
+/// them; one copy makes it structural.
+pub fn analysis_footprint(bounds: Aabb<i32>, params: &TraversalParams) -> Aabr<i32> {
+    let pad = 2 * params.min_width;
+    Aabr {
+        min: bounds.min.xy() - pad,
+        max: bounds.max.xy() + pad,
+    }
+}
+
 /// Analyse one intruder against one passage, and produce the repair it needs
 /// --- or the verdict that it needs none, or that none fits.
 ///
@@ -645,9 +662,8 @@ pub fn analyse(
     // The strip: the intruder's footprint, dilated so the analysis sees
     // clear passage on both sides of it rather than starting flush against
     // the obstruction.
-    let pad = 2 * params.min_width;
-    let min = bounds.min.xy() - pad;
-    let max = bounds.max.xy() + pad;
+    let strip = analysis_footprint(bounds, params);
+    let (min, max) = (strip.min, strip.max);
     let dims = ((max - min) / stride + 1).map(|e| e.max(1));
 
     let mut solid_col = Vec::new();

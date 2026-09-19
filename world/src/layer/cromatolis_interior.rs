@@ -52,7 +52,7 @@ use crate::{
     Canvas, IndexRef,
     layer::authored_voids::{
         CapsuleShape, CapsuleSpan, DiscShape, EDGE_SOFTNESS, ProceduralContact, SURFACE_MARGIN,
-        chunk_query_rect, dist_to_rect, spline_reaches_rect,
+        SplineProbe, chunk_query_rect, dist_to_rect, spline_reaches_rect, spline_sample,
     },
     sim::WorldSim,
     util::{FastNoise2d, sampler::Sampler},
@@ -61,7 +61,7 @@ use common::{
     assets::{AssetExt, BoxedError, FileAsset, load_ron},
     terrain::{
         Block, BlockKind, CoordinateConversions, MapSizeLg, SpriteKind, TerrainChunkSize,
-        quadratic_nearest_point, river_spline_coeffs,
+        river_spline_coeffs,
     },
     vol::RectVolSize,
 };
@@ -1768,8 +1768,17 @@ fn layout_levels(
 /// shapes that were pre-filtered against this specific chunk.
 struct RelevantInterior<'a> {
     levels: Vec<&'a LevelGeom>,
-    connections: Vec<&'a ConnectionSeg>,
-    water: Vec<&'a WaterSeg>,
+    /// Each surviving connection and water feature paired with its
+    /// [`SplineProbe`], built once per (chunk, shape) rather than inside the
+    /// column loop.
+    ///
+    /// Without it every one of the chunk's 1 024 columns rebuilds the shape's
+    /// spline coefficients and runs a full cubic nearest-point solve, including
+    /// the overwhelming majority that lie nowhere near the tube -- an interior
+    /// connection is hundreds of blocks long and a handful wide, so it crosses
+    /// a chunk rather than filling it.
+    connections: Vec<(&'a ConnectionSeg, SplineProbe)>,
+    water: Vec<(&'a WaterSeg, SplineProbe)>,
 }
 
 pub fn apply_cromatolis_interiors_to(canvas: &mut Canvas) {
@@ -1819,11 +1828,13 @@ pub fn apply_cromatolis_interiors_to(canvas: &mut Canvas) {
                 .connections
                 .iter()
                 .filter(|conn| connection_touches_chunk(conn, chunk_rect))
+                .map(|conn| (conn, connection_probe(conn)))
                 .collect(),
             water: interior
                 .water
                 .iter()
                 .filter(|water| water_touches_chunk(water, chunk_rect))
+                .map(|water| (water, water_probe(water)))
                 .collect(),
         })
         .filter(|relevant| {
@@ -1842,15 +1853,15 @@ pub fn apply_cromatolis_interiors_to(canvas: &mut Canvas) {
             for level in &interior.levels {
                 carve_level_room(canvas, wpos2d, col_alt, level);
             }
-            for conn in &interior.connections {
-                carve_connection(canvas, wpos2d, col_alt, conn);
+            for (conn, probe) in &interior.connections {
+                carve_connection(canvas, wpos2d, col_alt, conn, probe);
             }
-            for water in &interior.water {
-                carve_water(canvas, wpos2d, col_alt, water);
+            for (water, probe) in &interior.water {
+                carve_water(canvas, wpos2d, col_alt, water, probe);
             }
-            for conn in &interior.connections {
+            for (conn, probe) in &interior.connections {
                 if conn.sealed {
-                    plug_sealed_gate(canvas, wpos2d, conn);
+                    plug_sealed_gate(canvas, wpos2d, conn, probe);
                 }
             }
             // Placed last so the lever sprites always win the column over
@@ -1901,17 +1912,68 @@ fn level_touches_chunk(level: &LevelGeom, chunk_rect: Aabr<f64>) -> bool {
 fn connection_touches_chunk(conn: &ConnectionSeg, chunk_rect: Aabr<f64>) -> bool {
     let a2 = conn.a.xy().map(|e| e as f64 + 0.5);
     let b2 = conn.b.xy().map(|e| e as f64 + 0.5);
-    let max_dist = conn.style.radius as f64 + EDGE_SOFTNESS as f64 + 1.0;
-    spline_reaches_rect(a2, b2, conn.curve, chunk_rect, max_dist)
+    spline_reaches_rect(a2, b2, conn.curve, chunk_rect, connection_reach(conn))
+}
+
+/// How far past its own radius a sealed connection's gate plug reaches.
+///
+/// A named constant rather than a literal `1.0` in two places because it is
+/// now load-bearing in a way it was not: [`plug_column_z_range`] accepts out to
+/// `radius + PLUG_REACH_SLACK`, and it is what keeps that outer ring alive
+/// through [`connection_probe`]'s reject. `water_reach` has no counterpart
+/// because a water feature has no plug -- the asymmetry is a fact about the
+/// shapes, not an oversight.
+const PLUG_REACH_SLACK: f64 = 1.0;
+
+/// How far from its centreline a connection can still write: its carved
+/// passage, plus the carve's edge slack, plus [`PLUG_REACH_SLACK`].
+///
+/// One definition, read by the chunk-level pruning above and by the per-column
+/// probe below, so the box that rejects a column can never be tighter than the
+/// rectangle that admitted the chunk.
+fn connection_reach(conn: &ConnectionSeg) -> f64 {
+    conn.style.radius as f64 + EDGE_SOFTNESS as f64 + PLUG_REACH_SLACK
+}
+
+/// The per-column query precompute for one connection. See
+/// [`RelevantInterior`].
+fn connection_probe(conn: &ConnectionSeg) -> SplineProbe {
+    SplineProbe::new(
+        conn.a.xy().map(|e| e as f64 + 0.5),
+        conn.b.xy().map(|e| e as f64 + 0.5),
+        conn.curve,
+        connection_reach(conn),
+    )
+}
+
+/// How far from its centreline a water feature's *spline fill* reaches. The
+/// waterfall column at endpoint `b` is handled separately, by both the pruning
+/// below and the carve, because `t` truncating at 1.0 puts it off the spline.
+fn water_reach(seg: &WaterSeg) -> f64 { seg.radius as f64 + EDGE_SOFTNESS as f64 }
+
+/// The per-column query precompute for one water feature. See
+/// [`RelevantInterior`].
+fn water_probe(seg: &WaterSeg) -> SplineProbe {
+    SplineProbe::new(
+        seg.a.xy().map(|e| e as f64 + 0.5),
+        seg.b.xy().map(|e| e as f64 + 0.5),
+        seg.curve,
+        water_reach(seg),
+    )
 }
 
 /// Conservative reach of a water feature (its carved fill plus its
 /// waterfall column) against the chunk's column rectangle.
 fn water_touches_chunk(seg: &WaterSeg, chunk_rect: Aabr<f64>) -> bool {
-    let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
     let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
-    let max_dist = seg.radius as f64 + EDGE_SOFTNESS as f64;
-    if spline_reaches_rect(a2, b2, seg.curve, chunk_rect, max_dist) {
+    let max_dist = water_reach(seg);
+    if spline_reaches_rect(
+        seg.a.xy().map(|e| e as f64 + 0.5),
+        b2,
+        seg.curve,
+        chunk_rect,
+        max_dist,
+    ) {
         return true;
     }
     // A waterfall's vertical column sits at endpoint `b` and isn't
@@ -1964,42 +2026,14 @@ fn carve_level_room(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, level:
     }
 }
 
-/// Shared spline sample used by connections and water features: a
-/// quadratic spline between two fixed points, returning `t` (0 at `a2`, 1
-/// at `b2`) and the perpendicular distance from the queried point to the
-/// curve.
-fn spline_sample(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32, point: Vec2<f64>) -> Option<(f64, f64)> {
-    let ctrl_offset = ((b2 - a2) * 0.5
-        + ((b2 - a2) * 0.5).rotated_z(std::f64::consts::FRAC_PI_2) * 6.0 * curve as f64)
-        .map(|e| e as f32);
-    let spline = river_spline_coeffs(a2, ctrl_offset, b2);
-    let (t, closest, dist_sq) = quadratic_nearest_point(&spline, point, Vec2::new(a2, b2))?;
-    if !(0.0..=1.0).contains(&t) {
-        return None;
-    }
-    Some((t, closest.distance(point).min(dist_sq.sqrt())))
-}
-
-/// [`spline_sample`], reachable from the authored-void index's parity test.
-///
-/// That test is what keeps this module's copy, `cromatolis_cave_features`'s
-/// copy and the index's own copy byte-equivalent. They have to be: the
-/// protection index is defined as the volume these carves produce, dilated by
-/// one margin, and a one-sided edit would silently mis-protect.
-#[cfg(test)]
-pub(crate) fn spline_sample_for_parity(
-    a2: Vec2<f64>,
-    b2: Vec2<f64>,
-    curve: f32,
-    point: Vec2<f64>,
-) -> Option<(f64, f64)> {
-    spline_sample(a2, b2, curve, point)
-}
-
-fn carve_connection(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &ConnectionSeg) {
-    let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
-    let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
-    let Some((t, dist)) = spline_sample(a2, b2, seg.curve, wpos2d.map(|e| e as f64 + 0.5)) else {
+fn carve_connection(
+    canvas: &mut Canvas,
+    wpos2d: Vec2<i32>,
+    col_alt: f32,
+    seg: &ConnectionSeg,
+    probe: &SplineProbe,
+) {
+    let Some((t, dist)) = probe.sample(wpos2d.map(|e| e as f64 + 0.5)) else {
         return;
     };
     let radius = seg.style.radius as f64;
@@ -2047,11 +2081,13 @@ fn carve_connection(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &
 /// [`UndercompactGateAntechamberGeometry::plug_contains_column`] (the COW-7b
 /// runtime clear-on-solve write), so the two can never disagree about the
 /// plug's exact shape.
-fn plug_column_z_range(seg: &ConnectionSeg, wpos2d: Vec2<i32>) -> Option<(i32, i32)> {
-    let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
-    let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
-    let (t, dist) = spline_sample(a2, b2, seg.curve, wpos2d.map(|e| e as f64 + 0.5))?;
-    if (t - 0.5).abs() > GATE_PLUG_HALF_T || dist > (seg.style.radius as f64) + 1.0 {
+fn plug_column_z_range(
+    seg: &ConnectionSeg,
+    wpos2d: Vec2<i32>,
+    probe: &SplineProbe,
+) -> Option<(i32, i32)> {
+    let (t, dist) = probe.sample(wpos2d.map(|e| e as f64 + 0.5))?;
+    if (t - 0.5).abs() > GATE_PLUG_HALF_T || dist > (seg.style.radius as f64) + PLUG_REACH_SLACK {
         return None;
     }
 
@@ -2064,8 +2100,13 @@ fn plug_column_z_range(seg: &ConnectionSeg, wpos2d: Vec2<i32>) -> Option<(i32, i
 /// midpoint, guaranteeing a sealed connection stays physically blocked
 /// regardless of any carving `carve_connection` already did there. No
 /// puzzle/interaction logic.
-fn plug_sealed_gate(canvas: &mut Canvas, wpos2d: Vec2<i32>, seg: &ConnectionSeg) {
-    let Some((floor_z, ceiling_z)) = plug_column_z_range(seg, wpos2d) else {
+fn plug_sealed_gate(
+    canvas: &mut Canvas,
+    wpos2d: Vec2<i32>,
+    seg: &ConnectionSeg,
+    probe: &SplineProbe,
+) {
+    let Some((floor_z, ceiling_z)) = plug_column_z_range(seg, wpos2d, probe) else {
         return;
     };
     let plug = Block::new(BlockKind::Rock, Rgb::new(60, 55, 60));
@@ -2100,12 +2141,16 @@ fn water_depth(radius: f32) -> f32 { (radius * 0.6).clamp(3.0, 10.0) }
 /// protected volume can never disagree about how wide the fall is.
 fn waterfall_radius(radius: f32) -> f32 { (radius * 0.5).max(2.0) }
 
-fn carve_water(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &WaterSeg) {
-    let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
-    let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
+fn carve_water(
+    canvas: &mut Canvas,
+    wpos2d: Vec2<i32>,
+    col_alt: f32,
+    seg: &WaterSeg,
+    probe: &SplineProbe,
+) {
     let point = wpos2d.map(|e| e as f64 + 0.5);
 
-    if let Some((t, dist)) = spline_sample(a2, b2, seg.curve, point)
+    if let Some((t, dist)) = probe.sample(point)
         && edge_weight(dist as f32, seg.radius) > 0.0
     {
         let surface_z = Lerp::lerp_unclamped(seg.a.z as f64, seg.b.z as f64, t);
@@ -2167,6 +2212,15 @@ pub struct UndercompactGateAntechamberGeometry {
     /// precise per-column test.
     pub plug_aabb: Aabb<i32>,
     plug_seg: ConnectionSeg,
+    /// The plug's spline query, built once here rather than per column.
+    ///
+    /// Both server-side consumers (the clear-on-solve write and the
+    /// restart-recovery check) resolve this geometry once and then sweep every
+    /// column of [`Self::plug_aabb`], so a probe rebuilt inside
+    /// [`Self::plug_contains_column`] would be rebuilt a few thousand times per
+    /// call site. It cannot go stale: it is derived from `plug_seg` at the same
+    /// moment `plug_seg` is taken, and both are immutable thereafter.
+    plug_probe: SplineProbe,
 }
 
 impl UndercompactGateAntechamberGeometry {
@@ -2177,7 +2231,7 @@ impl UndercompactGateAntechamberGeometry {
     /// never carves outside, or leaves a sliver inside, the authored plug
     /// shape.
     pub fn plug_contains_column(&self, wpos2d: Vec2<i32>) -> Option<(i32, i32)> {
-        plug_column_z_range(&self.plug_seg, wpos2d)
+        plug_column_z_range(&self.plug_seg, wpos2d, &self.plug_probe)
     }
 }
 
@@ -2245,6 +2299,7 @@ fn geometry_from_layout(layout: &InteriorLayout) -> Option<UndercompactGateAntec
 
     let lever_positions = antechamber_lever_positions(room.anchor2d, room.radius, room.floor_z);
     let plug_aabb = plug_bounding_aabb(&plug_seg);
+    let plug_probe = connection_probe(&plug_seg);
 
     Some(UndercompactGateAntechamberGeometry {
         room_center2d: room.anchor2d,
@@ -2254,6 +2309,7 @@ fn geometry_from_layout(layout: &InteriorLayout) -> Option<UndercompactGateAntec
         lever_positions,
         plug_aabb,
         plug_seg,
+        plug_probe,
     })
 }
 
@@ -3822,5 +3878,145 @@ mod tests {
         assert!(EscapeActivation::parse("narrative_flags", &none).is_err());
         assert!(EscapeActivation::parse("always", &flags).is_err());
         assert!(EscapeActivation::parse("narrative_flags", &[" pad".to_string()]).is_err());
+    }
+    /// The invariant the old three-copy parity test used to stand for, in its
+    /// new home: **a shape's probe must never reject a column the carve itself
+    /// would write to.**
+    ///
+    /// The carves reject on their own predicates (`edge_weight(dist, radius) >
+    /// 0.0` for a connection and a water fill, `dist <= radius + 1.0` inside
+    /// the gate plug's own `t` band); the probes reject on [`connection_reach`]
+    /// and [`water_reach`]. Those are numbers that have to agree, and a `reach`
+    /// even slightly under a carve's acceptance radius would silently truncate
+    /// carved geometry while the protection index -- which queries through the
+    /// unbounded form and so never rejects -- went on protecting it. That is
+    /// exactly the shape of the defect COW-23's chunk pruning already had to
+    /// repair once.
+    ///
+    /// Derived from the carve predicates, **not** from `reach`: a test that
+    /// filtered both sides by `reach` would agree with itself no matter what
+    /// `reach` was. Synthetic geometry and no assets, so it runs in CI.
+    ///
+    /// The waterfall column at a water feature's downstream endpoint is
+    /// deliberately out of scope here, exactly as it is out of scope for the
+    /// probe: `t` truncates at 1.0, so the fall is not on the spline at all and
+    /// both [`carve_water`] and [`water_touches_chunk`] handle it separately.
+    #[test]
+    fn the_probe_never_rejects_a_column_the_carve_would_accept() {
+        let spans = [
+            (Vec2::new(300, 0), 0.0_f32),
+            (Vec2::new(0, 220), 0.18),
+            (Vec2::new(160, 160), -0.3),
+            (Vec2::new(-120, 70), 0.3),
+            (Vec2::new(30, 12), 0.0),
+        ];
+        let mut connection_columns = 0;
+        let mut plug_columns = 0;
+        let mut water_columns = 0;
+
+        for &(delta, curve) in &spans {
+            let a2 = Vec2::new(0.5, 0.5);
+            let b2 = delta.map(|e| e as f64 + 0.5);
+            let sweep = |reach: f64, mut visit: Box<dyn FnMut(Vec2<i32>, f64, f64) + '_>| {
+                let pad = reach.ceil() as i32 + 8;
+                let lo = Vec2::new(delta.x.min(0), delta.y.min(0)) - pad;
+                let hi = Vec2::new(delta.x.max(0), delta.y.max(0)) + pad;
+                for y in lo.y..=hi.y {
+                    for x in lo.x..=hi.x {
+                        let point = Vec2::new(x, y).map(|e| e as f64 + 0.5);
+                        if let Some((t, dist)) = spline_sample(a2, b2, curve, point) {
+                            visit(Vec2::new(x, y), t, dist);
+                        }
+                    }
+                }
+            };
+
+            // Connections: every authored traversal style, so a retune of one
+            // style's radius cannot slip past this.
+            for traversal in [
+                Traversal::WalkDescend,
+                Traversal::TerracedWalkDescend,
+                Traversal::BridgeLiftAndWalkDescend,
+                Traversal::SwimAscend,
+                Traversal::ProtectedLavaSidewalk,
+                Traversal::SealedStoneGate,
+            ] {
+                let seg = ConnectionSeg {
+                    id: "connection.test".to_string(),
+                    a: Vec3::new(0, 0, 0),
+                    b: delta.with_z(-40),
+                    a_ceiling: 12,
+                    b_ceiling: -28,
+                    curve,
+                    style: traversal.style(),
+                    sealed: traversal == Traversal::SealedStoneGate,
+                };
+                let probe = connection_probe(&seg);
+                sweep(
+                    connection_reach(&seg),
+                    Box::new(|wpos2d, t, dist| {
+                        let point = wpos2d.map(|e| e as f64 + 0.5);
+                        // `carve_connection`'s own acceptance test, verbatim.
+                        if edge_weight(dist as f32, seg.style.radius) > 0.0 {
+                            connection_columns += 1;
+                            assert_eq!(
+                                probe.sample(point),
+                                Some((t, dist)),
+                                "connection_reach rejected a column carve_connection accepts, at \
+                                 {wpos2d:?} ({traversal:?}, span {delta:?}, curve {curve})"
+                            );
+                        }
+                        // ...and `plug_column_z_range`'s, which reaches a block
+                        // further than the carve does.
+                        if (t - 0.5).abs() <= GATE_PLUG_HALF_T
+                            && dist <= (seg.style.radius as f64) + PLUG_REACH_SLACK
+                        {
+                            plug_columns += 1;
+                            assert_eq!(
+                                probe.sample(point),
+                                Some((t, dist)),
+                                "connection_reach rejected a column the gate plug fills, at \
+                                 {wpos2d:?} ({traversal:?}, span {delta:?}, curve {curve})"
+                            );
+                        }
+                    }),
+                );
+            }
+
+            // Water features, across the radius range the authored layouts use.
+            for radius in [3.0_f32, 8.0, 14.0] {
+                let seg = WaterSeg {
+                    a: Vec3::new(0, 0, 0),
+                    b: delta.with_z(-18),
+                    curve,
+                    radius,
+                    drop_m: Some(12.0),
+                };
+                let probe = water_probe(&seg);
+                sweep(
+                    water_reach(&seg),
+                    Box::new(|wpos2d, t, dist| {
+                        let point = wpos2d.map(|e| e as f64 + 0.5);
+                        // `carve_water`'s own acceptance test for the spline
+                        // fill, verbatim.
+                        if edge_weight(dist as f32, seg.radius) > 0.0 {
+                            water_columns += 1;
+                            assert_eq!(
+                                probe.sample(point),
+                                Some((t, dist)),
+                                "water_reach rejected a column carve_water fills, at {wpos2d:?} \
+                                 (radius {radius}, span {delta:?}, curve {curve})"
+                            );
+                        }
+                    }),
+                );
+            }
+        }
+
+        assert!(
+            connection_columns > 10_000 && water_columns > 1_000 && plug_columns > 100,
+            "the sweep found {connection_columns} connection, {plug_columns} plug and \
+             {water_columns} water columns; the fixture has stopped exercising the property"
+        );
     }
 }

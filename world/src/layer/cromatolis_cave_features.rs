@@ -75,7 +75,7 @@ use crate::{
     Canvas, Land,
     layer::authored_voids::{
         CapsuleShape, CapsuleSpan, DiscShape, EDGE_SOFTNESS, ProceduralContact, SURFACE_MARGIN,
-        chunk_query_rect, dist_to_rect, spline_reaches_rect,
+        SplineProbe, chunk_query_rect, dist_to_rect, spline_reaches_rect,
     },
     sim::WorldSim,
     util::RandomField,
@@ -83,10 +83,7 @@ use crate::{
 use common::{
     assets::{AssetExt, BoxedError, FileAsset, load_ron},
     comp::tool::ToolKind,
-    terrain::{
-        Block, CoordinateConversions, MapSizeLg, SpriteKind, TerrainChunkSize,
-        quadratic_nearest_point, river_spline_coeffs,
-    },
+    terrain::{Block, CoordinateConversions, MapSizeLg, SpriteKind, TerrainChunkSize},
     vol::RectVolSize,
 };
 use serde::Deserialize;
@@ -809,7 +806,15 @@ fn apply_minerals_to_floor(
 /// what made the copies here wrong).
 struct RelevantCave<'a> {
     hub: Option<&'a HubGeom>,
-    branches: Vec<&'a BranchSeg>,
+    /// Each surviving branch paired with its [`SplineProbe`], built here --
+    /// once per (chunk, branch) -- rather than inside the column loop.
+    ///
+    /// The probe is what keeps the per-column carve honest: without it every
+    /// one of the chunk's 1 024 columns rebuilds this branch's spline
+    /// coefficients and runs a full cubic nearest-point solve, including the
+    /// overwhelming majority that lie nowhere near the tube. A tunnel crossing
+    /// a chunk covers a few dozen columns of it.
+    branches: Vec<(&'a BranchSeg, SplineProbe)>,
     minerals: &'a [(SpriteKind, f32)],
 }
 
@@ -844,10 +849,11 @@ pub fn apply_cromatolis_cave_features_to(canvas: &mut Canvas) {
         })
         .filter_map(|cave| {
             let hub = hub_touches_chunk(&cave.hub, chunk_rect).then_some(&cave.hub);
-            let branches: Vec<&BranchSeg> = cave
+            let branches: Vec<(&BranchSeg, SplineProbe)> = cave
                 .branches
                 .iter()
                 .filter(|branch| branch_touches_chunk(branch, chunk_rect))
+                .map(|branch| (branch, branch_probe(branch)))
                 .collect();
             if hub.is_none() && branches.is_empty() {
                 None
@@ -877,9 +883,11 @@ pub fn apply_cromatolis_cave_features_to(canvas: &mut Canvas) {
             if let Some(hub) = cave.hub {
                 lowest_floor = min_floor(lowest_floor, carve_hub(canvas, wpos2d, col_alt, hub));
             }
-            for branch in &cave.branches {
-                lowest_floor =
-                    min_floor(lowest_floor, carve_branch(canvas, wpos2d, col_alt, branch));
+            for (branch, probe) in &cave.branches {
+                lowest_floor = min_floor(
+                    lowest_floor,
+                    carve_branch(canvas, wpos2d, col_alt, branch, probe),
+                );
             }
             if let Some(floor_z) = lowest_floor {
                 apply_minerals_to_floor(canvas, cave.minerals, wpos2d.with_z(floor_z));
@@ -908,45 +916,30 @@ fn hub_touches_chunk(hub: &HubGeom, chunk_rect: Aabr<f64>) -> bool {
 fn branch_touches_chunk(seg: &BranchSeg, chunk_rect: Aabr<f64>) -> bool {
     let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
     let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
-    let max_dist = seg.a_radius.max(seg.b_radius) as f64 + EDGE_SOFTNESS as f64 + 1.0;
-    spline_reaches_rect(a2, b2, seg.curve, chunk_rect, max_dist)
+    spline_reaches_rect(a2, b2, seg.curve, chunk_rect, branch_reach(seg))
+}
+
+/// How far from its centreline a branch can still carve: the widest radius it
+/// lerps to, plus the carve's own edge slack.
+///
+/// One definition, read by the chunk-level pruning above and by the
+/// per-column probe below, so the box that rejects a column can never be
+/// tighter than the rectangle that admitted the chunk.
+fn branch_reach(seg: &BranchSeg) -> f64 {
+    seg.a_radius.max(seg.b_radius) as f64 + EDGE_SOFTNESS as f64 + 1.0
+}
+
+/// The per-column query precompute for one branch. See [`RelevantCave`].
+fn branch_probe(seg: &BranchSeg) -> SplineProbe {
+    SplineProbe::new(
+        seg.a.xy().map(|e| e as f64 + 0.5),
+        seg.b.xy().map(|e| e as f64 + 0.5),
+        seg.curve,
+        branch_reach(seg),
+    )
 }
 
 fn edge_weight(dist: f32, radius: f32) -> f32 { ((radius - dist) / EDGE_SOFTNESS).clamp(0.0, 1.0) }
-
-/// Shared spline sample used by branch tunnels: a quadratic spline between
-/// two fixed points, returning `t` (0 at `a2`, 1 at `b2`) and the
-/// perpendicular distance from the queried point to the curve. Identical
-/// technique to `cromatolis_interior.rs`'s `spline_sample` (and, beneath
-/// that, `cave.rs::Tunnel`'s own spline math) -- see the module doc for why
-/// it's duplicated here rather than shared.
-fn spline_sample(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32, point: Vec2<f64>) -> Option<(f64, f64)> {
-    let ctrl_offset = ((b2 - a2) * 0.5
-        + ((b2 - a2) * 0.5).rotated_z(std::f64::consts::FRAC_PI_2) * 6.0 * curve as f64)
-        .map(|e| e as f32);
-    let spline = river_spline_coeffs(a2, ctrl_offset, b2);
-    let (t, closest, dist_sq) = quadratic_nearest_point(&spline, point, Vec2::new(a2, b2))?;
-    if !(0.0..=1.0).contains(&t) {
-        return None;
-    }
-    Some((t, closest.distance(point).min(dist_sq.sqrt())))
-}
-
-/// [`spline_sample`], reachable from the authored-void index's parity test.
-///
-/// That test is what keeps this module's copy, `cromatolis_interior`'s copy and
-/// the index's own copy byte-equivalent. They have to be: the protection index
-/// is defined as the volume this carve produces, dilated by one margin, and a
-/// one-sided edit would silently mis-protect.
-#[cfg(test)]
-pub(crate) fn spline_sample_for_parity(
-    a2: Vec2<f64>,
-    b2: Vec2<f64>,
-    curve: f32,
-    point: Vec2<f64>,
-) -> Option<(f64, f64)> {
-    spline_sample(a2, b2, curve, point)
-}
 
 /// Carve this column's slice of a hub chamber. Returns the floor `z` it
 /// carved, if any, so the caller can run a single mineral pass per column.
@@ -989,10 +982,9 @@ fn carve_branch(
     wpos2d: Vec2<i32>,
     col_alt: f32,
     seg: &BranchSeg,
+    probe: &SplineProbe,
 ) -> Option<i32> {
-    let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
-    let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
-    let (t, dist) = spline_sample(a2, b2, seg.curve, wpos2d.map(|e| e as f64 + 0.5))?;
+    let (t, dist) = probe.sample(wpos2d.map(|e| e as f64 + 0.5))?;
     let radius = Lerp::lerp_unclamped(seg.a_radius as f64, seg.b_radius as f64, t) as f32;
     if edge_weight(dist as f32, radius) <= 0.0 {
         return None;
@@ -1014,7 +1006,7 @@ fn carve_branch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CanvasInfo, util::SQUARE_4};
+    use crate::{CanvasInfo, layer::authored_voids::spline_sample, util::SQUARE_4};
 
     /// Every size class's hub chamber must be recognised as touching the
     /// very chunk it is anchored in.
@@ -3441,5 +3433,235 @@ mod tests {
                  into a scan past a few dozen"
             );
         });
+    }
+    /// What the per-chunk [`SplineProbe`] saves the branch carve, measured
+    /// over the real `(chunk, branch)` pairs the chunk-level pruning admits.
+    ///
+    /// The carve used to rebuild the branch's spline coefficients and run a
+    /// full `quadratic_nearest_point` cubic solve on every one of a chunk's
+    /// 1 024 columns. A branch *crosses* a chunk -- it does not fill it -- so
+    /// the overwhelming majority of those solves exist to be told the column
+    /// is nowhere near the tunnel.
+    ///
+    /// Two things are asserted, and the second is the one that matters:
+    /// the probe is faster, and it is **exactly equivalent** on every column
+    /// the carve could accept. The bounding box may only reject columns the
+    /// carve would have declined anyway; anything else silently loses
+    /// authored geometry, which is the defect COW-23's Phase 5 already had to
+    /// repair once.
+    #[test]
+    #[ignore]
+    fn the_branch_carve_probe_replaces_a_cubic_solve_per_column() {
+        use crate::layer::authored_regions::authored_voids_for;
+        use std::{
+            hint::black_box,
+            time::{Duration, Instant},
+        };
+
+        /// Chunks of the authored footprint to sweep. Every branch the
+        /// pruning admits into each is measured over that chunk's full
+        /// column grid, so this is already tens of millions of samples.
+        const CHUNK_SAMPLE: usize = 120;
+
+        let (world, index) = cromatolis_world();
+        let index_ref = index.as_index_ref();
+        let sim = world.sim();
+
+        CanvasInfo::with_mock_canvas_info(index_ref, sim, |info| {
+            let voids = authored_voids_for(info)
+                .expect("the authored Cromatolis region must index its voids");
+            let caves = index_ref
+                .cromatolis_cave_features
+                .get()
+                .expect("world generation must have resolved the authored caves");
+            let occupied = voids.occupied_chunks();
+            let stride = (occupied.len() / CHUNK_SAMPLE).max(1);
+            let chunks: Vec<Vec2<i32>> = occupied
+                .into_iter()
+                .step_by(stride)
+                .take(CHUNK_SAMPLE)
+                .collect();
+
+            let chunk_size = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+            let mut pairs = 0_usize;
+            let mut accepted = 0_u64;
+            let mut sampled = 0_u64;
+            let mut with_probe = Duration::ZERO;
+            let mut per_column = Duration::ZERO;
+            let mut sink = 0.0_f64;
+
+            for cpos in &chunks {
+                let chunk_wpos = cpos.cpos_to_wpos();
+                let rect = chunk_query_rect(chunk_wpos);
+                for cave in caves.iter() {
+                    for branch in cave.branches.iter() {
+                        if !branch_touches_chunk(branch, rect) {
+                            continue;
+                        }
+                        pairs += 1;
+                        let probe = branch_probe(branch);
+                        let a2 = branch.a.xy().map(|e| e as f64 + 0.5);
+                        let b2 = branch.b.xy().map(|e| e as f64 + 0.5);
+                        let reach = branch_reach(branch);
+
+                        let start = Instant::now();
+                        for y in 0..chunk_size.y {
+                            for x in 0..chunk_size.x {
+                                let point = (chunk_wpos + Vec2::new(x, y)).map(|e| e as f64 + 0.5);
+                                if let Some((t, dist)) = probe.sample(black_box(point)) {
+                                    sink += t + dist;
+                                    accepted += 1;
+                                }
+                            }
+                        }
+                        with_probe += start.elapsed();
+
+                        // The shape the carve had before, and *exactly* it:
+                        // `authored_voids::spline_sample`, which is what the
+                        // three deleted private copies were -- coefficients
+                        // rebuilt per column, no reject in front of the solve.
+                        //
+                        // `black_box` on the shape inputs because all of them
+                        // are loop-invariant here, and LLVM will happily hoist
+                        // the rebuild this loop exists to measure right out of
+                        // it. Timing `SplineProbe::unbounded` instead would be
+                        // worse still: it does strictly more work than the old
+                        // code (a second control-offset, a hull fold, a sqrt),
+                        // and all of it is hoistable, so the number could land
+                        // either side of the truth.
+                        let start = Instant::now();
+                        for y in 0..chunk_size.y {
+                            for x in 0..chunk_size.x {
+                                let point = (chunk_wpos + Vec2::new(x, y)).map(|e| e as f64 + 0.5);
+                                if let Some((t, dist)) = spline_sample(
+                                    black_box(a2),
+                                    black_box(b2),
+                                    black_box(branch.curve),
+                                    black_box(point),
+                                ) {
+                                    sink += t + dist;
+                                }
+                            }
+                        }
+                        per_column += start.elapsed();
+                        sampled += (chunk_size.x * chunk_size.y) as u64;
+
+                        // Equivalence, on every column, not a sample of them.
+                        for y in 0..chunk_size.y {
+                            for x in 0..chunk_size.x {
+                                let point = (chunk_wpos + Vec2::new(x, y)).map(|e| e as f64 + 0.5);
+                                let full = spline_sample(a2, b2, branch.curve, point)
+                                    .filter(|&(_, dist)| dist <= reach);
+                                assert_eq!(
+                                    probe.sample(point).filter(|&(_, dist)| dist <= reach),
+                                    full,
+                                    "the probe's rejects disagreed with the unrejected solve at \
+                                     {point:?} on a branch the carve could accept"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            assert!(
+                pairs > 0,
+                "no (chunk, branch) pair survived pruning over {} chunks -- this measurement is \
+                 not looking at the carve at all",
+                chunks.len()
+            );
+            println!(
+                "branch carve, {pairs} (chunk, branch) pairs over {} chunks, {sampled} column \
+                 samples ({accepted} inside the tube, {:.2} %):\n    per-column rebuild + solve: \
+                 {per_column:?} ({:.1} ns/column)\n    per-chunk probe + box reject: \
+                 {with_probe:?} ({:.1} ns/column)\n    saving: {:.1} %, {:.1} us per (chunk, \
+                 branch) pair [sink {sink:.3}]",
+                chunks.len(),
+                accepted as f64 * 100.0 / sampled as f64,
+                per_column.as_secs_f64() * 1e9 / sampled as f64,
+                with_probe.as_secs_f64() * 1e9 / sampled as f64,
+                (1.0 - with_probe.as_secs_f64() / per_column.as_secs_f64()) * 100.0,
+                (per_column - with_probe).as_secs_f64() * 1e6 / pairs as f64,
+            );
+            assert!(
+                with_probe < per_column,
+                "the probe ({with_probe:?}) was not faster than the per-column rebuild \
+                 ({per_column:?})"
+            );
+        });
+    }
+    /// The invariant the old three-copy parity test used to stand for, in its
+    /// new home: **a branch's probe must never reject a column `carve_branch`
+    /// itself would accept.**
+    ///
+    /// The carve rejects on `edge_weight(dist, radius(t)) <= 0.0`; the probe
+    /// rejects on [`branch_reach`]. Those are two numbers that have to agree,
+    /// and a `reach` even slightly under the carve's own acceptance radius
+    /// would silently truncate carved geometry while the protection index --
+    /// which queries through the unbounded form and so never rejects -- went on
+    /// protecting it. That is exactly the shape of the defect COW-23's chunk
+    /// pruning already had to repair once.
+    ///
+    /// Derived from the carve predicate, **not** from `reach`: a test that
+    /// filtered both sides by `reach` would agree with itself no matter what
+    /// `reach` was. Synthetic geometry and no assets, so it runs in CI --
+    /// the real-catalogue version is `#[ignore]`d and covers branches in the
+    /// shipped map only.
+    #[test]
+    fn the_probe_never_rejects_a_column_the_carve_would_accept() {
+        let mut checked = 0;
+        for &curve in &[0.0_f32, 0.12, -0.3, 0.3] {
+            for &(dx, dy) in &[(200, 0), (0, 160), (140, 140), (-90, 50), (24, 8)] {
+                for &(r_a, r_b) in &[
+                    (GIANT_HUB_RADIUS, GIANT_BRANCH_RADIUS),
+                    (SMALL_HUB_RADIUS, SMALL_BRANCH_RADIUS),
+                    (MEDIUM_BRANCH_RADIUS, MEDIUM_HUB_RADIUS),
+                ] {
+                    let seg = BranchSeg {
+                        a: Vec3::new(0, 0, 0),
+                        b: Vec3::new(dx, dy, 0),
+                        a_radius: r_a,
+                        b_radius: r_b,
+                        headroom: SMALL_HEADROOM,
+                        curve,
+                    };
+                    let probe = branch_probe(&seg);
+                    let reach = branch_reach(&seg).ceil() as i32;
+                    let lo = Vec2::new(dx.min(0), dy.min(0)) - reach - 8;
+                    let hi = Vec2::new(dx.max(0), dy.max(0)) + reach + 8;
+                    for y in lo.y..=hi.y {
+                        for x in lo.x..=hi.x {
+                            let point = Vec2::new(x, y).map(|e| e as f64 + 0.5);
+                            let Some((t, dist)) = spline_sample(
+                                seg.a.xy().map(|e| e as f64 + 0.5),
+                                seg.b.xy().map(|e| e as f64 + 0.5),
+                                curve,
+                                point,
+                            ) else {
+                                continue;
+                            };
+                            // `carve_branch`'s own acceptance test, verbatim.
+                            let radius = Lerp::lerp_unclamped(r_a as f64, r_b as f64, t) as f32;
+                            if edge_weight(dist as f32, radius) <= 0.0 {
+                                continue;
+                            }
+                            checked += 1;
+                            assert_eq!(
+                                probe.sample(point),
+                                Some((t, dist)),
+                                "branch_reach rejected a column carve_branch accepts, at \
+                                 {point:?} on a {dx}x{dy} branch (curve {curve}, radii {r_a} -> \
+                                 {r_b})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            checked > 10_000,
+            "only {checked} columns were inside a branch across the whole sweep; the fixture has \
+             stopped exercising the property"
+        );
     }
 }

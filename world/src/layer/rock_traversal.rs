@@ -20,7 +20,10 @@ use crate::{
         authored_voids::AuthoredVoidPassage,
         cave,
         rock::Rock,
-        traversal::{self, Accommodation, AccommodationTier, PassageQuery, TraversalParams},
+        traversal::{
+            self, Accommodation, AccommodationTier, PassageQuery, TraversalParams,
+            analysis_footprint,
+        },
     },
 };
 use vek::*;
@@ -85,7 +88,7 @@ pub(crate) fn probe_rocks_in(
                     info,
                     &land,
                 ),
-                ..passages_near(&rock, info, &land).unwrap_or_default()
+                ..passages_near(&rock, info, &land, &params).unwrap_or_default()
             };
             // The same cheap gate production applies before analysing a
             // rock, so the two agree about which rocks are even looked at.
@@ -160,7 +163,7 @@ pub(crate) fn accommodate(mut rock: Rock, info: &CanvasInfo) -> Option<Rock> {
     let land = info.land();
     let params = TraversalParams::ENGINE;
 
-    let Some(passages) = passages_near(&rock, info, &land) else {
+    let Some(passages) = passages_near(&rock, info, &land, &params) else {
         return Some(rock);
     };
     if !passages.reach(bounds) {
@@ -220,14 +223,23 @@ fn passages_near<'a>(
     rock: &Rock,
     info: &CanvasInfo<'a>,
     land: &Land,
+    params: &TraversalParams,
 ) -> Option<NearbyPassages<'a>> {
     let bounds = rock.world_bounds();
     let reach = (bounds.max.xy() - bounds.min.xy())
         .map(|e| e as f64)
         .magnitude()
         / 2.0
-        + TraversalParams::ENGINE.target_width as f64;
+        + params.target_width as f64;
     let centre = rock.wpos.xy();
+    // Exactly the columns `traversal::analyse` will sample for this rock, so
+    // an authored passage is built iff a shape of its tier can reach one of
+    // them. Taken from the analysis itself rather than restated here, and from
+    // the caller's own `params` rather than from `ENGINE`: with the constant
+    // baked in, analysing at a wider `min_width` would make the strip larger
+    // than the footprint and silently drop obstructions at its edge -- the one
+    // failure mode this localisation must not have.
+    let footprint = analysis_footprint(bounds, params);
 
     // The procedural tunnel layer exists only where it is actually run: its
     // geometry is derived on demand, so a region that switched it off has no
@@ -247,7 +259,7 @@ fn passages_near<'a>(
             .map(|voids| {
                 [AccommodationTier::Catalog, AccommodationTier::HandAuthored]
                     .into_iter()
-                    .filter_map(|tier| voids.passage(info, tier))
+                    .filter_map(|tier| voids.passage_near(info, tier, footprint))
                     .collect()
             })
             .unwrap_or_default(),

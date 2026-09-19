@@ -16,6 +16,14 @@
 //! `AuthoredVoids` is the narrow alternative: a cheap, exact-shape protection
 //! index the procedural layers consult at one choke point.
 //!
+//! The module also owns the **shared query primitive** both sides of that
+//! agreement use -- [`SplineProbe`], [`spline_sample`], [`spline_coeffs`],
+//! [`spline_reaches_rect`], [`chunk_query_rect`], [`dist_to_rect`]. Those are
+//! not index code: they are the carve's own per-column and per-chunk hot path,
+//! living here because the protected volume is *defined* as the carved volume
+//! dilated by one margin, and two implementations of the same curve is exactly
+//! how that equality silently stops holding.
+//!
 //! # What is engine-general here, and what is not
 //!
 //! **Everything in this module is engine-general**, and structurally so: it
@@ -319,21 +327,77 @@ pub(crate) struct AuthoredVoids {
     features: Vec<String>,
     /// Chunk-granular bucket grid over `shapes`, keyed by chunk position, so
     /// the per-chunk lookup is one hash instead of a scan over every shape.
-    /// Buckets are `Vec<u32>` (indices into `shapes`) rather than inline
+    /// Buckets hold `Vec<u32>` (indices into `shapes`) rather than inline
     /// storage because the grid is built once and the overwhelmingly common
     /// case is an *absent* key, which allocates nothing at all.
-    grid: HashMap<Vec2<i32>, Vec<u32>>,
+    grid: HashMap<Vec2<i32>, Bucket>,
+    /// Which [`AccommodationTier`]s appear anywhere in `shapes`, as
+    /// [`tier_bit`] flags. Precomputed because it is a world *constant* and
+    /// the question "does this index hold any shape of this tier" is asked
+    /// once per intruder candidate -- answering it by scanning `shapes` costs
+    /// a pass over the whole index for a bit that could never have changed.
+    tiers: u8,
+}
+
+/// One chunk's shapes, plus the summary a locality-aware consumer needs before
+/// it is willing to look at them.
+struct Bucket {
+    /// Indices into [`AuthoredVoids::shapes`].
+    shapes: Vec<u32>,
+    /// Which [`AccommodationTier`]s those shapes carry, as [`tier_bit`] flags.
+    ///
+    /// The point of storing it per bucket rather than deriving it: a consumer
+    /// that only cares about one tier can reject a whole chunk on one integer
+    /// test, without touching a single `VoidShape`.
+    tiers: u8,
+}
+
+/// One [`AccommodationTier`] as a bit, for the tier summaries above.
+///
+/// An exhaustive `match` rather than `as u8` on purpose: a fourth tier added
+/// later must fail to compile here and be given a bit, not silently collide
+/// with an existing one.
+fn tier_bit(tier: AccommodationTier) -> u8 {
+    match tier {
+        AccommodationTier::Procedural => 1 << 0,
+        AccommodationTier::Catalog => 1 << 1,
+        AccommodationTier::HandAuthored => 1 << 2,
+    }
 }
 
 /// The authored-void shapes that could claim any column of one chunk.
 ///
-/// Resolve this once per column (or once per chunk) and reuse it across every
-/// candidate procedural feature at that column: it turns the guard's cost from
-/// "one hash per query" into "one hash, then a slice test".
+/// Resolve this **once per chunk**, with [`chunk_voids_at`], and reuse it
+/// across every column and every candidate procedural feature in that chunk: it
+/// turns the guard's cost from "one hash per query" into "one hash, then a
+/// slice test". A caller that walks between chunks column by column resolves it
+/// per column instead, and that is the only reason to.
 #[derive(Clone, Copy)]
 pub(crate) struct ChunkVoids<'a> {
     voids: &'a AuthoredVoids,
     shapes: &'a [u32],
+}
+
+/// [`AuthoredVoids::in_chunk`] for an optional index, collapsed to `None` when
+/// nothing can claim the chunk at all.
+///
+/// The currency every per-chunk consumer should pass around. Two things fold
+/// into one `Option` here: a world with no authored region (`voids` is `None`)
+/// and a chunk nowhere near an authored feature (the bucket is absent), which
+/// are indistinguishable to a guard and would otherwise each need their own
+/// test at every call site.
+///
+/// **Resolve this once per chunk, not once per column.** The grid is
+/// chunk-granular, so every column of one chunk gets the same answer; a caller
+/// inside `Canvas::foreach_col` that calls this per column pays 1 024 hash
+/// lookups for one bucket.
+pub(crate) fn chunk_voids_at<'a>(
+    voids: Option<&'a AuthoredVoids>,
+    wpos2d: Vec2<i32>,
+) -> Option<ChunkVoids<'a>> {
+    voids
+        .map(|voids| voids.in_chunk(wpos2d))
+        .filter(|voids| !voids.is_empty())
 }
 
 impl ChunkVoids<'_> {
@@ -519,13 +583,21 @@ impl AuthoredVoidsBuilder {
 
 impl AuthoredVoids {
     fn from_shapes(shapes: Vec<VoidShape>, features: Vec<String>) -> Self {
-        let mut grid: HashMap<Vec2<i32>, Vec<u32>> = HashMap::new();
+        let mut grid: HashMap<Vec2<i32>, Bucket> = HashMap::new();
+        let mut tiers = 0;
         for (idx, shape) in shapes.iter().enumerate() {
+            let bit = tier_bit(shape.tier);
+            tiers |= bit;
             let min = wpos_to_cpos(shape.aabr.min);
             let max = wpos_to_cpos(shape.aabr.max);
             for y in min.y..=max.y {
                 for x in min.x..=max.x {
-                    grid.entry(Vec2::new(x, y)).or_default().push(idx as u32);
+                    let bucket = grid.entry(Vec2::new(x, y)).or_insert_with(|| Bucket {
+                        shapes: Vec::new(),
+                        tiers: 0,
+                    });
+                    bucket.shapes.push(idx as u32);
+                    bucket.tiers |= bit;
                 }
             }
         }
@@ -533,6 +605,7 @@ impl AuthoredVoids {
             shapes,
             features,
             grid,
+            tiers,
         }
     }
 
@@ -544,7 +617,7 @@ impl AuthoredVoids {
             shapes: self
                 .grid
                 .get(&wpos_to_cpos(wpos2d))
-                .map_or(&[][..], |bucket| bucket.as_slice()),
+                .map_or(&[][..], |bucket| bucket.shapes.as_slice()),
         }
     }
 
@@ -627,6 +700,26 @@ impl AuthoredVoids {
             .iter()
             .filter_map(|&idx| {
                 let shape = &self.shapes[idx as usize];
+                // The same integer compares `contact_at_column` puts in front
+                // of its geometry, and for the same reason: the bucket is
+                // chunk-granular, so most of what it hands back for a given
+                // column is not over that column, and a capsule's `None` costs
+                // a cubic solve to reach.
+                //
+                // Dilated by a block, unlike `contact_at_column`'s. That one
+                // guards a query at the shape's *own* margin, where `aabr` has
+                // the same margin folded in. This one guards the **undilated**
+                // band, and for a `Connect` shape `margin_for` is exactly zero
+                // (see `VoidShape::margin`), which makes `aabr` a tight box
+                // rounded to integers while acceptance is evaluated at
+                // `wpos2d + 0.5`. That is sound, but only by a sub-block
+                // argument about where a quadratic's extremum sits inside its
+                // control hull -- and nobody should have to re-derive that to
+                // read a cheap reject. One block of slack costs nothing and
+                // removes the argument entirely.
+                if !aabr_contains(&dilated(&shape.aabr, 1), wpos2d) {
+                    return None;
+                }
                 band_dilated_by(&shape.geom, 0.0, wpos2d, col_alt).map(|band| (band, pick(shape)))
             })
             .collect()
@@ -718,8 +811,12 @@ impl AuthoredVoids {
     pub(crate) fn grid_stats(&self) -> (usize, usize, usize) {
         (
             self.grid.len(),
-            self.grid.values().map(Vec::len).sum(),
-            self.grid.values().map(Vec::len).max().unwrap_or(0),
+            self.grid.values().map(|b| b.shapes.len()).sum(),
+            self.grid
+                .values()
+                .map(|b| b.shapes.len())
+                .max()
+                .unwrap_or(0),
         )
     }
 
@@ -869,12 +966,123 @@ pub(crate) struct AuthoredVoidPassage<'a> {
     /// applies.
     info: CanvasInfo<'a>,
     tier: AccommodationTier,
+    /// The footprint this passage was localised to (see
+    /// [`AuthoredVoids::passage_near`]).
+    ///
+    /// Carried so the contract is *enforced* rather than merely documented: a
+    /// passage exists only because some shape of its tier reached this box, so
+    /// querying it outside the box asks a question its own construction never
+    /// answered. Debug-asserted at both query entry points, because the failure
+    /// it guards is silent -- an obstruction nobody ever analyses.
+    footprint: Aabr<i32>,
 }
 
 impl AuthoredVoids {
-    /// This index read as a passage of one tier, or `None` when it holds no
-    /// shape of that tier at all.
+    /// This index read as a passage of one tier, or `None` when no shape of
+    /// that tier can reach any column of `footprint` -- which is what makes
+    /// this cheap enough to ask once per intruder candidate.
+    ///
+    /// # Why the footprint, and why it must be the analysis's own
+    ///
+    /// `footprint` is the exact 2D region the caller will go on to query (see
+    /// `traversal::analysis_footprint`), not the intruder's own bounds: a
+    /// passage that answers `None` here is never constructed, so a shape that
+    /// reaches *any* column the analysis samples must keep it alive. Passing a
+    /// smaller box would silently drop obstructions near the edge of the
+    /// dilated strip; passing a larger one only costs a passage that then
+    /// reports no bands.
+    ///
+    /// The locality test is the same chunk-granular bucket grid the cave-carve
+    /// guard reads, asked for a tier rather than for shapes -- so the common
+    /// case (an intruder nowhere near an authored feature) is a handful of hash
+    /// lookups, where scanning `shapes` for the tier was a pass over the whole
+    /// index whose answer could never vary by position.
+    pub(crate) fn passage_near<'a>(
+        &'a self,
+        info: &CanvasInfo<'a>,
+        tier: AccommodationTier,
+        footprint: Aabr<i32>,
+    ) -> Option<AuthoredVoidPassage<'a>> {
+        let bit = tier_bit(tier);
+        // World-constant reject first: no hashing at all for a tier this world
+        // does not author (`Procedural` never appears here, for one).
+        if self.tiers & bit == 0 {
+            return None;
+        }
+        (self.tiers_near(footprint) & bit != 0).then_some(AuthoredVoidPassage {
+            voids: self,
+            info: *info,
+            tier,
+            footprint,
+        })
+    }
+
+    /// Every tier carried by a shape that could reach any column of
+    /// `footprint`, as [`tier_bit`] flags.
+    ///
+    /// Chunk-granular, so it can only ever over-report -- a bucket is keyed by
+    /// the chunks a shape's *dilated bounding box* touches, which contains the
+    /// shape. Over-reporting costs a passage that finds no bands; under-
+    /// reporting would lose an obstruction, so the direction matters and is
+    /// structural rather than tuned.
+    fn tiers_near(&self, footprint: Aabr<i32>) -> u8 {
+        let min = wpos_to_cpos(footprint.min);
+        let max = wpos_to_cpos(footprint.max);
+        // Today's only caller is an intruder's own analysis footprint, which is
+        // a rock's bounds padded by `2 * min_width` -- a chunk or two, never
+        // close to this. The bound is not a tuning knob and moving it cannot
+        // change an answer: past it the loop is simply replaced by the
+        // world-level summary, which over-reports rather than under-reports, so
+        // a caller that trips it loses selectivity and nothing else. It exists
+        // because the loop's length is otherwise set by an argument, and
+        // "someone passes a region-sized box" should degrade rather than stall.
+        //
+        // Deliberately *not* a `debug_assert!`: the fallback is a documented,
+        // tested behaviour rather than a violated precondition, and asserting
+        // would fire on the test that pins it.
+        const MAX_CHUNK_SPAN: i32 = 4;
+        if max.x - min.x > MAX_CHUNK_SPAN || max.y - min.y > MAX_CHUNK_SPAN {
+            return self.tiers;
+        }
+        let mut tiers = 0;
+        for y in min.y..=max.y {
+            for x in min.x..=max.x {
+                if let Some(bucket) = self.grid.get(&Vec2::new(x, y)) {
+                    tiers |= bucket.tiers;
+                }
+            }
+        }
+        tiers
+    }
+
+    /// [`Self::passage_near`] over the whole world, for tests that want the
+    /// index as a passage without having an intruder to localise it to.
+    #[cfg(test)]
     pub(crate) fn passage<'a>(
+        &'a self,
+        info: &CanvasInfo<'a>,
+        tier: AccommodationTier,
+    ) -> Option<AuthoredVoidPassage<'a>> {
+        (self.tiers & tier_bit(tier) != 0).then_some(AuthoredVoidPassage {
+            voids: self,
+            info: *info,
+            tier,
+            footprint: Aabr {
+                min: Vec2::broadcast(i32::MIN / 2),
+                max: Vec2::broadcast(i32::MAX / 2),
+            },
+        })
+    }
+
+    /// [`Self::passage`] as it was written before the tier summaries existed:
+    /// a linear scan over every indexed shape, run once per intruder
+    /// candidate.
+    ///
+    /// Kept solely so the measurement that justified replacing it has a real
+    /// "before" to time against, rather than a remembered one. Nothing in
+    /// production may call this.
+    #[cfg(test)]
+    pub(crate) fn passage_by_scan<'a>(
         &'a self,
         info: &CanvasInfo<'a>,
         tier: AccommodationTier,
@@ -886,6 +1094,10 @@ impl AuthoredVoids {
                 voids: self,
                 info: *info,
                 tier,
+                footprint: Aabr {
+                    min: Vec2::broadcast(i32::MIN / 2),
+                    max: Vec2::broadcast(i32::MAX / 2),
+                },
             })
     }
 }
@@ -900,6 +1112,11 @@ impl AuthoredVoidPassage<'_> {
     }
 
     fn bands_at(&self, wpos2d: Vec2<i32>, col_alt: f32, out: &mut Vec<(i32, i32)>) {
+        debug_assert!(
+            aabr_contains(&self.footprint, wpos2d),
+            "a passage localised to {:?} was queried at {wpos2d:?}; it was only built because a              shape reached that box, so outside it this answer means nothing",
+            self.footprint
+        );
         for (band, shape_tier) in self
             .voids
             .carved_bands_at_column(wpos2d, col_alt, |shape| shape.tier)
@@ -1012,6 +1229,14 @@ fn sample_columns(geom: &VoidGeom) -> impl Iterator<Item = Vec2<i32>> {
     }
 }
 
+/// `aabr` grown by `by` blocks in every direction.
+fn dilated(aabr: &Aabr<i32>, by: i32) -> Aabr<i32> {
+    Aabr {
+        min: aabr.min - by,
+        max: aabr.max + by,
+    }
+}
+
 /// Whether a column falls inside a shape's dilated bounding box.
 fn aabr_contains(aabr: &Aabr<i32>, wpos2d: Vec2<i32>) -> bool {
     wpos2d.x >= aabr.min.x
@@ -1052,24 +1277,184 @@ fn shape_aabr(geom: &VoidGeom, margin: f32) -> Aabr<i32> {
             let reach = (r_a.max(*r_b) + margin).ceil() as i32;
             let a2 = a.xy().map(|e| e as f64 + 0.5);
             let b2 = b.xy().map(|e| e as f64 + 0.5);
-            // The quadratic's Bezier control point: `p(t) = a t^2 + b t + c`
-            // with `b` the control offset puts it half an offset off `a2`.
-            let ctrl = a2 + spline_ctrl_offset(a2, b2, *curve).map(f64::from) * 0.5;
-            let hull = [a2, b2, ctrl];
-            let min = hull.iter().fold(Vec2::broadcast(f64::INFINITY), |acc, p| {
-                acc.map2(*p, f64::min)
-            });
-            let max = hull
-                .iter()
-                .fold(Vec2::broadcast(f64::NEG_INFINITY), |acc, p| {
-                    acc.map2(*p, f64::max)
-                });
+            let hull = spline_hull_aabr(a2, b2, *curve);
             Aabr {
-                min: min.map(|e| e.floor() as i32) - reach,
-                max: max.map(|e| e.ceil() as i32) + reach,
+                min: hull.min.map(|e| e.floor() as i32) - reach,
+                max: hull.max.map(|e| e.ceil() as i32) + reach,
             }
         },
     }
+}
+
+/// The box containing every point of the bowed `a2` -> `b2` spline, undilated.
+///
+/// A quadratic Bezier lies inside the convex hull of its three control points,
+/// so the box of those three points contains the curve -- which makes any
+/// dilation of this box a sound *reject* for "is this column within `d` of the
+/// curve". One definition, read by [`shape_aabr`] and by [`SplineProbe`], so a
+/// reject built at a carve site can never be tighter than the index's own.
+fn spline_hull_aabr(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32) -> Aabr<f64> {
+    // The quadratic's Bezier control point: `p(t) = x t^2 + y t + z` with `y`
+    // the control offset puts it half an offset off `a2`.
+    let ctrl = a2 + spline_ctrl_offset(a2, b2, curve).map(f64::from) * 0.5;
+    let hull = [a2, b2, ctrl];
+    Aabr {
+        min: hull.iter().fold(Vec2::broadcast(f64::INFINITY), |acc, p| {
+            acc.map2(*p, f64::min)
+        }),
+        max: hull
+            .iter()
+            .fold(Vec2::broadcast(f64::NEG_INFINITY), |acc, p| {
+                acc.map2(*p, f64::max)
+            }),
+    }
+}
+
+/// Squared distance from `point` to the segment `a` -> `b`, zero-length
+/// segment included (it degenerates to the distance to the point).
+fn dist_sq_to_segment(a: Vec2<f64>, b: Vec2<f64>, point: Vec2<f64>) -> f64 {
+    let ab = b - a;
+    let len_sq = ab.magnitude_squared();
+    if len_sq <= f64::EPSILON {
+        return point.distance_squared(a);
+    }
+    let t = ((point - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    point.distance_squared(a + ab * t)
+}
+
+/// One bowed capsule's 2D query, precomputed once and then asked about many
+/// columns.
+///
+/// # Why this is not just a function
+///
+/// A carve site asks the *same* capsule about all 1 024 columns of a chunk, and
+/// two costs dominate that loop:
+///
+/// * rebuilding the quadratic's coefficients from the endpoints on every
+///   column, when they depend only on the shape; and
+/// * `quadratic_nearest_point`, which lands in `find_roots_cubic`'s
+///   three-real-roots branch -- 3 `sqrt` plus `atan`, `cbrt`, `cos`, `sin` and
+///   up to three root evaluations -- for columns that are nowhere near the
+///   tube.
+///
+/// Measured together on the real catalogue, the pre-probe form cost **31.4 ns
+/// per column** and this one **12.9 ns**, a 58.9 % saving
+/// (`the_branch_carve_probe_replaces_a_cubic_solve_per_column`).
+///
+/// **The rejects do not eliminate most columns, and the doc should not pretend
+/// they do.** A reject can only be as selective as the `reach` it is given, and
+/// a branch's is its widest radius plus the carve's edge slack -- so on a chunk
+/// the tunnel actually crosses, the accepted chord band is tens of blocks wide
+/// against a 32-block chunk and a large fraction of columns still reach the
+/// solve. The saving above is real and it is mostly the precompute; the rejects
+/// take the columns off the ends and the far corners.
+///
+/// So the coefficients are built once, and two cheap rejects stand in front of
+/// the solve.
+///
+/// # The two rejects, and why both are there
+///
+/// * **The dilated hull box.** Four comparisons, and it disposes of a column in
+///   a different part of the map for almost nothing.
+/// * **Chord distance plus sagitta.** The box is weak for exactly the shape
+///   this module is full of -- a long diagonal capsule, whose hull box covers
+///   most of any chunk it crosses while the tunnel itself is a few blocks wide.
+///   So a second test measures the distance to the *chord* (about ten flops, no
+///   solve) and compares it against `reach` plus how far the curve can bow off
+///   that chord.
+///
+/// # Why neither reject can lose geometry
+///
+/// [`spline_hull_aabr`] contains the whole curve (a quadratic Bezier lies in
+/// its control points' hull), so a point outside that box dilated by `reach`
+/// is further than `reach` from every point of the curve.
+///
+/// For the chord: `p(t) = A t² + B t + C` deviates from the straight line
+/// between its endpoints by exactly `A t (t - 1)`, which is maximal `|A| / 4`
+/// at the midpoint -- the sagitta. Distance to a segment is 1-Lipschitz, so a
+/// point further than `reach + sagitta` from the chord is further than `reach`
+/// from every point of the curve. Same bound `spline_reaches_rect` already
+/// uses from the other side.
+///
+/// Both are exact *provided the caller never accepts a column beyond its own
+/// `reach`* -- which is why `reach` is a constructor argument rather than a
+/// constant: each carve site passes its own widest acceptance radius, and
+/// passing a generous one only costs a few columns that then decline on the
+/// real distance.
+pub(crate) struct SplineProbe {
+    a2: Vec2<f64>,
+    b2: Vec2<f64>,
+    spline: Vec3<Vec2<f64>>,
+    aabr: Aabr<f64>,
+    /// `reach` plus the curve's sagitta, squared -- the chord-distance
+    /// threshold, pre-squared so the reject needs no `sqrt`.
+    chord_slack_sq: f64,
+}
+
+impl SplineProbe {
+    /// A probe over the spline between two column *centres* (the `+ 0.5`
+    /// convention every spline carve and this index already share), accepting
+    /// columns out to `reach`.
+    pub(crate) fn new(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32, reach: f64) -> Self {
+        debug_assert!(reach >= 0.0, "a capsule's reach cannot be negative");
+        let hull = spline_hull_aabr(a2, b2, curve);
+        let spline = spline_coeffs(a2, b2, curve);
+        // `p(t) = x t² + y t + z` bows off its own chord by at most |x| / 4.
+        let sagitta = spline.x.magnitude() / 4.0;
+        Self {
+            a2,
+            b2,
+            spline,
+            aabr: Aabr {
+                min: hull.min - reach,
+                max: hull.max + reach,
+            },
+            chord_slack_sq: (reach + sagitta) * (reach + sagitta),
+        }
+    }
+
+    /// `t` (0 at `a2`, 1 at `b2`) and the perpendicular distance from `point`
+    /// to the curve, or `None` when `point` is further than this probe's
+    /// `reach` from it.
+    ///
+    /// `quadratic_nearest_point` clamps its parameter into `[0, 1]`, so a
+    /// column past an endpoint reports that endpoint and its own distance to
+    /// it -- i.e. the shape has **rounded end caps**. The explicit range check
+    /// below therefore never fires today; it is kept because every copy this
+    /// replaces had it, and dropping it is the one edit that could make a
+    /// carved volume stop matching the protected one.
+    pub(crate) fn sample(&self, point: Vec2<f64>) -> Option<(f64, f64)> {
+        if point.x < self.aabr.min.x
+            || point.x > self.aabr.max.x
+            || point.y < self.aabr.min.y
+            || point.y > self.aabr.max.y
+        {
+            return None;
+        }
+        if dist_sq_to_segment(self.a2, self.b2, point) > self.chord_slack_sq {
+            return None;
+        }
+        spline_nearest(&self.spline, self.a2, self.b2, point)
+    }
+}
+
+/// The solve itself, with the rejects and the precompute left to the caller.
+///
+/// Split out so a caller that queries a *single* column does not pay for the
+/// hull box and the sagitta it will never consult: the index's own one-shot
+/// [`spline_sample`] is exactly that caller, and it sits on the per-column cave
+/// guard.
+fn spline_nearest(
+    spline: &Vec3<Vec2<f64>>,
+    a2: Vec2<f64>,
+    b2: Vec2<f64>,
+    point: Vec2<f64>,
+) -> Option<(f64, f64)> {
+    let (t, closest, dist_sq) = quadratic_nearest_point(spline, point, Vec2::new(a2, b2))?;
+    if !(0.0..=1.0).contains(&t) {
+        return None;
+    }
+    Some((t, closest.distance(point).min(dist_sq.sqrt())))
 }
 
 /// The spline's control offset (its derivative at `t = 0`), shared by
@@ -1085,27 +1470,28 @@ fn spline_ctrl_offset(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32) -> Vec2<f32> {
 /// one column: returns `t` (0 at `a2`, 1 at `b2`) and the perpendicular
 /// distance from the column to the curve.
 ///
-/// The same technique as the copies in the two Cromatolis carve modules, on
-/// purpose: the protection shape has to agree with the carve exactly, and a
-/// capsule built on the straight chord between the endpoints would be a
-/// different shape entirely wherever `curve` is non-zero. Those two copies are
-/// left where they are -- each module documents why it keeps its own -- and
-/// this is the engine-general one a future authored layer should reuse.
+/// The index's own **one-shot** form: it asks one shape about one column, so it
+/// builds the coefficients and solves, with none of [`SplineProbe`]'s
+/// precompute or rejects -- which it could not amortise and would only pay for.
+/// The carve sites, which ask one shape about a whole chunk, hold a probe.
 ///
-/// `quadratic_nearest_point` clamps its parameter into `[0, 1]` before
-/// returning, so a column past an endpoint reports that endpoint and its own
-/// distance to it -- i.e. the shape has **rounded end caps**, and a dilated
-/// shape's margin applies past its ends as well as along its flanks. The range
-/// check below therefore never fires today; it is kept because the two carve
-/// copies have it, and dropping it here would be the one edit that could make
-/// the protected volume stop matching the carved one.
-fn spline_sample(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32, point: Vec2<f64>) -> Option<(f64, f64)> {
-    let spline = spline_coeffs(a2, b2, curve);
-    let (t, closest, dist_sq) = quadratic_nearest_point(&spline, point, Vec2::new(a2, b2))?;
-    if !(0.0..=1.0).contains(&t) {
-        return None;
-    }
-    Some((t, closest.distance(point).min(dist_sq.sqrt())))
+/// The curve is the same either way: both go through [`spline_coeffs`], and
+/// `SplineProbe::sample` ends in the same [`spline_nearest`] this does, so the
+/// protection index and the carve cannot disagree about where a tunnel is. That
+/// is the property the whole module rests on -- a capsule built on the straight
+/// chord between the endpoints would be a different shape entirely wherever
+/// `curve` is non-zero.
+///
+/// See [`SplineProbe::sample`] for the rounded-end-cap behaviour, which is what
+/// makes a dilated shape's margin apply past its ends as well as along its
+/// flanks.
+pub(crate) fn spline_sample(
+    a2: Vec2<f64>,
+    b2: Vec2<f64>,
+    curve: f32,
+    point: Vec2<f64>,
+) -> Option<(f64, f64)> {
+    spline_nearest(&spline_coeffs(a2, b2, curve), a2, b2, point)
 }
 
 /// `p(t) = x t² + y t + z`, the one definition of the quadratic an authored
@@ -1752,39 +2138,113 @@ mod tests {
         );
     }
 
-    /// The protection index is *defined* as the carved volume dilated by one
-    /// margin, and that equality rests on three byte-identical copies of the
-    /// spline sample agreeing -- this module's, and the two carve modules'.
-    /// A one-sided edit to any of them would silently mis-protect, with only
-    /// an `#[ignore]`d real-asset test to catch it. This makes the invariant
-    /// load-bearing instead of aspirational.
+    /// **The one property the whole spline unification rests on**, and the
+    /// replacement for the test that used to sit here.
+    ///
+    /// That test compared three byte-identical private copies of the spline
+    /// sample, one per module, because the protection index is *defined* as the
+    /// carved volume dilated by one margin and a one-sided edit to any copy
+    /// would silently mis-protect. The three are now one implementation, so
+    /// that test could no longer fail for any reason connected to a carve, and
+    /// a reintroduced private copy would have sailed past it anyway -- it
+    /// compared the shared function against itself under two aliases. Keeping a
+    /// test that cannot fail is worse than not having one, because it reads
+    /// like cover.
+    ///
+    /// What replaced it is the claim the unification actually introduced, in
+    /// the exact asymmetric form it holds:
+    ///
+    /// * **Never narrower than `dist <= reach`.** Every column the unrejected
+    ///   solve puts within `reach` of the curve must survive both rejects, with
+    ///   the identical `(t, dist)`. This is the soundness half -- a narrower
+    ///   reject silently loses carved geometry.
+    /// * **Never a different answer.** Where the probe does return something it
+    ///   must be what the solve returns, not an approximation of it.
+    ///
+    /// It is deliberately **not** asserted to be exactly `dist <= reach`: both
+    /// rejects are conservative bounds, so a column a little past `reach` may
+    /// still reach the solve (and at `reach = 0` float noise puts a point *on*
+    /// the curve at `dist = 9e-15`, which is past it). Over-inclusion costs a
+    /// carve one declined column; under-inclusion is the defect. An
+    /// exact-equality assertion here would be wrong, not merely strict.
+    ///
+    /// Where each carve site's own `reach` sits relative to what that carve
+    /// accepts is the other half, and it is tested per module by
+    /// `the_probe_never_rejects_a_column_the_carve_would_accept`.
     #[test]
-    fn all_three_spline_samples_agree() {
+    fn a_probe_rejects_nothing_within_its_reach() {
         let cases = [
             (Vec2::new(0.0, 0.0), Vec2::new(200.0, 0.0), 0.0),
             (Vec2::new(0.0, 0.0), Vec2::new(200.0, 0.0), 0.3),
             (Vec2::new(-90.5, 40.5), Vec2::new(160.5, -220.5), -0.27),
             (Vec2::new(12.5, 12.5), Vec2::new(-300.5, 75.5), 0.18),
+            // Degenerate: a zero-length capsule, where the chord test's
+            // fallback to point distance is the only thing standing.
+            (Vec2::new(40.5, 40.5), Vec2::new(40.5, 40.5), 0.0),
         ];
-        let mut sampled = 0;
+        let mut within = 0;
+        let mut rejected = 0;
         for (a2, b2, curve) in cases {
-            for gx in -20..=20 {
-                for gy in -20..=20 {
-                    let point = Vec2::new(gx as f64 * 17.5, gy as f64 * 17.5);
-                    let ours = spline_sample(a2, b2, curve, point);
-                    let cave = crate::layer::cromatolis_cave_features::spline_sample_for_parity(
-                        a2, b2, curve, point,
-                    );
-                    let interior = crate::layer::cromatolis_interior::spline_sample_for_parity(
-                        a2, b2, curve, point,
-                    );
-                    assert_eq!(ours, cave, "cave copy diverged at {point:?}");
-                    assert_eq!(ours, interior, "interior copy diverged at {point:?}");
-                    sampled += 1;
+            for reach in [0.0, 1.0, 7.0, 26.0, 120.0] {
+                let probe = SplineProbe::new(a2, b2, curve, reach);
+                for gx in -40..=40 {
+                    for gy in -40..=40 {
+                        let point = Vec2::new(gx as f64 * 8.5, gy as f64 * 8.5);
+                        let solved = spline_sample(a2, b2, curve, point);
+                        let probed = probe.sample(point);
+                        if let Some((_, dist)) = solved
+                            && dist <= reach
+                        {
+                            within += 1;
+                            assert_eq!(
+                                probed, solved,
+                                "the probe rejected, or changed, a column within its own reach at \
+                                 {point:?} (reach {reach}, curve {curve})"
+                            );
+                        }
+                        match probed {
+                            // Over-inclusion is allowed, a different answer is
+                            // not.
+                            Some(_) => assert_eq!(
+                                probed, solved,
+                                "the probe returned something the solve does not, at {point:?} \
+                                 (reach {reach}, curve {curve})"
+                            ),
+                            None => rejected += 1,
+                        }
+                    }
                 }
             }
         }
-        assert!(sampled > 1_000);
+        assert!(
+            within > 1_000 && rejected > 1_000,
+            "{within} columns within reach and {rejected} rejected: the sweep has to exercise \
+             both sides or it is only testing one branch"
+        );
+    }
+
+    /// The chord reject's own primitive, including the degenerate segment the
+    /// `f64::EPSILON` branch exists for.
+    #[test]
+    fn distance_to_a_segment_clamps_to_its_ends() {
+        let a = Vec2::new(0.0, 0.0);
+        let b = Vec2::new(10.0, 0.0);
+        assert_eq!(dist_sq_to_segment(a, b, Vec2::new(5.0, 3.0)), 9.0);
+        assert_eq!(
+            dist_sq_to_segment(a, b, Vec2::new(-4.0, 0.0)),
+            16.0,
+            "past the start, the distance is to the start"
+        );
+        assert_eq!(
+            dist_sq_to_segment(a, b, Vec2::new(14.0, 0.0)),
+            16.0,
+            "past the end, the distance is to the end"
+        );
+        assert_eq!(
+            dist_sq_to_segment(a, a, Vec2::new(0.0, 6.0)),
+            36.0,
+            "a zero-length segment is a point"
+        );
     }
 
     /// A world with no authored region indexes nothing, so both paths through
@@ -2058,5 +2518,136 @@ mod tests {
         ]);
         assert_eq!(v.len(), 3);
         assert_eq!(v.policy_counts(), (1, 2));
+    }
+    /// [`voids`], with each shape's accommodation tier chosen per shape --- the
+    /// only fixture that can say anything about the per-bucket tier summary.
+    fn voids_with_tiers(shapes: Vec<(TestShape, AccommodationTier)>) -> AuthoredVoids {
+        let mut builder = AuthoredVoidsBuilder::default();
+        for (shape, tier) in shapes {
+            match shape {
+                TestShape::Disc(disc, contact, label) => {
+                    builder.push_disc(disc, contact, tier, label)
+                },
+                TestShape::Capsule(capsule, contact, label) => {
+                    builder.push_capsule(capsule, contact, tier, label)
+                },
+            }
+        }
+        builder.finish().expect("the fixture registered no shapes")
+    }
+
+    /// One chunk-sized box around a column, which is the shape of footprint a
+    /// real intruder produces.
+    fn footprint_at(wpos2d: Vec2<i32>) -> Aabr<i32> {
+        Aabr {
+            min: wpos2d - 16,
+            max: wpos2d + 16,
+        }
+    }
+
+    /// The whole point of localising the lookup: an intruder nowhere near an
+    /// authored shape must not build a passage at all, however many shapes of
+    /// its tier the index holds elsewhere in the world.
+    #[test]
+    fn a_footprint_far_from_every_shape_reports_no_tier() {
+        let v = voids(vec![disc(ProceduralContact::Seal)]);
+        assert_eq!(v.tiers_near(footprint_at(Vec2::new(100_000, 100_000))), 0);
+    }
+
+    #[test]
+    fn a_footprint_over_a_shape_reports_that_shape_s_tier_and_no_other() {
+        let v = voids_with_tiers(vec![
+            (disc(ProceduralContact::Seal), AccommodationTier::Catalog),
+            (
+                disc_at(Vec2::new(100_000, 0), ProceduralContact::Seal),
+                AccommodationTier::HandAuthored,
+            ),
+        ]);
+        assert_eq!(
+            v.tiers_near(footprint_at(Vec2::new(0, 0))),
+            tier_bit(AccommodationTier::Catalog),
+            "the far HandAuthored disc must not keep a passage alive here"
+        );
+        assert_eq!(
+            v.tiers_near(footprint_at(Vec2::new(100_000, 0))),
+            tier_bit(AccommodationTier::HandAuthored)
+        );
+        // Both, as the world-level answer, so the test above is comparing
+        // against something that really could have been reported.
+        assert_eq!(
+            v.tiers,
+            tier_bit(AccommodationTier::Catalog) | tier_bit(AccommodationTier::HandAuthored)
+        );
+    }
+
+    /// The fallback is not a tuning knob: an unreasonably large footprint has
+    /// to keep answering *conservatively*, because the alternative is a chunk
+    /// loop whose length is set by the caller.
+    #[test]
+    fn an_oversized_footprint_falls_back_to_the_world_answer() {
+        let v = voids(vec![disc(ProceduralContact::Seal)]);
+        let huge = Aabr {
+            min: Vec2::new(-1_000_000, -1_000_000),
+            max: Vec2::new(1_000_000, 1_000_000),
+        };
+        assert_eq!(v.tiers_near(huge), v.tiers);
+    }
+
+    /// The property the reject has to have, brute-forced: every column any
+    /// shape actually claims must lie in a footprint the tier summary keeps
+    /// alive. A `false` here is a passage silently not built, i.e. an
+    /// obstruction nobody ever analyses.
+    #[test]
+    fn no_claimed_column_is_localised_away() {
+        let v = voids_with_tiers(vec![
+            (
+                capsule(0.3, ProceduralContact::Seal),
+                AccommodationTier::Catalog,
+            ),
+            (
+                disc_at(Vec2::new(-300, 120), ProceduralContact::Connect),
+                AccommodationTier::HandAuthored,
+            ),
+        ]);
+        let mut claimed = 0;
+        for y in -200..=200 {
+            for x in -400..=300 {
+                let wpos2d = Vec2::new(x, y);
+                if !v.intersects_column(wpos2d, HIGH_ABOVE, &(-20..20)) {
+                    continue;
+                }
+                claimed += 1;
+                // A degenerate one-column footprint: the tightest box a
+                // caller could possibly pass, and so the hardest case.
+                let point = Aabr {
+                    min: wpos2d,
+                    max: wpos2d,
+                };
+                assert_ne!(
+                    v.tiers_near(point),
+                    0,
+                    "column {wpos2d:?} is claimed by a shape but its own chunk bucket reports no \
+                     tier at all"
+                );
+            }
+        }
+        assert!(
+            claimed > 1_000,
+            "only {claimed} columns were claimed over the swept area; the fixture has stopped \
+             exercising the property"
+        );
+    }
+
+    /// The `Procedural` tier belongs to the noise-derived tunnel layer, never
+    /// to an authored shape, so the index must answer `None` for it without
+    /// touching the grid at all.
+    #[test]
+    fn a_tier_no_authored_shape_carries_is_rejected_on_the_world_summary() {
+        let v = voids(vec![disc(ProceduralContact::Seal)]);
+        assert_eq!(v.tiers & tier_bit(AccommodationTier::Procedural), 0);
+        assert_eq!(
+            v.tiers_near(footprint_at(Vec2::zero())),
+            tier_bit(AccommodationTier::Catalog)
+        );
     }
 }
