@@ -50,6 +50,9 @@
 
 use crate::{
     Canvas, CanvasInfo, IndexRef,
+    layer::authored_voids::{
+        CapsuleShape, CapsuleSpan, DiscShape, EDGE_SOFTNESS, ProceduralContact, SURFACE_MARGIN,
+    },
     sim::WorldSim,
     util::{FastNoise2d, SQUARE_4, sampler::Sampler},
 };
@@ -84,13 +87,12 @@ const SITES_ASSET: &str = "world.map.cromatolis_v0_sites";
 /// isn't worth coupling through a shared private constant for one f32 pair.
 const CROMATOLIS_SOURCE_MAP_SIZE: Vec2<f32> = Vec2::new(2048.0, 1536.0);
 
-/// Minimum rock cover kept between any carved interior surface and the real
-/// terrain surface above it, so a shallow level can never accidentally
-/// punch a hole to the sky.
-const SURFACE_MARGIN: f32 = 4.0;
-/// Distance (in blocks) over which a carved edge fades in, so rooms/tunnels
-/// don't have a razor-sharp boundary.
-const EDGE_SOFTNESS: f32 = 3.0;
+// `SURFACE_MARGIN` (minimum rock cover kept between any carved interior
+// surface and the real terrain surface above it, so a shallow level can never
+// punch a hole to the sky) and `EDGE_SOFTNESS` (the distance over which a
+// carved edge fades in) are imported from `authored_voids` rather than
+// declared here: the authored-void protection index is defined as the volume
+// these carves produce, so the two must never drift apart.
 /// Upper bound on how far `carve_level_room`'s procedural-dressing edge
 /// jitter can ever push a room's radius outward. Used both to cheaply
 /// reject a column before paying for the noise sample, and to size the
@@ -604,6 +606,107 @@ pub(crate) struct InteriorLayout {
     /// interior authored an `escape_guidance` block. `None` for every
     /// interior that did not opt in, which is why no cost is paid for one.
     pub(crate) nav: Option<InteriorNavGraph>,
+}
+
+/// The procedural-contact policy every shape an authored interior contributes
+/// carries, hard-coded rather than authored.
+///
+/// The mechanism is present for interiors; the *authored field* deliberately is
+/// not. Interiors already solve what `Connect` solves -- they author real
+/// surface accesses, with optional capability gating, so they never need a
+/// procedural tunnel to be reachable -- and both would choose `Seal` anyway
+/// (the one room measured as penetrated by a procedural tunnel is a built
+/// market, and a hash-placed hole in its wall is not a design anyone would
+/// accept). Adding an unused field to a schema with a strict validator, for two
+/// features and zero demand, is speculative generality.
+///
+/// **It is also load-bearing, not merely a default.** Both shape accessors
+/// below deliberately *over*-approximate what the carve produces, which is only
+/// sound for a shape that gets dilated. Promoting this to an authored field
+/// means revisiting both of them in the same change, not just adding a
+/// `#[serde(default)]`.
+const INTERIOR_PROCEDURAL_CONTACT: ProceduralContact = ProceduralContact::Seal;
+
+impl InteriorLayout {
+    /// This interior's rooms as protection shapes for the authored-void index,
+    /// paired with their policy, mirroring what [`carve_level_room`] carves.
+    ///
+    /// The radius includes [`MAX_ROOM_JITTER`] for every room the authored
+    /// generation kind lets the carve dress, because that jitter is
+    /// additive-only and the dressed fringe is real carved space -- the same
+    /// reason [`level_touches_chunk`] widens by it before pruning. It does
+    /// *not* subtract the carve's own edge slack, so the reported radius is an
+    /// upper bound: sound only under [`INTERIOR_PROCEDURAL_CONTACT`].
+    pub(crate) fn void_discs(&self) -> impl Iterator<Item = (DiscShape, ProceduralContact)> + '_ {
+        self.levels.iter().map(|level| {
+            (
+                DiscShape {
+                    centre: level.anchor2d,
+                    radius: level.radius
+                        + if level.generation.allows_dressing() {
+                            MAX_ROOM_JITTER
+                        } else {
+                            0.0
+                        },
+                    floor_z: level.floor_z,
+                    ceiling_z: level.ceiling_z,
+                },
+                INTERIOR_PROCEDURAL_CONTACT,
+            )
+        })
+    }
+
+    /// This interior's connections and water features as protection shapes,
+    /// paired with their policy, mirroring what [`carve_connection`] and
+    /// [`carve_water`] carve -- including each segment's `curve`, so the
+    /// protected volume follows the same bowed spline rather than the straight
+    /// chord between its endpoints, and each one's vertical anchor, so a water
+    /// body's whole band drops with the surface cap the way [`carve_water`]
+    /// drops it.
+    ///
+    /// Three approximations, all sound only under
+    /// [`INTERIOR_PROCEDURAL_CONTACT`], because a dilated shape has 19 blocks
+    /// of slack to absorb them while an undilated one would have to match
+    /// exactly:
+    ///
+    /// * a connection's ceiling is reported as `floor + headroom`, without the
+    ///   per-column lerped authored ceiling that can lower it further (an
+    ///   *over*-approximation);
+    /// * a terraced connection's floor quantization is not reproduced, and
+    ///   `.round()` can put the carved floor up to half a terrace step *below*
+    ///   the un-terraced floor reported here (an *under*-approximation, the
+    ///   only one, and well inside the margin);
+    /// * the narrow waterfall column [`carve_water`] paints at a water
+    ///   feature's downstream end is not indexed at all -- it hangs below the
+    ///   segment's own capsule, so a `drop_m` deeper than the margin leaves its
+    ///   lower part unguarded. No authored waterfall is that deep today.
+    pub(crate) fn void_capsules(
+        &self,
+    ) -> impl Iterator<Item = (CapsuleShape, ProceduralContact)> + '_ {
+        let connections = self.connections.iter().map(|seg| CapsuleShape {
+            a: seg.a,
+            b: seg.b,
+            r_a: seg.style.radius,
+            r_b: seg.style.radius,
+            curve: seg.curve,
+            span: CapsuleSpan::AboveFloor {
+                headroom: seg.style.headroom,
+            },
+        });
+        let water = self.water.iter().map(|seg| CapsuleShape {
+            a: seg.a,
+            b: seg.b,
+            r_a: seg.radius,
+            r_b: seg.radius,
+            curve: seg.curve,
+            span: CapsuleSpan::BelowSurface {
+                depth: water_depth(seg.radius),
+            },
+        });
+        connections
+            .chain(water)
+            .map(|capsule| (capsule, INTERIOR_PROCEDURAL_CONTACT))
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -1837,6 +1940,22 @@ fn spline_sample(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32, point: Vec2<f64>) -> 
     Some((t, closest.distance(point).min(dist_sq.sqrt())))
 }
 
+/// [`spline_sample`], reachable from the authored-void index's parity test.
+///
+/// That test is what keeps this module's copy, `cromatolis_cave_features`'s
+/// copy and the index's own copy byte-equivalent. They have to be: the
+/// protection index is defined as the volume these carves produce, dilated by
+/// one margin, and a one-sided edit would silently mis-protect.
+#[cfg(test)]
+pub(crate) fn spline_sample_for_parity(
+    a2: Vec2<f64>,
+    b2: Vec2<f64>,
+    curve: f32,
+    point: Vec2<f64>,
+) -> Option<(f64, f64)> {
+    spline_sample(a2, b2, curve, point)
+}
+
 fn carve_connection(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &ConnectionSeg) {
     let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
     let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
@@ -1929,6 +2048,12 @@ fn carve_gate_levers(canvas: &mut Canvas, wpos2d: Vec2<i32>, level: &LevelGeom) 
     }
 }
 
+/// How far below its authored surface a water feature's fill reaches, from
+/// that feature's own radius. Shared by [`carve_water`] and
+/// [`InteriorLayout::void_capsules`] so the carved volume and the protected
+/// volume can never disagree about how deep the water is.
+fn water_depth(radius: f32) -> f32 { (radius * 0.6).clamp(3.0, 10.0) }
+
 fn carve_water(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &WaterSeg) {
     let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
     let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
@@ -1938,7 +2063,7 @@ fn carve_water(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &Water
         && edge_weight(dist as f32, seg.radius) > 0.0
     {
         let surface_z = Lerp::lerp_unclamped(seg.a.z as f64, seg.b.z as f64, t);
-        let depth = (seg.radius * 0.6).clamp(3.0, 10.0) as f64;
+        let depth = water_depth(seg.radius) as f64;
         let cap = (col_alt - SURFACE_MARGIN) as f64;
         let top = surface_z.min(cap);
         let bottom = top - depth;
@@ -2682,6 +2807,65 @@ mod tests {
             parse_place_scale(&place.scale)
                 .unwrap_or_else(|err| panic!("place {}: {err}", place.id));
         }
+    }
+
+    /// [`compute_bounds`] derives an interior's bounding circle from segment
+    /// *endpoints* only, which looks as if it could under-cover a connection
+    /// that bows well off its chord -- and the bounding circle is what the
+    /// per-chunk prune trusts, so an under-cover would silently drop carving
+    /// (and authored-void protection) for real geometry.
+    ///
+    /// It does not, over the real authored data, with room to spare. This
+    /// pins that: every connection's real centreline, sampled the same way
+    /// the rest of the module samples one, must stay inside the bounds circle
+    /// once its own tunnel radius is added.
+    ///
+    /// `cargo test -p xindeler-world compute_bounds -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn compute_bounds_covers_every_bowed_connection_centreline() {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        let (world, _index) = crate::World::generate(
+            0,
+            crate::sim::WorldOpts {
+                seed_elements: true,
+                world_file: crate::sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        );
+        let layouts = build_all_layouts_for_map_size(world.sim().map_size_lg());
+        let mut connections = 0;
+        let mut worst_deficit = f32::NEG_INFINITY;
+
+        for layout in &layouts {
+            let Some((centre, bounds_radius)) = layout.bounds else {
+                continue;
+            };
+            let centre = centre.map(|e| e as f64);
+            for seg in &layout.connections {
+                connections += 1;
+                let coeffs = connection_spline(seg);
+                for i in 0..=SPLINE_SAMPLES {
+                    let t = i as f64 / SPLINE_SAMPLES as f64;
+                    let reach = spline_at(coeffs, t).distance(centre) as f32 + seg.style.radius;
+                    worst_deficit = worst_deficit.max(reach - bounds_radius);
+                }
+            }
+        }
+
+        println!(
+            "{connections} connections across {} interiors; worst spline-vs-bounds deficit \
+             {worst_deficit:.3} blocks",
+            layouts.len()
+        );
+        assert!(connections > 0, "the real data must contain connections");
+        assert!(
+            worst_deficit <= 0.0,
+            "a connection's real centreline reaches {worst_deficit:.3} blocks OUTSIDE the \
+             bounding circle the per-chunk prune trusts"
+        );
     }
 
     /// Full-world smoke test: generates the real Cromatolis map and real

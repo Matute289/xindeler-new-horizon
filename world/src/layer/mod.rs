@@ -1,3 +1,5 @@
+pub mod authored_regions;
+pub mod authored_voids;
 pub mod cave;
 pub mod cromatolis_aerial_citadel;
 pub mod cromatolis_cave_features;

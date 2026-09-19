@@ -73,6 +73,9 @@
 
 use crate::{
     Canvas, CanvasInfo, Land,
+    layer::authored_voids::{
+        CapsuleShape, CapsuleSpan, DiscShape, EDGE_SOFTNESS, ProceduralContact, SURFACE_MARGIN,
+    },
     util::{RandomField, SQUARE_4},
 };
 use common::{
@@ -99,12 +102,11 @@ const CAVE_FEATURES_ASSET: &str = "world.map.cromatolis_v0_cave_features";
 /// authored content there.
 const EXCLUDED_FEATURE_IDS: &[&str] = &["cave.thurnak_entrance", "cave.kharvun_vent"];
 
-/// Minimum rock cover kept between a carved cave surface and the real
-/// terrain surface above it, same role as `cromatolis_interior.rs`'s
-/// constant of the same name.
-const SURFACE_MARGIN: f32 = 4.0;
-/// Distance (in blocks) over which a carved edge fades in.
-const EDGE_SOFTNESS: f32 = 3.0;
+// `SURFACE_MARGIN` (minimum rock cover kept between a carved cave surface and
+// the real terrain surface above it) and `EDGE_SOFTNESS` (the distance over
+// which a carved edge fades in) are imported from `authored_voids` rather than
+// declared here: the authored-void protection index is defined as the volume
+// this carve produces, so the two must never drift apart.
 
 // ---------------------------------------------------------------------
 // Size-class scaling. Named constants (not magic numbers inline) so the
@@ -409,7 +411,27 @@ struct CaveFeatureEntry {
     /// than failing the whole world's cave layer.
     #[serde(default)]
     minerals: Vec<CaveMineral>,
+    /// Whether a colliding purely-procedural tunnel may merge into this cave
+    /// ([`ProceduralContact::Connect`]) or must be cut back and plugged
+    /// ([`ProceduralContact::Seal`]).
+    ///
+    /// Authored upstream and derived there from the catalog's own content
+    /// fields; no content vocabulary reaches this crate, only the resolved
+    /// enum. A RON enum literal (`procedural_contact: Connect`), matching this
+    /// asset's existing `size_class: Giant` / `abundance: Common` convention.
+    ///
+    /// `#[serde(default)]` resolves to [`ProceduralContact::Seal`]: an asset
+    /// predating this field, a hand-written test fixture, or a future authored
+    /// map that never thought about it all get full protection. The reverse
+    /// default would silently expose every future map's authored geometry.
+    #[serde(default = "default_procedural_contact")]
+    procedural_contact: ProceduralContact,
 }
+
+/// See [`CaveFeatureEntry::procedural_contact`]: protection is the
+/// conservative direction, so opting a cave *into* being breachable has to be
+/// an explicit act.
+fn default_procedural_contact() -> ProceduralContact { ProceduralContact::Seal }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 struct CaveMineral {
@@ -484,6 +506,11 @@ pub(crate) struct GeneratedCave {
     /// Rough bounding circle (center, radius) covering every carved shape,
     /// used to cheaply skip chunks nowhere near this cave.
     bounds: (Vec2<i32>, f32),
+    /// The authored policy for a purely-procedural tunnel that runs into this
+    /// cave. Carried verbatim from [`CaveFeatureEntry::procedural_contact`];
+    /// this module never interprets it, it only hands it to every protection
+    /// shape the cave contributes.
+    procedural_contact: ProceduralContact,
 }
 
 impl GeneratedCave {
@@ -492,6 +519,47 @@ impl GeneratedCave {
     /// progression, not consumed by generation itself.
     #[cfg(test)]
     pub(crate) fn extent(&self) -> f32 { self.bounds.1 }
+
+    /// Rough bounding circle (centre, radius) covering every carved shape.
+    /// Exposed so a test can sweep the columns a cave can possibly touch.
+    #[cfg(test)]
+    pub(crate) fn bounds(&self) -> (Vec2<i32>, f32) { self.bounds }
+
+    /// How many branch tunnels this cave carved. Tests only.
+    #[cfg(test)]
+    pub(crate) fn branch_count(&self) -> usize { self.branches.len() }
+
+    /// This cave's authored procedural-contact policy.
+    pub(crate) fn procedural_contact(&self) -> ProceduralContact { self.procedural_contact }
+
+    /// This cave's hub chamber as a protection shape, mirroring exactly what
+    /// [`carve_hub`] carves. Narrow accessor rather than public fields: the
+    /// protection index only ever needs the shape, never the geometry struct.
+    pub(crate) fn hub_void_disc(&self) -> DiscShape {
+        DiscShape {
+            centre: self.hub.anchor2d,
+            radius: self.hub.radius,
+            floor_z: self.hub.floor_z,
+            ceiling_z: self.hub.ceiling_z,
+        }
+    }
+
+    /// This cave's branch tunnels as protection shapes, mirroring exactly what
+    /// [`carve_branch`] carves -- including each branch's `curve`, so the
+    /// protected volume follows the same bowed spline rather than the straight
+    /// chord between the branch's endpoints.
+    pub(crate) fn branch_void_capsules(&self) -> impl Iterator<Item = CapsuleShape> + '_ {
+        self.branches.iter().map(|seg| CapsuleShape {
+            a: seg.a,
+            b: seg.b,
+            r_a: seg.a_radius,
+            r_b: seg.b_radius,
+            curve: seg.curve,
+            span: CapsuleSpan::AboveFloor {
+                headroom: seg.headroom,
+            },
+        })
+    }
 }
 
 pub(crate) fn build_all_generated_caves(info: &CanvasInfo) -> Vec<GeneratedCave> {
@@ -575,6 +643,7 @@ fn build_generated_cave(
         branches,
         minerals: flatten_minerals(&feature.id, &feature.minerals, feature.size_class),
         bounds: (hub_wpos, max_reach + EDGE_SOFTNESS),
+        procedural_contact: feature.procedural_contact,
     }
 }
 
@@ -825,6 +894,22 @@ fn spline_sample(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32, point: Vec2<f64>) -> 
     Some((t, closest.distance(point).min(dist_sq.sqrt())))
 }
 
+/// [`spline_sample`], reachable from the authored-void index's parity test.
+///
+/// That test is what keeps this module's copy, `cromatolis_interior`'s copy and
+/// the index's own copy byte-equivalent. They have to be: the protection index
+/// is defined as the volume this carve produces, dilated by one margin, and a
+/// one-sided edit would silently mis-protect.
+#[cfg(test)]
+pub(crate) fn spline_sample_for_parity(
+    a2: Vec2<f64>,
+    b2: Vec2<f64>,
+    curve: f32,
+    point: Vec2<f64>,
+) -> Option<(f64, f64)> {
+    spline_sample(a2, b2, curve, point)
+}
+
 /// Carve this column's slice of a hub chamber. Returns the floor `z` it
 /// carved, if any, so the caller can run a single mineral pass per column.
 fn carve_hub(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, hub: &HubGeom) -> Option<i32> {
@@ -911,12 +996,14 @@ mod tests {
                             abundance: MineralAbundance::Trace,
                         },
                     ],
+                    procedural_contact: ProceduralContact::Connect,
                 },
                 CaveFeatureEntry {
                     id: "cave.test_small".to_string(),
                     position: NormalizedPosition { x: 0.6, y: 0.6 },
                     size_class: SizeClass::Small,
                     minerals: Vec::new(),
+                    procedural_contact: ProceduralContact::Seal,
                 },
             ],
         }
@@ -1422,6 +1509,65 @@ mod tests {
         );
     }
 
+    /// `procedural_contact` is `#[serde(default)]` so an asset predating the
+    /// field still loads -- which means a typo or a schema drift would be
+    /// invisible against the real asset, exactly like `minerals` below. Pinned
+    /// against an inline fixture instead: the RON enum-literal shape the
+    /// upstream exporter emits, both variants, plus an entry that omits the
+    /// field entirely.
+    ///
+    /// The absent case must resolve to `Seal`. That direction is the whole
+    /// safety property: a future authored map that never thinks about this
+    /// field gets full protection, and opting a cave *into* being breachable
+    /// has to be an explicit act.
+    #[test]
+    fn procedural_contact_round_trips_and_defaults_to_seal_when_absent() {
+        let asset: CaveFeaturesAsset = load_ron(
+            br#"(
+                schema: "xindeler_open_world.cave_features.v1",
+                coordinate_space: "normalized_map_xy_top_left_origin",
+                features: [
+                    (
+                        id: "cave.sealed",
+                        position: (x: 0.5, y: 0.5),
+                        size_class: Giant,
+                        procedural_contact: Seal,
+                        minerals: [],
+                    ),
+                    (
+                        id: "cave.connected",
+                        position: (x: 0.5, y: 0.5),
+                        size_class: Medium,
+                        procedural_contact: Connect,
+                        minerals: [],
+                    ),
+                    (
+                        id: "cave.field_absent",
+                        position: (x: 0.5, y: 0.5),
+                        size_class: Small,
+                        minerals: [],
+                    ),
+                ],
+            )"#
+            .as_slice(),
+        )
+        .expect("the exporter's RON shape must deserialize");
+
+        assert_eq!(
+            asset.features[0].procedural_contact,
+            ProceduralContact::Seal
+        );
+        assert_eq!(
+            asset.features[1].procedural_contact,
+            ProceduralContact::Connect
+        );
+        assert_eq!(
+            asset.features[2].procedural_contact,
+            ProceduralContact::Seal,
+            "an entry that never mentions the field must be protected, not breachable"
+        );
+    }
+
     /// The authored `minerals` field is `#[serde(default)]` so that the
     /// asset that predates the authoring pass still loads. That makes a
     /// silent deserialization failure invisible against the real asset, so
@@ -1558,6 +1704,7 @@ mod tests {
             branches,
             minerals: Vec::new(),
             bounds: (hub_wpos, max_reach + EDGE_SOFTNESS),
+            procedural_contact: ProceduralContact::Seal,
         }
     }
 
@@ -1665,5 +1812,302 @@ mod tests {
                 .generate_chunk(index_ref, chunk_pos, None, || false, None, None)
                 .expect("chunk generation must not fail for a real, in-bounds Cromatolis chunk");
         }
+    }
+
+    // -----------------------------------------------------------------
+    // The authored-void guard, measured against this catalog's real
+    // geometry. These live here rather than in `cave.rs` because they are
+    // Cromatolis integration tests -- `cave.rs` is upstream code and the
+    // engine-general half of the guard, and keeping its diff to the guard
+    // itself is what makes the next upstream merge cheap.
+    // -----------------------------------------------------------------
+
+    /// Sampling density over an authored cave's bounding circle. A full voxel
+    /// sweep of every authored cave is far more work than the property needs:
+    /// the guard is per *column*, so any column inside a sealed void's
+    /// footprint is an equally good witness, and a grid this fine puts many
+    /// samples inside even the smallest authored chamber.
+    const CAVE_SAMPLE_STEP: i32 = 8;
+
+    fn cromatolis_world() -> (crate::World, crate::IndexOwned) {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        crate::World::generate(
+            0,
+            crate::sim::WorldOpts {
+                seed_elements: true,
+                world_file: crate::sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        )
+    }
+
+    /// How many blocks of `z` a carved band and a tunnel's range share.
+    fn overlap_blocks(band: &std::ops::RangeInclusive<f32>, z: &std::ops::Range<i32>) -> i32 {
+        let lo = band.start().ceil() as i32;
+        let hi = band.end().floor() as i32;
+        (hi.min(z.end - 1) - lo.max(z.start) + 1).max(0)
+    }
+
+    /// **The headline regression.** After the guard, no purely-procedural
+    /// tunnel may share a single block with a `Seal` authored void's *carved*
+    /// volume -- and, because the guard sits at the one choke point every
+    /// consumer reads, a column it fires at yields no tunnel to carve *and* no
+    /// tunnel for `tree.rs`/`shrub.rs` to suppress vegetation over.
+    ///
+    /// `Connect` voids are exempt on purpose: overlap inside one of those is
+    /// the feature, not the bug. The test reports how much of it there is.
+    ///
+    /// Needs the real authored assets pulled locally, same precedent as this
+    /// module's other full-world tests:
+    /// `cargo test -p xindeler-world cromatolis_cave_features -- --ignored
+    /// --nocapture`
+    #[test]
+    #[ignore]
+    fn no_procedural_tunnel_survives_inside_a_sealed_authored_void() {
+        use crate::layer::{
+            authored_regions::authored_voids,
+            cave::{tunnel_bounds_at, tunnel_bounds_at_unguarded},
+        };
+
+        let (world, index) = cromatolis_world();
+        let index_ref = index.as_index_ref();
+        let sim = world.sim();
+
+        CanvasInfo::with_mock_canvas_info(index_ref, sim, |info| {
+            let land = info.land();
+            let voids =
+                authored_voids(info).expect("the authored Cromatolis region must index its voids");
+            let caves = index_ref
+                .cromatolis_cave_features
+                .get()
+                .expect("building the void index must have populated the cave cache");
+
+            let mut columns_sampled = 0_u64;
+            let mut seal_breach_blocks_before = 0_u64;
+            let mut connect_overlap_blocks = 0_u64;
+            let mut caves_breached_before = 0_usize;
+            let mut caves_breached_after = 0_usize;
+            let mut sealed_caves = 0_usize;
+            // How often a cave the author marked `Connect` is re-sealed anyway
+            // because a neighbouring `Seal` cave's protection shell reaches it.
+            // A deliberate consequence of the tie-break (a promise beats a
+            // permission), reported so the intent-loss is a number rather than
+            // a surprise.
+            let mut connect_columns_resealed = 0_u64;
+
+            for cave in caves {
+                let sealed = cave.procedural_contact() == ProceduralContact::Seal;
+                if sealed {
+                    sealed_caves += 1;
+                }
+                let (centre, radius) = cave.bounds();
+                let reach = radius.ceil() as i32;
+                let mut breached_before = false;
+                let mut breached_after = false;
+
+                for x in (-reach..=reach).step_by(CAVE_SAMPLE_STEP as usize) {
+                    for y in (-reach..=reach).step_by(CAVE_SAMPLE_STEP as usize) {
+                        let wpos2d = centre + Vec2::new(x, y);
+                        let Some(col_alt) = info.col_or_gen(wpos2d).map(|col| col.alt) else {
+                            continue;
+                        };
+                        let bands = voids.carved_bands_at_column(wpos2d, col_alt);
+                        if bands.is_empty() {
+                            continue;
+                        }
+                        columns_sampled += 1;
+
+                        for (_, z_range, _, _, _, _) in
+                            tunnel_bounds_at_unguarded(wpos2d, info, &land)
+                        {
+                            for (band, contact) in &bands {
+                                let blocks = overlap_blocks(band, &z_range) as u64;
+                                if blocks == 0 {
+                                    continue;
+                                }
+                                match contact {
+                                    ProceduralContact::Seal => {
+                                        seal_breach_blocks_before += blocks;
+                                        breached_before = true;
+                                    },
+                                    ProceduralContact::Connect => {
+                                        connect_overlap_blocks += blocks;
+                                        if voids
+                                            .in_chunk(wpos2d)
+                                            .contact_at_column(wpos2d, col_alt, &z_range)
+                                            == Some(ProceduralContact::Seal)
+                                        {
+                                            connect_columns_resealed += 1;
+                                        }
+                                    },
+                                }
+                            }
+                        }
+
+                        for (_, z_range, _, _, _, _) in tunnel_bounds_at(wpos2d, info, &land) {
+                            for (band, contact) in &bands {
+                                if *contact != ProceduralContact::Seal {
+                                    continue;
+                                }
+                                let blocks = overlap_blocks(band, &z_range);
+                                assert_eq!(
+                                    blocks, 0,
+                                    "a procedural tunnel survived inside a sealed authored void \
+                                     at {wpos2d:?}: tunnel {z_range:?} overlaps carved band \
+                                     {band:?}"
+                                );
+                                breached_after |= blocks > 0;
+                            }
+                        }
+                    }
+                }
+                if sealed {
+                    caves_breached_before += usize::from(breached_before);
+                    caves_breached_after += usize::from(breached_after);
+                }
+            }
+
+            let (seal_shapes, connect_shapes) = voids.policy_counts();
+            let (buckets, bucket_entries, largest_bucket) = voids.grid_stats();
+            println!(
+                "caves {} ({sealed_caves} Seal), indexed shapes {} ({seal_shapes} Seal / \
+                 {connect_shapes} Connect)\n  grid: {buckets} chunk buckets, {bucket_entries} \
+                 entries, largest bucket {largest_bucket}\n  authored columns sampled \
+                 {columns_sampled}\n  sealed caves breached BEFORE the guard: \
+                 {caves_breached_before} ({seal_breach_blocks_before} sampled blocks)\n  sealed \
+                 caves breached AFTER the guard:  {caves_breached_after}\n  sampled blocks of \
+                 deliberate Connect overlap: {connect_overlap_blocks}\n  Connect columns \
+                 re-sealed by a neighbouring Seal shell: {connect_columns_resealed}",
+                caves.len(),
+                voids.len(),
+            );
+            assert_eq!(
+                caves_breached_after, 0,
+                "the guard must leave no sealed authored cave breached"
+            );
+            assert!(
+                caves_breached_before > 0,
+                "the measurement is worthless if nothing was breached to begin with -- either the \
+                 sampling missed every collision or the authored geometry moved"
+            );
+        });
+    }
+
+    /// The guard cannot change which surface cave entrances exist, and this
+    /// pins that it did not: markers come from the node lattice
+    /// (`surface_entrances` never calls the tunnel query at all), so a change
+    /// here means the lattice or the authored map moved, never the guard.
+    #[test]
+    #[ignore]
+    fn the_real_region_still_derives_its_surface_cave_markers() {
+        const EXPECTED_MARKERS: usize = 150;
+
+        let (world, index) = cromatolis_world();
+        let land = Land::from_sim(world.sim());
+        let markers = crate::layer::cave::surface_entrances(&land, index.as_index_ref()).count();
+        println!("surface cave entrances: {markers}");
+        assert_eq!(
+            markers, EXPECTED_MARKERS,
+            "the authored region's surface cave marker count moved"
+        );
+    }
+
+    /// What the guard costs on the hot path, measured where it actually runs:
+    /// the per-column tunnel query every consumer reads.
+    ///
+    /// Two column sets, because they answer different questions. The uniform
+    /// sweep is the whole-map average, where almost every chunk bucket is
+    /// empty and the guard is one hash. The in-footprint sweep is drawn from
+    /// the authored caves' own bounding circles, where several shapes share a
+    /// bucket and each one costs a spline solve -- the worst case, and the one
+    /// a whole-map average hides completely.
+    ///
+    /// Reported rather than tightly asserted: wall time on a shared machine is
+    /// noisy enough that a percent-level threshold would flake. The assertion
+    /// still catches the failure mode that matters -- a guard that scans every
+    /// indexed shape per column instead of rejecting on a bounding box.
+    #[test]
+    #[ignore]
+    fn the_guard_costs_little_on_the_per_column_query() {
+        use crate::layer::{
+            authored_regions::authored_voids,
+            cave::{tunnel_bounds_at, tunnel_bounds_at_unguarded},
+        };
+        use std::time::Instant;
+
+        let (world, index) = cromatolis_world();
+        let index_ref = index.as_index_ref();
+        let sim = world.sim();
+
+        CanvasInfo::with_mock_canvas_info(index_ref, sim, |info| {
+            let land = info.land();
+            // Warm the index before either timing run, so neither pays for
+            // building it.
+            let voids = authored_voids(info).expect("the authored region must index its voids");
+            let caves = index_ref.cromatolis_cave_features.get().unwrap();
+            let size = sim.get_size().map(|e| e as i32) * 32;
+
+            let uniform: Vec<Vec2<i32>> = (0..20_000)
+                .map(|i: i32| Vec2::new((i * 97) % size.x, (i * 101) % size.y))
+                .collect();
+            // A dense sweep of the biggest authored caves' own footprints,
+            // where the buckets are non-empty.
+            let in_footprint: Vec<Vec2<i32>> = caves
+                .iter()
+                .take(40)
+                .flat_map(|cave| {
+                    let (centre, radius) = cave.bounds();
+                    let reach = radius.ceil() as i32;
+                    (0..500).map(move |i| {
+                        centre
+                            + Vec2::new(
+                                (i * 37) % (2 * reach) - reach,
+                                (i * 53) % (2 * reach) - reach,
+                            )
+                    })
+                })
+                .collect();
+
+            let time = |columns: &[Vec2<i32>], guarded: bool| {
+                let mut sink = 0_i64;
+                let start = Instant::now();
+                for &wpos2d in columns {
+                    sink += if guarded {
+                        tunnel_bounds_at(wpos2d, info, &land).count() as i64
+                    } else {
+                        tunnel_bounds_at_unguarded(wpos2d, info, &land).count() as i64
+                    };
+                }
+                (start.elapsed(), sink)
+            };
+
+            for (name, columns) in [("uniform", &uniform), ("in-footprint", &in_footprint)] {
+                // One untimed pass to warm whatever caches either path shares.
+                let _ = time(columns, false);
+                let (unguarded, _) = time(columns, false);
+                let (guarded, sink) = time(columns, true);
+                let overhead = guarded.as_secs_f64() / unguarded.as_secs_f64() - 1.0;
+                println!(
+                    "{name}: {} columns, unguarded {unguarded:?}, guarded {guarded:?} ({:+.2} %) \
+                     [sink {sink}]",
+                    columns.len(),
+                    overhead * 100.0
+                );
+                assert!(
+                    overhead < 1.0,
+                    "{name}: the guard more than doubled the per-column query ({:+.2} %); it \
+                     should be one hash plus a bounding-box reject, not a scan",
+                    overhead * 100.0
+                );
+            }
+            let (_, _, largest_bucket) = voids.grid_stats();
+            assert!(
+                largest_bucket <= 64,
+                "one chunk bucket holds {largest_bucket} shapes; the per-column guard degrades \
+                 into a scan past a few dozen"
+            );
+        });
     }
 }

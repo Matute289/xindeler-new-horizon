@@ -2,6 +2,7 @@ use crate::{
     BiomeProfiles, Colors, Features,
     biome_profile::BIOME_PROFILES_SCHEMA,
     layer::{
+        authored_voids::AuthoredVoids,
         cromatolis_aerial_citadel::AerialCitadelConfig,
         cromatolis_cave_features::GeneratedCave,
         cromatolis_interior::InteriorLayout,
@@ -45,6 +46,14 @@ pub struct Index {
     /// load or validate). Same per-`Index` rationale as `cromatolis_interiors`
     /// above.
     pub(crate) cromatolis_aerial_citadel: OnceLock<Option<AerialCitadelConfig>>,
+    /// The shared authored-void protection index (see
+    /// [`crate::layer::authored_voids`]), lazily built and cached the first
+    /// time a purely-procedural layer asks whether a column belongs to an
+    /// authored feature. `None` when no authored region is loaded, which is
+    /// what makes every consumer of it a no-op -- and generation therefore
+    /// bit-identical -- for a purely procedural world. Same per-`Index`
+    /// rationale as `cromatolis_interiors` above.
+    pub(crate) authored_voids: OnceLock<Option<AuthoredVoids>>,
     colors: AssetHandle<Arc<Colors>>,
     features: AssetHandle<Arc<Features>>,
     /// The authored biome-profile catalog (see `crate::biome_profile`),
@@ -115,6 +124,7 @@ impl Index {
             cromatolis_interiors: OnceLock::new(),
             cromatolis_cave_features: OnceLock::new(),
             cromatolis_aerial_citadel: OnceLock::new(),
+            authored_voids: OnceLock::new(),
             colors,
             features,
             biome_profiles,
@@ -297,6 +307,27 @@ mod tests {
         );
         assert!(
             b.cromatolis_aerial_citadel.get().is_none(),
+            "index b's cache must still be empty -- it must not share state with index a"
+        );
+    }
+
+    /// Same independence requirement as `cromatolis_interiors` above, applied
+    /// to `authored_voids`. It matters slightly more here than for the three
+    /// caches above: this one is consulted by the *purely-procedural* layers,
+    /// so a leaked cache would have a second world's authored geometry
+    /// suppressing tunnels in a world that has none.
+    #[test]
+    fn authored_voids_cache_is_independent_per_index_instance() {
+        let a = Index::new(0);
+        let b = Index::new(0);
+
+        a.authored_voids.get_or_init(|| None);
+        assert!(
+            a.authored_voids.get().is_some(),
+            "index a should have its cache initialized"
+        );
+        assert!(
+            b.authored_voids.get().is_none(),
             "index b's cache must still be empty -- it must not share state with index a"
         );
     }
