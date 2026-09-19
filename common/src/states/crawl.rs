@@ -1,6 +1,6 @@
 use super::utils::*;
 use crate::{
-    comp::{CharacterState, StateUpdate, character_state::OutputEvents},
+    comp::{CharacterState, Posture, StateUpdate, character_state::OutputEvents},
     states::behavior::{CharacterBehavior, JoinData},
 };
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,10 @@ pub struct Data;
 fn can_stand(data: &JoinData) -> bool {
     data.health
         .is_none_or(|health| !health.has_consumed_death_protection())
+        // A body that crawled into a gap it does not fit standing up stays
+        // there. Same refusal the downed check above already expresses, for a
+        // different reason.
+        && has_room_for_posture(data, Posture::Stand)
 }
 
 // NOTE: In the future we might want to allow using some items while downed, but

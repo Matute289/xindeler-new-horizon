@@ -2387,6 +2387,24 @@ impl Client {
         }
     }
 
+    /// Lie down, without toggling back up if already prone.
+    ///
+    /// Distinct from [`Client::toggle_crawl`] because it backs a *hold*: the
+    /// gesture continues to fire while the key is down, and a toggle would make
+    /// the character bob between postures instead of committing to one.
+    pub fn go_prone(&mut self) {
+        let already_prone = self
+            .state
+            .ecs()
+            .read_storage::<CharacterState>()
+            .get(self.entity())
+            .is_some_and(|cs| matches!(cs, CharacterState::Crawl));
+
+        if !already_prone {
+            self.control_action(ControlAction::Crawl);
+        }
+    }
+
     pub fn toggle_crawl(&mut self) {
         let is_crawling = self
             .state

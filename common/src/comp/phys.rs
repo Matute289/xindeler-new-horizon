@@ -180,12 +180,55 @@ impl Collider {
     /// `MAX_RADIUS` is deliberately lied about here, which is why a rat and an
     /// eight-metre cyclops occupy the same box in the world.
     pub fn terrain_cylinder(&self, scale: f32) -> (f32, f32, f32) {
+        self.terrain_cylinder_in(scale, Posture::Stand)
+    }
+
+    /// The same cylinder, for a body that is not standing up straight.
+    ///
+    /// A posture is allowed to go **below** [`TERRAIN_CYLINDER_MIN_HEIGHT`],
+    /// which is the entire point of it: that floor is 1.2, so no multiplier
+    /// applied on top of the standing clamp could ever reach a one-block gap.
+    /// Standing is bit-identical to the clamp this function replaced, so a body
+    /// that never changes posture is unaffected.
+    pub fn terrain_cylinder_in(&self, scale: f32, posture: Posture) -> (f32, f32, f32) {
         let (_, z_max) = self.get_z_limits(1.0);
+        let standing = z_max.clamped(TERRAIN_CYLINDER_MIN_HEIGHT, TERRAIN_CYLINDER_MAX_HEIGHT);
         (
             self.bounding_radius().min(TERRAIN_CYLINDER_MAX_RADIUS) * scale,
             0.0,
-            z_max.clamped(TERRAIN_CYLINDER_MIN_HEIGHT, TERRAIN_CYLINDER_MAX_HEIGHT) * scale,
+            standing * posture.height_factor() * scale,
         )
+    }
+}
+
+/// How upright a body is holding itself, which is the only thing that changes
+/// how tall it is to the world.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum Posture {
+    #[default]
+    Stand,
+    /// Crouched — the posture sneaking already puts a body in.
+    Crouch,
+    /// Flat to the ground.
+    Prone,
+}
+
+impl Posture {
+    /// Fraction of standing height this posture occupies.
+    ///
+    /// These are the ratios the camera already uses for the same two postures
+    /// (`voxygen`'s `scene` drops the viewpoint to 0.6 and 0.3), so the body
+    /// agrees with what the player is looking through. For a 1.75 m humanoid
+    /// that is 1.05 crouched — enough for ledges and overhangs but *not* a
+    /// one-block gap — and 0.55 prone, which clears one comfortably. Lying down
+    /// is what buys the tightest gaps, and that is deliberate: it is the slower
+    /// posture and it should be the one that earns something.
+    pub const fn height_factor(self) -> f32 {
+        match self {
+            Posture::Stand => 1.0,
+            Posture::Crouch => 0.6,
+            Posture::Prone => 0.3,
+        }
     }
 }
 
@@ -287,4 +330,84 @@ impl ForceUpdate {
 
 impl Component for ForceUpdate {
     type Storage = VecStorage<Self>;
+}
+
+#[cfg(test)]
+mod posture_tests {
+    use super::*;
+
+    /// A humanoid's capsule, as `state_ext` builds it for a player character.
+    fn player_capsule() -> Collider {
+        Collider::CapsulePrism(CapsulePrism {
+            p0: Vec2::zero(),
+            p1: Vec2::zero(),
+            radius: 0.4,
+            z_min: 0.0,
+            z_max: 1.75,
+        })
+    }
+
+    /// 🔴 Standing must be bit-identical to the clamp this replaced, or every
+    /// creature in the game just changed size.
+    #[test]
+    fn standing_is_unchanged() {
+        let c = player_capsule();
+        for scale in [0.2, 0.5, 1.0, 1.5, 3.0] {
+            let (_, _, z_max) = c.terrain_cylinder(scale);
+            let expected =
+                1.75f32.clamped(TERRAIN_CYLINDER_MIN_HEIGHT, TERRAIN_CYLINDER_MAX_HEIGHT) * scale;
+            assert_eq!(z_max, expected, "standing height changed at scale {scale}");
+            assert_eq!(
+                c.terrain_cylinder_in(scale, Posture::Stand),
+                c.terrain_cylinder(scale),
+            );
+        }
+    }
+
+    /// The point of the whole exercise: lying down fits a one-block gap, and
+    /// crouching deliberately does not.
+    ///
+    /// Crouching is kept honest at the camera's own ratio rather than nudged
+    /// under 1.0, because the gesture that reaches prone is one button-hold
+    /// away — so the tight gaps have a real answer and the crouch does not have
+    /// to be fudged into being that answer.
+    #[test]
+    fn lying_down_fits_a_one_block_gap_and_crouching_does_not() {
+        let (_, _, crouched) = player_capsule().terrain_cylinder_in(1.0, Posture::Crouch);
+        let (_, _, prone) = player_capsule().terrain_cylinder_in(1.0, Posture::Prone);
+
+        assert!(crouched > 1.0, "crouched height was {crouched}");
+        assert!(crouched < 1.75, "crouching should still shrink the body");
+        assert!(prone < 1.0, "prone height was {prone}");
+    }
+
+    /// A posture is allowed below the standing floor — the reason a multiplier
+    /// on the clamped value could never have worked, since that floor is 1.2.
+    #[test]
+    fn a_posture_may_go_below_the_standing_floor() {
+        // A short body is clamped up to the floor when standing…
+        let stubby = Collider::CapsulePrism(CapsulePrism {
+            p0: Vec2::zero(),
+            p1: Vec2::zero(),
+            radius: 0.4,
+            z_min: 0.0,
+            z_max: 0.5,
+        });
+        let (_, _, standing) = stubby.terrain_cylinder(1.0);
+        assert_eq!(standing, TERRAIN_CYLINDER_MIN_HEIGHT);
+        // …and still gets under it by lying down.
+        let (_, _, prone) = stubby.terrain_cylinder_in(1.0, Posture::Prone);
+        assert!(prone < TERRAIN_CYLINDER_MIN_HEIGHT);
+    }
+
+    /// Posture never changes how wide a body is; that is a separate property.
+    #[test]
+    fn posture_does_not_change_radius() {
+        let c = player_capsule();
+        let (standing, ..) = c.terrain_cylinder_in(1.0, Posture::Stand);
+        for posture in [Posture::Crouch, Posture::Prone] {
+            let (r, ..) = c.terrain_cylinder_in(1.0, posture);
+            assert_eq!(r, standing);
+        }
+    }
 }
