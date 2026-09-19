@@ -616,6 +616,13 @@ pub struct HelpDownedEventData<'a> {
     rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
     character_states: WriteStorage<'a, comp::CharacterState>,
     healths: WriteStorage<'a, comp::Health>,
+    // Needed to check the rescued player actually fits standing up before we
+    // stand them up.
+    positions: ReadStorage<'a, comp::Pos>,
+    bodies: ReadStorage<'a, comp::Body>,
+    scales: ReadStorage<'a, comp::Scale>,
+    colliders: ReadStorage<'a, comp::Collider>,
+    terrain: ReadExpect<'a, common::terrain::TerrainGrid>,
 }
 
 impl ServerEvent for HelpDownedEvent {
@@ -627,8 +634,41 @@ impl ServerEvent for HelpDownedEvent {
                 if let Some(mut health) = data.healths.get_mut(entity) {
                     health.refresh_death_protection();
                 }
+                // Standing them up is conditional on there being room to
+                // stand. A downed player can end up somewhere only the prone
+                // cylinder fits — tight gaps being reachable prone is the
+                // point of posture — and forcing them upright there would leave
+                // them clipped into the ceiling with no way out, since being
+                // revived to `Idle` also takes away the crawl they would have
+                // used to get clear. Leaving them prone costs one keypress and
+                // is always recoverable.
+                let fits_standing = || {
+                    // Without a position or a body there is nothing to check
+                    // against, so never block a rescue on it.
+                    let (Some(pos), Some(body)) =
+                        (data.positions.get(entity), data.bodies.get(entity))
+                    else {
+                        return true;
+                    };
+                    let collider = data
+                        .colliders
+                        .get(entity)
+                        .cloned()
+                        .unwrap_or_else(|| body.collider());
+                    let scale = data.scales.get(entity).map_or(1.0, |s| s.0);
+                    let (radius, _, z_max) =
+                        collider.terrain_cylinder_in(scale, comp::Posture::Stand);
+                    common::states::utils::terrain_column_is_clear(
+                        &*data.terrain,
+                        pos.0,
+                        radius,
+                        z_max,
+                    )
+                };
+
                 if let Some(mut character_state) = data.character_states.get_mut(entity)
                     && matches!(*character_state, comp::CharacterState::Crawl)
+                    && fits_standing()
                 {
                     *character_state = CharacterState::Idle(Default::default());
                 }

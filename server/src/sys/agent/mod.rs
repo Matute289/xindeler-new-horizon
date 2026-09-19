@@ -8,7 +8,7 @@ use crate::sys::agent::{
 };
 use common::{
     comp::{
-        self, Agent, Alignment, Body, CharacterState, Controller, Health, Scale,
+        self, Agent, Alignment, Body, CharacterState, Controller, Health, Posture, Scale,
         inventory::slot::EquipSlot, item::ItemDesc,
     },
     mounting::Volume,
@@ -216,7 +216,15 @@ impl<'a> System<'a> for Sys {
                     let dims = match moving_body {
                         None | Some(Body::Ship(_) | Body::Item(_)) => TraversalDims::default(),
                         Some(body) => {
-                            let (_, _, z_max) = body.collider().terrain_cylinder(scale);
+                            // The agent's *current* posture, so a creature that
+                            // is crouching or lying down plans routes it
+                            // actually fits through rather than the ones it
+                            // would fit standing.
+                            let posture = read_data
+                                .char_states
+                                .get(moving_entity)
+                                .map_or(Posture::Stand, |cs| cs.posture(body));
+                            let (_, _, z_max) = body.collider().terrain_cylinder_in(scale, posture);
                             TraversalDims::from_terrain_cylinder(z_max)
                         },
                     };

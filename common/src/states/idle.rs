@@ -1,7 +1,7 @@
 use super::utils::*;
 use crate::{
     comp::{
-        CharacterState, InventoryAction, StateUpdate, character_state::OutputEvents,
+        CharacterState, InventoryAction, Posture, StateUpdate, character_state::OutputEvents,
         controller::InputKind, inventory::item::armor::Friction,
     },
     resources::Time,
@@ -115,6 +115,13 @@ impl CharacterBehavior for Data {
 
     fn stand(&self, data: &JoinData, _: &mut OutputEvents) -> StateUpdate {
         let mut update = StateUpdate::from(data);
+        // Standing up into a ceiling is refused rather than resolved: the
+        // collision solver's answer to a body overlapping terrain is to push
+        // out and, failing that, restore the old position, which reads as
+        // jitter. Staying crouched is the better answer.
+        if self.is_sneaking && !has_room_for_posture(data, Posture::Stand) {
+            return update;
+        }
         update.character = CharacterState::Idle(Data::default());
         update
     }

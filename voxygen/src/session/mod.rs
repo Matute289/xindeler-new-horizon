@@ -128,6 +128,12 @@ fn clear_stale_spectator_components(client: &Client, spectated_entity: specs::En
     ecs.write_storage::<Interactors>().remove(spectated_entity);
 }
 
+/// How long the crouch key must be held before the character lies down.
+///
+/// Long enough that a deliberate tap-to-crouch never trips it, short enough
+/// that holding it does not feel like the input was dropped.
+const HOLD_TO_GO_PRONE: std::time::Duration = std::time::Duration::from_millis(350);
+
 pub struct SessionState {
     scene: Scene,
     pub(crate) client: Rc<RefCell<Client>>,
@@ -136,6 +142,13 @@ pub struct SessionState {
     key_state: KeyState,
     inputs: comp::ControllerInputs,
     inputs_state: HashSet<GameInput>,
+    /// When the crouch key went down, while it is still held.
+    ///
+    /// Tapping it toggles crouch, as it always has; holding it past
+    /// `HOLD_TO_GO_PRONE` drops the character the rest of the way to the floor.
+    /// Cleared on release and once the drop has fired, so one hold produces one
+    /// transition rather than one per frame.
+    sneak_held_since: Option<std::time::Instant>,
     /// Which of `Primary`/`Secondary` currently has its held click routed
     /// past the HUD (to the build/weapon path below) rather than to a bound
     /// mouse-slot ability. Latched on press and consulted (then cleared) on
@@ -242,6 +255,7 @@ impl SessionState {
             key_state: KeyState::default(),
             inputs: comp::ControllerInputs::default(),
             inputs_state: HashSet::new(),
+            sneak_held_since: None,
             click_bypasses_hud: HashSet::new(),
             hud,
             selected_block: Block::new(BlockKind::Misc, Rgb::broadcast(255)),
@@ -674,6 +688,22 @@ impl PlayState for SessionState {
                 camera.set_orientation(cam_dir);
             }
 
+            // Holding the crouch key past the threshold takes the character
+            // the rest of the way down, to prone. Latches rather than requiring
+            // the key to stay held: every other posture here is a toggle, and
+            // holding a key through a long crawlspace is a punishment, not a
+            // gesture. Tapping the key again stands back up (subject to there
+            // being room).
+            if self
+                .sneak_held_since
+                .is_some_and(|since| since.elapsed() >= HOLD_TO_GO_PRONE)
+            {
+                self.sneak_held_since = None;
+                if !self.client.borrow().is_trading() {
+                    self.client.borrow_mut().go_prone();
+                }
+            }
+
             let client = self.client.borrow();
             let player_entity = client.entity();
 
@@ -1064,6 +1094,12 @@ impl PlayState for SessionState {
                                 if state && !is_trading && controlling_char {
                                     self.stop_auto_walk();
                                     self.client.borrow_mut().toggle_sneak();
+                                    // Start the clock. If the key comes back up
+                                    // before the threshold this was a tap and
+                                    // the toggle above is the whole gesture.
+                                    self.sneak_held_since = Some(std::time::Instant::now());
+                                } else if !state {
+                                    self.sneak_held_since = None;
                                 }
                             },
                             GameInput::CancelClimb => {

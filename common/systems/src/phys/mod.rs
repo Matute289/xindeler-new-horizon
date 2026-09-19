@@ -1,7 +1,7 @@
 use common::{
     comp::{
         Body, CapsulePrism, CharacterState, Collider, Density, Immovable, Mass, Ori, PhysicsState,
-        Pos, PosVelOriDefer, PreviousPhysCache, Projectile, Scale, Stats, Sticky, Vel,
+        Pos, PosVelOriDefer, Posture, PreviousPhysCache, Projectile, Scale, Stats, Sticky, Vel,
         body::ship::{self, figuredata::VOXEL_COLLIDER_MANIFEST},
         fluid_dynamics::{Fluid, Wings},
         inventory::item::armor::Friction,
@@ -1039,7 +1039,17 @@ impl PhysicsData<'_> {
                                 tgt_pos = cpos.0;
                             },
                             Collider::CapsulePrism(_) => {
-                                let cylinder = collider.terrain_cylinder(scale);
+                                // A crouching or prone body is genuinely
+                                // shorter to the world, not just to the
+                                // camera. `posture` answers `Stand` unless the
+                                // body is actually able to fold, so this is a
+                                // no-op for everything that cannot.
+                                let posture = match (character_state, body) {
+                                    (Some(cs), Some(body)) => cs.posture(body),
+                                    _ => Posture::Stand,
+                                };
+                                let cylinder =
+                                    collider.terrain_cylinder_in(scale, posture);
                                 let mut cpos = *pos;
                                 collision::box_voxel_collision(
                                     cylinder,

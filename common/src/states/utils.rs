@@ -2,7 +2,7 @@ use crate::{
     astar::Astar,
     comp::{
         Alignment, Body, CharacterState, Density, HealthChange, InputAttr, InputKind, Inventory,
-        InventoryAction, Melee, Ori, Pos, Scale, StateUpdate,
+        InventoryAction, Melee, Ori, Pos, Posture, Scale, StateUpdate,
         ability::{
             AbilityInitEvent, AbilityMeta, AbilityRequirements, Capability, CharacterAbility,
             SpecifiedAbility, Stance,
@@ -1000,6 +1000,65 @@ pub fn attempt_wield(data: &JoinData<'_>, update: &mut StateUpdate) {
     }
 }
 
+/// Is the space a cylinder of `radius` and `z_max` would occupy at `pos` clear
+/// of solid terrain?
+///
+/// Samples every column the radius covers, not just the one the centre is in:
+/// standing near a block boundary straddles two, and checking only the centre
+/// would happily clear a body into a ceiling one column over.
+///
+/// Shared so that everything which can put a body upright asks the same
+/// question — a character standing up under its own power, and the server
+/// standing up somebody else's rescued character.
+pub fn terrain_column_is_clear<V>(terrain: &V, pos: Vec3<f32>, radius: f32, z_max: f32) -> bool
+where
+    V: ReadVol<Vox = Block>,
+{
+    let feet = pos.z.floor() as i32;
+    // The topmost block the body would occupy, inclusive.
+    let head = (pos.z + z_max - f32::EPSILON).floor() as i32;
+
+    let (x0, x1) = (
+        (pos.x - radius).floor() as i32,
+        (pos.x + radius).floor() as i32,
+    );
+    let (y0, y1) = (
+        (pos.y - radius).floor() as i32,
+        (pos.y + radius).floor() as i32,
+    );
+
+    (x0..=x1).all(|x| {
+        (y0..=y1).all(|y| {
+            (feet..=head).all(|z| {
+                terrain
+                    .get(Vec3::new(x, y, z))
+                    // Unloaded terrain is assumed clear. The collision solver
+                    // only visits loaded blocks, so this matches what the
+                    // physics would actually do there.
+                    .map(|block| !block.is_solid())
+                    .unwrap_or(true)
+            })
+        })
+    })
+}
+
+/// Is there room above this entity to hold itself in `posture`?
+///
+/// A momentary shrink like a roll can grow back without asking, because the
+/// game knows the roll ends in open air. A posture a body *holds* cannot: a
+/// player who crouches into a one-block slot and then stands would otherwise
+/// grow into solid rock, and the collision solver's answer to that is to push
+/// out, fail, and restore the old position — a jitter, not a crash, but not
+/// acceptable either.
+///
+/// So standing up is a request that can be refused. That contract is not new
+/// here: `crawl.rs` already refuses to let a downed player stand.
+pub fn has_room_for_posture(data: &JoinData<'_>, posture: Posture) -> bool {
+    let scale = data.scale.map_or(1.0, |s| s.0);
+    let (radius, _, z_max) = data.body.collider().terrain_cylinder_in(scale, posture);
+    terrain_column_is_clear(data.terrain, data.pos.0, radius, z_max)
+}
+
 /// Checks that player can `Sit` and updates `CharacterState` if so
 pub fn attempt_sit(data: &JoinData<'_>, update: &mut StateUpdate) {
     if data.physics.on_ground.is_some() {
@@ -1009,7 +1068,12 @@ pub fn attempt_sit(data: &JoinData<'_>, update: &mut StateUpdate) {
 
 /// Checks that player can `Crawl` and updates `CharacterState` if so
 pub fn attempt_crawl(data: &JoinData<'_>, update: &mut StateUpdate) {
-    if data.physics.on_ground.is_some() {
+    if data.physics.on_ground.is_some()
+        && data
+            .body
+            .traversal_capabilities()
+            .contains(TraversalCapabilities::PRONE)
+    {
         update.character = CharacterState::Crawl;
     }
 }
@@ -1037,7 +1101,14 @@ pub fn attempt_talk(data: &JoinData<'_>, update: &mut StateUpdate, tgt: Option<U
 }
 
 pub fn attempt_sneak(data: &JoinData<'_>, update: &mut StateUpdate) {
-    if data.physics.on_ground.is_some() && data.body.is_humanoid() {
+    // Crouching is a body-shape question now rather than a "is this the player"
+    // question: anything with a spine that folds can do it.
+    if data.physics.on_ground.is_some()
+        && data
+            .body
+            .traversal_capabilities()
+            .contains(TraversalCapabilities::CROUCH)
+    {
         update.character = Idle(idle::Data {
             is_sneaking: true,
             time_entered: *data.time,
