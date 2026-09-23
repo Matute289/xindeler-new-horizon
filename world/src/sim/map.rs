@@ -2,14 +2,14 @@ use crate::{
     CONFIG, IndexRef,
     column::ColumnSample,
     sim::{
-        AuthoredGroundCoverProfile, AuthoredMapEcologyProfile, GroundCoverBand, GroundSubstrate,
-        RiverKind, WorldSim,
+        AuthoredEcologyZone, AuthoredGroundCoverProfile, AuthoredMapEcologyProfile,
+        GroundCoverBand, GroundSubstrate, RiverKind, WorldSim,
     },
     site::SiteKind,
 };
 use common::{
     terrain::{
-        BiomeKind, CoordinateConversions, NEIGHBOR_DELTA, TerrainChunkSize,
+        CoordinateConversions, NEIGHBOR_DELTA, TerrainChunkSize,
         map::{Connection, ConnectionKind, MapConfig, MapSample},
         vec2_as_uniform_idx,
     },
@@ -96,13 +96,13 @@ pub(super) fn authored_ground_cover_preview_tint(
 }
 
 /// Adds a restrained ecological cue to the authored map after the soil
-/// treatment. This is deliberately a map-only consumer of the **resolved**
-/// biome: it makes forests, swamps, and jungles readable without changing
+/// treatment. This consumes the exact authored ecology zone, so its visible
+/// extents never drift with a procedural `BiomeKind`; it still cannot change
 /// terrain blocks, authored vegetation density, or placement rules.
 fn authored_ecology_preview_tint(
     base: Rgb<u8>,
     profile: Option<&AuthoredMapEcologyProfile>,
-    biome: BiomeKind,
+    ecology_zone: Option<AuthoredEcologyZone>,
     tree_density: f64,
     is_water: bool,
     is_physical_mountain: bool,
@@ -110,7 +110,9 @@ fn authored_ecology_preview_tint(
     if is_water || is_physical_mountain {
         return base;
     }
-    let Some(zone) = profile.and_then(|profile| profile.zone_for(biome)) else {
+    let Some(zone) = ecology_zone
+        .and_then(|ecology_zone| profile.and_then(|profile| profile.zone_for(ecology_zone)))
+    else {
         return base;
     };
     let tint = Rgb::new(
@@ -416,7 +418,7 @@ pub fn sample_pos(
             out = authored_ecology_preview_tint(
                 out,
                 sampler.authored_map_ecology_profile.as_ref(),
-                sample.get_biome(),
+                sampler.authored_ecology_zone_at(pos),
                 vegetation,
                 is_physical_water,
                 is_physical_surface,
@@ -509,7 +511,7 @@ mod tests {
     use super::*;
     use crate::{
         index::{Index, IndexOwned},
-        sim::{AuthoredGroundCoverProfile, GroundCoverBand},
+        sim::{AuthoredEcologyZone, AuthoredGroundCoverProfile, GroundCoverBand},
     };
     use common::assets::AssetExt;
 
@@ -546,7 +548,7 @@ mod tests {
         let forest = authored_ecology_preview_tint(
             base,
             Some(&profile),
-            BiomeKind::Forest,
+            Some(AuthoredEcologyZone::TemperateForest),
             0.9,
             false,
             false,
@@ -554,7 +556,7 @@ mod tests {
         let swamp = authored_ecology_preview_tint(
             base,
             Some(&profile),
-            BiomeKind::Swamp,
+            Some(AuthoredEcologyZone::Wetland),
             0.9,
             false,
             false,
@@ -562,7 +564,7 @@ mod tests {
         let jungle = authored_ecology_preview_tint(
             base,
             Some(&profile),
-            BiomeKind::Jungle,
+            Some(AuthoredEcologyZone::Jungle),
             0.9,
             false,
             false,
@@ -572,7 +574,14 @@ mod tests {
         assert_ne!(swamp, forest);
         assert_ne!(jungle, forest);
         assert_eq!(
-            authored_ecology_preview_tint(base, Some(&profile), BiomeKind::Swamp, 1.0, true, false),
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::Wetland),
+                1.0,
+                true,
+                false
+            ),
             base,
             "water keeps its physical map treatment",
         );
@@ -580,7 +589,7 @@ mod tests {
             authored_ecology_preview_tint(
                 base,
                 Some(&profile),
-                BiomeKind::Forest,
+                Some(AuthoredEcologyZone::TemperateForest),
                 1.0,
                 false,
                 true

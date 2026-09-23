@@ -1,22 +1,23 @@
 (
     schema: "xindeler_open_world.map_ecology.v1",
-    // Map-only visual language. These values never affect SimChunk biome
-    // classification, the ground-cover raster, terrain blocks, or tree
-    // placement. They make the resolved ecological zones readable while the
-    // base map keeps hillshade, contours and altitude texture.
+    // Map-only visual language. `ecology_zone_mask_manual_v1` chooses these
+    // authored categories; values never affect SimChunk biome classification,
+    // the ground-cover raster, terrain blocks, or tree placement. Keeping the
+    // zone source categorical means the exact forest/wetland/jungle masses
+    // remain stable even when the procedural climate classification changes.
     voxel_minimap_overlay_alpha: 112,
     zones: [
         // This is a second, independent presentation layer: ground-cover
-        // remains responsible for visible soil, while the resolved biome and
-        // the already-authored tree density make ecological regions legible.
+        // remains responsible for visible soil, while authored ecology and
+        // the already-authored tree density make regional masses legible.
         // The two layers compose sequentially. Their maxima retain at least
         // 44% of the physical base before hillshade/contours, avoiding a
         // flat green wash while still making zones legible.
-        (biome: Grassland, map_tint: (0.35686275, 0.54901961, 0.19215686), base_blend: 0.12, tree_density_blend: 0.00),
-        (biome: Savannah, map_tint: (0.45882353, 0.49019608, 0.19215686), base_blend: 0.12, tree_density_blend: 0.00),
-        (biome: Forest, map_tint: (0.09411765, 0.40392157, 0.16470588), base_blend: 0.08, tree_density_blend: 0.12),
-        (biome: Jungle, map_tint: (0.04705882, 0.30980392, 0.15294118), base_blend: 0.20, tree_density_blend: 0.04),
-        (biome: Swamp, map_tint: (0.10980392, 0.38431373, 0.31372549), base_blend: 0.22, tree_density_blend: 0.00),
-        (biome: Taiga, map_tint: (0.12549020, 0.33333333, 0.25490196), base_blend: 0.12, tree_density_blend: 0.10),
+        (zone: OpenLand, map_tint: (0.38, 0.50, 0.22), base_blend: 0.10, tree_density_blend: 0.00),
+        (zone: Shrubland, map_tint: (0.35, 0.43, 0.19), base_blend: 0.16, tree_density_blend: 0.02),
+        (zone: TemperateForest, map_tint: (0.08, 0.36, 0.13), base_blend: 0.18, tree_density_blend: 0.16),
+        (zone: Wetland, map_tint: (0.10, 0.34, 0.30), base_blend: 0.24, tree_density_blend: 0.04),
+        (zone: Jungle, map_tint: (0.03, 0.26, 0.11), base_blend: 0.24, tree_density_blend: 0.08),
+        (zone: AlpineBarren, map_tint: (0.30, 0.34, 0.37), base_blend: 0.12, tree_density_blend: 0.00),
     ],
 )
