@@ -95,19 +95,27 @@ pub(super) fn authored_ground_cover_preview_tint(
     )
 }
 
-/// Adds a restrained ecological cue to the authored map after the soil
-/// treatment. This consumes the exact authored ecology zone, so its visible
-/// extents never drift with a procedural `BiomeKind`; it still cannot change
-/// terrain blocks, authored vegetation density, or placement rules.
+/// Adds the authored ecological cue after the soil treatment. This consumes
+/// the exact authored ecology zone, so its visible extents never drift with a
+/// procedural `BiomeKind`; it still cannot change terrain blocks, authored
+/// vegetation density, or placement rules.
+///
+/// A shoreline remains physically authoritative for every category except an
+/// authored wetland. A `ColumnSample` deliberately marks `water_dist <= 3`
+/// as physical so the *ground* retains its shoreline material, but treating
+/// that proximity as rock/snow/cliff here erased wetland presentation along
+/// the very water edge that defines it.
 fn authored_ecology_preview_tint(
     base: Rgb<u8>,
     profile: Option<&AuthoredMapEcologyProfile>,
     ecology_zone: Option<AuthoredEcologyZone>,
     tree_density: f64,
     is_water: bool,
-    is_physical_mountain: bool,
+    is_physical_surface: bool,
+    is_shoreline: bool,
+    has_non_shore_physical: bool,
 ) -> Rgb<u8> {
-    if is_water || is_physical_mountain {
+    if is_water {
         return base;
     }
     let Some(zone) = ecology_zone
@@ -115,6 +123,11 @@ fn authored_ecology_preview_tint(
     else {
         return base;
     };
+    if is_physical_surface
+        && !(is_shoreline && !has_non_shore_physical && zone.zone == AuthoredEcologyZone::Wetland)
+    {
+        return base;
+    }
     let tint = Rgb::new(
         (zone.map_tint.0 * 255.0) as u8,
         (zone.map_tint.1 * 255.0) as u8,
@@ -294,14 +307,24 @@ pub fn sample_pos(
                 .map(|e| e as f64)
             };
 
-            (rgb, alt, sample.ice_depth, sample.surface_is_physical)
+            (
+                rgb,
+                alt,
+                sample.ice_depth,
+                sample.surface_is_physical,
+                sample.water_dist.is_some_and(|distance| distance <= 3.0),
+                sample.snow_cover
+                    || sample.temp <= CONFIG.snow_temp
+                    || sample.cliff_offset > 0.0
+                    || sample.surface_block_override.is_some(),
+            )
         });
 
     let downhill_wpos = downhill.unwrap_or(wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32));
     let alt = if is_basement {
         basement
     } else {
-        column_data.map_or(alt, |(_, alt, _, _)| alt)
+        column_data.map_or(alt, |(_, alt, _, _, _, _)| alt)
     };
 
     let depth_m = (alt.max(water_alt) - alt).max(0.0) as f64;
@@ -318,7 +341,9 @@ pub fn sample_pos(
         if is_shaded { 1.0 } else { alt },
         if is_shaded || is_humidity { 1.0 } else { 0.0 },
     );
-    let column_rgb = column_data.map(|(rgb, _, _, _)| rgb).unwrap_or(default_rgb);
+    let column_rgb = column_data
+        .map(|(rgb, _, _, _, _, _)| rgb)
+        .unwrap_or(default_rgb);
     let mut connections = [None; 8];
     let mut has_connections = false;
     // TODO: Support non-river connections.
@@ -342,42 +367,44 @@ pub fn sample_pos(
                 });
             });
     };
-    let rgb =
-        if is_water && is_ice && column_data.is_some_and(|(_, _, ice_depth, _)| ice_depth > 0.0) {
-            CONFIG.ice_color
-        } else {
-            match (river_kind, (is_water, true_alt >= true_sea_level)) {
-                (_, (false, _)) | (None, (_, true)) | (Some(RiverKind::River { .. }), _) => {
-                    let (r, g, b) = (
-                        (column_rgb.r
-                            * if is_temperature {
-                                temperature as f64
-                            } else {
-                                column_rgb.r
-                            })
-                        .sqrt(),
-                        column_rgb.g,
-                        (column_rgb.b
-                            * if is_humidity {
-                                humidity as f64
-                            } else {
-                                column_rgb.b
-                            })
-                        .sqrt(),
-                    );
-                    Rgb::new((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
-                },
-                (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => match depth_m {
-                    depth if depth < 5.0 => Rgb::new(0, 0xa8, 0xc9),
-                    depth if depth < 15.0 => Rgb::new(0, 0x91, 0xbd),
-                    depth if depth < 30.0 => Rgb::new(0, 0x78, 0xab),
-                    depth if depth < 70.0 => Rgb::new(0, 0x61, 0x99),
-                    depth if depth < 150.0 => Rgb::new(0, 0x4b, 0x82),
-                    depth if depth < 300.0 => Rgb::new(0, 0x36, 0x6b),
-                    _ => Rgb::new(0, 0x22, 0x52),
-                },
-            }
-        };
+    let rgb = if is_water
+        && is_ice
+        && column_data.is_some_and(|(_, _, ice_depth, _, _, _)| ice_depth > 0.0)
+    {
+        CONFIG.ice_color
+    } else {
+        match (river_kind, (is_water, true_alt >= true_sea_level)) {
+            (_, (false, _)) | (None, (_, true)) | (Some(RiverKind::River { .. }), _) => {
+                let (r, g, b) = (
+                    (column_rgb.r
+                        * if is_temperature {
+                            temperature as f64
+                        } else {
+                            column_rgb.r
+                        })
+                    .sqrt(),
+                    column_rgb.g,
+                    (column_rgb.b
+                        * if is_humidity {
+                            humidity as f64
+                        } else {
+                            column_rgb.b
+                        })
+                    .sqrt(),
+                );
+                Rgb::new((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+            },
+            (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => match depth_m {
+                depth if depth < 5.0 => Rgb::new(0, 0xa8, 0xc9),
+                depth if depth < 15.0 => Rgb::new(0, 0x91, 0xbd),
+                depth if depth < 30.0 => Rgb::new(0, 0x78, 0xab),
+                depth if depth < 70.0 => Rgb::new(0, 0x61, 0x99),
+                depth if depth < 150.0 => Rgb::new(0, 0x4b, 0x82),
+                depth if depth < 300.0 => Rgb::new(0, 0x36, 0x6b),
+                _ => Rgb::new(0, 0x22, 0x52),
+            },
+        }
+    };
     let rgb = if let Some(sample) = sampler
         .get(pos)
         .filter(|sample| sample.authored_cromatolis_v0)
@@ -401,9 +428,11 @@ pub fn sample_pos(
         // cliffs, forced rock and shoreline material must outrank the visual
         // ground-cover/ecology layers even below the authored alpine band.
         let is_physical_alpine = sample.authored_alpine_snowland;
+        let has_non_shore_physical = is_physical_alpine
+            || column_data.is_some_and(|(_, _, _, _, _, non_shore_physical)| non_shore_physical);
         let is_physical_surface = authored_preview_has_physical_surface(
             is_physical_alpine,
-            column_data.map(|(_, _, _, is_physical)| is_physical),
+            column_data.map(|(_, _, _, is_physical, _, _)| is_physical),
         );
         let mut out = rgb;
         if profile.is_some() {
@@ -422,6 +451,8 @@ pub fn sample_pos(
                 vegetation,
                 is_physical_water,
                 is_physical_surface,
+                column_data.is_some_and(|(_, _, _, _, is_shoreline, _)| is_shoreline),
+                has_non_shore_physical,
             );
         }
         let neighbor_alt = |offset: Vec2<i32>| {
@@ -545,11 +576,33 @@ mod tests {
     fn ecology_preview_keeps_relief_base_but_makes_authored_zones_distinct() {
         let base = Rgb::new(0x69, 0x7d, 0x43);
         let profile = cromatolis_ecology_profile();
+        let open_land = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            Some(AuthoredEcologyZone::OpenLand),
+            0.0,
+            false,
+            false,
+            false,
+            false,
+        );
+        let shrubland = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            Some(AuthoredEcologyZone::Shrubland),
+            0.4,
+            false,
+            false,
+            false,
+            false,
+        );
         let forest = authored_ecology_preview_tint(
             base,
             Some(&profile),
             Some(AuthoredEcologyZone::TemperateForest),
             0.9,
+            false,
+            false,
             false,
             false,
         );
@@ -560,6 +613,8 @@ mod tests {
             0.9,
             false,
             false,
+            false,
+            false,
         );
         let jungle = authored_ecology_preview_tint(
             base,
@@ -568,8 +623,39 @@ mod tests {
             0.9,
             false,
             false,
+            false,
+            false,
         );
 
+        assert!(
+            open_land.r > forest.r && open_land.g > forest.g,
+            "open land must stay visibly lighter than temperate forest"
+        );
+        assert!(
+            swamp.b > forest.b,
+            "wetland must retain a visibly cooler (blue-green) map cue"
+        );
+        assert!(
+            jungle.g < forest.g,
+            "jungle must remain visually deeper than temperate forest"
+        );
+        let rgb_distance = |left: Rgb<u8>, right: Rgb<u8>| {
+            (i16::from(left.r) - i16::from(right.r)).unsigned_abs()
+                + (i16::from(left.g) - i16::from(right.g)).unsigned_abs()
+                + (i16::from(left.b) - i16::from(right.b)).unsigned_abs()
+        };
+        for (left_name, left, right_name, right) in [
+            ("open land", open_land, "shrubland", shrubland),
+            ("open land", open_land, "forest", forest),
+            ("forest", forest, "wetland", swamp),
+            ("forest", forest, "jungle", jungle),
+        ] {
+            assert!(
+                rgb_distance(left, right) >= 24,
+                "{left_name} and {right_name} need a cartographically legible palette separation; \
+                 got {left:?} and {right:?}",
+            );
+        }
         assert_ne!(forest, base);
         assert_ne!(swamp, forest);
         assert_ne!(jungle, forest);
@@ -580,7 +666,9 @@ mod tests {
                 Some(AuthoredEcologyZone::Wetland),
                 1.0,
                 true,
-                false
+                false,
+                false,
+                false,
             ),
             base,
             "water keeps its physical map treatment",
@@ -592,10 +680,55 @@ mod tests {
                 Some(AuthoredEcologyZone::TemperateForest),
                 1.0,
                 false,
-                true
+                true,
+                false,
+                true,
             ),
             base,
             "mountains keep their physical map treatment",
+        );
+        assert_ne!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::Wetland),
+                1.0,
+                false,
+                true,
+                true,
+                false,
+            ),
+            base,
+            "an authored wetland retains its cartographic cue along its physical shoreline",
+        );
+        assert_eq!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::TemperateForest),
+                1.0,
+                false,
+                true,
+                true,
+                false,
+            ),
+            base,
+            "shoreline presentation remains physical outside explicit wetland zones",
+        );
+        assert_eq!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::Wetland),
+                1.0,
+                false,
+                true,
+                true,
+                true,
+            ),
+            base,
+            "wetland never overrides co-located snow, rock, cliff, forced material, or alpine \
+             presentation",
         );
     }
 

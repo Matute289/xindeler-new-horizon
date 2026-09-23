@@ -5,19 +5,22 @@
     // the ground-cover raster, terrain blocks, or tree placement. Keeping the
     // zone source categorical means the exact forest/wetland/jungle masses
     // remain stable even when the procedural climate classification changes.
-    voxel_minimap_overlay_alpha: 112,
+    // Keep the world-map layer legible in the HUD.  The local voxel overlay
+    // provides nearby detail, but at 44% opacity it previously flattened the
+    // authored forest/wetland masses back into one green field.
+    voxel_minimap_overlay_alpha: 64,
     zones: [
         // This is a second, independent presentation layer: ground-cover
-        // remains responsible for visible soil, while authored ecology and
-        // the already-authored tree density make regional masses legible.
-        // The two layers compose sequentially. Their maxima retain at least
-        // 44% of the physical base before hillshade/contours, avoiding a
-        // flat green wash while still making zones legible.
-        (zone: OpenLand, map_tint: (0.38, 0.50, 0.22), base_blend: 0.10, tree_density_blend: 0.00),
-        (zone: Shrubland, map_tint: (0.35, 0.43, 0.19), base_blend: 0.16, tree_density_blend: 0.02),
-        (zone: TemperateForest, map_tint: (0.08, 0.36, 0.13), base_blend: 0.18, tree_density_blend: 0.16),
-        (zone: Wetland, map_tint: (0.10, 0.34, 0.30), base_blend: 0.24, tree_density_blend: 0.04),
-        (zone: Jungle, map_tint: (0.03, 0.26, 0.11), base_blend: 0.24, tree_density_blend: 0.08),
-        (zone: AlpineBarren, map_tint: (0.30, 0.34, 0.37), base_blend: 0.12, tree_density_blend: 0.00),
+        // remains responsible for visible soil, while these deliberately
+        // separated hues make the authored regional masses legible.  Their
+        // combined blend leaves at least 28% of the physical map base, so
+        // hillshade, contours, rock, snow, paths and coastlines remain real
+        // rather than becoming a flat colour fill.
+        (zone: OpenLand,         map_tint: (0.48, 0.52, 0.20), base_blend: 0.42, tree_density_blend: 0.00),
+        (zone: Shrubland,        map_tint: (0.34, 0.40, 0.14), base_blend: 0.48, tree_density_blend: 0.04),
+        (zone: TemperateForest,  map_tint: (0.04, 0.25, 0.07), base_blend: 0.52, tree_density_blend: 0.18),
+        (zone: Wetland,          map_tint: (0.04, 0.30, 0.25), base_blend: 0.58, tree_density_blend: 0.05),
+        (zone: Jungle,           map_tint: (0.01, 0.16, 0.05), base_blend: 0.60, tree_density_blend: 0.12),
+        (zone: AlpineBarren,     map_tint: (0.30, 0.34, 0.37), base_blend: 0.22, tree_density_blend: 0.00),
     ],
 )
