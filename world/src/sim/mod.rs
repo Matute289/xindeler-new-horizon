@@ -7635,10 +7635,10 @@ mod tests {
     }
 
     /// Guards the authored map-only layer against an LFS pointer, a bad
-    /// exporter interpolation, or an accidental second Y flip. The two
-    /// sampled positions are inside the reviewed Waning Moon and southern
-    /// jungle masses respectively; tree density and biome remain deliberately
-    /// outside this assertion's contract.
+    /// exporter interpolation, or an accidental second Y flip. These points
+    /// are the COW-18.4 review anchors for the named organic envelopes; tree
+    /// density and physical biome deliberately remain outside this map-only
+    /// contract.
     #[test]
     #[ignore]
     fn cromatolis_ecology_zone_contract_against_real_lfs_assets() {
@@ -7650,14 +7650,54 @@ mod tests {
         assert_eq!(layer.len(), sim.map_size_lg().chunks_len());
         assert!(AuthoredEcologyZone::validate_layer(layer).is_ok());
         assert_eq!(
-            sim.authored_ecology_zone_at(Vec2::new(684, 599)),
+            sim.authored_ecology_zone_at(Vec2::new(710, 690)),
             Some(AuthoredEcologyZone::TemperateForest),
-            "Waning Moon must remain an authored forest mass after source Y-flip"
+            "the top of Waning Moon must remain an authored forest mass"
         );
         assert_eq!(
-            sim.authored_ecology_zone_at(Vec2::new(186, 59)),
+            sim.authored_ecology_zone_at(Vec2::new(730, 476)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Waning Moon's descending lower lobe must survive the export"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(725, 876)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Sourcil must surround Pleasant Loch on its northern side"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(860, 833)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Sourcil must surround Pleasant Loch on its eastern side"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(285, 616)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Silver Forest must extend west of Sapphire Loch"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(460, 523)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Silver Forest must extend east of Sapphire Loch"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(485, 556)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Moon Forest must extend west of Moon Lake"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(580, 476)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Moon Forest must extend east of Moon Lake"
+        );
+        assert_ne!(
+            sim.authored_ecology_zone_at(Vec2::new(450, 356)),
             Some(AuthoredEcologyZone::Jungle),
-            "the southern jungle mass must not collapse into a procedural biome"
+            "Greenlife must not leak north into the Red Peaks"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(600, 143)),
+            Some(AuthoredEcologyZone::Jungle),
+            "Greenlife must remain present south of its Mazon-Tathune boundary"
         );
     }
 
