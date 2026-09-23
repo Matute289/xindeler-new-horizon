@@ -50,6 +50,22 @@ fn authored_map_post_processing_applies(
         && true_alt >= true_sea_level
 }
 
+/// Whether this particular map cell, rather than the map rendering mode, has
+/// physical water that must keep its own visual treatment.
+/// `MapConfig::is_water` only asks the renderer whether it should include water
+/// globally; its default is `true`, so using it here would suppress authored
+/// land presentation across the entire world map.
+fn authored_map_cell_is_physical_water(
+    river_kind: Option<RiverKind>,
+    depth_m: f64,
+    true_alt: f64,
+    true_sea_level: f64,
+) -> bool {
+    matches!(river_kind, Some(RiverKind::Lake { .. } | RiverKind::Ocean))
+        || depth_m > 0.0
+        || true_alt < true_sea_level
+}
+
 /// Physical column material always outranks authored map presentation. The
 /// optional column fact is absent only at an unavailable map boundary; the
 /// compact regional alpine fact remains available there.
@@ -412,9 +428,8 @@ pub fn sample_pos(
     {
         let altitude = ((sample.alt - CONFIG.sea_level) as f64 / 1050.0).clamp(0.0, 1.0);
         let vegetation = sample.tree_density.clamp(0.0, 1.0) as f64;
-        let is_physical_water = is_water
-            || matches!(river_kind, Some(RiverKind::Lake { .. } | RiverKind::Ocean))
-            || true_alt < true_sea_level;
+        let is_physical_water =
+            authored_map_cell_is_physical_water(river_kind, depth_m, true_alt, true_sea_level);
         let profile = sampler.authored_ground_cover_profile.as_ref();
 
         // Cromatolis's alpine policy is expressed in real relief metres and
@@ -730,6 +745,33 @@ mod tests {
             "wetland never overrides co-located snow, rock, cliff, forced material, or alpine \
              presentation",
         );
+    }
+
+    #[test]
+    fn authored_land_tint_is_not_disabled_by_the_global_water_render_option() {
+        // `MapConfig::orthographic` enables water rendering globally. That
+        // configuration must not classify every dry land cell as physical
+        // water and bypass the authored ground/ecology palette.
+        assert!(!authored_map_cell_is_physical_water(None, 0.0, 12.0, 0.0));
+        assert!(authored_map_cell_is_physical_water(
+            Some(RiverKind::Ocean),
+            0.0,
+            12.0,
+            0.0,
+        ));
+        let river = Some(RiverKind::River {
+            cross_section: Vec2::new(2.0, 1.0),
+        });
+        assert!(
+            !authored_map_cell_is_physical_water(river, 0.0, 12.0, 0.0),
+            "a dry river-adjacent cell remains eligible for its authored land tint"
+        );
+        assert!(
+            authored_map_cell_is_physical_water(river, 1.0, 12.0, 0.0),
+            "a water-covered river cell keeps its physical water treatment"
+        );
+        assert!(authored_map_cell_is_physical_water(None, 1.0, 12.0, 0.0));
+        assert!(authored_map_cell_is_physical_water(None, 0.0, -0.1, 0.0));
     }
 
     #[test]
