@@ -230,7 +230,9 @@ impl World {
                     .civs()
                     .sites
                     .values()
-                    .filter_map(|site| Some((site.kind.marker()?, site)))
+                    .filter_map(|site| {
+                        Some((site.kind.marker(site.is_authored_settlement())?, site))
+                    })
                     .map(|(marker, site)| {
                         Marker::at(
                             (site.center * TerrainChunkSize::RECT_SIZE.map(|e| e as i32)).as_(),

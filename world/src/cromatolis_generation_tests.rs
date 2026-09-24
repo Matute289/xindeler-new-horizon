@@ -970,3 +970,84 @@ fn authored_cave_roofs_are_rock_not_crust() {
         crust_fraction * 100.0
     );
 }
+
+/// The bug this guards against: Cromatolis's 7 authored `Inn` (and any
+/// `Post`) settlements resolve to `SiteKind::Camp` as a physical stand-in --
+/// no dedicated inn/post generator exists yet (see
+/// `civ::resolve_settlement_site_kind`). `Camp` is also what genuine
+/// procedural bandit camps use, and `SiteKind::marker` used to return `None`
+/// for every `Camp` unconditionally, so none of the 7 inns showed up on the
+/// world map at all -- unlike every other settlement category.
+///
+/// `civ::Site.authored.is_some()` (surfaced on the real, generated
+/// `site::Site` as `is_authored_settlement`) is the same signal
+/// `rtsim::generate::site::good_or_evil` already uses to keep these sites
+/// from being classified as hostile (COW-19); this test is that fix's
+/// counterpart for the map marker, exercised against the real generated
+/// world rather than the `SiteKind::marker` unit test's synthetic bool.
+///
+/// `cargo test -p xindeler-world
+/// cromatolis_authored_inns_and_posts_get_a_town_marker -- --ignored`
+#[test]
+#[ignore]
+fn cromatolis_authored_inns_and_posts_get_a_town_marker() {
+    let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+    let (world, index) = World::generate(
+        0,
+        sim::WorldOpts {
+            seed_elements: true,
+            world_file: sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+            calendar: None,
+        },
+        &threadpool,
+        &|_| {},
+    );
+    let index_ref = index.as_index_ref();
+
+    // Every real `WorldSite` that is both `SiteKind::Camp` and
+    // `is_authored_settlement` is one of Cromatolis's authored inns/posts:
+    // `Camp` is currently the physical stand-in for exactly those two
+    // categories (see `civ::AuthoredSettlementCategory::default_site_kind`),
+    // and nothing else in this region sets `is_authored_settlement` on a
+    // `Camp` site. Found this way (rather than by name) so the assertion
+    // doesn't quietly stop covering a settlement if the authored export
+    // renames or adds one.
+    let authored_camp_sites: Vec<_> = index_ref
+        .sites
+        .iter()
+        .filter(|(_, site)| site.kind == Some(SiteKind::Camp) && site.is_authored_settlement)
+        .map(|(id, site)| (id, site.name().unwrap_or("<unnamed>").to_string()))
+        .collect();
+
+    assert!(
+        authored_camp_sites.len() >= 7,
+        "expected at least the 7 reviewed authored inns among Cromatolis's Camp-stand-in sites, \
+         found {}: {authored_camp_sites:?}",
+        authored_camp_sites.len()
+    );
+
+    let map_data = world.get_map_data(index_ref, &threadpool);
+    let town_marker_site_ids: std::collections::HashSet<_> = map_data
+        .sites
+        .iter()
+        .filter(|marker| marker.kind == MarkerKind::Town)
+        .filter_map(|marker| marker.site)
+        .collect();
+
+    for (site_id, name) in &authored_camp_sites {
+        assert!(
+            town_marker_site_ids.contains(&site_id.id()),
+            "authored settlement {name:?} ({site_id:?}) resolves to SiteKind::Camp but got no \
+             Town marker on the world map -- `SiteKind::marker` regressed back to treating every \
+             Camp as unmarked regardless of is_authored_settlement"
+        );
+    }
+
+    // A genuine wild procedural `Camp` must still get no marker at all --
+    // this only matters outside Cromatolis (see the comment on
+    // `civs_generate_places_every_authored_cromatolis_settlement_and_landmark`
+    // in `civ::mod::tests`: an authored-settlements region places zero
+    // procedural minor sites, so Cromatolis itself has none to check here),
+    // and is covered directly by the `SiteKind::marker` unit tests in
+    // `site::mod::tests` instead of by asset-dependent generation.
+}
