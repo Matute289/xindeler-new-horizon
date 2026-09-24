@@ -123,6 +123,7 @@ impl<'a> CanvasInfo<'a> {
             authored_near_water: false,
             water_body: None,
             salinity: None,
+            aquatic_ecology_profile: None,
             authored_alpine_snowland: false,
             chaos: 0.0,
             alt: 0.0,

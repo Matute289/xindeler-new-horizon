@@ -1,0 +1,152 @@
+// Cromatolis aquatic ecology: which fauna/flora profile governs a water
+// chunk, selected by `WaterBodyKind` + `Salinity` + depth + abstract
+// temperature (`world/src/sim/mod.rs`'s `AuthoredAquaticEcology`).
+//
+// Matched top to bottom; the first profile whose selector matches a column
+// wins. Every selector field is optional -- an absent field matches
+// anything, and RON's `ron` crate requires an explicit `Some(..)` around any
+// value given for one (a bare `None` is spelled by omitting the field
+// entirely, since every one carries `#[serde(default)]`). `zones` (currently
+// empty) can force a named profile inside a polygon regardless of selector,
+// the same `polygon_normalized_top_left` convention
+// `cromatolis_v0_tree_candidate_policy.ron` and the climate microclimate
+// zones use.
+//
+// Profile selection here is deliberately structural rather than tuned to a
+// biologically precise depth/temperature split: with only seven profiles
+// (the engine-side `AquaticEcologyProfileId` enum caps how many named
+// profiles have a real consumer, keeping this small), `depth`/`temp`
+// bands are drawn so every real `WaterBodyKind` × depth combination lands in
+// exactly one profile, rather than leaving an unclaimed gap between two
+// narrow niches. `caribbean_reef_shelf`/`temperate_kelp_shelf` therefore
+// span the whole 0-200m band (not just the true photic shelf) so no marine
+// column falls through to nothing; `abyssal_plain` picks up everything
+// beyond that. `swamp_shallows` is the closest reachable proxy for a swamp
+// water body now that `WaterBodyKind` carries no `Swamp` variant (see that
+// enum's doc comment in `world/src/sim/mod.rs`) -- shallow standing water at
+// a lake or lagoon edge, matched before the unrestricted `standing_lake`/
+// `estuary` profiles that mop up the remaining depth range.
+//
+// `density` is each profile's wildlife spawn-attempt rate, read live by the
+// `world.wildlife.spawn.cromatolis.aquatic.<id>` manifest entries in
+// `world/src/layer/wildlife.rs`. `fauna`'s weights are the declared source
+// of truth for each profile's species mix, but are not read by that
+// manifest directly -- its entries gate on *which* profile a column
+// resolved to, and each such profile's actual `SpawnEntry` pack lives in its
+// own asset (`assets/world/wildlife/spawn/cromatolis/aquatic/<id>.ron`),
+// authored to match this list (kept honest by
+// `cromatolis_aquatic_spawn_entries_match_their_declared_ecology_fauna` in
+// `world/src/layer/wildlife.rs`'s test module). `flora`'s weights *are* read
+// live too, by the `Underwater`/`Floating` `ScatterConfig`s in
+// `world/src/layer/scatter.rs`.
+(
+    schema: "xindeler_open_world.aquatic_ecology.v1",
+
+    profiles: [
+        (
+            id: "caribbean_reef_shelf",
+            water_kind: Some([Ocean, Sea]),
+            salinity: Some([Saline]),
+            depth: Some((min: 0.0, max: 200.0)),
+            temp: Some((min: 0.3, max: 999.0)),
+            density: 0.0001,
+            fauna: [
+                (3.0, "common.entity.wild.peaceful.clownfish"),
+                (1.0, "common.entity.wild.aggressive.reefsnapper"),
+            ],
+            flora: [
+                (1.0, StonyCoral),
+                (0.6, SoftCoral),
+                (0.4, MermaidsFan),
+                (0.3, SeaweedTropical),
+            ],
+        ),
+        (
+            id: "temperate_kelp_shelf",
+            water_kind: Some([Ocean, Sea]),
+            salinity: Some([Saline]),
+            depth: Some((min: 0.0, max: 200.0)),
+            temp: Some((min: -999.0, max: 0.3)),
+            density: 0.0001,
+            fauna: [
+                (2.0, "common.entity.wild.peaceful.marlin"),
+                (1.0, "common.entity.wild.peaceful.seal"),
+            ],
+            flora: [
+                (1.0, GiantKelp),
+                (0.8, BullKelp),
+                (0.6, SeaweedTemperate),
+                (0.5, Seagrass),
+                (0.3, SeaAnemone),
+            ],
+        ),
+        (
+            id: "abyssal_plain",
+            water_kind: Some([Ocean, Sea]),
+            depth: Some((min: 200.0, max: 100000.0)),
+            // Sparser than the two shelf profiles: this is most of the
+            // ocean's real seabed area, and "sparse open-water/deep-seabed
+            // predators only" is the point, not a placeholder.
+            density: 0.00003,
+            fauna: [
+                // Deliberately barren of flora (no light reaches this band),
+                // but not of fauna -- sparse open-water/deep-seabed
+                // predators only.
+                (2.0, "common.entity.wild.aggressive.sandshark"),
+                (1.0, "common.entity.wild.aggressive.rocksnapper"),
+            ],
+            flora: [],
+        ),
+        (
+            id: "swamp_shallows",
+            water_kind: Some([Lake, Lagoon]),
+            depth: Some((min: 0.0, max: 2.0)),
+            density: 0.001,
+            fauna: [
+                (3.0, "common.entity.wild.peaceful.axolotl"),
+                (3.0, "common.entity.wild.peaceful.crab"),
+                (1.0, "common.entity.wild.aggressive.sea_crocodile"),
+            ],
+            flora: [],
+        ),
+        (
+            id: "estuary",
+            water_kind: Some([Lagoon]),
+            density: 0.001,
+            fauna: [
+                (2.0, "common.entity.wild.peaceful.turtle"),
+                (1.0, "common.entity.wild.peaceful.marlin"),
+                (1.0, "common.entity.wild.peaceful.crab"),
+            ],
+            flora: [],
+        ),
+        (
+            id: "standing_lake",
+            water_kind: Some([Lake]),
+            density: 0.001,
+            fauna: [
+                (3.0, "common.entity.wild.peaceful.piranha"),
+                (6.0, "common.entity.wild.peaceful.axolotl"),
+                (1.0, "common.entity.wild.aggressive.alligator"),
+                (2.0, "common.entity.wild.peaceful.kelpie"),
+                (16.0, "common.entity.wild.peaceful.crab"),
+                (4.0, "common.entity.wild.aggressive.crocodile"),
+                (1.0, "common.entity.wild.aggressive.hydra"),
+            ],
+            flora: [],
+        ),
+        (
+            id: "mountain_river",
+            water_kind: Some([River]),
+            density: 0.001,
+            fauna: [
+                (3.0, "common.entity.wild.peaceful.piranha"),
+                (1.0, "common.entity.wild.aggressive.rootsnapper"),
+                (1.0, "common.entity.wild.aggressive.crocodile"),
+            ],
+            flora: [],
+        ),
+    ],
+
+    zones: [],
+)

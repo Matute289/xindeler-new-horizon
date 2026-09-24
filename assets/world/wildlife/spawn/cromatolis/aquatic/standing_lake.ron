@@ -1,6 +1,6 @@
 SpawnEntry (
-    name: "Cromatolis lake wildlife.",
-    note: "Freshwater inhabitants of Cromatolis's elevated lakes -- same species mix as the base game's tropical rivers, but gated to the real, much hotter temperature band Cromatolis's authored climate curve produces at lake altitude.",
+    name: "Cromatolis standing-lake wildlife.",
+    note: "Freshwater inland-lake inhabitants -- the `standing_lake` profile in cromatolis_v0_aquatic_ecology.ron.",
     rules: [
         Pack(
             groups: [
