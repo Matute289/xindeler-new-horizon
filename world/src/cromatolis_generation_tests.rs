@@ -827,3 +827,146 @@ fn authored_void_lookup_costs_on_the_live_carve_and_rock_paths() {
         measure("in-footprint", &chunks);
     });
 }
+
+/// How much rock an authored generic cave actually leaves between itself and
+/// the sky.
+///
+/// The three constants that decide this — the branch-floor clamp, the
+/// per-size-class carve depth, and `authored_voids::SURFACE_MARGIN` — were
+/// each chosen on their own terms, and the number they produce *together* on
+/// this landmass had never been measured. It turned out to be three or four
+/// blocks across most of a Giant cave's footprint: not a cave with a roof, a
+/// hollow under a crust. This is the measurement that says so, and the
+/// regression guard that keeps it from silently going back.
+///
+/// Read it as a *shape* measurement, not a count of defects. The sample is
+/// one 256x256-block window centred on `cave.cave_020` (a Giant, and the cave
+/// whose in-client report started this), so the absolute numbers belong to
+/// that window; what matters is the fraction, and that nothing breaches.
+///
+/// Two measurement details that are load-bearing rather than incidental:
+///
+/// * The surface is found by scanning down from `col.alt`, not from the top of
+///   the chunk. Scanning from the top finds a tree canopy or a boulder and then
+///   reads the gap under the leaves as a breached roof — that error alone
+///   reported 274 false breaches in this window.
+/// * `col.alt` is the same altitude the carve caps its ceiling against, and it
+///   tracks the real generated ground closely (measured over this window:
+///   median +0.3 blocks, never more than +1.0). So a thin roof here is the
+///   carve doing what it was told, not the carve being told the wrong height.
+///
+/// `cargo test -p xindeler-world --release
+/// authored_cave_roofs_are_rock_not_crust -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn authored_cave_roofs_are_rock_not_crust() {
+    use common::{
+        terrain::{CoordinateConversions, TerrainChunk, TerrainChunkSize},
+        vol::{ReadVol, RectVolSize},
+    };
+
+    /// Centre of the sample window: inside `cave.cave_020`'s footprint.
+    const WINDOW_CENTRE: Vec2<i32> = Vec2 {
+        x: 10_937,
+        y: 30_535,
+    };
+    /// Half-width of the sample window, in blocks.
+    const WINDOW_HALF: i32 = 128;
+    /// At or below this much rock cover, the ground reads as a crust rather
+    /// than a cave roof: a few blocks is what a player breaks through by
+    /// accident.
+    const CRUST_BLOCKS: i32 = 4;
+
+    let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+    let (world, index) = World::generate(
+        0,
+        sim::WorldOpts {
+            seed_elements: true,
+            world_file: sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+            calendar: None,
+        },
+        &threadpool,
+        &|_| {},
+    );
+    let index_ref = index.as_index_ref();
+    let sim = world.sim();
+
+    let mut chunks: std::collections::HashMap<Vec2<i32>, TerrainChunk> =
+        std::collections::HashMap::new();
+    let mut columns = 0_u32;
+    let mut breached = 0_u32;
+    let mut crust = 0_u32;
+
+    CanvasInfo::with_mock_canvas_info(index_ref, sim, |info| {
+        for dy in -WINDOW_HALF..WINDOW_HALF {
+            for dx in -WINDOW_HALF..WINDOW_HALF {
+                let wpos = WINDOW_CENTRE + Vec2::new(dx, dy);
+                let cpos = wpos.wpos_to_cpos();
+                if let std::collections::hash_map::Entry::Vacant(slot) = chunks.entry(cpos) {
+                    let Ok((chunk, _)) =
+                        world.generate_chunk(index_ref, cpos, None, || false, None, None)
+                    else {
+                        continue;
+                    };
+                    slot.insert(chunk);
+                }
+                let chunk = &chunks[&cpos];
+                let rel = Vec2::new(
+                    wpos.x - cpos.x * TerrainChunkSize::RECT_SIZE.x as i32,
+                    wpos.y - cpos.y * TerrainChunkSize::RECT_SIZE.y as i32,
+                );
+                let Some(col) = info.col_or_gen(wpos) else {
+                    continue;
+                };
+                let bottom = chunk.get_min_z();
+                let ground = col.alt.floor() as i32;
+                let Some(surface) = (bottom..=ground)
+                    .rev()
+                    .find(|&z| chunk.get(rel.with_z(z)).is_ok_and(|b| b.is_filled()))
+                else {
+                    continue;
+                };
+                columns += 1;
+                let Some(void_top) = (bottom..surface)
+                    .rev()
+                    .find(|&z| chunk.get(rel.with_z(z)).is_ok_and(|b| !b.is_filled()))
+                else {
+                    continue;
+                };
+                let cover = surface - void_top;
+                if cover <= 1 {
+                    breached += 1;
+                }
+                if cover <= CRUST_BLOCKS {
+                    crust += 1;
+                }
+            }
+        }
+    });
+
+    let crust_fraction = f64::from(crust) / f64::from(columns);
+    println!(
+        "cave_020 window: {columns} ground columns, {breached} breached, {crust} roofed by \
+         {CRUST_BLOCKS} blocks or less ({:.1}%)",
+        crust_fraction * 100.0
+    );
+
+    assert_eq!(
+        breached, 0,
+        "an authored cave reached the sky. `SURFACE_MARGIN` is supposed to make that impossible, \
+         so this is the cap itself failing rather than a tuning question"
+    );
+    // Measured 8.8% after the branch-floor clamp was raised from 24 to 64,
+    // against 23.8% before it. The bound sits well above the measurement and
+    // well below the old value on purpose: it is here to catch a regression
+    // back towards "the whole footprint is a crust", not to pin a number that
+    // moves whenever the terrain does.
+    assert!(
+        crust_fraction < 0.15,
+        "{:.1}% of this window is cave roofed by {CRUST_BLOCKS} blocks or less. That was 23.8% \
+         when the branch-floor clamp kept tunnels at the hub's altitude while the ground fell \
+         away beneath them; if it is back up there, check `MAX_BRANCH_FLOOR_DRIFT` and the \
+         `*_DEPTH` constants before anything else",
+        crust_fraction * 100.0
+    );
+}

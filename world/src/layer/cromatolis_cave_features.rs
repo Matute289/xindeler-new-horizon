@@ -152,7 +152,31 @@ const SMALL_DEPTH: i32 = 18;
 /// Branch floor is kept within this many blocks of the hub's floor, so a
 /// branch tip landing over sharply different terrain still reads as part
 /// of one connected cave system rather than an absurd vertical shaft.
-const MAX_BRANCH_FLOOR_DRIFT: i32 = 24;
+///
+/// **Raised from 24 after measuring what 24 actually produced on the real
+/// map.** A branch tip wants to sit `profile.depth` below *its own* surface;
+/// this clamp is what stops it. At 24 the clamp bound almost every Giant
+/// branch on this landmass, because a 95-block branch crosses more than 24
+/// blocks of relief routinely -- so the tunnel stayed at the hub's altitude
+/// while the ground fell away from under it, and the only thing left between
+/// the cave and the sky was [`SURFACE_MARGIN`]'s ceiling cap. The result was
+/// not a cave with a thin roof in one spot: it was the whole footprint
+/// hollowed out under three or four blocks of crust.
+///
+/// Measured around `cave.cave_020` (a Giant), 256x256 blocks, roof thickness
+/// per ground column, real LFS assets: **24 -> 15,612 columns (23.8%) roofed
+/// by 2-4 blocks; 64 -> 5,749 (8.8%)**. Columns over a void with 12 blocks or
+/// less above them go 27.6% -> 12.4%. Nothing breaches the surface at either
+/// value -- the cap holds -- so this is entirely about how much rock is left,
+/// not about holes. Past 64 the curve is flat (128 gives 5,688), because what
+/// remains is a straight branch spanning ground that dips in the middle, which
+/// no endpoint clamp can follow; fixing that needs a per-column floor, which
+/// is a change to the carve rather than to this constant.
+///
+/// 64 blocks over a 95-block Giant branch is roughly a 34 degree grade, which
+/// is a steep tunnel and still a tunnel; the shaft this constant exists to
+/// prevent is the near-vertical case, which stays prevented.
+const MAX_BRANCH_FLOOR_DRIFT: i32 = 64;
 
 // ---------------------------------------------------------------------
 // Authored minerals.

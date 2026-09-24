@@ -92,14 +92,46 @@
             // ~34.6 C loses the highest shore chunks; anything at or above
             // ~35.7 C pushes the lowest ones to a saturated 1.0, which the
             // half-open range excludes.
+            //
+            // SHAPE: a 16-gon approximating a disc of radius 14 chunks about
+            // (832, 768), not the axis-aligned 26x26 rectangle this entry
+            // first shipped as. The rectangle was visible as a literal square
+            // on the world map: chunk temperature feeds biome resolution,
+            // biome feeds the map colour, and a 15 C step with straight edges
+            // and a straight-edged 8-chunk falloff painted a hard-edged
+            // 42x42-chunk block of warm-ground colour across chunk rows
+            // 747..788 / columns 811..852. The pocket is meant to read as a
+            // local anomaly, so its footprint has to be a shape terrain could
+            // plausibly produce. A disc also matches how the anomaly is
+            // described -- warmth radiating from the lake -- where a square
+            // matched nothing.
+            //
+            // The inradius (14 * cos(pi/16) = 13.73) is what has to clear the
+            // 12-chunk shore radius the 35.0 C above is derived from, and it
+            // does with 1.73 chunks to spare: every chunk centre within radius
+            // 12 of (832, 768) is still strictly inside the polygon, so the
+            // derivation holds unchanged and the two dungeon predicates see
+            // exactly the same shoreline they did before.
             id: "microclimate.myrmidon_terracotta_lake",
             forced_sea_level_temp_c: 35.0,
             falloff_chunks: 8.0,
             polygon_normalized_top_left: [
-                (x: 0.799805, y: 0.237305),
-                (x: 0.825195, y: 0.237305),
-                (x: 0.825195, y: 0.262695),
-                (x: 0.799805, y: 0.262695),
+                (x: 0.826172, y: 0.250000),
+                (x: 0.825131, y: 0.244768),
+                (x: 0.822167, y: 0.240333),
+                (x: 0.817732, y: 0.237369),
+                (x: 0.812500, y: 0.236328),
+                (x: 0.807268, y: 0.237369),
+                (x: 0.802833, y: 0.240333),
+                (x: 0.799869, y: 0.244768),
+                (x: 0.798828, y: 0.250000),
+                (x: 0.799869, y: 0.255232),
+                (x: 0.802833, y: 0.259667),
+                (x: 0.807268, y: 0.262631),
+                (x: 0.812500, y: 0.263672),
+                (x: 0.817732, y: 0.262631),
+                (x: 0.822167, y: 0.259667),
+                (x: 0.825131, y: 0.255232),
             ],
         ),
     ],
