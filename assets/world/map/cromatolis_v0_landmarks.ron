@@ -14,7 +14,7 @@
             name: "The Tree of Souls",
             kind: TreeOfSouls,
             template: GiantTree,
-            center: (x: 0.60039, y: 0.89772),
+            center: (x: 0.60283, y: 0.88795),
         ),
         (
             id: "site.black_tower_south",
