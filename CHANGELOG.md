@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Settings, Social, Map and Crafting on-screen corner buttons (all four remain available via their keybinds, the Esc menu and the skillbar).
 
+### Fixed
+
+- A steep real cliff could make the distant LoD terrain mesh's vertex-placement pass overshoot, producing a sharp black wedge/degenerate triangle in the far terrain (most visible near coastal cliffs, e.g. Cromatolis's Rios Port).
+
 ## [0.21.0] - 2026-08-23
 
 ### Added
