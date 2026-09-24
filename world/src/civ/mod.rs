@@ -5614,13 +5614,18 @@ mod tests {
         //   Gnarling         291 -> 102,588   temp band [-0.3, 0.4) used to sit
         //                                     435-891 m up; it now contains the
         //                                     temperate sea-level anchor itself
-        //   Adlet         13,057 -> 137,222   `temp < -0.2`, likewise
+        //   Adlet         13,057 -> 137,307   `temp < -0.2`, likewise
         //   Cultist       85,912 -> 200,081   `temp < 0.5`: nearly all land
         //   VampireCastle     48 ->     142   `temp <= -0.8`: a little more
         //                                     genuinely cold high ground
         //   DwarvenMine  142,606 -> 270,395   no temp term; follows
         //                                     `BiomeKind::Forest`, +79%
-        //   Myrmidon/Terracotta  4 ->    106  the authored microclimate pocket
+        //   Myrmidon/Terracotta  4 ->    103  the authored microclimate pocket
+        //                                     (106 while that pocket was still
+        //                                     authored as a rectangle; the disc
+        //                                     that replaced it covers three
+        //                                     fewer shore chunks, which is also
+        //                                     where Adlet's +85 comes from)
         //   ChapelSite       343 ->     343   no temp or biome term
         //   Sahagin          638 ->     638   no temp or biome term
         //

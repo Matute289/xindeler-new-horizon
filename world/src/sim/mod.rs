@@ -8586,9 +8586,21 @@ mod tests {
         //
         // Pinned exactly, deliberately: an exact number is what makes the next
         // re-measure unmissable.
-        assert_eq!(biome_count(BiomeKind::Savannah), 2_419);
-        assert_eq!(biome_count(BiomeKind::Grassland), 179_722);
-        assert_eq!(biome_count(BiomeKind::Taiga), 46_052);
+        // `Savannah` needs `temp >= 0.3`, and the only ground on this map that
+        // reaches it is the authored microclimate pocket -- so this number is
+        // not a biome measurement so much as a readout of that pocket's
+        // footprint, and it moves whenever the pocket's shape does. It was
+        // 2,419 while the pocket was authored as an axis-aligned 26x26-chunk
+        // rectangle; reshaping it into a disc of radius 14 (which is what
+        // stopped the world map drawing a literal square of dry-ground colour
+        // there) drops it to 2,288, and the 111 chunks that fall out of the
+        // `temp >= 0.3` band land in `Grassland` just below it (179,722 ->
+        // 179,833) plus 20 in `Taiga` (46,052 -> 46,072), which is the cold
+        // high ground right at the pocket's old corners. `Mountain` and
+        // `Snowland` do not move.
+        assert_eq!(biome_count(BiomeKind::Savannah), 2_288);
+        assert_eq!(biome_count(BiomeKind::Grassland), 179_833);
+        assert_eq!(biome_count(BiomeKind::Taiga), 46_072);
         assert_eq!(biome_count(BiomeKind::Mountain), 27_879);
         assert_eq!(biome_count(BiomeKind::Snowland), 32_983);
         // Banded instead: the biomes where a small move really would be the CDF
