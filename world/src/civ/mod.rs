@@ -4421,6 +4421,14 @@ mod tests {
             Some(&1)
         );
         assert_eq!(by_kind.get(&AuthoredLandmarkKind::Harbour), Some(&2));
+
+        let tree_of_souls = landmarks
+            .landmarks
+            .iter()
+            .find(|landmark| landmark.id == "site.the_tree_of_souls")
+            .expect("real Cromatolis export must contain The Tree of Souls");
+        assert_eq!(tree_of_souls.center.x, 0.60283);
+        assert_eq!(tree_of_souls.center.y, 0.88795);
     }
 
     #[test]
