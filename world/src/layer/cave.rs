@@ -2,7 +2,7 @@ use crate::{
     Canvas, CanvasInfo, ColumnSample, IndexRef, Land,
     layer::{
         authored_regions::authored_voids_for as authored_voids,
-        authored_voids::{AuthoredVoids, ChunkVoids, ProceduralContact},
+        authored_voids::{ChunkVoids, ProceduralContact, chunk_voids_at},
         traversal::{AccommodationTier, PassageColumn, PassageQuery},
     },
     site::SiteKind,
@@ -435,12 +435,16 @@ fn all_tunnels_at<'a>(
 /// *parameter* rather than something this function looks up, so the test-only
 /// [`tunnel_bounds_at_unguarded`] can measure the "before" side without adding
 /// a branch to the production path. See [`crate::layer::authored_voids`].
-fn tunnel_bounds_at_from_guarded_by<'a>(
+///
+/// `voids` is this **chunk's** already-resolved bucket, not the whole index: a
+/// per-chunk caller resolves it once with [`chunk_voids_at`] and hands the same
+/// value to all 1 024 of its columns.
+fn tunnel_bounds_at_chunk<'a>(
     wpos2d: Vec2<i32>,
     info: &'a CanvasInfo,
     land: &'a Land,
     tunnels: impl Iterator<Item = (u32, Tunnel)> + 'a,
-    voids: Option<&'a AuthoredVoids>,
+    voids: Option<ChunkVoids<'a>>,
 ) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
     info.col_or_gen(wpos2d)
         .map(move |col| {
@@ -458,13 +462,17 @@ fn tunnel_bounds_at_from_guarded_by<'a>(
         .flatten()
 }
 
-/// As [`tunnel_bounds_at_from_guarded_by`], for a caller that already holds
+/// As [`tunnel_bounds_at_chunk`], for a caller that already holds
 /// this column's sample.
 ///
 /// Generating a `ColumnSample` is the most expensive thing done per column in
 /// world-gen and `CanvasInfo::col_or_gen` does not cache, so a caller that
 /// needs both the sample and the tunnel bounds must not ask for the sample
 /// twice.
+///
+/// `voids` is this **chunk's** bucket, resolved by the caller (see
+/// [`chunk_voids_at`]), so the guard costs nothing per column beyond the
+/// geometry it actually has to test.
 fn tunnel_bounds_at_col_guarded_by<'a>(
     wpos2d: Vec2<i32>,
     info: &'a CanvasInfo,
@@ -472,15 +480,9 @@ fn tunnel_bounds_at_col_guarded_by<'a>(
     col_alt: f32,
     col_water_dist: Option<f32>,
     tunnels: impl Iterator<Item = (u32, Tunnel)> + 'a,
-    voids: Option<&'a AuthoredVoids>,
+    voids: Option<ChunkVoids<'a>>,
 ) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
     let wposf = wpos2d.map(|e| e as f64 + 0.5);
-    // Resolved once per column rather than once per candidate tunnel: the
-    // bucket lookup is the only hash this guard ever pays, and in a world with
-    // no authored region there is nothing here at all.
-    let voids: Option<ChunkVoids<'a>> = voids
-        .map(|voids| voids.in_chunk(wpos2d))
-        .filter(|voids| !voids.is_empty());
     tunnels.filter_map(move |(level, tunnel)| {
         let (z_range, horizontal, vertical, dist) = tunnel.z_range_at(wposf, *info)?;
         // Avoid cave entrances intersecting water
@@ -531,7 +533,13 @@ fn tunnel_bounds_at_from<'a>(
     land: &'a Land,
     tunnels: impl Iterator<Item = (u32, Tunnel)> + 'a,
 ) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
-    tunnel_bounds_at_from_guarded_by(wpos2d, info, land, tunnels, authored_voids(info))
+    tunnel_bounds_at_chunk(
+        wpos2d,
+        info,
+        land,
+        tunnels,
+        chunk_voids_at(authored_voids(info), wpos2d),
+    )
 }
 
 /// [`tunnel_bounds_at`] as it would behave in a world with no authored region
@@ -542,7 +550,7 @@ pub(crate) fn tunnel_bounds_at_unguarded<'a>(
     info: &'a CanvasInfo,
     land: &'a Land,
 ) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
-    tunnel_bounds_at_from_guarded_by(wpos2d, info, land, all_tunnels_at(wpos2d, info, land), None)
+    tunnel_bounds_at_chunk(wpos2d, info, land, all_tunnels_at(wpos2d, info, land), None)
 }
 
 /// [`tunnel_bounds_at`] and [`tunnel_bounds_at_unguarded`] for one column, from
@@ -576,7 +584,10 @@ pub(crate) fn tunnel_bounds_at_col_both<'a>(
             voids,
         )
     };
-    (make(None), make(authored_voids(info)))
+    (
+        make(None),
+        make(chunk_voids_at(authored_voids(info), wpos2d)),
+    )
 }
 
 pub fn tunnel_bounds_at<'a>(
@@ -671,7 +682,7 @@ impl PassageQuery for TunnelPassage<'_> {
             col_alt,
             col.water_dist,
             self.tunnels.iter().copied(),
-            authored_voids(&info),
+            chunk_voids_at(authored_voids(&info), wpos2d),
         )
         .filter_map(|(_, z_range, horizontal, vertical, dist, tunnel)| {
             let fill = tunnel_column(
@@ -745,9 +756,15 @@ pub fn apply_caves_to(canvas: &mut Canvas, rng: &mut impl Rng) {
             .unwrap_or(0.0)
             .clamp(0.0, 1.0);
         let mut structure_cache = SmallCache::default();
+        // XINDELER: resolved once for the whole chunk, not once per column --
+        // the authored-void grid is chunk-granular and `foreach_col` never
+        // leaves this chunk. Kept to two lines on purpose: this is inside an
+        // upstream-owned function, and every line the fork adds here is a line
+        // the monthly `gitlab/master` merge has to resolve.
+        let voids = chunk_voids_at(authored_voids(&info), info.wpos());
         canvas.foreach_col(|canvas, wpos2d, col| {
             let tunnel_bounds =
-                tunnel_bounds_at_from(wpos2d, &info, &land, tunnels.iter().copied())
+                tunnel_bounds_at_chunk(wpos2d, &info, &land, tunnels.iter().copied(), voids)
                     .collect::<Vec<_>>();
 
             // First, clear out tunnels
@@ -2281,6 +2298,7 @@ fn apply_entity_spawns<R: Rng>(canvas: &mut Canvas, wpos: Vec3<i32>, biome: &Bio
 #[cfg(test)]
 pub(crate) mod measure {
     use super::*;
+    use crate::layer::authored_voids::AuthoredVoids;
 
     /// What the authored-void guard does to **one** tunnel, walked end to end.
     ///
@@ -2377,6 +2395,9 @@ pub(crate) mod measure {
             let Some(col) = info.col_or_gen(wpos2d) else {
                 continue;
             };
+            // The chunk bucket, resolved here because the walk moves between
+            // chunks column by column and so cannot hoist it any further.
+            let chunk_voids = chunk_voids_at(voids, wpos2d);
             let bounds = |voids| {
                 tunnel_bounds_at_col_guarded_by(
                     wpos2d,
@@ -2403,7 +2424,7 @@ pub(crate) mod measure {
             // whatever the reason. The two can only differ if the guard grows a
             // second reason to drop an entry, and then this is the assertion that
             // says so rather than the count quietly drifting.
-            let plugged = bounds(voids).is_none();
+            let plugged = bounds(chunk_voids).is_none();
             // A plain `assert_eq!`, not `debug_assert_eq!`: every caller documents
             // itself as `cargo test --release`, and the workspace release profile
             // sets `debug-assertions = false` -- so a debug assertion here would be
