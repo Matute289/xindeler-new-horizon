@@ -223,7 +223,17 @@ impl SiteKind {
         )
     }
 
-    pub fn marker(&self) -> Option<MarkerKind> {
+    /// `is_authored_settlement` is `site::Site::is_authored_settlement`: see
+    /// that field's doc. It exists here for the same reason it exists in
+    /// `rtsim::generate::site::good_or_evil` -- `Camp` is reused as a
+    /// physical stand-in for authored settlement categories (currently
+    /// `inn`/`post`) that don't have a dedicated building generator yet.
+    /// Those are real, named, friendly settlements and -- like every other
+    /// authored settlement category -- must surface a marker on the world
+    /// map; a genuine wild procedural `Camp` (bandit hideout) must not,
+    /// since those are meant to be found by exploration rather than
+    /// advertised on the map.
+    pub fn marker(&self, is_authored_settlement: bool) -> Option<MarkerKind> {
         match self {
             SiteKind::Refactor
             | SiteKind::CliffTown
@@ -244,6 +254,15 @@ impl SiteKind {
             SiteKind::Adlet => Some(MarkerKind::Adlet),
             SiteKind::Haniwa => Some(MarkerKind::Haniwa),
             SiteKind::VampireCastle => Some(MarkerKind::VampireCastle),
+
+            // An authored inn/post using `Camp` as its physical stand-in:
+            // no dedicated marker icon exists for those categories yet (see
+            // `common::map::MarkerKind`), so reuse `Town` -- the same
+            // "reuse the closest existing generic thing" approach already
+            // taken for the physical/NPC generator itself. A genuine wild
+            // procedural camp (`is_authored_settlement` false) falls
+            // through to the unmarked arm below, unchanged.
+            SiteKind::Camp if is_authored_settlement => Some(MarkerKind::Town),
 
             SiteKind::PirateHideout
             | SiteKind::JungleRuin
@@ -3561,4 +3580,40 @@ fn get_gradient_average(aabr: Aabr<i32>, land: &Land) -> f32 {
     }
 
     gradient_sum / (gradient_sample_count as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SiteKind;
+    use common::map::MarkerKind;
+
+    #[test]
+    fn camp_marker_depends_only_on_is_authored_settlement() {
+        // A genuine wild procedural `Camp` (bandit hideout) stays unmarked --
+        // it's meant to be found by exploration, not advertised on the map.
+        assert_eq!(SiteKind::Camp.marker(false), None);
+        // An authored Cromatolis inn/post using `Camp` as its physical
+        // stand-in (no dedicated generator exists yet -- see
+        // `civ::resolve_settlement_site_kind`) is a real, named, friendly
+        // settlement and must get a marker like every other settlement
+        // category does. `Town` is reused since no dedicated inn/post icon
+        // exists (same "reuse the closest existing generic thing" approach
+        // already taken for the physical/NPC generator itself).
+        assert_eq!(SiteKind::Camp.marker(true), Some(MarkerKind::Town));
+    }
+
+    #[test]
+    fn is_authored_settlement_does_not_affect_other_site_kinds() {
+        // The flag only changes anything for `Camp` -- sanity check a
+        // marked and an unmarked kind both stay put regardless of it.
+        assert_eq!(
+            SiteKind::Refactor.marker(false),
+            SiteKind::Refactor.marker(true)
+        );
+        assert_eq!(
+            SiteKind::PirateHideout.marker(false),
+            SiteKind::PirateHideout.marker(true)
+        );
+        assert_eq!(SiteKind::PirateHideout.marker(true), None);
+    }
 }

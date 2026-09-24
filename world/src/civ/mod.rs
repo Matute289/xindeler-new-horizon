@@ -3727,6 +3727,12 @@ impl Site {
     /// (which also covers landmarks) -- this feeds
     /// `site::Site::with_authored_settlement`, which only makes sense for
     /// genuine settlement pins.
+    ///
+    /// Not to be confused with the *field* of the same name on the real
+    /// generated `site::Site` (this method is the source it gets copied
+    /// from at `establish_site` time) -- that field, not this method, is
+    /// what `SiteKind::marker` and `rtsim::generate::site::good_or_evil`
+    /// read once a site actually exists in the world.
     pub fn is_authored_settlement(&self) -> bool { self.authored.is_some() }
 
     /// Whether player-start selection should consider this site at all.
