@@ -1463,6 +1463,83 @@ pub enum WorldCivStage {
     SiteGeneration,
 }
 
+/// Authored Cromatolis settlements that no authored route reaches, and that
+/// should get a real, engine-computed procedural connector to the rest of
+/// the road network (see
+/// `Civs::establish_procedural_cromatolis_route_connectors`).
+///
+/// This is a curated subset of every authored-roadless settlement, not the
+/// full list: a handful of authored-roadless settlements (the settlements
+/// in and around Malicious Haven) are intentionally isolated and must stay
+/// roadless, so they are deliberately absent here. Reconcile this list only
+/// against a reviewed decision about which settlements should gain a road,
+/// never mechanically from "every settlement with no authored route".
+const CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS: &[&str] = &[
+    // Town x6
+    "site.bronze_shore",
+    "site.elynshara",
+    "site.kalitos",
+    "site.morhe_dorei",
+    "site.rios_port",
+    "site.wanora",
+    // Village x4
+    "site.belletoile_village",
+    "site.itos_village",
+    "site.nugget_field_mines",
+    "site.ravenfair",
+    // Post x4
+    "site.bg_central_post",
+    "site.bg_east_post",
+    "site.bg_west_post",
+    "site.hita_post",
+    // Inn x6
+    "site.el_ojo_de_luna",
+    "site.the_fish_journey",
+    "site.the_sapphire_pillow",
+    "site.trident_dreams",
+    "site.twin_dreams",
+    "site.under_the_river",
+];
+
+/// Authored Cromatolis settlements that no authored route reaches and that
+/// must stay that way: confirmed intentionally isolated, not an authoring
+/// gap, so `establish_procedural_cromatolis_route_connectors` must never be
+/// handed these. All 5 are in or near Malicious Haven (a deliberately
+/// cut-off volcanic-island region).
+const CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS: &[&str] = &[
+    "site.malicious_haven.alice.zha_lloig_rhaz",
+    "site.malicious_haven.elena.vhorr_azhal",
+    "site.malicious_haven.merid.gha_rrul_uth",
+    "site.malicious_haven.susy.thlug_nyarr",
+    "site.tenoxitlan",
+];
+
+/// Members of `CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS` that
+/// `establish_procedural_cromatolis_route_connectors` cannot currently
+/// connect: measured against the real installed world, `find_path` finds no
+/// path at all from any of these three to any of the 8 nearest
+/// authored-connected settlements, even with an unbounded cost budget. All
+/// three sit in the far northwest of the map (chunk coordinates roughly
+/// x:69-156, y:145-213), 269-568 chunks in a straight line from the nearest
+/// authored-connected settlement (`site.mazon_town` and others) -- the
+/// pathfinder's walking-plus-small-cardinal-gap model (`walk_in_all_dirs`,
+/// up to a ~5-chunk unauthored gap) cannot bridge whatever separates them
+/// from the rest of the road network. This needs its own design decision
+/// (e.g. an authored bridge/route, or reclassifying them alongside
+/// `CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS`) rather than a silent
+/// engine-side workaround here.
+///
+/// `establish_procedural_cromatolis_route_connectors` still attempts these
+/// (skip-with-a-warning on failure is its normal behavior for any target,
+/// not special-cased for this list) -- this list exists so the real-data
+/// reachability regression can pin the current gap explicitly instead of
+/// either failing outright or silently passing over it.
+const CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED: &[&str] = &[
+    "site.rios_port",
+    "site.itos_village",
+    "site.nugget_field_mines",
+];
+
 impl Civs {
     pub fn generate(
         seed: u32,
@@ -1720,6 +1797,10 @@ impl Civs {
             }
             if let Some(routes) = authored_routes.as_ref() {
                 this.establish_authored_cromatolis_routes(&ctx, routes);
+                this.establish_procedural_cromatolis_route_connectors(
+                    &mut ctx,
+                    CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS,
+                );
             }
             report_stage(WorldCivStage::CivCreation(1, 1));
         } else {
@@ -3086,23 +3167,8 @@ impl Civs {
         site_fn: impl FnOnce(Id<Place>) -> Site,
     ) -> Id<Site> {
         prof_span!("establish_site");
-        const SITE_AREA: Range<usize> = 1..4; //64..256;
 
-        fn establish_site(
-            civs: &mut Civs,
-            ctx: &mut GenCtx<impl Rng>,
-            loc: Vec2<i32>,
-            site_fn: impl FnOnce(Id<Place>) -> Site,
-        ) -> Id<Site> {
-            let place = match ctx.sim.get(loc).and_then(|site| site.place) {
-                Some(place) => place,
-                None => civs.establish_place(ctx, loc, SITE_AREA),
-            };
-
-            civs.sites.insert(site_fn(place))
-        }
-
-        let site = establish_site(self, ctx, loc, site_fn);
+        let site = establish_site_at(self, ctx, loc, site_fn);
         if ctx
             .sim
             .get(loc)
@@ -3171,72 +3237,7 @@ impl Civs {
                     // also only holds while authored regions are map-global,
                     // since it tests the *site's* chunk rather than each chunk
                     // the path writes through.
-                    for locs in path.nodes().windows(3) {
-                        if let Some((i, _)) = NEIGHBORS
-                            .iter()
-                            .enumerate()
-                            .find(|(_, dir)| **dir == locs[0] - locs[1])
-                        {
-                            ctx.sim.get_mut(locs[0]).unwrap().path.0.neighbors |=
-                                1 << ((i as u8 + 4) % 8);
-                            ctx.sim.get_mut(locs[1]).unwrap().path.0.neighbors |= 1 << (i as u8);
-                        }
-
-                        if let Some((i, _)) = NEIGHBORS
-                            .iter()
-                            .enumerate()
-                            .find(|(_, dir)| **dir == locs[2] - locs[1])
-                        {
-                            ctx.sim.get_mut(locs[2]).unwrap().path.0.neighbors |=
-                                1 << ((i as u8 + 4) % 8);
-
-                            ctx.sim.get_mut(locs[1]).unwrap().path.0.neighbors |= 1 << (i as u8);
-                            ctx.sim.get_mut(locs[1]).unwrap().path.0.offset = Vec2::new(
-                                ctx.rng.random_range(-16..17),
-                                ctx.rng.random_range(-16..17),
-                            );
-                        } else if !self.bridges.contains_key(&locs[1]) {
-                            let center = (locs[1] + locs[2]) / 2;
-                            let id =
-                                establish_site(self, &mut ctx.reseed(), center, move |place| {
-                                    Site {
-                                        kind: SiteKind::Bridge(locs[1], locs[2]),
-                                        site_tmp: None,
-                                        center,
-                                        place,
-                                        authored: None,
-                                        authored_landmark: None,
-                                        authored_bridge: None,
-                                        authored_fortification: None,
-                                    }
-                                });
-                            self.bridges.insert(locs[1], (locs[2], id));
-                            self.bridges.insert(locs[2], (locs[1], id));
-                        }
-                        /*
-                        let to_prev_idx = NEIGHBORS
-                            .iter()
-                            .enumerate()
-                            .find(|(_, dir)| **dir == (locs[0] - locs[1]).map(|e| e.signum()))
-                            .expect("Track locations must be neighbors")
-                            .0;
-
-                        let to_next_idx = NEIGHBORS
-                            .iter()
-                            .enumerate()
-                            .find(|(_, dir)| **dir == (locs[2] - locs[1]).map(|e| e.signum()))
-                            .expect("Track locations must be neighbors")
-                            .0;
-
-                        ctx.sim.get_mut(locs[0]).unwrap().path.0.neighbors |=
-                            1 << ((to_prev_idx as u8 + 4) % 8);
-                        ctx.sim.get_mut(locs[2]).unwrap().path.0.neighbors |=
-                            1 << ((to_next_idx as u8 + 4) % 8);
-                        let mut chunk = ctx.sim.get_mut(locs[1]).unwrap();
-                        chunk.path.0.neighbors |=
-                            (1 << (to_prev_idx as u8)) | (1 << (to_next_idx as u8));
-                        */
-                    }
+                    self.carve_track_into_terrain(ctx, &path);
 
                     // Take note of the track
                     let track = self.tracks.insert(Track { cost, path });
@@ -3249,6 +3250,256 @@ impl Civs {
         }
 
         site
+    }
+
+    /// Carves a computed `Path<Vec2<i32>>` into the terrain as a real,
+    /// walkable road: OR-merges neighbor-connection bits into each chunk's
+    /// `Way` (see `world::sim::way::Way`), nudges interior chunks with a
+    /// random offset so the road doesn't run dead-straight through chunk
+    /// centers, and creates a procedural `Bridge` site wherever two
+    /// consecutive path nodes are not direct neighbors (a water/cliff gap
+    /// `find_path` bridged over via `walk_in_all_dirs`).
+    ///
+    /// Extracted verbatim from `establish_site`'s inline "find neighbors"
+    /// carving loop so any other caller that computes a `find_path` result
+    /// can reuse the exact same terrain-writing code instead of a
+    /// parallel, drift-prone copy -- every caller must carve identically
+    /// for their roads to look and behave the same.
+    ///
+    /// IMPORTANT: these writes are unguarded and would clobber an authored
+    /// route layer outright -- `neighbors` is `|=`-merged, and `offset`
+    /// below is overwritten with a random value. `establish_site`'s early
+    /// return for `authored_cromatolis_v0` chunks is what keeps its own
+    /// calls away from authored terrain; a caller that deliberately wants
+    /// to carve inside the Cromatolis authored region must reason about
+    /// that itself -- see that call site's own doc comment.
+    fn carve_track_into_terrain(&mut self, ctx: &mut GenCtx<impl Rng>, path: &Path<Vec2<i32>>) {
+        for locs in path.nodes().windows(3) {
+            if let Some((i, _)) = NEIGHBORS
+                .iter()
+                .enumerate()
+                .find(|(_, dir)| **dir == locs[0] - locs[1])
+            {
+                ctx.sim.get_mut(locs[0]).unwrap().path.0.neighbors |= 1 << ((i as u8 + 4) % 8);
+                ctx.sim.get_mut(locs[1]).unwrap().path.0.neighbors |= 1 << (i as u8);
+            }
+
+            if let Some((i, _)) = NEIGHBORS
+                .iter()
+                .enumerate()
+                .find(|(_, dir)| **dir == locs[2] - locs[1])
+            {
+                ctx.sim.get_mut(locs[2]).unwrap().path.0.neighbors |= 1 << ((i as u8 + 4) % 8);
+
+                ctx.sim.get_mut(locs[1]).unwrap().path.0.neighbors |= 1 << (i as u8);
+                ctx.sim.get_mut(locs[1]).unwrap().path.0.offset =
+                    Vec2::new(ctx.rng.random_range(-16..17), ctx.rng.random_range(-16..17));
+            } else if !self.bridges.contains_key(&locs[1]) {
+                let center = (locs[1] + locs[2]) / 2;
+                let id = establish_site_at(self, &mut ctx.reseed(), center, move |place| Site {
+                    kind: SiteKind::Bridge(locs[1], locs[2]),
+                    site_tmp: None,
+                    center,
+                    place,
+                    authored: None,
+                    authored_landmark: None,
+                    authored_bridge: None,
+                    authored_fortification: None,
+                });
+                self.bridges.insert(locs[1], (locs[2], id));
+                self.bridges.insert(locs[2], (locs[1], id));
+            }
+        }
+    }
+
+    /// Procedurally connects a given subset of authored Cromatolis
+    /// settlements that no authored route reaches at all (the reviewed
+    /// roadless-settlement list is pinned by a regression test in this
+    /// module's `tests` submodule) to the rest of the road network, by
+    /// computing and carving a real connector path. Every settlement's
+    /// authored position is left exactly where it is; the route source data
+    /// in `xindeler-open-world` is never touched -- the engine fills in the
+    /// missing segment procedurally instead, so the fix is immune to future
+    /// settlement-footprint rework upstream.
+    ///
+    /// `connector_target_ids` is deliberately an explicit, reviewed list
+    /// (not "every roadless settlement"): some authored-roadless
+    /// settlements are intentionally isolated and must stay roadless, so
+    /// this must never be handed the full roadless-settlement list -- only
+    /// the reviewed subset that is meant to gain a connector.
+    ///
+    /// For each target, finds the nearest settlement that is *already*
+    /// reachable (an authored route, or a connector this same pass already
+    /// carved earlier in the list) by straight-line chunk distance, then
+    /// calls the same `find_path` A* pathfinder the generic procedural
+    /// civ-site-linking pass in `establish_site` uses, and carves the
+    /// result with the same `carve_track_into_terrain` -- so a connector is
+    /// not a distinguishable "procedural-looking" road, it is the exact
+    /// same mechanism. Nearest-connected-settlement (rather than nearest
+    /// point on an existing route's polyline) is used because `find_path`'s
+    /// interface is endpoint-to-endpoint, not point-to-polyline, and the
+    /// settlements needing a connector sit close to the existing network
+    /// -- a full point-to-polyline solver would be over-engineering for a
+    /// gap this small.
+    ///
+    /// Must run after `establish_authored_cromatolis_settlements` (so
+    /// target sites exist) and after `establish_authored_cromatolis_routes`
+    /// (so "already reachable" reflects every authored route before any
+    /// connector is added).
+    fn establish_procedural_cromatolis_route_connectors(
+        &mut self,
+        ctx: &mut GenCtx<impl Rng>,
+        connector_target_ids: &[&str],
+    ) {
+        // Owned `String` keys, deliberately not `&str` borrowed from
+        // `self.sites` (as `establish_authored_cromatolis_routes` above
+        // does): carving a connector below can insert a new `Bridge` site
+        // via `carve_track_into_terrain` -> `establish_site_at`, which
+        // mutates `self.sites` -- a borrowed-key map would keep that
+        // borrow alive across the loop and conflict with it.
+        let sites_by_authored_id = self
+            .sites
+            .iter()
+            .filter_map(|(site_id, site)| {
+                site.authored
+                    .as_ref()
+                    .map(|metadata| (metadata.id.clone(), site_id))
+            })
+            .collect::<std::collections::HashMap<String, Id<Site>>>();
+
+        // "Already reachable" grows as connectors are added below, so a
+        // second target settlement near a freshly-carved connector can
+        // anchor onto it instead of always reaching back to an original
+        // authored road.
+        let mut connected: std::collections::HashSet<Id<Site>> = sites_by_authored_id
+            .values()
+            .copied()
+            .filter(|&id| self.neighbors(id).next().is_some())
+            .collect();
+
+        let mut established = 0usize;
+        let mut skipped: Vec<&str> = Vec::new();
+
+        for &target_id in connector_target_ids {
+            let Some(&target_site) = sites_by_authored_id.get(target_id) else {
+                warn!(
+                    %target_id,
+                    "Procedural Cromatolis route connector target has no settlement site"
+                );
+                skipped.push(target_id);
+                continue;
+            };
+            if connected.contains(&target_site) {
+                // Already reachable (an authored route); nothing to do.
+                continue;
+            }
+
+            let target_loc = self.sites.get(target_site).center;
+
+            let nearest = connected
+                .iter()
+                .copied()
+                .map(|id| {
+                    let dist = self.sites.get(id).center.distance_squared(target_loc);
+                    (id, dist)
+                })
+                .min_by_key(|&(_, dist)| dist);
+
+            let Some((anchor_site, _)) = nearest else {
+                warn!(
+                    %target_id,
+                    "No already-connected Cromatolis settlement to anchor a procedural connector \
+                     to"
+                );
+                skipped.push(target_id);
+                continue;
+            };
+            let anchor_loc = self.sites.get(anchor_site).center;
+
+            let get_bridge = |start| self.bridges.get(&start).map(|(end, _)| *end);
+            // Generous but bounded: these connectors are expected to be
+            // short (the target settlements sit close to the existing road
+            // network already), but an uncapped search could otherwise run
+            // away chasing a pathological terrain case.
+            const MAX_CONNECTOR_COST: f32 = 20_000.0;
+            let Some((path, cost)) =
+                find_path(ctx, get_bridge, target_loc, anchor_loc, MAX_CONNECTOR_COST)
+            else {
+                warn!(
+                    %target_id,
+                    ?target_loc,
+                    ?anchor_loc,
+                    "Failed to find a procedural Cromatolis route connector path"
+                );
+                skipped.push(target_id);
+                continue;
+            };
+
+            self.carve_track_into_terrain(ctx, &path);
+
+            // A direct single-hop connector (its two endpoints already
+            // adjacent chunks) never enters `carve_track_into_terrain`'s
+            // `windows(3)` loop, which would otherwise leave it a real
+            // Track with no visible road -- give it the neighbor bit
+            // directly so that case still renders.
+            let nodes = path.nodes();
+            if nodes.len() == 2
+                && let Some((i, _)) = NEIGHBORS
+                    .iter()
+                    .enumerate()
+                    .find(|(_, dir)| **dir == nodes[0] - nodes[1])
+            {
+                if let Some(chunk) = ctx.sim.get_mut(nodes[0]) {
+                    chunk.path.0.neighbors |= 1 << ((i as u8 + 4) % 8);
+                }
+                if let Some(chunk) = ctx.sim.get_mut(nodes[1]) {
+                    chunk.path.0.neighbors |= 1 << (i as u8);
+                }
+            }
+
+            // Match the authored road's physical width along the whole
+            // connector (endpoints included) so it isn't a visually
+            // distinguishable, narrower "procedural" road -- the default
+            // procedural width (`way::Path::default()`, 5.0) is only what
+            // a freshly-generated Cromatolis chunk gets when no authored
+            // route raster touches it (see `authored_route_way` /
+            // `SimChunk::path`); this pass deliberately overrides that for
+            // the chunks it carves.
+            for &node in nodes {
+                if let Some(chunk) = ctx.sim.get_mut(node) {
+                    chunk.path.1.width = crate::layer::CROMATOLIS_AUTHORED_PATH_WIDTH;
+                }
+            }
+            let node_count = nodes.len();
+
+            let track = self.tracks.insert(Track { cost, path });
+            self.track_map
+                .entry(target_site)
+                .or_default()
+                .insert(anchor_site, track);
+
+            debug!(
+                %target_id,
+                anchor_id = %sites_by_authored_id
+                    .iter()
+                    .find(|&(_, &id)| id == anchor_site)
+                    .map_or("?", |(id, _)| id.as_str()),
+                node_count,
+                cost,
+                "Established procedural Cromatolis route connector"
+            );
+
+            connected.insert(target_site);
+            established += 1;
+        }
+
+        info!(
+            established,
+            requested = connector_target_ids.len(),
+            skipped_count = skipped.len(),
+            ?skipped,
+            "Established procedural Cromatolis route connectors"
+        );
     }
 
     fn gnarling_enemies(&self) -> impl Iterator<Item = Vec2<i32>> + '_ {
@@ -3344,6 +3595,25 @@ impl Civs {
     fn camp_enemies(&self) -> impl Iterator<Item = Vec2<i32>> + '_ {
         self.sites().map(|s| s.center)
     }
+}
+
+/// Resolves (or creates) the `Place` at `loc` and inserts a new `Site` into
+/// it. Free-standing (rather than a `&mut self` method) so it can be called
+/// while the caller already holds a `&mut Civs` borrow elsewhere, e.g. from
+/// inside `Civs::carve_track_into_terrain`'s bridge-creation branch.
+fn establish_site_at(
+    civs: &mut Civs,
+    ctx: &mut GenCtx<impl Rng>,
+    loc: Vec2<i32>,
+    site_fn: impl FnOnce(Id<Place>) -> Site,
+) -> Id<Site> {
+    const SITE_AREA: Range<usize> = 1..4; //64..256;
+    let place = match ctx.sim.get(loc).and_then(|site| site.place) {
+        Some(place) => place,
+        None => civs.establish_place(ctx, loc, SITE_AREA),
+    };
+
+    civs.sites.insert(site_fn(place))
 }
 
 /// Attempt to find a path between two locations
@@ -4547,7 +4817,19 @@ mod tests {
         }
     }
 
-    /// COW-19: exactly which installed settlements no authored road reaches.
+    /// Exactly which installed settlements no *authored* road reaches.
+    ///
+    /// This is a data-level fact about `cromatolis_v0_routes.ron` alone, and
+    /// stays true regardless of any engine-side procedural connector: a
+    /// settlement can be in this list and still be reachable in the
+    /// generated world, if
+    /// `Civs::establish_procedural_cromatolis_route_connectors`
+    /// covers it (see `CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS` /
+    /// `CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS`, and
+    /// `cromatolis_procedural_route_connector_targets_are_exactly_the_authored_roadless_minus_deliberate_exceptions`
+    /// below, which reconciles that against this list). Real end-to-end
+    /// reachability of the generated world is asserted separately by
+    /// `civs_generate_makes_every_non_deliberately_roadless_settlement_reachable_from_the_capital`.
     ///
     /// Asserted as a *set*, not a count: a rewire that connects one settlement
     /// and strands another leaves any total unchanged and would pass green,
@@ -4584,6 +4866,70 @@ mod tests {
             connected.contains("site.kalthis"),
             "the capital must be on the road network"
         );
+    }
+
+    /// `CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS` (the settlements that
+    /// get a real, engine-computed connector) and
+    /// `CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS` (the settlements that
+    /// must stay roadless on purpose) must partition
+    /// `CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD` exactly: every authored-roadless
+    /// settlement must be accounted for by exactly one of the two lists, with
+    /// none left over and none double-counted. This is what keeps a future
+    /// edit to either production list honest against the reviewed authored-
+    /// roadless set, instead of silently drifting (a settlement added to
+    /// neither list would get no connector and no "deliberately roadless"
+    /// guard; a settlement added to both would get a connector production
+    /// code treats as pointless).
+    #[test]
+    fn cromatolis_procedural_route_connector_targets_are_exactly_the_authored_roadless_minus_deliberate_exceptions()
+     {
+        let targets: HashSet<&str> = CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS
+            .iter()
+            .copied()
+            .collect();
+        let excluded: HashSet<&str> = CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS
+            .iter()
+            .copied()
+            .collect();
+        let roadless: HashSet<&str> = CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD
+            .iter()
+            .copied()
+            .collect();
+
+        assert_eq!(
+            targets.len(),
+            CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS.len(),
+            "connector target list contains a duplicate"
+        );
+        assert_eq!(
+            excluded.len(),
+            CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS.len(),
+            "deliberately-roadless list contains a duplicate"
+        );
+        assert!(
+            targets.is_disjoint(&excluded),
+            "a settlement appears in both the connector-target list and the deliberately-roadless \
+             list"
+        );
+
+        let union: HashSet<&str> = targets.union(&excluded).copied().collect();
+        assert_eq!(
+            union, roadless,
+            "CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS + \
+             CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS must together equal exactly \
+             CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD"
+        );
+
+        // The known-unresolved subset must itself be drawn from the
+        // connector-target list -- it documents a gap in connecting a
+        // target, not a separate settlement category.
+        for &site_id in CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED {
+            assert!(
+                targets.contains(site_id),
+                "{site_id} is on CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED but not \
+                 on CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS"
+            );
+        }
     }
 
     #[test]
@@ -5385,6 +5731,131 @@ mod tests {
             );
         }
         assert_eq!(tracks.len(), AUTHORED_CROMATOLIS_ROUTES);
+    }
+
+    /// Real-data regression for the procedural Cromatolis route-connector
+    /// pass (`Civs::establish_procedural_cromatolis_route_connectors`):
+    /// every installed settlement is reachable from the capital by road in
+    /// the generated world -- either an authored route, or a procedural
+    /// connector -- *except* the settlements on
+    /// `CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS` (which must stay
+    /// unreachable, guarding against a future change accidentally "fixing"
+    /// those too) and
+    /// `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED` (a known,
+    /// currently-unreachable subset of the connector targets --
+    /// see that constant's doc comment).
+    ///
+    /// BFS walks the real `Track` graph via `Civs::neighbors`, which does
+    /// not distinguish an authored route's `Track` from a procedural
+    /// connector's -- this deliberately proves end-to-end reachability of
+    /// the combined graph, not just that each mechanism ran.
+    #[test]
+    #[ignore]
+    fn civs_generate_makes_every_non_deliberately_roadless_settlement_reachable_from_the_capital() {
+        let mut sim = generate_cromatolis_world();
+        let mut index = crate::index::Index::new(0);
+        let civs = crate::civ::Civs::generate(0, &mut sim, &mut index, None, &|_| {});
+
+        let sites_by_authored_id = civs
+            .sites
+            .iter()
+            .filter_map(|(id, site)| site.authored.as_ref().map(|meta| (meta.id.as_str(), id)))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let settlements = real_settlements();
+        assert_eq!(
+            settlements.settlements.len(),
+            AUTHORED_CROMATOLIS_SETTLEMENTS
+        );
+
+        let capital = *sites_by_authored_id
+            .get("site.kalthis")
+            .expect("the capital settlement must be present in the generated world");
+
+        let mut reachable = HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        reachable.insert(capital);
+        queue.push_back(capital);
+        while let Some(site) = queue.pop_front() {
+            for neighbor in civs.neighbors(site) {
+                if reachable.insert(neighbor) {
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+
+        let deliberately_roadless: HashSet<&str> = CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS
+            .iter()
+            .copied()
+            .collect();
+        let still_unresolved: HashSet<&str> =
+            CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED
+                .iter()
+                .copied()
+                .collect();
+
+        let mut unexpectedly_unreachable = Vec::new();
+        let mut unexpectedly_resolved = Vec::new();
+        for settlement in &settlements.settlements {
+            let site_id = settlement.id.as_str();
+            let &site = sites_by_authored_id.get(site_id).unwrap_or_else(|| {
+                panic!("authored settlement {site_id} missing from generated civs")
+            });
+            let is_reachable = reachable.contains(&site);
+
+            if deliberately_roadless.contains(site_id) {
+                assert!(
+                    !is_reachable,
+                    "{site_id} is on CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS but is \
+                     reachable from the capital in the generated world -- something connected it \
+                     that should not have"
+                );
+            } else if still_unresolved.contains(site_id) {
+                // Pinned as currently-unreachable, not swept under an
+                // unconditional pass: if a future change (e.g. an authored
+                // bridge, or a pathfinder improvement) makes this settlement
+                // reachable, this flips to a failure so
+                // `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED`
+                // gets updated instead of silently going stale.
+                if is_reachable {
+                    unexpectedly_resolved.push(site_id);
+                }
+            } else if !is_reachable {
+                unexpectedly_unreachable.push(site_id);
+            }
+        }
+
+        assert!(
+            unexpectedly_unreachable.is_empty(),
+            "settlements unreachable from the capital by road (authored or procedural): {:?}",
+            unexpectedly_unreachable
+        );
+        assert!(
+            unexpectedly_resolved.is_empty(),
+            "settlements on CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED are now \
+             reachable: {:?} -- remove them from that list",
+            unexpectedly_resolved
+        );
+
+        // Every connector target that isn't a known-unresolved case must
+        // have resolved onto a real `Track` of its own, not merely
+        // transitive BFS reachability through some other mechanism --
+        // mirrors
+        // `civs_generate_establishes_every_authored_cromatolis_route_as_a_real_track`'s
+        // "a real Track, not just a loop turn" discipline.
+        for &target_id in CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS {
+            if still_unresolved.contains(target_id) {
+                continue;
+            }
+            let &site = sites_by_authored_id.get(target_id).unwrap_or_else(|| {
+                panic!("procedural connector target {target_id} missing from generated civs")
+            });
+            assert!(
+                civs.neighbors(site).next().is_some(),
+                "procedural connector target {target_id} has no real Track edge in the generated \
+                 world"
+            );
+        }
     }
 
     #[test]
