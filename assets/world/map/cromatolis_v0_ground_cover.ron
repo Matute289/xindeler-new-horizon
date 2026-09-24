@@ -4,12 +4,17 @@
     // `(1 - luminance) * 100`. It only controls visible soil and never tree
     // density or placement.
     bands: [
-        // Keep enough of the base terrain color for hillshade, contours and
-        // altitude texture to remain legible on both map and minimap.
-        (band: BareDry, max_cover: 0.10, surface_tint: (0.61, 0.47, 0.28), surface_blend: 0.0, map_tint: (0.74117647, 0.67843137, 0.35294118), map_blend: 0.50),
-        (band: Grassland, max_cover: 0.25, surface_tint: (0.39, 0.48, 0.18), surface_blend: 0.36, map_tint: (0.50980392, 0.61568627, 0.25882353), map_blend: 0.42),
-        (band: SparseWoodland, max_cover: 0.35, surface_tint: (0.26, 0.40, 0.16), surface_blend: 0.50, map_tint: (0.15686275, 0.45098039, 0.20784314), map_blend: 0.50),
-        (band: Forest, max_cover: 0.55, surface_tint: (0.16, 0.34, 0.12), surface_blend: 0.68, map_tint: (0.11764706, 0.38039216, 0.19607843), map_blend: 0.56),
-        (band: Jungle, max_cover: 1.0, surface_tint: (0.08, 0.30, 0.13), surface_blend: 0.78, map_tint: (0.03137255, 0.21176471, 0.12549020), map_blend: 0.62),
+        // Map tints are deliberately more restrained than the in-world
+        // surface tints: they retain the terrain's own soil, hillshade,
+        // contours and altitude texture instead of washing every unzoned
+        // lowland into the same green.  Regional ecology is applied later by
+        // `cromatolis_v0_map_ecology.ron` where a categorical zone exists.
+        // BareDry means scant vegetation, not sand. Sand is categorical and
+        // comes only from `ground_substrate_zones.ron` at Northwall.
+        (band: BareDry, max_cover: 0.10, surface_tint: (0.25, 0.48, 0.16), surface_blend: 0.55, map_tint: (0.34, 0.37, 0.17), map_blend: 0.24),
+        (band: Grassland, max_cover: 0.25, surface_tint: (0.32, 0.50, 0.17), surface_blend: 0.42, map_tint: (0.38, 0.46, 0.20), map_blend: 0.24),
+        (band: SparseWoodland, max_cover: 0.35, surface_tint: (0.20, 0.40, 0.15), surface_blend: 0.54, map_tint: (0.22, 0.36, 0.16), map_blend: 0.25),
+        (band: Forest, max_cover: 0.55, surface_tint: (0.13, 0.32, 0.11), surface_blend: 0.66, map_tint: (0.06, 0.32, 0.09), map_blend: 0.26),
+        (band: Jungle, max_cover: 1.0, surface_tint: (0.06, 0.27, 0.12), surface_blend: 0.76, map_tint: (0.04, 0.22, 0.09), map_blend: 0.28),
     ],
 )

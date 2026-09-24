@@ -977,11 +977,12 @@ enum AuthoredLayerKind {
     ElevatedLakes,
     RiverChannels,
     ClimateZone,
+    EcologyZone,
 }
 
 impl AuthoredLayerKind {
     /// All layer kinds a region can ship, in the order they're loaded.
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Routes,
         Self::Vegetation,
         Self::GroundCover,
@@ -989,6 +990,7 @@ impl AuthoredLayerKind {
         Self::ElevatedLakes,
         Self::RiverChannels,
         Self::ClimateZone,
+        Self::EcologyZone,
     ];
 
     fn asset_suffix(self) -> &'static str {
@@ -1000,6 +1002,7 @@ impl AuthoredLayerKind {
             Self::ElevatedLakes => "elevated_lakes",
             Self::RiverChannels => "river_channels",
             Self::ClimateZone => "climate_zone",
+            Self::EcologyZone => "ecology_zone",
         }
     }
 }
@@ -1710,12 +1713,69 @@ impl FileAsset for AuthoredGroundCoverProfile {
     }
 }
 
+/// A categorical, authored cartographic ecology class.
+///
+/// The integer values are deliberately sparse 8-bit codes, not an ordinal
+/// gradient: the producer must preserve them through mode/nearest resampling.
+/// The continuous vegetation mask remains the only source of tree density.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
+pub(crate) enum AuthoredEcologyZone {
+    Unspecified,
+    OpenLand,
+    Shrubland,
+    TemperateForest,
+    Wetland,
+    Jungle,
+    AlpineBarren,
+}
+
+impl AuthoredEcologyZone {
+    const ALL: [Self; 7] = [
+        Self::Unspecified,
+        Self::OpenLand,
+        Self::Shrubland,
+        Self::TemperateForest,
+        Self::Wetland,
+        Self::Jungle,
+        Self::AlpineBarren,
+    ];
+    const CODES: [u8; 7] = [0, 32, 64, 96, 128, 160, 192];
+
+    fn from_layer_value(value: f32) -> Option<Self> {
+        // f32 export/import can move a canonical `code / 255` by a few ULPs,
+        // but a half-step is a corrupt/interpolated class and must not round
+        // silently into a neighbouring authored zone.
+        const EPSILON: f32 = 1.0e-6;
+        Self::CODES
+            .iter()
+            .position(|code| (value - f32::from(*code) / 255.0).abs() <= EPSILON)
+            .map(|index| Self::ALL[index])
+    }
+
+    fn validate_layer(layer: &[f32]) -> Result<(), String> {
+        layer
+            .iter()
+            .enumerate()
+            .find_map(|(index, value)| {
+                Self::from_layer_value(*value)
+                    .is_none()
+                    .then_some((index, value))
+            })
+            .map_or(Ok(()), |(index, value)| {
+                Err(format!(
+                    "ecology-zone layer contains invalid categorical value {value} at index \
+                     {index}"
+                ))
+            })
+    }
+}
+
 /// Data-owned visual language for an authored region's map and minimap. The
-/// engine resolves the biome; content decides how strongly that fact reads on
-/// the cartographic surface.
+/// categorical ecology raster selects a zone; this profile supplies only its
+/// presentation. It never affects terrain blocks or tree placement.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub(crate) struct MapEcologyZoneDefinition {
-    pub biome: BiomeKind,
+    pub zone: AuthoredEcologyZone,
     pub map_tint: (f32, f32, f32),
     pub base_blend: f32,
     pub tree_density_blend: f32,
@@ -1737,8 +1797,8 @@ impl AuthoredMapEcologyProfile {
         }
         let mut seen = std::collections::HashSet::new();
         for zone in &self.zones {
-            if !seen.insert(zone.biome) {
-                return Err(format!("map ecology has duplicate biome {:?}", zone.biome));
+            if !seen.insert(zone.zone) {
+                return Err(format!("map ecology has duplicate zone {:?}", zone.zone));
             }
             let tint = zone.map_tint;
             if !tint.0.is_finite()
@@ -1748,7 +1808,7 @@ impl AuthoredMapEcologyProfile {
                 || !(0.0..=1.0).contains(&tint.1)
                 || !(0.0..=1.0).contains(&tint.2)
             {
-                return Err(format!("map ecology tint for {:?} is invalid", zone.biome));
+                return Err(format!("map ecology tint for {:?} is invalid", zone.zone));
             }
             for (name, value) in [
                 ("base_blend", zone.base_blend),
@@ -1757,22 +1817,25 @@ impl AuthoredMapEcologyProfile {
                 if !value.is_finite() || !(0.0..=1.0).contains(&value) {
                     return Err(format!(
                         "map ecology {name} for {:?} is outside 0..=1: {value}",
-                        zone.biome
+                        zone.zone
                     ));
                 }
             }
             if zone.base_blend + zone.tree_density_blend > 1.0 {
                 return Err(format!(
                     "map ecology blends for {:?} exceed 1.0: {} + {}",
-                    zone.biome, zone.base_blend, zone.tree_density_blend
+                    zone.zone, zone.base_blend, zone.tree_density_blend
                 ));
             }
         }
         Ok(())
     }
 
-    pub(crate) fn zone_for(&self, biome: BiomeKind) -> Option<&MapEcologyZoneDefinition> {
-        self.zones.iter().find(|zone| zone.biome == biome)
+    pub(crate) fn zone_for(
+        &self,
+        ecology_zone: AuthoredEcologyZone,
+    ) -> Option<&MapEcologyZoneDefinition> {
+        self.zones.iter().find(|zone| zone.zone == ecology_zone)
     }
 }
 
@@ -2235,6 +2298,10 @@ pub struct WorldSim {
     /// Cartographic ecology profile for the loaded authored region. This is
     /// intentionally separate from ground cover and tree-density contracts.
     pub(crate) authored_map_ecology_profile: Option<AuthoredMapEcologyProfile>,
+    /// Categorical cartographic ecology kept beside the map, not copied into
+    /// every `SimChunk`: it is consumed only by map/minimap rendering and a
+    /// per-chunk enum would add avoidable permanent world memory.
+    authored_ecology_zone_layer: Option<Box<[f32]>>,
     /// Additional tree-root lattices supplied by a loaded authored region.
     /// Procedural worlds intentionally leave this empty and retain the exact
     /// upstream `StructureGen2d` candidate sequence.
@@ -2342,6 +2409,7 @@ impl WorldSim {
             authored_procedural_layers: None,
             authored_ground_cover_profile: None,
             authored_map_ecology_profile: None,
+            authored_ecology_zone_layer: None,
             authored_tree_candidate_policy: None,
             authored_alpine_policy: None,
         }
@@ -2403,6 +2471,7 @@ impl WorldSim {
             authored_elevated_lakes_layer,
             authored_river_channels_layer,
             authored_climate_zone_layer,
+            authored_ecology_zone_layer,
         ) = if let Some(region) = authored_region {
             (
                 load_authored_layer(region, AuthoredLayerKind::Routes),
@@ -2412,10 +2481,21 @@ impl WorldSim {
                 load_authored_layer(region, AuthoredLayerKind::ElevatedLakes),
                 load_authored_layer(region, AuthoredLayerKind::RiverChannels),
                 load_authored_layer(region, AuthoredLayerKind::ClimateZone),
+                load_authored_layer(region, AuthoredLayerKind::EcologyZone),
             )
         } else {
-            (None, None, None, None, None, None, None)
+            (None, None, None, None, None, None, None, None)
         };
+        let authored_ecology_zone_layer =
+            authored_ecology_zone_layer.and_then(
+                |layer| match AuthoredEcologyZone::validate_layer(&layer) {
+                    Ok(()) => Some(layer),
+                    Err(error) => {
+                        warn!(%error, "Ignoring invalid authored ecology-zone layer");
+                        None
+                    },
+                },
+            );
         // Never substitute vegetation when the independent cover layer is
         // missing: that would silently restore the coupling this layer was
         // introduced to remove. LFS-free CI and partial local checkouts are
@@ -3712,6 +3792,7 @@ impl WorldSim {
             authored_procedural_layers,
             authored_ground_cover_profile,
             authored_map_ecology_profile,
+            authored_ecology_zone_layer,
             authored_tree_candidate_policy,
             authored_alpine_policy,
         };
@@ -4208,6 +4289,30 @@ impl WorldSim {
         } else {
             None
         }
+    }
+
+    /// Returns the exact authored cartographic ecology class at `chunk_pos`.
+    /// This is intentionally map-only; terrain and tree placement continue to
+    /// consume their independent physical and vegetation signals.
+    pub(crate) fn authored_ecology_zone_at(
+        &self,
+        chunk_pos: Vec2<i32>,
+    ) -> Option<AuthoredEcologyZone> {
+        self.authored_ecology_zone_layer.as_ref().and_then(|layer| {
+            if chunk_pos
+                .map2(self.map_size_lg().chunks(), |coord, size| {
+                    coord >= 0 && coord < size as i32
+                })
+                .reduce_and()
+            {
+                let chunk_index = vec2_as_uniform_idx(self.map_size_lg(), chunk_pos);
+                let layer_index =
+                    authored_layer_idx_for_cromatolis_v0(self.map_size_lg(), chunk_index);
+                AuthoredEcologyZone::from_layer_value(layer[layer_index])
+            } else {
+                None
+            }
+        })
     }
 
     pub fn get_gradient_approx(&self, chunk_pos: Vec2<i32>) -> Option<f32> {
@@ -6724,6 +6829,26 @@ mod tests {
     }
 
     #[test]
+    fn ecology_zone_accepts_only_the_authored_categorical_codes() {
+        let exported = AuthoredEcologyZone::CODES.map(|code| f32::from(code) / 255.0);
+        for (value, expected) in exported.into_iter().zip(AuthoredEcologyZone::ALL) {
+            assert_eq!(AuthoredEcologyZone::from_layer_value(value), Some(expected));
+        }
+        assert!(AuthoredEcologyZone::validate_layer(&exported).is_ok());
+        assert_eq!(
+            AuthoredEcologyZone::from_layer_value(96.0 / 255.0 + 1.0e-7),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "f32 representation noise must not invalidate an exported class"
+        );
+        assert!(AuthoredEcologyZone::validate_layer(&[0.0, 0.5]).is_err());
+        assert_eq!(
+            AuthoredEcologyZone::from_layer_value(1.0),
+            None,
+            "white is not an ecology-zone class"
+        );
+    }
+
+    #[test]
     fn resolving_sea_level_temp_reads_the_zone_raster_and_degrades_to_the_fallback() {
         let climate = AuthoredCromatolisClimate::default().resolve(TEST_MAP_CHUNKS);
         let anywhere = Vec2::new(50, 50);
@@ -7370,6 +7495,10 @@ mod tests {
             "world.map.cromatolis_v0_ground_cover"
         );
         assert_eq!(
+            asset_specifier_for(region, AuthoredLayerKind::EcologyZone),
+            "world.map.cromatolis_v0_ecology_zone"
+        );
+        assert_eq!(
             asset_specifier_for(region, AuthoredLayerKind::Water),
             "world.map.cromatolis_v0_water"
         );
@@ -7393,7 +7522,8 @@ mod tests {
         // Engine posi (0, 0) is top-left in *engine* space; after the single
         // flip it must read the *last* source row (source-top-left order),
         // not the first -- this is the inversion `routes`/`vegetation`
-        // already rely on, extended here to cover the 3 new layers too.
+        // already rely on, extended here to cover the climate and ecology
+        // categorical layers too.
         let posi_00 = vec2_as_uniform_idx(map_size_lg, Vec2::new(0, 0));
         assert_eq!(
             authored_layer_idx_for_cromatolis_v0(map_size_lg, posi_00),
@@ -7413,6 +7543,32 @@ mod tests {
         assert_eq!(
             authored_layer_idx_for_cromatolis_v0(map_size_lg, posi_30),
             3 * 4 + 3
+        );
+
+        let ecology = [
+            0.0,
+            32.0 / 255.0,
+            64.0 / 255.0,
+            96.0 / 255.0,
+            128.0 / 255.0,
+            160.0 / 255.0,
+            192.0 / 255.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            192.0 / 255.0,
+            192.0 / 255.0,
+            192.0 / 255.0,
+            192.0 / 255.0,
+        ];
+        assert_eq!(
+            AuthoredEcologyZone::from_layer_value(
+                ecology[authored_layer_idx_for_cromatolis_v0(map_size_lg, posi_00)]
+            ),
+            Some(AuthoredEcologyZone::AlpineBarren),
+            "ecology zones must use the same one-time source Y flip as every authored layer"
         );
 
         // Applying the flip twice must return to the original row (single
@@ -7823,6 +7979,198 @@ mod tests {
             &threadpool,
             &|_| {},
         )
+    }
+
+    /// COW-18.3 phase A discovery probe. It deliberately records generated
+    /// facts and the exact server RGBA, rather than interpreting a TIFF or a
+    /// client screenshot. Once these canonical positions are reviewed, this
+    /// becomes the fixed eight-zone regression table.
+    #[test]
+    #[ignore]
+    fn cromatolis_cartographic_baseline_discovery_against_real_lfs_assets() {
+        use crate::index::{Index, IndexOwned};
+
+        let sim = generate_cromatolis_world();
+        let size = sim.map_size_lg();
+        let index = IndexOwned::new(Index::new(0));
+        let map = sim.get_map(index.as_index_ref(), None);
+        let mut map_config = MapConfig::orthographic(
+            sim.map_size_lg(),
+            CONFIG.sea_level..=CONFIG.sea_level + sim.max_height,
+        );
+        map_config.is_shaded = false;
+        let profile = sim
+            .authored_ground_cover_profile
+            .as_ref()
+            .expect("real Cromatolis carries its ground-cover profile");
+        let is_dry = |chunk: &SimChunk| chunk.river.river_kind.is_none();
+        let locate = |name: &str, predicate: &dyn Fn(Vec2<i32>, &SimChunk) -> bool| {
+            let pos = (0..size.chunks_len())
+                .map(|idx| uniform_idx_as_vec2(size, idx))
+                .find(|&pos| predicate(pos, sim.get(pos).expect("in-bounds chunk")))
+                .unwrap_or_else(|| panic!("no real Cromatolis chunk matched baseline zone {name}"));
+            let chunk = sim.get(pos).unwrap();
+            let rgba = map.rgba[pos].to_le_bytes();
+            let flipped_y = Vec2::new(pos.x, size.chunks().y as i32 - 1 - pos.y);
+            let rgba_flipped_y = map.rgba[flipped_y].to_le_bytes();
+            let mut samples = Vec::with_capacity(size.chunks_len());
+            samples.resize_with(size.chunks_len(), || None);
+            let column = ColumnGen::new(&sim).get((
+                pos * TerrainChunkSize::RECT_SIZE.map(|edge| edge as i32),
+                index.as_index_ref(),
+                None,
+            ));
+            let column_alt = column.as_ref().map(|sample| sample.alt);
+            let column_water = column.as_ref().map(|sample| sample.water_level);
+            let column_surface = column.as_ref().map(|sample| sample.surface_color);
+            let column_surface_is_physical =
+                column.as_ref().map(|sample| sample.surface_is_physical);
+            if let Some(column) = column {
+                samples[vec2_as_uniform_idx(size, pos)] = Some(column);
+            }
+            let direct =
+                sample_pos(&map_config, &sim, index.as_index_ref(), Some(&samples), pos).rgb;
+            println!(
+                "{name}: pos=({},{}) relief={:.1} alt_internal={:.1} water_alt={:.1} cover={:.3} \
+                 density={:.3} temp={:.3} authored={} column_alt={:?} column_water={:?} \
+                 column_surface={:?} column_physical={:?} biome={:?} river={:?} water={:?} \
+                 substrate={:?} snowland={} direct=#{:02x}{:02x}{:02x} \
+                 rgba=#{:02x}{:02x}{:02x}{:02x} rgba_flipped_y=#{:02x}{:02x}{:02x}{:02x}",
+                pos.x,
+                pos.y,
+                chunk.alt - CONFIG.sea_level,
+                chunk.alt,
+                chunk.water_alt,
+                chunk.ground_cover,
+                chunk.tree_density,
+                chunk.temp,
+                chunk.authored_cromatolis_v0,
+                column_alt,
+                column_water,
+                column_surface,
+                column_surface_is_physical,
+                chunk.get_biome(),
+                chunk.river.river_kind,
+                chunk.water_body,
+                chunk.ground_substrate,
+                chunk.authored_alpine_snowland,
+                direct.r,
+                direct.g,
+                direct.b,
+                rgba[0],
+                rgba[1],
+                rgba[2],
+                rgba[3],
+                rgba_flipped_y[0],
+                rgba_flipped_y[1],
+                rgba_flipped_y[2],
+                rgba_flipped_y[3],
+            );
+        };
+
+        locate("waning_moon", &|pos, chunk| {
+            pos == Vec2::new(684, 599) && is_dry(chunk)
+        });
+        locate("central_grassland", &|pos, chunk| {
+            (300..700).contains(&pos.x)
+                && (350..700).contains(&pos.y)
+                && is_dry(chunk)
+                && profile.classify(chunk.ground_cover) == GroundCoverBand::Grassland
+        });
+        locate("southern_jungle", &|pos, chunk| {
+            pos.y < 450 && is_dry(chunk) && chunk.get_biome() == BiomeKind::Jungle
+        });
+        locate("wetland", &|_pos, chunk| {
+            is_dry(chunk) && chunk.get_biome() == BiomeKind::Swamp
+        });
+        locate("north_interior", &|pos, chunk| {
+            pos.y > 700
+                && is_dry(chunk)
+                && chunk.ground_substrate != Some(GroundSubstrate::Sand)
+                && chunk.alt - CONFIG.sea_level < 500.0
+                && chunk.get_biome() != BiomeKind::Swamp
+                && chunk.ground_cover < 0.30
+                && chunk.tree_density < 0.45
+        });
+        locate("northwall_exterior", &|_pos, chunk| {
+            chunk.ground_substrate == Some(GroundSubstrate::Sand)
+        });
+        locate("alpine_transition", &|_pos, chunk| {
+            is_dry(chunk) && (700.0..1010.0).contains(&(chunk.alt - CONFIG.sea_level))
+        });
+        locate("persistent_snow", &|pos, chunk| {
+            (4..1020).contains(&pos.x)
+                && (4..1020).contains(&pos.y)
+                && is_dry(chunk)
+                && chunk.alt - CONFIG.sea_level >= 1010.0
+        });
+    }
+
+    /// Guards the authored map-only layer against an LFS pointer, a bad
+    /// exporter interpolation, or an accidental second Y flip. These points
+    /// are the COW-18.4 review anchors for the named organic envelopes; tree
+    /// density and physical biome deliberately remain outside this map-only
+    /// contract.
+    #[test]
+    #[ignore]
+    fn cromatolis_ecology_zone_contract_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let layer = sim
+            .authored_ecology_zone_layer
+            .as_ref()
+            .expect("real Cromatolis must load its categorical ecology layer");
+        assert_eq!(layer.len(), sim.map_size_lg().chunks_len());
+        assert!(AuthoredEcologyZone::validate_layer(layer).is_ok());
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(710, 690)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "the top of Waning Moon must remain an authored forest mass"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(730, 476)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Waning Moon's descending lower lobe must survive the export"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(725, 876)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Sourcil must surround Pleasant Loch on its northern side"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(860, 833)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Sourcil must surround Pleasant Loch on its eastern side"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(285, 616)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Silver Forest must extend west of Sapphire Loch"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(460, 523)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Silver Forest must extend east of Sapphire Loch"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(485, 556)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Moon Forest must extend west of Moon Lake"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(580, 476)),
+            Some(AuthoredEcologyZone::TemperateForest),
+            "Moon Forest must extend east of Moon Lake"
+        );
+        assert_ne!(
+            sim.authored_ecology_zone_at(Vec2::new(450, 356)),
+            Some(AuthoredEcologyZone::Jungle),
+            "Greenlife must not leak north into the Red Peaks"
+        );
+        assert_eq!(
+            sim.authored_ecology_zone_at(Vec2::new(600, 143)),
+            Some(AuthoredEcologyZone::Jungle),
+            "Greenlife must remain present south of its Mazon-Tathune boundary"
+        );
     }
 
     /// Always runs (no `#[ignore]`, unlike the real-data regression below):

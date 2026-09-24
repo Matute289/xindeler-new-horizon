@@ -3,8 +3,8 @@ use crate::{
     all::ForestKind,
     biome_profile::BiomeProfile,
     sim::{
-        AuthoredGroundCoverProfile, CROMATOLIS_V0_REGION_ID, GroundCoverBand, GroundSubstrate,
-        Path, RiverKind, SimChunk, WorldSim, local_cells,
+        AuthoredGroundCoverProfile, CROMATOLIS_V0_REGION_ID, GroundSubstrate, Path, RiverKind,
+        SimChunk, WorldSim, local_cells,
     },
     site::SpawnRules,
     util::{RandomField, RandomPerm, Sampler},
@@ -1482,6 +1482,17 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         // structure placement) see cratered terrain too.
         let riverless_alt = riverless_alt + damage.rim - damage.depth;
 
+        let surface_is_physical = column_surface_is_physical(
+            water_dist,
+            snow_cover,
+            temp,
+            alt,
+            cliff_offset,
+            surface_block_override.is_some(),
+            sim_chunk.authored_region_id,
+            sim_chunk.authored_alpine_snowland,
+        );
+
         Some(ColumnSample {
             alt,
             riverless_alt,
@@ -1503,14 +1514,13 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                     authored_region_id: sim_chunk.authored_region_id,
                     ground_cover: authored_ground_cover,
                     ground_substrate: sim_chunk.ground_substrate,
-                    physical_exclusion: water_dist.is_some_and(|dist| dist <= 3.0)
-                        || snow_cover
-                        || temp <= CONFIG.snow_temp
-                        || alt >= 500.0
-                        || cliff_offset > 0.0
-                        || surface_block_override.is_some(),
+                    physical_exclusion: surface_is_physical,
                 },
             ),
+            // The map generator consumes this resolved column fact so it
+            // never paints an ecological tint over physical snow, rock,
+            // cliffs, forced material, or shoreline surface treatment.
+            surface_is_physical,
             sub_surface_color,
             // No growing directly on bedrock.
             // And, no growing on sites that don't want them TODO: More precise than this when we
@@ -1564,6 +1574,36 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
     }
 }
 
+/// Whether the final column material must win over authored map presentation.
+///
+/// The legacy `alt >= 500` cutoff is expressed in the engine's internal
+/// altitude frame. It remains the procedural-world rule, but cannot be used
+/// for Cromatolis: its internal sea-level offset is 140 m, so it incorrectly
+/// classified ordinary 360 m authored woodland as physical mountain. The
+/// region's already-resolved alpine fact is the sole altitude authority there
+/// and begins at the reviewed 700 m real relief threshold.
+fn column_surface_is_physical(
+    water_dist: Option<f32>,
+    snow_cover: bool,
+    temp: f32,
+    alt: f32,
+    cliff_offset: f32,
+    has_surface_block_override: bool,
+    authored_region_id: Option<&str>,
+    authored_alpine_snowland: bool,
+) -> bool {
+    water_dist.is_some_and(|dist| dist <= 3.0)
+        || snow_cover
+        || temp <= CONFIG.snow_temp
+        || cliff_offset > 0.0
+        || has_surface_block_override
+        || if authored_region_id == Some(CROMATOLIS_V0_REGION_ID) {
+            authored_alpine_snowland
+        } else {
+            alt >= 500.0
+        }
+}
+
 /// Resolves the final color stored in [`ColumnSample::surface_color`]. The
 /// authored tint is intentionally applied after the beach/shore interpolation
 /// so a lowland forest cannot become thermal sand again at the last step.
@@ -1615,9 +1655,6 @@ fn resolve_final_column_surface_color(
         return Rgb::new(0.61, 0.47, 0.28);
     }
     let band = profile.classify(context.ground_cover);
-    if band == GroundCoverBand::BareDry {
-        return base;
-    }
     let definition = profile
         .bands
         .iter()
@@ -1639,6 +1676,7 @@ pub struct ColumnSample<'a> {
     pub water_level: f32,
     pub warp_factor: f32,
     pub surface_color: Rgb<f32>,
+    pub surface_is_physical: bool,
     pub sub_surface_color: Rgb<f32>,
     pub tree_density: f32,
     pub forest_kind: ForestKind,
@@ -1707,6 +1745,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cromatolis_subalpine_woodland_does_not_inherit_internal_altitude_cutoff() {
+        assert!(
+            !column_surface_is_physical(
+                None,
+                false,
+                0.0,
+                562.7,
+                0.0,
+                false,
+                Some(CROMATOLIS_V0_REGION_ID),
+                false,
+            ),
+            "422.7 m real relief is below Cromatolis's 700 m alpine threshold; its +140 m \
+             internal offset must not suppress authored woodland presentation"
+        );
+    }
+
+    #[test]
+    fn cromatolis_alpine_fact_and_procedural_altitude_cutoff_remain_physical() {
+        assert!(column_surface_is_physical(
+            None,
+            false,
+            0.0,
+            840.0,
+            0.0,
+            false,
+            Some(CROMATOLIS_V0_REGION_ID),
+            true,
+        ));
+        assert!(column_surface_is_physical(
+            None, false, 0.0, 500.0, 0.0, false, None, false,
+        ));
+    }
+
     fn cover_context(
         authored_region_id: Option<&'static str>,
         ground_cover: f32,
@@ -1748,7 +1821,7 @@ mod tests {
     }
 
     #[test]
-    fn bare_dry_profile_leaves_the_existing_dry_surface_unchanged() {
+    fn bare_dry_profile_is_earthy_not_thermal_sand() {
         let generic_sand = Rgb::new(0.86, 0.73, 0.43);
         let resolved = resolve_final_column_surface_color(
             generic_sand,
@@ -1763,7 +1836,11 @@ mod tests {
             cover_context(Some(CROMATOLIS_V0_REGION_ID), 0.10, None, false),
         );
 
-        assert_rgb_near(resolved, generic_sand);
+        assert_ne!(resolved, generic_sand);
+        assert!(
+            resolved.g > resolved.r,
+            "a non-sand BareDry Cromatolis column must resolve toward earth/grass, not beach sand"
+        );
     }
 
     #[test]

@@ -2,14 +2,14 @@ use crate::{
     CONFIG, IndexRef,
     column::ColumnSample,
     sim::{
-        AuthoredGroundCoverProfile, AuthoredMapEcologyProfile, GroundCoverBand, GroundSubstrate,
-        RiverKind, WorldSim,
+        AuthoredEcologyZone, AuthoredGroundCoverProfile, AuthoredMapEcologyProfile,
+        GroundCoverBand, GroundSubstrate, RiverKind, WorldSim,
     },
     site::SiteKind,
 };
 use common::{
     terrain::{
-        BiomeKind, CoordinateConversions, NEIGHBOR_DELTA, TerrainChunkSize,
+        CoordinateConversions, NEIGHBOR_DELTA, TerrainChunkSize,
         map::{Connection, ConnectionKind, MapConfig, MapSample},
         vec2_as_uniform_idx,
     },
@@ -50,6 +50,32 @@ fn authored_map_post_processing_applies(
         && true_alt >= true_sea_level
 }
 
+/// Whether this particular map cell, rather than the map rendering mode, has
+/// physical water that must keep its own visual treatment.
+/// `MapConfig::is_water` only asks the renderer whether it should include water
+/// globally; its default is `true`, so using it here would suppress authored
+/// land presentation across the entire world map.
+fn authored_map_cell_is_physical_water(
+    river_kind: Option<RiverKind>,
+    depth_m: f64,
+    true_alt: f64,
+    true_sea_level: f64,
+) -> bool {
+    matches!(river_kind, Some(RiverKind::Lake { .. } | RiverKind::Ocean))
+        || depth_m > 0.0
+        || true_alt < true_sea_level
+}
+
+/// Physical column material always outranks authored map presentation. The
+/// optional column fact is absent only at an unavailable map boundary; the
+/// compact regional alpine fact remains available there.
+fn authored_preview_has_physical_surface(
+    authored_alpine_snowland: bool,
+    column_surface_is_physical: Option<bool>,
+) -> bool {
+    authored_alpine_snowland || column_surface_is_physical.unwrap_or(false)
+}
+
 /// Applies the authored ground-cover band's map-preview tint. Physical map
 /// layers deliberately bypass this stage: their water/mountain rendering is
 /// applied by `sample_pos` and must not inherit a vegetation tint. An explicit
@@ -85,24 +111,39 @@ pub(super) fn authored_ground_cover_preview_tint(
     )
 }
 
-/// Adds a restrained ecological cue to the authored map after the soil
-/// treatment. This is deliberately a map-only consumer of the **resolved**
-/// biome: it makes forests, swamps, and jungles readable without changing
-/// terrain blocks, authored vegetation density, or placement rules.
+/// Adds the authored ecological cue after the soil treatment. This consumes
+/// the exact authored ecology zone, so its visible extents never drift with a
+/// procedural `BiomeKind`; it still cannot change terrain blocks, authored
+/// vegetation density, or placement rules.
+///
+/// A shoreline remains physically authoritative for every category except an
+/// authored wetland. A `ColumnSample` deliberately marks `water_dist <= 3`
+/// as physical so the *ground* retains its shoreline material, but treating
+/// that proximity as rock/snow/cliff here erased wetland presentation along
+/// the very water edge that defines it.
 fn authored_ecology_preview_tint(
     base: Rgb<u8>,
     profile: Option<&AuthoredMapEcologyProfile>,
-    biome: BiomeKind,
+    ecology_zone: Option<AuthoredEcologyZone>,
     tree_density: f64,
     is_water: bool,
-    is_physical_mountain: bool,
+    is_physical_surface: bool,
+    is_shoreline: bool,
+    has_non_shore_physical: bool,
 ) -> Rgb<u8> {
-    if is_water || is_physical_mountain {
+    if is_water {
         return base;
     }
-    let Some(zone) = profile.and_then(|profile| profile.zone_for(biome)) else {
+    let Some(zone) = ecology_zone
+        .and_then(|ecology_zone| profile.and_then(|profile| profile.zone_for(ecology_zone)))
+    else {
         return base;
     };
+    if is_physical_surface
+        && !(is_shoreline && !has_non_shore_physical && zone.zone == AuthoredEcologyZone::Wetland)
+    {
+        return base;
+    }
     let tint = Rgb::new(
         (zone.map_tint.0 * 255.0) as u8,
         (zone.map_tint.1 * 255.0) as u8,
@@ -282,14 +323,24 @@ pub fn sample_pos(
                 .map(|e| e as f64)
             };
 
-            (rgb, alt, sample.ice_depth)
+            (
+                rgb,
+                alt,
+                sample.ice_depth,
+                sample.surface_is_physical,
+                sample.water_dist.is_some_and(|distance| distance <= 3.0),
+                sample.snow_cover
+                    || sample.temp <= CONFIG.snow_temp
+                    || sample.cliff_offset > 0.0
+                    || sample.surface_block_override.is_some(),
+            )
         });
 
     let downhill_wpos = downhill.unwrap_or(wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32));
     let alt = if is_basement {
         basement
     } else {
-        column_data.map_or(alt, |(_, alt, _)| alt)
+        column_data.map_or(alt, |(_, alt, _, _, _, _)| alt)
     };
 
     let depth_m = (alt.max(water_alt) - alt).max(0.0) as f64;
@@ -306,7 +357,9 @@ pub fn sample_pos(
         if is_shaded { 1.0 } else { alt },
         if is_shaded || is_humidity { 1.0 } else { 0.0 },
     );
-    let column_rgb = column_data.map(|(rgb, _, _)| rgb).unwrap_or(default_rgb);
+    let column_rgb = column_data
+        .map(|(rgb, _, _, _, _, _)| rgb)
+        .unwrap_or(default_rgb);
     let mut connections = [None; 8];
     let mut has_connections = false;
     // TODO: Support non-river connections.
@@ -330,7 +383,9 @@ pub fn sample_pos(
                 });
             });
     };
-    let rgb = if is_water && is_ice && column_data.is_some_and(|(_, _, ice_depth)| ice_depth > 0.0)
+    let rgb = if is_water
+        && is_ice
+        && column_data.is_some_and(|(_, _, ice_depth, _, _, _)| ice_depth > 0.0)
     {
         CONFIG.ice_color
     } else {
@@ -373,39 +428,47 @@ pub fn sample_pos(
     {
         let altitude = ((sample.alt - CONFIG.sea_level) as f64 / 1050.0).clamp(0.0, 1.0);
         let vegetation = sample.tree_density.clamp(0.0, 1.0) as f64;
-        let is_physical_water = is_water
-            || matches!(river_kind, Some(RiverKind::Lake { .. } | RiverKind::Ocean))
-            || true_alt < true_sea_level;
+        let is_physical_water =
+            authored_map_cell_is_physical_water(river_kind, depth_m, true_alt, true_sea_level);
         let profile = sampler.authored_ground_cover_profile.as_ref();
 
+        // Cromatolis's alpine policy is expressed in real relief metres and
+        // starts at 700 m.  Do not use the old preview-only `altitude > 0.28`
+        // cutoff here: it corresponds to roughly 294 m of relief and used to
+        // erase the authored soil and forest language from valid sub-alpine
+        // woodland.  `authored_alpine_snowland` is the already-resolved,
+        // region-scoped physical fact, so it preserves the rock/snow column
+        // result without reinterpreting altitude a second time. The column
+        // contributes its broader physical-surface fact too: cold snow,
+        // cliffs, forced rock and shoreline material must outrank the visual
+        // ground-cover/ecology layers even below the authored alpine band.
+        let is_physical_alpine = sample.authored_alpine_snowland;
+        let has_non_shore_physical = is_physical_alpine
+            || column_data.is_some_and(|(_, _, _, _, _, non_shore_physical)| non_shore_physical);
+        let is_physical_surface = authored_preview_has_physical_surface(
+            is_physical_alpine,
+            column_data.map(|(_, _, _, is_physical, _, _)| is_physical),
+        );
         let mut out = rgb;
-        if sample.temp >= 0.0 && profile.is_some() {
+        if profile.is_some() {
             (_, out) = authored_ground_cover_preview_tint(
                 out,
                 profile,
                 sample.ground_cover,
                 sample.ground_substrate,
                 is_physical_water,
-                altitude > 0.28,
+                is_physical_surface,
             );
             out = authored_ecology_preview_tint(
                 out,
                 sampler.authored_map_ecology_profile.as_ref(),
-                sample.get_biome(),
+                sampler.authored_ecology_zone_at(pos),
                 vegetation,
                 is_physical_water,
-                altitude > 0.28,
+                is_physical_surface,
+                column_data.is_some_and(|(_, _, _, _, is_shoreline, _)| is_shoreline),
+                has_non_shore_physical,
             );
-            if !is_physical_water && altitude > 0.28 {
-                let mountain_t = ((altitude - 0.28) / 0.46).clamp(0.0, 1.0);
-                let mountain = if mountain_t > 0.6 {
-                    Rgb::new(0x3d, 0x28, 0x1a)
-                } else {
-                    Rgb::new(0x78, 0x55, 0x32)
-                };
-                let mountain_blend = mountain_t * (1.0 - vegetation * 0.42) * 0.95;
-                out = blend_rgb(out, mountain, mountain_blend);
-            }
         }
         let neighbor_alt = |offset: Vec2<i32>| {
             sampler
@@ -494,13 +557,18 @@ mod tests {
     use super::*;
     use crate::{
         index::{Index, IndexOwned},
-        sim::{AuthoredGroundCoverProfile, GroundCoverBand},
+        sim::{AuthoredEcologyZone, AuthoredGroundCoverProfile, GroundCoverBand},
     };
     use common::assets::AssetExt;
 
     fn cromatolis_profile() -> AuthoredGroundCoverProfile {
         AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
             .expect("the shipped Cromatolis ground-cover profile must load")
+    }
+
+    fn cromatolis_ecology_profile() -> AuthoredMapEcologyProfile {
+        AuthoredMapEcologyProfile::load_owned("world.map.cromatolis_v0_map_ecology")
+            .expect("the shipped Cromatolis map ecology profile must load")
     }
 
     #[test]
@@ -512,45 +580,111 @@ mod tests {
             authored_ground_cover_preview_tint(dry_beige, Some(&profile), 0.50, None, false, false);
 
         assert_eq!(band, Some(GroundCoverBand::Forest));
-        assert_eq!(color, Rgb::new(0x63, 0x82, 0x43));
         assert_ne!(color, dry_beige);
+        assert!(
+            color.g > color.r && color.g > color.b,
+            "forest preview must remain visibly green after a data-only palette retune"
+        );
     }
 
     #[test]
     fn ecology_preview_keeps_relief_base_but_makes_authored_zones_distinct() {
         let base = Rgb::new(0x69, 0x7d, 0x43);
-        let profile = AuthoredMapEcologyProfile::load_owned("world.map.cromatolis_v0_map_ecology")
-            .expect("the shipped Cromatolis map ecology profile must load");
+        let profile = cromatolis_ecology_profile();
+        let open_land = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            Some(AuthoredEcologyZone::OpenLand),
+            0.0,
+            false,
+            false,
+            false,
+            false,
+        );
+        let shrubland = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            Some(AuthoredEcologyZone::Shrubland),
+            0.4,
+            false,
+            false,
+            false,
+            false,
+        );
         let forest = authored_ecology_preview_tint(
             base,
             Some(&profile),
-            BiomeKind::Forest,
+            Some(AuthoredEcologyZone::TemperateForest),
             0.9,
+            false,
+            false,
             false,
             false,
         );
         let swamp = authored_ecology_preview_tint(
             base,
             Some(&profile),
-            BiomeKind::Swamp,
+            Some(AuthoredEcologyZone::Wetland),
             0.9,
+            false,
+            false,
             false,
             false,
         );
         let jungle = authored_ecology_preview_tint(
             base,
             Some(&profile),
-            BiomeKind::Jungle,
+            Some(AuthoredEcologyZone::Jungle),
             0.9,
+            false,
+            false,
             false,
             false,
         );
 
+        assert!(
+            open_land.r > forest.r && open_land.g > forest.g,
+            "open land must stay visibly lighter than temperate forest"
+        );
+        assert!(
+            swamp.b > forest.b,
+            "wetland must retain a visibly cooler (blue-green) map cue"
+        );
+        assert!(
+            jungle.g < forest.g,
+            "jungle must remain visually deeper than temperate forest"
+        );
+        let rgb_distance = |left: Rgb<u8>, right: Rgb<u8>| {
+            (i16::from(left.r) - i16::from(right.r)).unsigned_abs()
+                + (i16::from(left.g) - i16::from(right.g)).unsigned_abs()
+                + (i16::from(left.b) - i16::from(right.b)).unsigned_abs()
+        };
+        for (left_name, left, right_name, right) in [
+            ("open land", open_land, "shrubland", shrubland),
+            ("open land", open_land, "forest", forest),
+            ("forest", forest, "wetland", swamp),
+            ("forest", forest, "jungle", jungle),
+        ] {
+            assert!(
+                rgb_distance(left, right) >= 24,
+                "{left_name} and {right_name} need a cartographically legible palette separation; \
+                 got {left:?} and {right:?}",
+            );
+        }
         assert_ne!(forest, base);
         assert_ne!(swamp, forest);
         assert_ne!(jungle, forest);
         assert_eq!(
-            authored_ecology_preview_tint(base, Some(&profile), BiomeKind::Swamp, 1.0, true, false),
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::Wetland),
+                1.0,
+                true,
+                false,
+                false,
+                false,
+            ),
             base,
             "water keeps its physical map treatment",
         );
@@ -558,14 +692,86 @@ mod tests {
             authored_ecology_preview_tint(
                 base,
                 Some(&profile),
-                BiomeKind::Forest,
+                Some(AuthoredEcologyZone::TemperateForest),
                 1.0,
                 false,
-                true
+                true,
+                false,
+                true,
             ),
             base,
             "mountains keep their physical map treatment",
         );
+        assert_ne!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::Wetland),
+                1.0,
+                false,
+                true,
+                true,
+                false,
+            ),
+            base,
+            "an authored wetland retains its cartographic cue along its physical shoreline",
+        );
+        assert_eq!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::TemperateForest),
+                1.0,
+                false,
+                true,
+                true,
+                false,
+            ),
+            base,
+            "shoreline presentation remains physical outside explicit wetland zones",
+        );
+        assert_eq!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::Wetland),
+                1.0,
+                false,
+                true,
+                true,
+                true,
+            ),
+            base,
+            "wetland never overrides co-located snow, rock, cliff, forced material, or alpine \
+             presentation",
+        );
+    }
+
+    #[test]
+    fn authored_land_tint_is_not_disabled_by_the_global_water_render_option() {
+        // `MapConfig::orthographic` enables water rendering globally. That
+        // configuration must not classify every dry land cell as physical
+        // water and bypass the authored ground/ecology palette.
+        assert!(!authored_map_cell_is_physical_water(None, 0.0, 12.0, 0.0));
+        assert!(authored_map_cell_is_physical_water(
+            Some(RiverKind::Ocean),
+            0.0,
+            12.0,
+            0.0,
+        ));
+        let river = Some(RiverKind::River {
+            cross_section: Vec2::new(2.0, 1.0),
+        });
+        assert!(
+            !authored_map_cell_is_physical_water(river, 0.0, 12.0, 0.0),
+            "a dry river-adjacent cell remains eligible for its authored land tint"
+        );
+        assert!(
+            authored_map_cell_is_physical_water(river, 1.0, 12.0, 0.0),
+            "a water-covered river cell keeps its physical water treatment"
+        );
+        assert!(authored_map_cell_is_physical_water(None, 1.0, 12.0, 0.0));
+        assert!(authored_map_cell_is_physical_water(None, 0.0, -0.1, 0.0));
     }
 
     #[test]
@@ -647,6 +853,14 @@ mod tests {
         ));
         assert!(!authored_map_post_processing_applies(None, 0.49, sea_level));
         assert!(authored_map_post_processing_applies(None, 0.5, sea_level));
+    }
+
+    #[test]
+    fn a_real_column_physical_surface_outranks_authored_green_presentation() {
+        assert!(authored_preview_has_physical_surface(false, Some(true)));
+        assert!(authored_preview_has_physical_surface(true, Some(false)));
+        assert!(!authored_preview_has_physical_surface(false, Some(false)));
+        assert!(!authored_preview_has_physical_surface(false, None));
     }
 
     #[test]
