@@ -43,7 +43,7 @@ use bincode::{
     serde::{decode_from_std_read, encode_into_std_write},
 };
 use common::{
-    assets::{AssetExt, BoxedError, FileAsset, load_bincode_legacy, load_ron},
+    assets::{AssetExt, AssetHandle, BoxedError, FileAsset, load_bincode_legacy, load_ron},
     calendar::Calendar,
     grid::Grid,
     lottery::Lottery,
@@ -52,13 +52,14 @@ use common::{
     spot::Spot,
     store::{Id, Store},
     terrain::{
-        BiomeKind, CoordinateConversions, MapSizeLg, TerrainChunk, TerrainChunkSize,
+        BiomeKind, CoordinateConversions, MapSizeLg, SpriteKind, TerrainChunk, TerrainChunkSize,
         map::MapConfig, neighbors, uniform_idx_as_vec2, vec2_as_uniform_idx,
     },
     vol::RectVolSize,
 };
 use common_base::prof_span;
 use common_net::msg::WorldMapMsg;
+use lazy_static::lazy_static;
 use noise::{
     BasicMulti, Billow, Fbm, HybridMulti, MultiFractal, NoiseFn, Perlin, RidgedMulti, SuperSimplex,
     core::worley::distance_functions,
@@ -134,6 +135,10 @@ struct GenCdf {
     /// Per-chunk water salinity, see `SimChunk::salinity`. `None` wherever
     /// `authored_water_body` is `None`.
     authored_salinity: Box<[Option<Salinity>]>,
+    /// Resolved fauna/flora profile table for the loaded region (if any), or
+    /// an empty one if none is loaded / the asset failed to parse. See
+    /// `SimChunk::aquatic_ecology_profile`.
+    aquatic_ecology: ResolvedAquaticEcology,
     humid_base: InverseCdf,
     temp_base: InverseCdf,
     chaos: InverseCdf,
@@ -1031,6 +1036,9 @@ struct AuthoredRegion {
     fortifications: &'static str,
     tree_candidate_policy: &'static str,
     alpine_policy: Option<&'static str>,
+    /// Fauna/flora-by-water-body-and-salinity profile table, see
+    /// [`AuthoredAquaticEcology`].
+    aquatic_ecology_profile: &'static str,
 }
 
 /// Threshold above which an authored water/elevated-lake/river-channel mask
@@ -1068,6 +1076,7 @@ const AUTHORED_REGIONS: &[AuthoredRegion] = &[AuthoredRegion {
     fortifications: "world.map.cromatolis_v0_fortifications",
     tree_candidate_policy: "world.map.cromatolis_v0_tree_candidate_policy",
     alpine_policy: Some("world.map.cromatolis_v0_alpine"),
+    aquatic_ecology_profile: "world.map.cromatolis_v0_aquatic_ecology",
 }];
 
 /// One regional alpine policy, loaded once per authored world. All heights
@@ -2300,6 +2309,7 @@ impl WorldSim {
                 authored_near_water: false,
                 water_body: None,
                 salinity: None,
+                aquatic_ecology_profile: None,
                 authored_alpine_snowland: false,
                 chaos: 0.0,
                 alt: 0.0,
@@ -2493,6 +2503,27 @@ impl WorldSim {
                 },
             )
         });
+        // Unlike the panic-on-failure loaders above, a missing/malformed
+        // aquatic ecology asset degrades to an empty catalog (no aquatic
+        // fauna/flora profile boost anywhere) rather than failing world
+        // generation outright -- the same posture as the climate/alpine
+        // loaders below it.
+        let aquatic_ecology = authored_region
+            .and_then(|region| {
+                match AuthoredAquaticEcology::load_owned(region.aquatic_ecology_profile) {
+                    Ok(catalog) => Some(catalog.resolve(map_size_lg.chunks())),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            region = region.id,
+                            "Could not load authored aquatic ecology; aquatic fauna/flora \
+                             profiles will be inactive"
+                        );
+                        None
+                    },
+                }
+            })
+            .unwrap_or_default();
         let authored_ground_substrate_zones = authored_region
             .filter(|_| ground_cover_available)
             .map(|region| {
@@ -3650,6 +3681,7 @@ impl WorldSim {
             authored_near_water,
             authored_water_body,
             authored_salinity,
+            aquatic_ecology,
             humid_base,
             temp_base,
             chaos,
@@ -4617,9 +4649,19 @@ pub struct SimChunk {
     /// *physical* question (how the chunk is carved, and where its water level
     /// comes from) and is upstream Veloren code shared with the procedural
     /// world. The two are allowed to disagree -- see [`WaterBodyKind`].
+    ///
+    /// Its production consumer is [`AquaticEcologyProfileId`]: this field and
+    /// `salinity` are the *inputs* to resolving `aquatic_ecology_profile`
+    /// below (done once, at generation time), not something downstream code
+    /// reads directly -- so outside this module's own tests, the only other
+    /// reader is `layer::wildlife::cromatolis_freshwater`, which nothing in a
+    /// non-test build calls either. `expect` rather than `allow` so the
+    /// attribute cannot outlive a real non-test reader appearing, and
+    /// `not(test)` because this module's regressions do read the field.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) water_body: Option<WaterBodyKind>,
-    /// How salty this chunk's water is (COW-22 `C22-4`), if it is water at all.
-    /// `None` exactly where `water_body` is `None`.
+    /// How salty this chunk's water is, if it is water at all. `None`
+    /// exactly where `water_body` is `None`.
     ///
     /// Type and salinity are deliberately separate axes rather than one fused
     /// enum, because a body can be a river *and* salty; fusing them would mean
@@ -4627,25 +4669,28 @@ pub struct SimChunk {
     /// kind that can be salty. Derived from the topology of the classified
     /// bodies -- see [`derive_salinity`] -- never from an authored raster.
     ///
-    /// A field rather than a side table on `WorldSim` because the eventual
-    /// consumers are the `SPAWN_RULES` closures in `layer::wildlife`, typed
-    /// `|&SimChunk, &ColumnSample|` -- they have no handle on `WorldSim` to
-    /// look anything up in.
+    /// Same "input to `aquatic_ecology_profile`, not read directly outside
+    /// this module's tests" posture as `water_body` above, so it carries the
+    /// same attribute for the same reason.
     ///
     /// Free, today: `Option<Salinity>` is one byte and lands in what was
     /// already `SimChunk`'s end padding, so the struct stays 224 bytes and the
     /// 1,048,576-chunk map costs nothing extra. One padding byte is left after
     /// it; the field after *that* one takes `SimChunk` to 232 bytes, i.e. 8 MB.
-    ///
-    /// Carried but not yet consumed: the aquatic-ecology asset that selects a
-    /// fauna/flora profile by water kind *and* salinity is COW-22's `C22-5`,
-    /// which also replaces the two Cromatolis wildlife manifest entries that
-    /// currently gate on `water_body` alone. `expect` rather than `allow` so
-    /// the attribute cannot outlive the first real read, and `not(test)`
-    /// because the regressions below do read the field, which would
-    /// otherwise leave the expectation unfulfilled in the test build.
     #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) salinity: Option<Salinity>,
+    /// Which fauna/flora profile (if any) this chunk resolved to, out of
+    /// `cromatolis_v0_aquatic_ecology.ron`'s `profiles`/`zones` table. `None`
+    /// for dry chunks, chunks outside an authored region, and wet chunks that
+    /// happen to match no profile. Resolved once, here, from `water_body` and
+    /// `salinity` above plus depth and temperature -- see
+    /// [`AquaticEcologyProfileId`] and `ResolvedAquaticEcology::
+    /// resolve_profile`. The production consumers (`layer::wildlife`'s
+    /// aquatic manifest entries, `layer::scatter`'s flora weight lookup) read
+    /// only this field, never `water_body`/`salinity` directly, because they
+    /// are plain `fn` pointers with no handle on `WorldSim` to resolve a
+    /// profile from scratch.
+    pub(crate) aquatic_ecology_profile: Option<AquaticEcologyProfileId>,
     /// Compact post-generation fact. The policy remains owned by `WorldSim`.
     pub(crate) authored_alpine_snowland: bool,
     pub chaos: f32,
@@ -4884,7 +4929,7 @@ fn authored_route_way(map_size_lg: MapSizeLg, posi: usize, routes: &[f32]) -> Op
 /// add lives inside `world` (`sim`, `layer`). Widen it the day something in
 /// `server`/`voxygen` needs it -- that is a one-line change, where narrowing it
 /// again would not be.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub(crate) enum WaterBodyKind {
     /// Open marine water.
     Ocean,
@@ -5073,7 +5118,7 @@ fn promote_lagoon_basins(
 /// Scoped `pub(crate)` for the same reason [`WaterBodyKind`] is: every consumer
 /// lives inside `world` today, and widening it later is a one-line change where
 /// narrowing it again would not be.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub(crate) enum Salinity {
     /// Inland water: a river above its estuary, and standing water with a way
     /// out.
@@ -5475,6 +5520,400 @@ fn derive_salinity(
         "every classified water chunk carries a salinity, and nothing else does"
     );
     salinity
+}
+
+/// Schema this crate understands for `cromatolis_v0_aquatic_ecology.ron`. See
+/// [`AuthoredAquaticEcology`].
+const AQUATIC_ECOLOGY_SCHEMA: &str = "xindeler_open_world.aquatic_ecology.v1";
+
+/// An inclusive `[min, max]` band on one continuous selector axis (depth in
+/// metres below the local water surface, or abstract temperature). RON
+/// spells this as a bare `(min: .., max: ..)` struct literal.
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct AquaticEcologyRange {
+    min: f32,
+    max: f32,
+}
+
+impl AquaticEcologyRange {
+    fn is_valid(&self) -> bool {
+        self.min.is_finite() && self.max.is_finite() && self.min <= self.max
+    }
+
+    fn contains(&self, value: f32) -> bool { value >= self.min && value <= self.max }
+}
+
+/// One named fauna/flora profile in [`AuthoredAquaticEcology`]. Every selector
+/// field is optional; an absent field matches anything, and a present one is
+/// spelled `field: Some(..)` in RON (this crate's `ron` version requires the
+/// explicit wrapper; it does not infer `Some` from a bare value).
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct AuthoredAquaticEcologyProfile {
+    pub(crate) id: String,
+    #[serde(default)]
+    water_kind: Option<Vec<WaterBodyKind>>,
+    #[serde(default)]
+    salinity: Option<Vec<Salinity>>,
+    #[serde(default)]
+    depth: Option<AquaticEcologyRange>,
+    #[serde(default)]
+    temp: Option<AquaticEcologyRange>,
+    /// Wildlife spawn-attempt density for this profile, read by
+    /// `layer::wildlife`'s `world.wildlife.spawn.cromatolis.aquatic.<id>`
+    /// manifest entries. An authored value rather than a Rust constant so a
+    /// rich reef and a sparse abyssal plain need not share one number --
+    /// `0.0001`/`0.001` below mirror the ocean/lake magnitudes the two-entry
+    /// stopgap this schema replaced used (open ocean is by far the largest
+    /// wet area on this map, so an equal per-chunk rate there would dwarf
+    /// every other water body's population; freshwater bodies are small
+    /// enough that they don't need the same dampening).
+    density: f32,
+    /// `(weight, entity asset specifier)`. The weights themselves are not
+    /// read by the wildlife manifest today -- its entries gate on *which*
+    /// profile a column resolved to, and each such profile's actual species
+    /// mix lives in its own `SpawnEntry` asset (`assets/world/wildlife/
+    /// spawn/cromatolis/aquatic/<id>.ron`), authored to match this list.
+    /// Carried and validated here anyway as the declared source of truth for
+    /// "what lives here", so a future, richer `SpawnEntry` resolver does not
+    /// need a schema bump to read it. Kept honest against drift by
+    /// `layer::wildlife`'s `cromatolis_aquatic_spawn_entries_match_their_
+    /// declared_ecology_fauna` test, which loads both sides and asserts they
+    /// agree -- this field lied about that once already (see that test's
+    /// doc comment) before the test existed.
+    #[serde(default)]
+    pub(crate) fauna: Vec<(f32, String)>,
+    /// `(weight, sprite)`. Consumed by the `Underwater`/`Floating`
+    /// `ScatterConfig`s in `layer::scatter` -- see
+    /// `cromatolis_aquatic_flora_weight`.
+    #[serde(default)]
+    pub(crate) flora: Vec<(f32, SpriteKind)>,
+}
+
+/// A named place that overrides the profile table entirely inside its
+/// polygon. Same `polygon_normalized_top_left` convention as
+/// [`AuthoredMicroclimateZone`] and `cromatolis_v0_tree_candidate_policy.ron`,
+/// but with no falloff: a zone either governs a chunk or it does not, there
+/// is no blended in-between for "which species list applies here".
+#[derive(Clone, Debug, Deserialize)]
+struct AuthoredAquaticEcologyZone {
+    id: String,
+    /// Id of the profile (in the sibling `profiles` list) this zone forces.
+    profile: String,
+    polygon_normalized_top_left: Vec<NormalizedTopLeftPoint>,
+}
+
+/// `assets/world/map/cromatolis_v0_aquatic_ecology.ron`: which fauna/flora
+/// profile governs a Cromatolis water chunk, selected by
+/// [`WaterBodyKind`]/[`Salinity`]/depth/temperature. Replaces the
+/// `world.wildlife.spawn.cromatolis.{ocean,lake}` stopgap entries and
+/// `cromatolis_aquatic_temp_window` (see that function's doc comment -- this
+/// type and its two consumers are its named deletion trigger).
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct AuthoredAquaticEcology {
+    schema: String,
+    pub(crate) profiles: Vec<AuthoredAquaticEcologyProfile>,
+    #[serde(default)]
+    zones: Vec<AuthoredAquaticEcologyZone>,
+}
+
+impl AuthoredAquaticEcology {
+    /// Structural validation only -- schema match, and that every profile/
+    /// zone id is well-formed and unique. Per-entry content problems (a
+    /// negative weight, an inverted range, a zone naming a profile that does
+    /// not exist) are *not* rejected here: they degrade individually inside
+    /// [`Self::resolve`], each with its own `warn!`, so that one bad
+    /// authored token costs that one entry rather than the whole catalog.
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != AQUATIC_ECOLOGY_SCHEMA {
+            return Err(format!(
+                "unsupported aquatic ecology schema '{}', expected '{AQUATIC_ECOLOGY_SCHEMA}'",
+                self.schema
+            ));
+        }
+        let mut profile_ids = DHashSet::default();
+        for profile in &self.profiles {
+            if profile.id.is_empty() || !profile_ids.insert(profile.id.as_str()) {
+                return Err(format!(
+                    "aquatic ecology profile ids must be unique and non-empty (offending id: '{}')",
+                    profile.id
+                ));
+            }
+        }
+        let mut zone_ids = DHashSet::default();
+        for zone in &self.zones {
+            if zone.id.is_empty() || !zone_ids.insert(zone.id.as_str()) {
+                return Err(format!(
+                    "aquatic ecology zone ids must be unique and non-empty (offending id: '{}')",
+                    zone.id
+                ));
+            }
+            if zone.polygon_normalized_top_left.len() < 3 {
+                return Err(format!(
+                    "aquatic ecology zone '{}' needs at least 3 polygon points",
+                    zone.id
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Cleans per-entry content problems (dropping the offending entry with
+    /// a `warn!`, never the whole catalog) and projects zone polygons into
+    /// chunk space once, producing the form worldgen actually queries.
+    fn resolve(&self, map_chunks: Vec2<u16>) -> ResolvedAquaticEcology {
+        let profiles: Vec<AuthoredAquaticEcologyProfile> = self
+            .profiles
+            .iter()
+            .cloned()
+            .map(|mut profile| {
+                let id = profile.id.clone();
+                profile.fauna.retain(|(weight, entity)| {
+                    let ok = weight.is_finite() && *weight > 0.0 && !entity.is_empty();
+                    if !ok {
+                        warn!(
+                            profile = id,
+                            weight, entity, "Dropping invalid aquatic ecology fauna entry"
+                        );
+                    }
+                    ok
+                });
+                profile.flora.retain(|(weight, kind)| {
+                    let ok = weight.is_finite() && *weight > 0.0;
+                    if !ok {
+                        warn!(
+                            profile = id,
+                            weight,
+                            ?kind,
+                            "Dropping invalid aquatic ecology flora entry"
+                        );
+                    }
+                    ok
+                });
+                if profile.depth.is_some_and(|range| !range.is_valid()) {
+                    warn!(profile = id, "Dropping invalid aquatic ecology depth range");
+                    profile.depth = None;
+                }
+                if profile.temp.is_some_and(|range| !range.is_valid()) {
+                    warn!(profile = id, "Dropping invalid aquatic ecology temp range");
+                    profile.temp = None;
+                }
+                profile
+            })
+            .collect();
+
+        let zones = self
+            .zones
+            .iter()
+            .filter_map(|zone| {
+                let Some(profile_index) = profiles.iter().position(|p| p.id == zone.profile) else {
+                    warn!(
+                        zone = zone.id,
+                        profile = zone.profile,
+                        "Dropping aquatic ecology zone: no profile with this id"
+                    );
+                    return None;
+                };
+                Some(ResolvedAquaticEcologyZone {
+                    profile_index,
+                    vertices: zone
+                        .polygon_normalized_top_left
+                        .iter()
+                        .map(|point| {
+                            Vec2::new(
+                                point.x * map_chunks.x as f32,
+                                // Normalized space is top-left origin, chunk
+                                // space is bottom-left.
+                                (1.0 - point.y) * map_chunks.y as f32,
+                            )
+                        })
+                        .collect(),
+                })
+            })
+            .collect();
+
+        ResolvedAquaticEcology { profiles, zones }
+    }
+}
+
+impl FileAsset for AuthoredAquaticEcology {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> {
+        let catalog: Self = load_ron(&bytes)?;
+        catalog.validate().map_err(Into::into).map(|_| catalog)
+    }
+}
+
+impl Default for AuthoredAquaticEcology {
+    /// Used only when the authored asset is missing or fails to parse -- an
+    /// empty catalog, so every water chunk simply resolves no profile (no
+    /// aquatic fauna/flora boost) rather than the world failing to generate.
+    fn default() -> Self {
+        Self {
+            schema: AQUATIC_ECOLOGY_SCHEMA.to_owned(),
+            profiles: Vec::new(),
+            zones: Vec::new(),
+        }
+    }
+}
+
+/// One [`AuthoredAquaticEcologyZone`] with its polygon already in chunk
+/// space, and its `profile` id already resolved to an index into
+/// [`ResolvedAquaticEcology::profiles`].
+#[derive(Debug)]
+struct ResolvedAquaticEcologyZone {
+    profile_index: usize,
+    vertices: Vec<Vec2<f32>>,
+}
+
+impl ResolvedAquaticEcologyZone {
+    fn contains(&self, chunk_pos: Vec2<i32>) -> bool {
+        let point = chunk_pos.map(|e| e as f32) + 0.5;
+        point_in_polygon(point, self.vertices.iter().copied())
+    }
+}
+
+/// [`AuthoredAquaticEcology`] in the form worldgen reads it. Built once per
+/// world (or defaulted to empty, see [`AuthoredAquaticEcology::default`]),
+/// then queried once per water chunk from `SimChunk::generate`.
+#[derive(Debug, Default)]
+pub(crate) struct ResolvedAquaticEcology {
+    profiles: Vec<AuthoredAquaticEcologyProfile>,
+    zones: Vec<ResolvedAquaticEcologyZone>,
+}
+
+impl ResolvedAquaticEcology {
+    /// Resolves the profile governing one water chunk, if any. `None`
+    /// `water_kind` (a dry chunk) always resolves `None`; a wet chunk that
+    /// matches no zone and no profile also resolves `None` -- both are
+    /// legal and simply mean "no aquatic-ecology boost here", not an error.
+    ///
+    /// Zones are checked first, in authored order, and override the profile
+    /// table entirely inside their polygon. Failing that, profiles are
+    /// matched top to bottom; every selector field a profile specifies must
+    /// match, and an absent field matches anything.
+    fn resolve_profile(
+        &self,
+        chunk_pos: Vec2<i32>,
+        water_kind: Option<WaterBodyKind>,
+        salinity: Option<Salinity>,
+        depth_below_water: f32,
+        temp: f32,
+    ) -> Option<&AuthoredAquaticEcologyProfile> {
+        let water_kind = water_kind?;
+        if let Some(zone) = self.zones.iter().find(|zone| zone.contains(chunk_pos)) {
+            return self.profiles.get(zone.profile_index);
+        }
+        self.profiles.iter().find(|profile| {
+            profile
+                .water_kind
+                .as_ref()
+                .is_none_or(|kinds| kinds.contains(&water_kind))
+                && profile
+                    .salinity
+                    .as_ref()
+                    .is_none_or(|kinds| salinity.is_some_and(|s| kinds.contains(&s)))
+                && profile
+                    .depth
+                    .is_none_or(|range| range.contains(depth_below_water))
+                && profile.temp.is_none_or(|range| range.contains(temp))
+        })
+    }
+}
+
+/// Which of the aquatic-ecology profiles authored in
+/// `cromatolis_v0_aquatic_ecology.ron` a chunk resolved to, baked onto
+/// [`SimChunk`] at generation time.
+///
+/// A compact enum rather than the profile's own `String` id: the consumers
+/// (the `SPAWN_RULES`-style closures in `layer::wildlife` and the
+/// `ScatterConfig`s in `layer::scatter`) are themselves a fixed set of `fn`
+/// pointers, one per profile this build implements, so the profile *set* is
+/// already pinned by engine code -- a `String` would cost 16 bytes per chunk
+/// (`Option<&str>` is niche-optimized but still a fat pointer) for
+/// information a 1-byte enum already carries. Authors can still retune each
+/// profile's selector/fauna/flora weights freely in the RON; adding a *new*
+/// named profile the engine consumes is the one thing that needs an engine
+/// change, same as adding a new manifest entry always has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AquaticEcologyProfileId {
+    CaribbeanReefShelf,
+    TemperateKelpShelf,
+    AbyssalPlain,
+    SwampShallows,
+    Estuary,
+    StandingLake,
+    MountainRiver,
+}
+
+impl AquaticEcologyProfileId {
+    /// Maps a resolved profile's authored `id` string back to the compact
+    /// enum, if it names one of the profiles this engine build actually
+    /// consumes. A profile with an id outside this set (e.g. a future one
+    /// with no engine consumer yet) resolves `None` here and so contributes
+    /// no fauna/flora boost -- graceful, not an error.
+    ///
+    /// This is also the one edit that can silently orphan already-generated
+    /// chunks under hot-reload: `SimChunk::aquatic_ecology_profile` is baked
+    /// once, at generation time, from whichever id string matched *then*.
+    /// `layer::scatter`'s flora-weight lookup re-resolves this same mapping
+    /// on every read from its own independently hot-reloaded asset handle
+    /// (see that module's `CROMATOLIS_AQUATIC_ECOLOGY`), so renaming or
+    /// removing a live profile id makes every chunk already carrying that
+    /// enum value read `None` from the renamed catalog -- no warning, no
+    /// error, just a quiet drop to zero weight until the world regenerates.
+    /// Retuning a profile's existing fields in place is safe; renaming its
+    /// `id` is not, for chunks generated before the rename.
+    pub(crate) fn from_id(id: &str) -> Option<Self> {
+        Some(match id {
+            "caribbean_reef_shelf" => Self::CaribbeanReefShelf,
+            "temperate_kelp_shelf" => Self::TemperateKelpShelf,
+            "abyssal_plain" => Self::AbyssalPlain,
+            "swamp_shallows" => Self::SwampShallows,
+            "estuary" => Self::Estuary,
+            "standing_lake" => Self::StandingLake,
+            "mountain_river" => Self::MountainRiver,
+            _ => return None,
+        })
+    }
+}
+
+lazy_static! {
+    /// Cached handle to `cromatolis_v0_aquatic_ecology.ron`, shared by every
+    /// consumer that needs to read a field of the *authored* (not
+    /// per-chunk-resolved) catalog live -- currently `layer::wildlife`'s
+    /// spawn-density lookup and `layer::scatter`'s flora-weight lookup.
+    /// Neither of those is a method on `WorldSim`/`GenCdf` (both are bare
+    /// `fn` pointers with no handle to borrow `GenCdf::aquatic_ecology`
+    /// from), so they read this independently-cached copy instead.
+    /// `assets_manager` caches by specifier, so the underlying file is still
+    /// only read and parsed once regardless of how many call sites load it.
+    /// `None` if the asset is missing or fails to parse, so every lookup
+    /// through it degrades to a safe default rather than panicking
+    /// mid-worldgen.
+    pub(crate) static ref CROMATOLIS_AQUATIC_ECOLOGY: Option<AssetHandle<AuthoredAquaticEcology>> =
+        AuthoredAquaticEcology::load("world.map.cromatolis_v0_aquatic_ecology").ok();
+}
+
+/// The resolved profile matching `id`'s declared spawn-attempt `density`, or
+/// `0.0` if the asset failed to load, no profile in it maps to `id`, or that
+/// profile's `density` is non-finite/non-positive -- the same "one bad
+/// authored value costs only its own reader, never a panic" posture
+/// [`AuthoredAquaticEcology::resolve`] uses, applied here too since this
+/// reads the asset independently of that resolve pass (see
+/// [`CROMATOLIS_AQUATIC_ECOLOGY`]).
+pub(crate) fn aquatic_ecology_profile_density(id: AquaticEcologyProfileId) -> f32 {
+    let Some(handle) = CROMATOLIS_AQUATIC_ECOLOGY.as_ref() else {
+        return 0.0;
+    };
+    let catalog = handle.read();
+    catalog
+        .profiles
+        .iter()
+        .find(|profile| AquaticEcologyProfileId::from_id(&profile.id) == Some(id))
+        .map(|profile| profile.density)
+        .filter(|density| density.is_finite() && *density > 0.0)
+        .unwrap_or(0.0)
 }
 
 /// Widest channel, in metres, the engine will carve as a real
@@ -6029,12 +6468,27 @@ impl SimChunk {
             })
             .unwrap_or_default();
 
+        let water_body = gen_cdf.authored_water_body[posi];
+        let salinity = gen_cdf.authored_salinity[posi];
+        // Depth below the local water surface, floored at zero for a wet
+        // chunk whose own (unwarped, see `alt` above) altitude happens to sit
+        // at or above it -- a real possibility right at a shoreline, and a
+        // real depth of zero is exactly the right answer there, not a reason
+        // to skip profile resolution.
+        let aquatic_ecology_profile = water_body.and_then(|kind| {
+            gen_cdf
+                .aquatic_ecology
+                .resolve_profile(pos, Some(kind), salinity, (water_alt - alt).max(0.0), temp)
+                .and_then(|profile| AquaticEcologyProfileId::from_id(&profile.id))
+        });
+
         Self {
             authored_cromatolis_v0: gen_cdf.authored_cromatolis_v0,
             authored_region_id: gen_cdf.authored_region_id,
             authored_near_water: gen_cdf.authored_near_water[posi],
-            water_body: gen_cdf.authored_water_body[posi],
-            salinity: gen_cdf.authored_salinity[posi],
+            water_body,
+            salinity,
+            aquatic_ecology_profile,
             authored_alpine_snowland: authored_alpine
                 .is_some_and(|policy| alt - CONFIG.sea_level >= policy.snow_start_altitude_m),
             chaos,
@@ -6801,6 +7255,24 @@ mod tests {
                 .unwrap_or_else(|err| panic!("{} is invalid: {err}", region.ground_cover_profile));
         }
         assert!(WorldSim::empty().authored_ground_cover_profile.is_none());
+    }
+
+    #[test]
+    fn every_configured_authored_region_has_a_valid_aquatic_ecology_profile() {
+        for region in AUTHORED_REGIONS {
+            let catalog = AuthoredAquaticEcology::load_owned(region.aquatic_ecology_profile)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "{} is configured for {} but failed to load: {err:?}",
+                        region.aquatic_ecology_profile, region.id
+                    )
+                });
+            assert!(
+                !catalog.profiles.is_empty(),
+                "{} declares no profiles",
+                region.aquatic_ecology_profile
+            );
+        }
     }
 
     // ---- AuthoredF32Layer: raw f32le format ----
@@ -8664,15 +9136,20 @@ mod tests {
     ///    urchins, ...) must stop growing marine flora in the reclassified
     ///    inland chunks. Their gate is `col.chunk.river.is_ocean()`, so this
     ///    pins the size of that set.
-    /// 2. Every water chunk must still be claimed by one of the two Cromatolis
-    ///    wildlife manifest entries. Their chunk-level gates are
-    ///    `BiomeKind::Ocean` (`cromatolis.ocean`) and `cromatolis_freshwater`
-    ///    (`cromatolis.lake`); every generic `*.river`/`*.lake` entry is
-    ///    `not_cromatolis`-gated, so a chunk neither entry claims gets *no*
-    ///    wildlife at all.
+    /// 2. Every water chunk must resolve an `aquatic_ecology_profile`, which is
+    ///    what every Cromatolis aquatic wildlife manifest entry now gates on --
+    ///    a wet chunk resolving `None` gets *no* wildlife at all.
+    ///
+    /// Coverage is the load-bearing regression here, not zero-uncovered
+    /// alone: the aquatic-ecology profile table replaced a two-entry
+    /// `close(temp, 0.0, 1.0)` bridge (measured 100.0000% of wet ocean and
+    /// freshwater columns) which itself replaced #351's original two entries
+    /// (measured 99.9997% ocean / 96.07% freshwater). This asserts against
+    /// both floors so a profile-selector gap regresses loudly rather than
+    /// merging unnoticed.
     #[test]
     #[ignore]
-    fn cromatolis_water_reclassification_keeps_its_consumers_covered_against_real_lfs_assets() {
+    fn cromatolis_aquatic_ecology_profile_covers_wildlife_consumers_against_real_lfs_assets() {
         let sim = generate_cromatolis_world();
 
         // Exactly the marine cells: the inland water that used to read as ocean
@@ -8685,28 +9162,101 @@ mod tests {
             .count();
         assert_eq!(marine_scatter_chunks, EXPORTED_MARINE_CELLS);
 
-        let mut uncovered = 0;
-        let mut double_covered = 0;
-        for chunk in sim.chunks.iter() {
-            if chunk.water_body.is_none() {
-                continue;
-            }
-            let ocean_entry = chunk.get_biome() == BiomeKind::Ocean;
-            let lake_entry = crate::layer::wildlife::cromatolis_freshwater(chunk);
-            match (ocean_entry, lake_entry) {
-                (false, false) => uncovered += 1,
-                (true, true) => double_covered += 1,
-                _ => {},
+        let coverage = |predicate: fn(&SimChunk) -> bool| {
+            let wet: Vec<&SimChunk> = sim.chunks.iter().filter(|c| predicate(c)).collect();
+            let covered = wet
+                .iter()
+                .filter(|c| c.aquatic_ecology_profile.is_some())
+                .count();
+            (covered, wet.len())
+        };
+
+        let (ocean_covered, ocean_total) = coverage(|c| c.get_biome() == BiomeKind::Ocean);
+        let (fresh_covered, fresh_total) = coverage(crate::layer::wildlife::cromatolis_freshwater);
+
+        assert!(
+            ocean_total > 0 && fresh_total > 0,
+            "fixture generated no wet chunks to measure"
+        );
+
+        let ocean_pct = 100.0 * ocean_covered as f64 / ocean_total as f64;
+        let fresh_pct = 100.0 * fresh_covered as f64 / fresh_total as f64;
+        println!(
+            "aquatic ecology coverage: ocean {ocean_covered}/{ocean_total} ({ocean_pct:.4}%), \
+             freshwater {fresh_covered}/{fresh_total} ({fresh_pct:.4}%)"
+        );
+        assert!(
+            ocean_pct >= 99.9997,
+            "aquatic ecology profile covers only {ocean_pct:.4}% of {ocean_total} wet ocean \
+             columns ({ocean_covered} covered), below the 99.9997% floor the stopgap this schema \
+             replaced measured"
+        );
+        assert!(
+            fresh_pct >= 96.07,
+            "aquatic ecology profile covers only {fresh_pct:.4}% of {fresh_total} wet freshwater \
+             columns ({fresh_covered} covered), below the 96.07% floor the stopgap this schema \
+             replaced measured"
+        );
+
+        // Every wet chunk not covered by any profile is worth naming: a real
+        // regression here should be quick to diagnose, not just quantify.
+        let mut uncovered_by_kind: Vec<(WaterBodyKind, u32)> = Vec::new();
+        for chunk in sim
+            .chunks
+            .iter()
+            .filter_map(|c| c.water_body.filter(|_| c.aquatic_ecology_profile.is_none()))
+        {
+            match uncovered_by_kind
+                .iter_mut()
+                .find(|(kind, _)| *kind == chunk)
+            {
+                Some((_, count)) => *count += 1,
+                None => uncovered_by_kind.push((chunk, 1)),
             }
         }
-        assert_eq!(
-            uncovered, 0,
-            "{uncovered} water chunks are claimed by neither Cromatolis wildlife entry"
+        assert!(
+            uncovered_by_kind.is_empty(),
+            "uncovered wet chunks by water body: {uncovered_by_kind:?}"
         );
-        assert_eq!(
-            double_covered, 0,
-            "{double_covered} water chunks are claimed by both Cromatolis wildlife entries, \
-             double-counting their density"
+    }
+
+    /// Every sprite `layer::scatter`'s marine `ScatterConfig`s converted to
+    /// read `cromatolis_aquatic_flora_weight` instead of a `close(col.temp,
+    /// ..)` constant must still be reachable *somewhere* on the real map --
+    /// i.e. at least one real chunk's resolved profile assigns it a nonzero
+    /// weight. Column-level depth/`is_ocean` placement gates are unchanged
+    /// (this row is deliberately mechanical there, see the scatter.rs diff),
+    /// so this only has to check the weight table's own reachability, not
+    /// re-run full scatter placement.
+    #[test]
+    #[ignore]
+    fn cromatolis_aquatic_ecology_flora_sprites_all_reachable_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+
+        const CONVERTED_SPRITES: [SpriteKind; 9] = [
+            SpriteKind::Seagrass,
+            SpriteKind::SeaweedTemperate,
+            SpriteKind::SeaweedTropical,
+            SpriteKind::MermaidsFan,
+            SpriteKind::SeaAnemone,
+            SpriteKind::GiantKelp,
+            SpriteKind::BullKelp,
+            SpriteKind::StonyCoral,
+            SpriteKind::SoftCoral,
+        ];
+
+        let mut unreachable = Vec::new();
+        for sprite in CONVERTED_SPRITES {
+            let reachable = sim.chunks.iter().any(|chunk| {
+                crate::layer::scatter::cromatolis_aquatic_flora_weight(chunk, sprite) > 0.0
+            });
+            if !reachable {
+                unreachable.push(sprite);
+            }
+        }
+        assert!(
+            unreachable.is_empty(),
+            "{unreachable:?} have zero weight in every profile on the real map -- unreachable"
         );
     }
 

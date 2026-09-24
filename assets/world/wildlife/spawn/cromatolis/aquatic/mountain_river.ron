@@ -1,0 +1,21 @@
+SpawnEntry (
+    name: "Cromatolis mountain-river wildlife.",
+    note: "Freshwater river-corridor inhabitants -- the `mountain_river` profile in cromatolis_v0_aquatic_ecology.ron.",
+    rules: [
+        Pack(
+            groups: [
+                (3, (2, 4, "common.entity.wild.peaceful.piranha")),
+                (1, (1, 1, "common.entity.wild.aggressive.rootsnapper")),
+            ],
+            spawn_mode: Water,
+            day_period: [Night, Morning, Noon, Evening],
+        ),
+        Pack(
+            groups: [
+                (1, (1, 1, "common.entity.wild.aggressive.crocodile")),
+            ],
+            spawn_mode: Land,
+            day_period: [Night, Morning, Noon, Evening],
+        ),
+    ],
+)

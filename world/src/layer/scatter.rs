@@ -1,7 +1,7 @@
 use crate::{
     CONFIG, Canvas,
     column::ColumnSample,
-    sim::SimChunk,
+    sim::{AquaticEcologyProfileId, CROMATOLIS_AQUATIC_ECOLOGY, CROMATOLIS_V0_REGION_ID, SimChunk},
     util::{RandomField, close},
 };
 use common::{
@@ -13,6 +13,69 @@ use num::traits::Pow;
 use rand::prelude::*;
 use std::f32;
 use vek::*;
+
+/// Weight `cromatolis_v0_aquatic_ecology.ron`'s profile for `c` assigns
+/// `kind`, as a fraction of that profile's single strongest `flora` entry --
+/// comparable in magnitude to the `close(...)` factor this replaces, which
+/// also peaked at `1.0`. `0.0` if `c` resolved no profile, the profile
+/// declares no flora at all (e.g. the deliberately-barren abyssal plain),
+/// `kind` is not one of the species it lists, or its entry (or every entry
+/// in the list) has a non-finite/non-positive weight -- this reads the
+/// catalog independently of [`AuthoredAquaticEcology::resolve`]'s per-entry
+/// cleanup (see [`CROMATOLIS_AQUATIC_ECOLOGY`]'s doc comment), so it filters
+/// defensively here too rather than trusting the raw authored value.
+pub(crate) fn cromatolis_aquatic_flora_weight(c: &SimChunk, kind: SpriteKind) -> f32 {
+    let Some(id) = c.aquatic_ecology_profile else {
+        return 0.0;
+    };
+    let Some(handle) = CROMATOLIS_AQUATIC_ECOLOGY.as_ref() else {
+        return 0.0;
+    };
+    let catalog = handle.read();
+    let Some(profile) = catalog
+        .profiles
+        .iter()
+        .find(|profile| AquaticEcologyProfileId::from_id(&profile.id) == Some(id))
+    else {
+        return 0.0;
+    };
+    let valid_weight = |weight: &f32| weight.is_finite() && *weight > 0.0;
+    let max_weight = profile
+        .flora
+        .iter()
+        .filter(|(weight, _)| valid_weight(weight))
+        .map(|(weight, _)| *weight)
+        .fold(0.0_f32, f32::max);
+    if max_weight <= 0.0 {
+        return 0.0;
+    }
+    profile
+        .flora
+        .iter()
+        .find(|(weight, sprite)| *sprite == kind && valid_weight(weight))
+        .map_or(0.0, |(weight, _)| weight / max_weight)
+}
+
+/// Drop-in replacement for a `close(col.temp, fallback_center,
+/// fallback_falloff)` factor in a marine `ScatterConfig`: inside the
+/// authored Cromatolis region, reads `kind`'s weight from the real resolved
+/// aquatic-ecology profile instead; everywhere else (every other world this
+/// engine can generate, which has no such profile at all) falls back to the
+/// exact `close(...)` call it replaced, so behaviour outside Cromatolis is
+/// unchanged.
+fn cromatolis_aquatic_flora_factor(
+    c: &SimChunk,
+    col: &ColumnSample,
+    kind: SpriteKind,
+    fallback_center: f32,
+    fallback_falloff: f32,
+) -> f32 {
+    if c.authored_region_id == Some(CROMATOLIS_V0_REGION_ID) {
+        cromatolis_aquatic_flora_weight(c, kind)
+    } else {
+        close(col.temp, fallback_center, fallback_falloff)
+    }
+}
 
 /// Returns a decimal value between 0 and 1.
 /// The density is maximum at the middle of the highest and the lowest allowed
@@ -806,9 +869,9 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: Seagrass,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Grass | BlockKind::Sand),
-            f: |_, col| {
+            f: |c, col| {
                 (
-                    close(col.temp, CONFIG.temperate_temp, 0.8)
+                    cromatolis_aquatic_flora_factor(c, col, Seagrass, CONFIG.temperate_temp, 0.8)
                         * MUSH_FACT
                         * 300.0
                         * if col.chunk.river.is_ocean()
@@ -845,10 +908,15 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: SeaweedTemperate,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Grass | BlockKind::Sand),
-            f: |_, col| {
+            f: |c, col| {
                 (
-                    close(col.temp, CONFIG.temperate_temp, 0.8)
-                        * MUSH_FACT
+                    cromatolis_aquatic_flora_factor(
+                        c,
+                        col,
+                        SeaweedTemperate,
+                        CONFIG.temperate_temp,
+                        0.8,
+                    ) * MUSH_FACT
                         * 50.0
                         * if col.chunk.river.is_ocean()
                             && col.alt < col.water_level - DEPTH_WATER_NORM + 11.0
@@ -866,9 +934,9 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: SeaweedTropical,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Grass | BlockKind::Sand),
-            f: |_, col| {
+            f: |c, col| {
                 (
-                    close(col.temp, 1.0, 0.95)
+                    cromatolis_aquatic_flora_factor(c, col, SeaweedTropical, 1.0, 0.95)
                         * MUSH_FACT
                         * 50.0
                         * if col.chunk.river.is_ocean()
@@ -927,9 +995,9 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: MermaidsFan,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |_, col| {
+            f: |c, col| {
                 (
-                    close(col.temp, 1.0, 0.95)
+                    cromatolis_aquatic_flora_factor(c, col, MermaidsFan, 1.0, 0.95)
                         * MUSH_FACT
                         * 500.0
                         * if col.chunk.river.is_ocean()
@@ -948,9 +1016,9 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: SeaAnemone,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |_, col| {
+            f: |c, col| {
                 (
-                    close(col.temp, CONFIG.temperate_temp, 0.8)
+                    cromatolis_aquatic_flora_factor(c, col, SeaAnemone, CONFIG.temperate_temp, 0.8)
                         * MUSH_FACT
                         * 125.0
                         * if col.chunk.river.is_ocean()
@@ -969,9 +1037,9 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: GiantKelp,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |_, col| {
+            f: |c, col| {
                 (
-                    close(col.temp, CONFIG.temperate_temp, 0.8)
+                    cromatolis_aquatic_flora_factor(c, col, GiantKelp, CONFIG.temperate_temp, 0.8)
                         * MUSH_FACT
                         * 220.0
                         * if col.chunk.river.is_ocean()
@@ -990,9 +1058,9 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: BullKelp,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |_, col| {
+            f: |c, col| {
                 (
-                    close(col.temp, CONFIG.temperate_temp, 0.7)
+                    cromatolis_aquatic_flora_factor(c, col, BullKelp, CONFIG.temperate_temp, 0.7)
                         * MUSH_FACT
                         * 300.0
                         * if col.chunk.river.is_ocean()
@@ -1011,9 +1079,9 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: StonyCoral,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |_, col| {
+            f: |c, col| {
                 (
-                    close(col.temp, 1.0, 0.9)
+                    cromatolis_aquatic_flora_factor(c, col, StonyCoral, 1.0, 0.9)
                         * MUSH_FACT
                         * 160.0
                         * if col.chunk.river.is_ocean()
@@ -1032,9 +1100,9 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: SoftCoral,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |_, col| {
+            f: |c, col| {
                 (
-                    close(col.temp, 1.0, 0.9)
+                    cromatolis_aquatic_flora_factor(c, col, SoftCoral, 1.0, 0.9)
                         * MUSH_FACT
                         * 120.0
                         * if col.chunk.river.is_ocean()
