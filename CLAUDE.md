@@ -2,6 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Analyzing Matías's QA screen-recordings (`.mov` files)
+
+Matías does in-client QA passes as `.mov` screen recordings (typically saved to `~/Screenshots/`),
+since Claude cannot watch video directly. To review one: extract frames with `ffmpeg` (already
+installed via Homebrew, no `pip install`/`opencv-python` needed) and read them as images.
+
+```bash
+# One video, frames every N seconds into a per-video folder (use your scratchpad, not ~/Screenshots):
+mkdir -p <scratchpad>/frames/<name>
+ffmpeg -v error -i ~/Screenshots/<name>.mov -vf "fps=1/<N>" <scratchpad>/frames/<name>/f_%03d.jpg
+```
+
+Check `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 <file>.mov`
+first and pick `N` so each video yields roughly 20-30 frames — enough coverage without reviewing
+hundreds of near-duplicate images. Read frames with the `Read` tool (jpg/png both work). **Delete
+the extracted frames when done** (`rm -rf <scratchpad>/frames/<name>`) — they're only useful during
+the analysis, and Matías's disk isn't the place to accumulate them (the scratchpad already isn't).
+
 ## What this repo is
 
 `xindeler-new-horizon` is the successor track chosen 2026-07-24 after an engine-strategy
