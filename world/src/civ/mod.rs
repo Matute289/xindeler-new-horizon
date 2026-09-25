@@ -401,6 +401,163 @@ struct AuthoredCromatolisRoute {
     points: Vec<AuthoredMapPoint>,
 }
 
+/// Authored Cromatolis maritime trade routes (COW-24). Unlike
+/// `AuthoredCromatolisRouteGraph`'s overland routes, a maritime route must
+/// never be carved into the terrain as a walkable road: ships don't need a
+/// paved seabed, and the real gap between the mainland and Rios Port's
+/// island group is ~233 chunks of open ocean, which would blow straight
+/// through `establish_procedural_cromatolis_route_connectors`'s
+/// `MAX_CONNECTOR_COST` guard rail anyway (that guard assumes a short,
+/// walkable gap, not open water). This asset is purely the economy/RTSim
+/// travel-edge list, exactly like the land route graph above -- see
+/// `Civs::establish_authored_cromatolis_maritime_routes`, which registers a
+/// route whose two stops both resolve to a real installed settlement as a
+/// real `Track` in `self.tracks`/`self.track_map`, the same mechanism the
+/// land route graph already uses for the same purpose, without ever
+/// touching `self.sim`/`ctx.sim`.
+///
+/// A stop is `Site(id)` (a settlement within 700m of the traced junction),
+/// `External(direction)` (the route exits the map canvas with no invented
+/// foreign port), or `Waypoint(x, y)` (an unresolved open-water branch point
+/// the source raster could not name). Only a `Site`-to-`Site` route
+/// registers a `Track` edge -- `External`/`Waypoint` stops are still parsed
+/// and retained on `AuthoredCromatolisMaritimeRoute` (for a future
+/// map-decoration/UI use, and so the RON round-trips completely) even though
+/// nothing on the engine side consumes them yet.
+#[derive(Debug, Deserialize)]
+struct AuthoredCromatolisMaritimeRoutes {
+    schema: String,
+    coordinate_space: String,
+    #[expect(dead_code)]
+    source_canvas: AuthoredMaritimeSourceCanvas,
+    #[expect(dead_code)]
+    notes: Vec<String>,
+    routes: Vec<AuthoredCromatolisMaritimeRoute>,
+}
+
+impl FileAsset for AuthoredCromatolisMaritimeRoutes {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+impl AuthoredCromatolisMaritimeRoutes {
+    fn validate(&self, map_size: MapSizeLg) -> Result<(), String> {
+        const EXPECTED_SCHEMA: &str = "xindeler_open_world.authored_maritime_routes.v1";
+        const EXPECTED_COORDINATE_SPACE: &str = "normalized_map_xy_top_left_origin";
+
+        if self.schema != EXPECTED_SCHEMA {
+            return Err(format!(
+                "expected schema {EXPECTED_SCHEMA}, got {}",
+                self.schema
+            ));
+        }
+        if self.coordinate_space != EXPECTED_COORDINATE_SPACE {
+            return Err(format!(
+                "expected coordinate space {EXPECTED_COORDINATE_SPACE}, got {}",
+                self.coordinate_space
+            ));
+        }
+        if self.routes.is_empty() {
+            return Err("maritime route graph contains no edges".to_string());
+        }
+
+        let mut ids = std::collections::HashSet::new();
+        for route in &self.routes {
+            if route.id.is_empty() || !ids.insert(route.id.as_str()) {
+                return Err(format!("duplicate or empty maritime route id {}", route.id));
+            }
+            if route.stops.len() != 2 {
+                return Err(format!(
+                    "maritime route {} must have exactly 2 stops, got {}",
+                    route.id,
+                    route.stops.len()
+                ));
+            }
+            if route.points.len() < 2 {
+                return Err(format!("invalid maritime route points for {}", route.id));
+            }
+            if route
+                .points
+                .iter()
+                .map(|point| point.to_chunk_pos(map_size))
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                < 2
+            {
+                return Err(format!(
+                    "maritime route {} collapses to one chunk",
+                    route.id
+                ));
+            }
+            if !route.length_m.is_finite() || route.length_m <= 0.0 {
+                return Err(format!("invalid maritime route length for {}", route.id));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthoredMaritimeSourceCanvas {
+    #[expect(dead_code)]
+    width: u32,
+    #[expect(dead_code)]
+    height: u32,
+    #[expect(dead_code)]
+    origin: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthoredCromatolisMaritimeRoute {
+    id: String,
+    stops: Vec<AuthoredMaritimeStop>,
+    length_m: f32,
+    points: Vec<AuthoredMapPoint>,
+}
+
+/// A maritime route's endpoint. Only `Site` resolves to a real settlement --
+/// see `AuthoredCromatolisMaritimeRoutes`'s doc comment above.
+#[derive(Debug, Clone, Deserialize)]
+enum AuthoredMaritimeStop {
+    Site(String),
+    External {
+        direction: AuthoredMaritimeDirection,
+    },
+    // Deliberately inline fields (not `Waypoint(AuthoredMapPoint)`): RON
+    // serializes a newtype variant wrapping a named-field struct as
+    // `Variant(StructName(field: value, ...))` (or requires the struct name
+    // some other way), but the real export writes `Waypoint(x: .., y: ..)`
+    // -- the struct-variant call syntax -- with no nested struct name at
+    // all. Matching that shape exactly (rather than reshaping the source
+    // data) is what `AuthoredCromatolisMaritimeRoutes`'s module doc comment
+    // means by "read this file directly ... don't guess the schema".
+    Waypoint {
+        x: f32,
+        y: f32,
+    },
+}
+
+impl AuthoredMaritimeStop {
+    /// The settlement id this stop resolves to, or `None` for an
+    /// `External`/`Waypoint` stop that has nothing on the other end (yet) to
+    /// connect to.
+    fn site_id(&self) -> Option<&str> {
+        match self {
+            Self::Site(id) => Some(id.as_str()),
+            Self::External { .. } | Self::Waypoint { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+enum AuthoredMaritimeDirection {
+    North,
+    South,
+    East,
+    West,
+}
+
 /// Physical bridges are independent of the route graph: a route describes
 /// travel, this asset owns the elevated crossing that preserves the water
 /// beneath it (bridges never fill water in to make room for themselves).
@@ -1514,54 +1671,58 @@ const CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS: &[&str] = &[
     "site.tenoxitlan",
 ];
 
-/// Members of `CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS` that are not
-/// reachable from the capital by any real, engine-generated road -- authored
-/// or procedural. Measured against the real installed world, `find_path`
-/// finds no path at all from any of these three to any of the 8 nearest
-/// *mainland* authored-connected settlements, even with an unbounded cost
-/// budget. All three sit in the far northwest of the map (chunk coordinates
-/// roughly x:69-156, y:145-213), 269-568 chunks in a straight line from the
-/// nearest mainland authored-connected settlement (`site.mazon_town` and
-/// others) -- the pathfinder's walking-plus-small-cardinal-gap model
-/// (`walk_in_all_dirs`, up to a ~5-chunk unauthored gap) cannot bridge
-/// whatever separates them from the mainland road network (~233 chunks of
-/// open ocean, consistent with a real strait/separate landmass, not a bug).
+/// Members of `CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS` that no
+/// real, engine-generated **road** (authored or procedural) reaches from the
+/// capital. Measured against the real installed world, `find_path` finds no
+/// path at all from any of these three to any of the 8 nearest *mainland*
+/// authored-connected settlements, even with an unbounded cost budget. All
+/// three sit in the far northwest of the map (chunk coordinates roughly
+/// x:69-156, y:145-213), 269-568 chunks in a straight line from the nearest
+/// mainland authored-connected settlement (`site.mazon_town` and others) --
+/// the pathfinder's walking-plus-small-cardinal-gap model (`walk_in_all_dirs`,
+/// up to a ~5-chunk unauthored gap) cannot bridge whatever separates them
+/// from the mainland road network (~233 chunks of open ocean, consistent
+/// with a real strait/separate landmass, not a bug).
 ///
 /// These three are, in fact, their own isolated northwest **island group**:
 /// close enough to each other (62-109 chunks apart, real land) for
 /// `find_path` to connect them internally, even though none of them can
-/// reach the mainland. `site.rios_port` is meant to get its own maritime
-/// connection to the mainland through a separate, not-yet-built system
-/// (`cromatolis_v0_maritime_routes.ron`); `site.itos_village` and
+/// reach the mainland by road. `site.itos_village` and
 /// `site.nugget_field_mines` are both inland on the island (not coastal like
-/// Rios Port), so instead they get a real **land** connector within the
-/// island (`CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS`, a second,
-/// island-scoped call to `establish_procedural_cromatolis_route_connectors`
-/// right after the mainland pass) rather than their own maritime stop.
+/// Rios Port), so they get a real **land** connector within the island
+/// (`CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS`, a second, island-scoped
+/// call to `establish_procedural_cromatolis_route_connectors` right after
+/// the mainland pass) rather than their own maritime stop.
 ///
-/// That island connector makes `site.itos_village` and
-/// `site.nugget_field_mines` reachable from `site.rios_port` (and from each
-/// other) -- but it does NOT, and cannot, make any of the three reachable
-/// from the capital: the island group as a whole is still cut off from the
-/// mainland by the same ~233 chunks of ocean, until the separate maritime
-/// system lands. All three therefore correctly stay on this list, which
-/// documents exactly one thing -- "not reachable from the capital" -- the
-/// invariant the BFS-from-capital regression test below asserts.
-/// `civs_generate_connects_the_rios_port_island_group_to_itself_but_not_the_mainland`
-/// is the dedicated real-asset test for the island-internal connectivity
-/// described here.
+/// `site.rios_port` itself is therefore **empty** now (COW-24): it used to
+/// list all three, back when the maritime-route system referenced below was
+/// "not-yet-built" -- `establish_authored_cromatolis_maritime_routes` now
+/// gives Rios Port a real `Track` to the mainland (it has authored maritime
+/// stops to `site.dove_city`, `site.mazon_town` and `site.portland`, all
+/// three already mainland-road-connected), which the island connector above
+/// then extends transitively to `site.itos_village` and
+/// `site.nugget_field_mines`. This still isn't a road across the ~233
+/// chunks of open ocean (that must never be carved -- see
+/// `AuthoredCromatolisMaritimeRoutes`'s doc comment) and it is a different
+/// mechanism than the one this constant polices (road reachability), but the
+/// combined `Track` graph (`Civs::neighbors`) that
+/// `civs_generate_makes_every_non_deliberately_roadless_settlement_reachable_from_the_capital`
+/// asserts against does not distinguish a road `Track` from a maritime one,
+/// so all three are genuinely capital-reachable now and must stay off this
+/// list -- see
+/// `civs_generate_connects_the_rios_port_island_group_to_the_mainland_via_the_maritime_route`
+/// for the dedicated real-asset regression.
 ///
 /// `establish_procedural_cromatolis_route_connectors` still attempts these
 /// three against the mainland network in its first (unscoped) call
 /// (skip-with-a-warning on failure is its normal behavior for any target,
-/// not special-cased for this list) -- this list exists so the real-data
-/// reachability regression can pin the current gap explicitly instead of
-/// either failing outright or silently passing over it.
-const CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED: &[&str] = &[
-    "site.rios_port",
-    "site.itos_village",
-    "site.nugget_field_mines",
-];
+/// not special-cased for this list); for `site.rios_port` that attempt is now
+/// expected to no-op ("already reachable") rather than warn, since the
+/// maritime pass above runs first and already gave it a `Track`. This list
+/// stays in place (currently empty) so the real-data reachability regression
+/// can pin any *future* gap explicitly instead of either failing outright or
+/// silently passing over it, exactly as it did for this one before COW-24.
+const CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED: &[&str] = &[];
 
 /// Cromatolis's isolated northwest island group's own settlements that
 /// should get a real, engine-computed **land** connector to
@@ -1575,24 +1736,29 @@ const CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED: &[&str] = &[
 ///
 /// Both members are also members of
 /// `CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS` (the mainland connector
-/// pass already tried, and failed, to reach them from the mainland network --
-/// see `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED`); this list
-/// is a deliberately-scoped second attempt for the same two settlements,
-/// never a substitute for the reviewed roadless/deliberately-roadless
-/// bookkeeping above.
+/// pass already tried, and failed, to reach them from the mainland road
+/// network directly -- see
+/// `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED`); this list is
+/// a deliberately-scoped second attempt for the same two settlements, never
+/// a substitute for the reviewed roadless/deliberately-roadless bookkeeping
+/// above.
 const CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS: &[&str] =
     &["site.itos_village", "site.nugget_field_mines"];
 
 /// Seeds `site.rios_port` into
 /// `establish_procedural_cromatolis_route_connectors`'s "already reachable"
-/// set for the island-scoped call, even though Rios Port has no real Track
-/// of its own yet (the mainland pass already gave up on it -- see
-/// `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED`). Without this
-/// explicit seed the island-scoped pass would have nothing to anchor its
+/// set for the island-scoped call. Since COW-24,
+/// `establish_authored_cromatolis_maritime_routes` normally already gives
+/// Rios Port a real `Track` of its own by the time this runs (making this
+/// seed redundant in the common case), but the explicit seed stays as a
+/// deliberate fallback: if the maritime route asset ever fails to load or
+/// validate (`warn!`-and-`None`, never a hard failure -- see that loader's
+/// call site), Rios Port would otherwise have no real `Track` yet, and
+/// without this seed the island-scoped pass would have nothing to anchor its
 /// first target to (its normal "already reachable" set is derived from real
-/// Track edges, and nothing on the island has one yet) and every island
-/// target would fail immediately with "no already-connected settlement to
-/// anchor to".
+/// Track edges) and every island target would fail immediately with "no
+/// already-connected settlement to anchor to" -- degrading island-internal
+/// connectivity along with mainland reachability instead of just the latter.
 const CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS: &[&str] = &["site.rios_port"];
 
 impl Civs {
@@ -1757,6 +1923,36 @@ impl Civs {
         } else {
             None
         };
+        // Same region-scoped gating as the land route graph above --
+        // maritime routes also resolve their endpoints by authored
+        // settlement id.
+        let authored_maritime_routes = if authored_cromatolis && authored_settlements.is_some() {
+            match AuthoredCromatolisMaritimeRoutes::load_owned(
+                "world.map.cromatolis_v0_maritime_routes",
+            ) {
+                Ok(routes) => match routes.validate(sim.map_size_lg()) {
+                    Ok(()) => Some(routes),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "Could not validate Cromatolis authored maritime route graph; \
+                             continuing without RTSim maritime routes"
+                        );
+                        None
+                    },
+                },
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "Could not load Cromatolis authored maritime route graph; continuing \
+                         without RTSim maritime routes"
+                    );
+                    None
+                },
+            }
+        } else {
+            None
+        };
         // See `cromatolis_authored_bridge_preview`'s doc comment: bridges
         // stay off in a normal run and only load when a developer opts in
         // via the env var, matching `xindeler-old`'s current live behavior.
@@ -1849,6 +2045,22 @@ impl Civs {
             }
             if let Some(fortifications) = authored_fortifications.as_ref() {
                 this.establish_authored_cromatolis_fortifications(&mut ctx, fortifications);
+            }
+            // Deliberately a sibling of, not nested inside, the
+            // `authored_routes` block below: maritime routes have their own
+            // independent load/validate gate and must establish
+            // successfully even if the unrelated land route graph asset
+            // fails to load, matching the "one bad or not-yet-applicable
+            // asset must never take another one down with it" resilience
+            // this codebase already holds for every other authored
+            // Cromatolis layer. Still runs before the mainland connector
+            // pass below (nested inside the next block) so a settlement a
+            // maritime route reaches (e.g. `site.rios_port`) is already
+            // "already reachable" there instead of also being handed a
+            // doomed procedural connector attempt across open ocean -- see
+            // `establish_authored_cromatolis_maritime_routes`'s doc comment.
+            if let Some(maritime_routes) = authored_maritime_routes.as_ref() {
+                this.establish_authored_cromatolis_maritime_routes(&ctx, maritime_routes);
             }
             if let Some(routes) = authored_routes.as_ref() {
                 this.establish_authored_cromatolis_routes(&ctx, routes);
@@ -3129,6 +3341,118 @@ impl Civs {
         info!(
             established,
             "Established authored Cromatolis RTSim route edges"
+        );
+    }
+
+    /// Establishes logical travel edges for Cromatolis's authored maritime
+    /// trade routes (COW-24) as real `Track`s in
+    /// `self.tracks`/`self.track_map` -- exactly the same RTSim travel-edge
+    /// mechanism `establish_authored_cromatolis_routes` above already uses
+    /// for overland routes, deliberately not a parallel structure, and
+    /// deliberately never carving anything into `ctx.sim` (see
+    /// `AuthoredCromatolisMaritimeRoutes`'s doc comment for why a maritime
+    /// route must not become a physical road).
+    ///
+    /// Must run after `establish_authored_cromatolis_settlements`, since
+    /// routes resolve their endpoints by authored settlement id, and should
+    /// run before `establish_procedural_cromatolis_route_connectors`'s
+    /// mainland pass so a settlement a maritime route reaches (e.g.
+    /// `site.rios_port`) is already counted "already reachable" there and is
+    /// not also handed a doomed procedural connector attempt across open
+    /// ocean.
+    ///
+    /// Only a route whose *both* stops are `Site(id)` and resolve to a real
+    /// settlement in this engine's installed settlement set registers a
+    /// `Track`. An `External`/`Waypoint` stop, or a `Site(id)` this engine
+    /// has no settlement for (the maritime export was built independently in
+    /// `xindeler-open-world` and can reference an id this engine's
+    /// settlement set doesn't have), is skipped with a `warn!`/`debug!` --
+    /// one bad or not-yet-applicable entry must never fail the whole asset.
+    fn establish_authored_cromatolis_maritime_routes(
+        &mut self,
+        ctx: &GenCtx<impl Rng>,
+        routes: &AuthoredCromatolisMaritimeRoutes,
+    ) {
+        let sites_by_authored_id = self
+            .sites
+            .iter()
+            .filter_map(|(site_id, site)| {
+                site.authored
+                    .as_ref()
+                    .map(|metadata| (metadata.id.as_str(), site_id))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut connected_pairs = std::collections::HashSet::new();
+        let mut established = 0;
+        let mut retained_non_settlement = 0;
+
+        for route in &routes.routes {
+            let [first, second] = &route.stops[..] else {
+                // `validate()` already guarantees exactly 2 stops; this is
+                // unreachable in practice, but skip defensively rather than
+                // panic on a validation gap.
+                warn!(route_id = %route.id, "Maritime route does not have exactly 2 stops");
+                continue;
+            };
+            let (Some(start_id), Some(end_id)) = (first.site_id(), second.site_id()) else {
+                debug!(
+                    route_id = %route.id,
+                    "Retaining non-settlement authored maritime route stop(s) without a Track \
+                     edge"
+                );
+                retained_non_settlement += 1;
+                continue;
+            };
+            let Some(&start) = sites_by_authored_id.get(start_id) else {
+                warn!(route_id = %route.id, start = %start_id, "Authored maritime route references a settlement this engine has no site for");
+                continue;
+            };
+            let Some(&end) = sites_by_authored_id.get(end_id) else {
+                warn!(route_id = %route.id, end = %end_id, "Authored maritime route references a settlement this engine has no site for");
+                continue;
+            };
+            if start == end {
+                warn!(route_id = %route.id, "Authored maritime route connects a settlement to itself");
+                continue;
+            }
+            let pair = if start_id < end_id {
+                (start_id, end_id)
+            } else {
+                (end_id, start_id)
+            };
+            if !connected_pairs.insert(pair) {
+                debug!(route_id = %route.id, "Skipping duplicate authored maritime route edge");
+                continue;
+            }
+
+            let mut path = route
+                .points
+                .iter()
+                .map(|point| point.to_chunk_pos(ctx.sim.map_size_lg()))
+                .collect::<Vec<_>>();
+            path[0] = self.sites.get(start).center;
+            let last = path.len() - 1;
+            path[last] = self.sites.get(end).center;
+            path.dedup();
+            if path.len() < 2 {
+                warn!(route_id = %route.id, "Skipping authored maritime route collapsed to one chunk");
+                continue;
+            }
+            let cost = path
+                .windows(2)
+                .map(|points| points[0].as_::<f32>().distance(points[1].as_()))
+                .sum::<f32>()
+                .max(1.0);
+            let track = self.tracks.insert(Track {
+                cost,
+                path: Path { nodes: path },
+            });
+            self.track_map.entry(start).or_default().insert(end, track);
+            established += 1;
+        }
+        info!(
+            established,
+            retained_non_settlement, "Established authored Cromatolis maritime RTSim route edges"
         );
     }
 
@@ -4469,6 +4793,13 @@ mod tests {
         .expect("real Cromatolis route graph export must parse")
     }
 
+    fn real_maritime_routes() -> AuthoredCromatolisMaritimeRoutes {
+        load_ron(include_bytes!(
+            "../../../assets/world/map/cromatolis_v0_maritime_routes.ron"
+        ))
+        .expect("real Cromatolis maritime route graph export must parse")
+    }
+
     fn real_bridges() -> AuthoredCromatolisBridges {
         load_ron(include_bytes!(
             "../../../assets/world/map/cromatolis_v0_bridges.ron"
@@ -4513,6 +4844,19 @@ mod tests {
     /// names. Pinned so a whole authored path disappearing is caught even
     /// though the row total would stay plausible.
     const AUTHORED_CROMATOLIS_ROUTE_PATH_NAMES: usize = 20;
+
+    /// COW-24, measured against the installed
+    /// `cromatolis_v0_maritime_routes.ron`: 36 authored maritime routes
+    /// total (rows in the RON, mirroring `AUTHORED_CROMATOLIS_ROUTES`'s
+    /// naming).
+    const AUTHORED_CROMATOLIS_MARITIME_ROUTES: usize = 36;
+
+    /// COW-24, measured: of the 36 authored maritime routes, 15 connect two
+    /// real settlements (`Site` to `Site`) and therefore register a real
+    /// `Track` via `establish_authored_cromatolis_maritime_routes`. The
+    /// remaining 21 have an `External` or `Waypoint` stop and are parsed and
+    /// retained but never become a `Track` edge.
+    const AUTHORED_CROMATOLIS_MARITIME_SITE_TO_SITE_ROUTES: usize = 15;
 
     /// COW-19, measured: the settlements **no** authored track reaches.
     ///
@@ -4898,6 +5242,154 @@ mod tests {
         }
     }
 
+    // ---- Authored Cromatolis maritime routes (COW-24): loaders ----
+
+    #[test]
+    fn cromatolis_authored_maritime_routes_parse_and_validate_real_export_without_panicking() {
+        let routes = real_maritime_routes();
+        assert_eq!(
+            routes.schema,
+            "xindeler_open_world.authored_maritime_routes.v1"
+        );
+        let map_size = synthetic_map_size();
+        routes
+            .validate(map_size)
+            .expect("real Cromatolis maritime route graph must be valid at runtime scale");
+
+        // Real, measured counts as of this export: 36 routes total, of which
+        // 15 connect two real settlements (the rest have an `External` or
+        // `Waypoint` stop and are retained without a Track edge -- see
+        // `establish_authored_cromatolis_maritime_routes`).
+        assert_eq!(routes.routes.len(), AUTHORED_CROMATOLIS_MARITIME_ROUTES);
+
+        let ids = routes
+            .routes
+            .iter()
+            .map(|route| route.id.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(ids.len(), routes.routes.len());
+
+        let site_to_site = routes
+            .routes
+            .iter()
+            .filter(|route| {
+                route.stops.len() == 2 && route.stops.iter().all(|stop| stop.site_id().is_some())
+            })
+            .count();
+        assert_eq!(
+            site_to_site, AUTHORED_CROMATOLIS_MARITIME_SITE_TO_SITE_ROUTES,
+            "number of maritime routes connecting two real settlements changed"
+        );
+    }
+
+    /// COW-24: every maritime route's `Site(id)` stop currently resolves
+    /// against a real installed settlement. Unlike the land route graph's
+    /// equivalent test, `establish_authored_cromatolis_maritime_routes`
+    /// itself must NOT hard-fail if this ever stops being true (the maritime
+    /// export is built independently upstream and can reference an id this
+    /// engine's settlement set doesn't have yet -- it degrades to a `warn!`
+    /// and skips just that route). This test still pins the current,
+    /// fully-resolved state as a regression signal: if it starts failing,
+    /// that's a real content gap worth a human look, not silently absorbed
+    /// only into a warning log.
+    #[test]
+    fn cromatolis_authored_maritime_route_site_stops_resolve_against_real_settlements() {
+        let routes = real_maritime_routes();
+        let settlements = real_settlements();
+        let settlement_ids = settlements
+            .settlements
+            .iter()
+            .map(|settlement| settlement.id.as_str())
+            .collect::<HashSet<_>>();
+
+        for route in &routes.routes {
+            for stop in &route.stops {
+                if let Some(site_id) = stop.site_id() {
+                    assert!(
+                        settlement_ids.contains(site_id),
+                        "maritime route {} references unknown settlement {}",
+                        route.id,
+                        site_id
+                    );
+                }
+            }
+        }
+    }
+
+    /// COW-24: at most one maritime route per *unordered pair* of
+    /// settlements, mirroring
+    /// `cromatolis_authored_route_graph_has_no_duplicated_endpoint_pair`'s
+    /// land-route coverage. `establish_authored_cromatolis_maritime_routes`
+    /// keeps its own `connected_pairs` set and `continue`s past a repeat
+    /// with only a `debug!` line, so a duplicated pair would silently
+    /// discard the second route's path geometry.
+    #[test]
+    fn cromatolis_authored_maritime_route_graph_has_no_duplicated_settlement_pair() {
+        let routes = real_maritime_routes();
+        routes
+            .validate(synthetic_map_size())
+            .expect("real Cromatolis maritime route graph must be valid at runtime scale");
+
+        let mut pairs = HashSet::new();
+        for route in &routes.routes {
+            let Some([first, second]) = route.stops.first_chunk::<2>() else {
+                continue;
+            };
+            let (Some(a), Some(b)) = (first.site_id(), second.site_id()) else {
+                continue;
+            };
+            let pair = if a <= b { (a, b) } else { (b, a) };
+            assert!(
+                pairs.insert(pair),
+                "maritime route {} repeats a settlement pair another maritime route already \
+                 covers; establish_authored_cromatolis_maritime_routes would drop its path \
+                 geometry",
+                route.id
+            );
+        }
+    }
+
+    /// COW-24's real objective, pinned at the data level: `site.rios_port`
+    /// has an authored maritime stop to at least one mainland settlement
+    /// that already has its own authored land route (i.e. is not itself on
+    /// `CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD`). This is what
+    /// `establish_authored_cromatolis_maritime_routes` +
+    /// `establish_procedural_cromatolis_route_connectors`'s mainland
+    /// reachability test above rely on: a maritime `Track` alone is only
+    /// useful if it lands on a settlement the mainland road network already
+    /// reaches.
+    #[test]
+    fn cromatolis_authored_maritime_routes_give_rios_port_a_mainland_landing() {
+        let routes = real_maritime_routes();
+        let roadless: HashSet<&str> = CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD
+            .iter()
+            .copied()
+            .collect();
+
+        let rios_port_mainland_stops = routes
+            .routes
+            .iter()
+            .filter_map(|route| {
+                let [first, second] = route.stops.first_chunk::<2>()?;
+                let (a, b) = (first.site_id()?, second.site_id()?);
+                if a == "site.rios_port" {
+                    Some(b)
+                } else if b == "site.rios_port" {
+                    Some(a)
+                } else {
+                    None
+                }
+            })
+            .filter(|&other| other != "site.rios_port" && !roadless.contains(other))
+            .collect::<Vec<_>>();
+
+        assert!(
+            !rios_port_mainland_stops.is_empty(),
+            "site.rios_port has no authored maritime stop to a mainland-road-connected settlement \
+             -- the mainland reachability gap this asset is meant to close would stay open"
+        );
+    }
+
     /// Exactly which installed settlements no *authored* road reaches.
     ///
     /// This is a data-level fact about `cromatolis_v0_routes.ron` alone, and
@@ -5017,17 +5509,34 @@ mod tests {
     /// (`CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS`,
     /// `CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS`) must stay a
     /// consistent subset of the reviewed mainland bookkeeping above: every
-    /// island target and seed anchor must be a real, known-unresolved
-    /// connector target, and a settlement must never be both a target (gets
-    /// its own connector carved) and a seed anchor (is the thing other
-    /// targets connect to) in the same pass.
+    /// island target and seed anchor must be a real member of
+    /// `CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS` (the connector
+    /// system's full reviewed candidate pool), and a settlement must never
+    /// be both a target (gets its own connector carved) and a seed anchor
+    /// (is the thing other targets connect to) in the same pass.
+    ///
+    /// Before COW-24 this checked membership against
+    /// `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED` instead,
+    /// since every island-pass member was, at the time, a mainland-pass
+    /// failure by construction. That is no longer true for
+    /// `site.rios_port`: since the maritime route pass now gives it a real
+    /// `Track` before the mainland connector pass runs, that pass now finds
+    /// `site.rios_port` already "reachable" and skips it outright rather
+    /// than attempting (and failing) a direct `find_path` -- so it is
+    /// deliberately absent from
+    /// `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED` (now
+    /// empty) while still correctly present as the island pass's seed
+    /// anchor. `site.itos_village`/`site.nugget_field_mines` are
+    /// unaffected: no maritime stop reaches either of them, so the mainland
+    /// pass still genuinely attempts and fails a direct `find_path` for
+    /// both, unchanged from before COW-24.
     #[test]
-    fn cromatolis_island_route_connector_lists_are_consistent_with_the_still_unresolved_set() {
-        let still_unresolved: HashSet<&str> =
-            CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED
-                .iter()
-                .copied()
-                .collect();
+    fn cromatolis_island_route_connector_lists_are_consistent_with_the_reviewed_connector_targets()
+    {
+        let connector_targets: HashSet<&str> = CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS
+            .iter()
+            .copied()
+            .collect();
         let island_targets: HashSet<&str> = CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS
             .iter()
             .copied()
@@ -5048,10 +5557,10 @@ mod tests {
         );
         for &site_id in island_targets.iter().chain(island_seed_anchors.iter()) {
             assert!(
-                still_unresolved.contains(site_id),
+                connector_targets.contains(site_id),
                 "{site_id} is on the island connector pass but not on \
-                 CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED -- the island pass only \
-                 makes sense for settlements the mainland pass already failed to reach"
+                 CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS -- the island pass only makes \
+                 sense for settlements the reviewed connector bookkeeping already covers"
             );
         }
     }
@@ -5858,21 +6367,27 @@ mod tests {
     }
 
     /// Real-data regression for the procedural Cromatolis route-connector
-    /// pass (`Civs::establish_procedural_cromatolis_route_connectors`):
-    /// every installed settlement is reachable from the capital by road in
-    /// the generated world -- either an authored route, or a procedural
-    /// connector -- *except* the settlements on
+    /// pass (`Civs::establish_procedural_cromatolis_route_connectors`) and,
+    /// since COW-24, the authored maritime route pass
+    /// (`Civs::establish_authored_cromatolis_maritime_routes`): every
+    /// installed settlement is reachable from the capital in the generated
+    /// world -- an authored land route, a procedural connector, or an
+    /// authored maritime route -- *except* the settlements on
     /// `CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS` (which must stay
     /// unreachable, guarding against a future change accidentally "fixing"
     /// those too) and
-    /// `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED` (a known,
-    /// currently-unreachable subset of the connector targets --
-    /// see that constant's doc comment).
+    /// `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED` (currently
+    /// empty -- reserved for any future connector gap, see that constant's
+    /// doc comment).
     ///
     /// BFS walks the real `Track` graph via `Civs::neighbors`, which does
-    /// not distinguish an authored route's `Track` from a procedural
-    /// connector's -- this deliberately proves end-to-end reachability of
-    /// the combined graph, not just that each mechanism ran.
+    /// not distinguish an authored land route's `Track`, a procedural
+    /// connector's, or an authored maritime route's -- this deliberately
+    /// proves end-to-end reachability of the combined graph, not just that
+    /// each mechanism ran. `site.rios_port` (and, transitively through the
+    /// island connector pass, `site.itos_village`/`site.nugget_field_mines`)
+    /// is exactly the case COW-24 closes: it now resolves through this same
+    /// assertion instead of needing a dedicated carve-out.
     #[test]
     #[ignore]
     fn civs_generate_makes_every_non_deliberately_roadless_settlement_reachable_from_the_capital() {
@@ -5985,22 +6500,33 @@ mod tests {
     /// Real-data regression for the island-scoped follow-up half of
     /// `Civs::establish_procedural_cromatolis_route_connectors`
     /// (`CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS` /
-    /// `CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS`): proves the two
-    /// things this pass does and does not achieve.
+    /// `CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS`) combined with
+    /// COW-24's authored maritime route pass
+    /// (`Civs::establish_authored_cromatolis_maritime_routes`): proves the
+    /// full chain now holds end to end.
     ///
-    /// Does: `site.itos_village` and `site.nugget_field_mines` each resolve
-    /// onto a real `Track` of their own, and a BFS over the real `Track`
-    /// graph starting at `site.rios_port` reaches all three island
-    /// settlements -- they are a single, mutually-connected component.
+    /// Before COW-24 this test (then named
+    /// `..._connects_the_rios_port_island_group_to_itself_but_not_the_mainland`)
+    /// asserted the island group was internally connected but *not*
+    /// reachable from the capital -- that half of the story is now false by
+    /// design and asserted the other way below.
     ///
-    /// Does not: none of the three is reachable from the capital by that
-    /// same BFS. The island group stays cut off from the mainland (still
-    /// ~233 chunks of ocean) until the separate maritime-route system lands
-    /// -- this pass never attempts, and must never fake, mainland
-    /// reachability for the island group.
+    /// Proves: `site.itos_village` and `site.nugget_field_mines` each
+    /// resolve onto a real `Track` of their own (the island connector pass);
+    /// `site.rios_port` resolves onto a real `Track` of its own (the
+    /// maritime route pass); a BFS over the real `Track` graph starting at
+    /// `site.rios_port` reaches all three island settlements (they are a
+    /// single, mutually-connected component); and a BFS from the capital
+    /// now reaches all three too, by way of `site.rios_port`'s maritime
+    /// stop to a mainland settlement (`site.dove_city`, `site.mazon_town` or
+    /// `site.portland` -- whichever the real authored data resolves first).
+    /// The ~233 chunks of open ocean between them is real and is still never
+    /// carved as a physical road (see `AuthoredCromatolisMaritimeRoutes`'s
+    /// doc comment) -- this is graph reachability over the logical `Track`
+    /// edge the maritime pass adds, not a claim that a road now exists.
     #[test]
     #[ignore]
-    fn civs_generate_connects_the_rios_port_island_group_to_itself_but_not_the_mainland() {
+    fn civs_generate_connects_the_rios_port_island_group_to_the_mainland_via_the_maritime_route() {
         let mut sim = generate_cromatolis_world();
         let mut index = crate::index::Index::new(0);
         let civs = crate::civ::Civs::generate(0, &mut sim, &mut index, None, &|_| {});
@@ -6024,9 +6550,15 @@ mod tests {
             .get("site.kalthis")
             .expect("the capital settlement must be present in the generated world");
 
-        // Each island target resolved onto a real Track of its own, not
-        // merely transitive reachability through some other mechanism --
-        // same discipline as the mainland test above.
+        // Each island target -- and now Rios Port itself, via its maritime
+        // stop -- resolved onto a real Track of its own, not merely
+        // transitive reachability through some other mechanism -- same
+        // discipline as the mainland test above.
+        assert!(
+            civs.neighbors(rios_port).next().is_some(),
+            "site.rios_port has no real Track edge in the generated world -- the maritime route \
+             pass did not establish one"
+        );
         assert!(
             civs.neighbors(itos_village).next().is_some(),
             "site.itos_village has no real Track edge in the generated world"
@@ -6059,8 +6591,9 @@ mod tests {
              graph"
         );
 
-        // BFS from the capital must NOT reach any of the three: the island
-        // group is connected to itself, not to the mainland.
+        // BFS from the capital must now reach all three: the maritime route
+        // pass closes the gap the island group's own connectivity alone
+        // could not.
         let mut mainland_reachable = HashSet::new();
         let mut queue = std::collections::VecDeque::new();
         mainland_reachable.insert(capital);
@@ -6078,9 +6611,9 @@ mod tests {
             ("site.nugget_field_mines", nugget_field_mines),
         ] {
             assert!(
-                !mainland_reachable.contains(&site),
-                "{site_id} is reachable from the capital -- the island group must stay cut off \
-                 from the mainland until the separate maritime-route system lands"
+                mainland_reachable.contains(&site),
+                "{site_id} is not reachable from the capital -- the maritime route pass should \
+                 have closed this gap (COW-24)"
             );
         }
     }
