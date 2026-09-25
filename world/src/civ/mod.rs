@@ -12,7 +12,7 @@ use crate::{
     civ::airship_travel::Airships,
     config::CONFIG,
     sim::WorldSim,
-    site::{self, Site as WorldSite, SiteKind, SitesGenMeta, namegen::NameGen},
+    site::{self, PortClass, Site as WorldSite, SiteKind, SitesGenMeta, namegen::NameGen},
     util::{DHashMap, NEIGHBORS, attempt, seed_expan},
 };
 use common::{
@@ -1038,6 +1038,57 @@ impl AuthoredSettlementCategory {
             },
         }
     }
+
+    /// The naval-port tier a settlement of this category gets if it has a
+    /// port at all (see `resolve_naval_port`, which decides *whether* it
+    /// does). Purely a category->tier lookup, with no knowledge of routes
+    /// or overrides.
+    const fn naval_port_class(self) -> PortClass {
+        match self {
+            Self::Capital => PortClass::Harbour,
+            Self::City => PortClass::Quay,
+            Self::Town => PortClass::Pier,
+            // `Inn`/`Post` never resolve `SiteKind::Refactor` (see
+            // `default_site_kind` above), so `generate_city` never sees this
+            // arm for them today -- included anyway so the match stays
+            // exhaustive and correct if that ever changes.
+            Self::Village | Self::Hamlet | Self::Inn | Self::Post => PortClass::Jetty,
+        }
+    }
+}
+
+/// Derives the naval-port class (if any) `generate_city` should be told
+/// about for an authored settlement.
+///
+/// A settlement has a port iff it appears as a `Site(...)` stop of one of
+/// the authored maritime routes -- this is a derived signal, not a
+/// separately authored flag, so it can never drift out of sync with the
+/// routes that are the actual reason the port exists. The settlement's
+/// category then decides the tier via
+/// `AuthoredSettlementCategory::naval_port_class`.
+///
+/// TODO: `AuthoredCromatolisMaritimeTraffic`'s `settlements` override list
+/// (`maritime_traffic.rs`) carries a `naval_port: Option<bool>` per
+/// settlement meant to correct this derivation by hand, but nothing loads
+/// that override file into worldgen yet and the shipped file has an empty
+/// `settlements` list -- so there is currently nothing to honour. Once a
+/// caller loads `AuthoredCromatolisMaritimeTraffic` here, apply its
+/// per-settlement `naval_port` override before falling back to the
+/// route-membership derivation below, rather than adding a second override
+/// mechanism.
+fn resolve_naval_port(
+    authored: Option<&AuthoredSettlementMeta>,
+    maritime_routes: Option<&AuthoredCromatolisMaritimeRoutes>,
+) -> Option<PortClass> {
+    let authored = authored?;
+    let maritime_routes = maritime_routes?;
+    let has_port = maritime_routes.routes.iter().any(|route| {
+        route
+            .stops
+            .iter()
+            .any(|stop| stop.site_id() == Some(authored.id.as_str()))
+    });
+    has_port.then(|| authored.category.naval_port_class())
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
@@ -2343,6 +2394,10 @@ impl Civs {
                             || Lerp::lerp(0.03, 1.0, rng.random_range(0.0..1f32).powi(5)),
                             |authored| authored.size.city_scale(),
                         );
+                        let naval_port = resolve_naval_port(
+                            sim_site.authored.as_ref(),
+                            authored_maritime_routes.as_ref(),
+                        );
                         WorldSite::generate_city(
                             &Land::from_sim(ctx.sim),
                             index_ref,
@@ -2351,6 +2406,7 @@ impl Civs {
                             size,
                             calendar,
                             &mut gen_meta,
+                            naval_port,
                         )
                     },
                     SiteKind::GliderCourse => WorldSite::generate_glider_course(
@@ -5110,6 +5166,94 @@ mod tests {
             .map(|settlement| settlement.id.as_str())
             .collect::<HashSet<_>>();
         assert_eq!(ids.len(), settlements.settlements.len());
+    }
+
+    // ---- Naval port class derivation ----
+
+    /// The 13 settlements that appear as a maritime-route `Site(...)` stop
+    /// must resolve to the naval-port tier their `category` implies; every
+    /// other authored settlement must resolve to no port at all. Checked
+    /// against the real settlements and maritime-route exports directly,
+    /// rather than a hand-maintained id list, so a settlement gaining or
+    /// losing a route stop is caught here rather than drifting silently.
+    #[test]
+    fn resolve_naval_port_matches_category_for_every_route_stop_and_none_otherwise() {
+        let settlements = real_settlements();
+        let maritime_routes = real_maritime_routes();
+
+        let port_settlement_ids: HashSet<&str> = maritime_routes
+            .routes
+            .iter()
+            .flat_map(|route| route.stops.iter())
+            .filter_map(|stop| stop.site_id())
+            .collect();
+        assert_eq!(
+            port_settlement_ids.len(),
+            13,
+            "expected exactly 13 distinct settlements to appear as maritime route stops"
+        );
+
+        let mut with_port = 0;
+        let mut without_port = 0;
+        for settlement in &settlements.settlements {
+            let meta = AuthoredSettlementMeta {
+                id: settlement.id.clone(),
+                name: settlement.name.clone(),
+                category: settlement.category,
+                size: settlement.size,
+                population: settlement.population.clone(),
+                requires_capital_castle: settlement.requires_capital_castle,
+                start_eligible: settlement.start_eligible,
+            };
+            let resolved = resolve_naval_port(Some(&meta), Some(&maritime_routes));
+
+            if port_settlement_ids.contains(settlement.id.as_str()) {
+                with_port += 1;
+                assert_eq!(
+                    resolved,
+                    Some(settlement.category.naval_port_class()),
+                    "settlement {} is a maritime route stop but resolved to {:?} instead of its \
+                     category's tier",
+                    settlement.id,
+                    resolved
+                );
+            } else {
+                without_port += 1;
+                assert_eq!(
+                    resolved, None,
+                    "settlement {} is not a maritime route stop but resolved to {:?}",
+                    settlement.id, resolved
+                );
+            }
+        }
+
+        assert_eq!(with_port, 13, "expected 13 settlements to resolve a port");
+        assert_eq!(
+            without_port,
+            settlements.settlements.len() - 13,
+            "expected every other authored settlement to resolve no port"
+        );
+
+        // Also real conditions at the actual call site, not just theoretical:
+        // a non-authored settlement (every non-Cromatolis `generate_city`
+        // caller) and a missing route graph (the asset failed to load or
+        // validate) must both resolve to no port rather than panicking.
+        assert_eq!(resolve_naval_port(None, Some(&maritime_routes)), None);
+        let kalthis = settlements
+            .settlements
+            .iter()
+            .find(|settlement| settlement.id == "site.kalthis")
+            .expect("the real export must still author Kalthis");
+        let kalthis_meta = AuthoredSettlementMeta {
+            id: kalthis.id.clone(),
+            name: kalthis.name.clone(),
+            category: kalthis.category,
+            size: kalthis.size,
+            population: kalthis.population.clone(),
+            requires_capital_castle: kalthis.requires_capital_castle,
+            start_eligible: kalthis.start_eligible,
+        };
+        assert_eq!(resolve_naval_port(Some(&kalthis_meta), None), None);
     }
 
     /// `SettlementTemplateContract` deliberately does not deserialize

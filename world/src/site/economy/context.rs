@@ -409,6 +409,7 @@ mod tests {
                             1.0,
                             None,
                             &mut meta,
+                            None,
                         ),
                     };
                     for g in i.resources.iter() {
@@ -477,6 +478,7 @@ mod tests {
                 1.0,
                 None,
                 &mut meta,
+                None,
             );
             for (good, amount) in resources.iter() {
                 settlement

@@ -41,6 +41,7 @@ use namegen::NameGen;
 use rand::{SeedableRng, prelude::*, seq::IndexedRandom};
 use rand_chacha::{ChaCha8Rng, ChaChaRng};
 use std::ops::Range;
+use tracing::debug;
 use vek::*;
 
 /// Seed a new RNG from an old RNG, thereby making the old RNG independent of
@@ -154,6 +155,27 @@ impl Default for SpawnRules {
             preferred_alt: (0.0, 0.0, f32::NEG_INFINITY),
         }
     }
+}
+
+/// The naval-port class a `generate_city` call site can request for a
+/// settlement's waterfront. Engine-general and deliberately carries no
+/// authoring vocabulary: it does not mention Cromatolis,
+/// `AuthoredSettlementCategory`, or any other private, `Deserialize`-only
+/// concept, so it can cross into this generic site generator (which every
+/// Veloren settlement runs through) without dragging a content-adapter
+/// dependency upward. A future non-Cromatolis authored map can request a
+/// port the same way with no adoption cost.
+///
+/// Currently only threaded through and `debug!`-logged by `generate_city`:
+/// no port geometry is generated from it yet. See `civ::mod`'s
+/// `generate_city` call site for how a settlement's category maps to a
+/// tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortClass {
+    Jetty,
+    Pier,
+    Quay,
+    Harbour,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1356,6 +1378,7 @@ impl Site {
         size: f32,
         calendar: Option<&Calendar>,
         generator_stats: &mut SitesGenMeta,
+        naval_port: Option<PortClass>,
     ) -> Self {
         let mut rng = reseed(rng);
         let name = NameGen::location(&mut rng).generate_town();
@@ -1374,6 +1397,15 @@ impl Site {
         site.demarcate_obstacles(land);
         generator_stats.add(site.name(), GenStatSiteKind::City);
         site.make_initial_plaza_default(land, index, &mut rng, generator_stats, &name, road_kind);
+
+        // No port geometry is placed yet -- this is only threaded through so
+        // a later placement pass has somewhere to hook in without another
+        // signature change. `debug!` rather than `warn!`/`info!` since a
+        // `None` here (every non-Cromatolis settlement today) is entirely
+        // normal, not noteworthy.
+        if let Some(class) = naval_port {
+            debug!(site = %name, ?class, "settlement requested a naval port class (not yet placed)");
+        }
 
         let build_chance = Lottery::from(vec![
             (64.0, 1), // house
@@ -3529,6 +3561,7 @@ pub fn test_site() -> Site {
         0.5,
         None,
         &mut gen_meta,
+        None,
     )
 }
 
@@ -3584,8 +3617,12 @@ fn get_gradient_average(aabr: Aabr<i32>, land: &Land) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::SiteKind;
+    use super::{PortClass, Site, SiteKind, SitesGenMeta};
+    use crate::{IndexRef, index::Index};
     use common::map::MarkerKind;
+    use rand::SeedableRng;
+    use rand_chacha::ChaChaRng;
+    use vek::Vec2;
 
     #[test]
     fn camp_marker_depends_only_on_is_authored_settlement() {
@@ -3615,5 +3652,64 @@ mod tests {
             SiteKind::PirateHideout.marker(true)
         );
         assert_eq!(SiteKind::PirateHideout.marker(true), None);
+    }
+
+    /// `generate_city`'s `naval_port` parameter is only threaded through and
+    /// logged today -- no port geometry is generated from it yet. This
+    /// pins that: the same seed must produce a tile-for-tile, plot-count-
+    /// identical `Site` whether `naval_port` is `None` or `Some(_)`. A
+    /// caller-supplied, not entropy-seeded, RNG is what makes this
+    /// deterministic and therefore actually comparable (unlike full chunk
+    /// generation, which reseeds its own RNG from entropy per call).
+    #[test]
+    fn naval_port_class_does_not_affect_generated_geometry() {
+        fn generate_with(naval_port: Option<PortClass>) -> Site {
+            let index = Index::new(0);
+            let index_ref = IndexRef {
+                colors: &index.colors(),
+                features: &index.features(),
+                biome_profiles: &index.biome_profiles(),
+                index: &index,
+            };
+            let mut gen_meta = SitesGenMeta::new(0);
+            let mut rng = ChaChaRng::from_seed([7u8; 32]);
+            Site::generate_city(
+                &super::Land::empty(),
+                index_ref,
+                &mut rng,
+                Vec2::zero(),
+                0.5,
+                None,
+                &mut gen_meta,
+                naval_port,
+            )
+        }
+
+        let without_port = generate_with(None);
+        // Any tier is equally a claim that nothing should differ yet --
+        // `Harbour` picked arbitrarily.
+        let with_port = generate_with(Some(PortClass::Harbour));
+
+        assert_eq!(
+            without_port.tiles.bounds, with_port.tiles.bounds,
+            "requesting a naval port class changed the generated tile grid's bounds"
+        );
+        for x in without_port.tiles.bounds.min.x..=without_port.tiles.bounds.max.x {
+            for y in without_port.tiles.bounds.min.y..=without_port.tiles.bounds.max.y {
+                let tpos = Vec2::new(x, y);
+                // `Tile` has no `Debug` impl, so this can't be `assert_eq!`.
+                assert!(
+                    without_port.tiles.get_known(tpos) == with_port.tiles.get_known(tpos),
+                    "tile {tpos:?} differs between naval_port: None and naval_port: Some(_)"
+                );
+            }
+        }
+        assert_eq!(
+            without_port.plots.values().count(),
+            with_port.plots.values().count(),
+            "requesting a naval port class changed the generated plot count"
+        );
+        assert_eq!(without_port.plazas.len(), with_port.plazas.len());
+        assert_eq!(without_port.roads.len(), with_port.roads.len());
     }
 }
