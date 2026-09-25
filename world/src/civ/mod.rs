@@ -2059,6 +2059,16 @@ impl Civs {
             // "already reachable" there instead of also being handed a
             // doomed procedural connector attempt across open ocean -- see
             // `establish_authored_cromatolis_maritime_routes`'s doc comment.
+            //
+            // This maritime-then-land call order is also load-bearing for
+            // `Civs::land_track_between`: when both passes register a
+            // `Track` for the same site pair in the *same* directed order,
+            // the second write (`establish_authored_cromatolis_routes`,
+            // below) wins that `track_map` slot, so a same-direction
+            // collision always resolves to `Land`, never `Maritime` --
+            // reordering these two calls would flip that. See
+            // `land_track_between`'s doc comment for the (rarer)
+            // opposite-direction case it exists to handle instead.
             if let Some(maritime_routes) = authored_maritime_routes.as_ref() {
                 this.establish_authored_cromatolis_maritime_routes(&ctx, maritime_routes);
             }
@@ -2658,6 +2668,40 @@ impl Civs {
                     .get(&b)
                     .and_then(|dests| Some((*dests.get(&a)?, true)))
             })
+    }
+
+    /// Like `track_between`, but only ever returns a `TrackKind::Land` track
+    /// -- for land-bound NPC pathing
+    /// (`rtsim::rule::npc_ai::movement::path_between_sites`), which must
+    /// never hop onto a maritime `Track`.
+    ///
+    /// `track_map[a][b]` and `track_map[b][a]` are independent slots, and an
+    /// authored maritime route can register the opposite direction of an
+    /// already-authored land route between the same two settlements (each
+    /// pass picks its own directed `start`/`end`); when that happens both
+    /// slots are occupied by two genuinely different `Track`s -- one `Land`,
+    /// one `Maritime`. `track_between`'s `a`-then-`b` fallback only ever
+    /// surfaces one of the two depending on argument order, so a caller that
+    /// merely checks *that* result's `kind` can be blind to a real `Land`
+    /// alternative sitting in the other slot. This checks both slots
+    /// explicitly and returns whichever is `Land`, preferring neither slot
+    /// over the other -- `None` only when no `Land` track connects the two
+    /// sites at all, even if a `Maritime` one does.
+    pub fn land_track_between(&self, a: Id<Site>, b: Id<Site>) -> Option<(Id<Track>, bool)> {
+        let forward = self
+            .track_map
+            .get(&a)
+            .and_then(|dests| dests.get(&b))
+            .map(|&id| (id, false));
+        let backward = self
+            .track_map
+            .get(&b)
+            .and_then(|dests| dests.get(&a))
+            .map(|&id| (id, true));
+        [forward, backward]
+            .into_iter()
+            .flatten()
+            .find(|&(id, _)| self.tracks.get(id).kind == TrackKind::Land)
     }
 
     /// Return an iterator over a site's neighbors
@@ -3333,6 +3377,7 @@ impl Civs {
                 .max(1.0);
             let track = self.tracks.insert(Track {
                 cost,
+                kind: TrackKind::Land,
                 path: Path { nodes: path },
             });
             self.track_map.entry(start).or_default().insert(end, track);
@@ -3445,6 +3490,7 @@ impl Civs {
                 .max(1.0);
             let track = self.tracks.insert(Track {
                 cost,
+                kind: TrackKind::Maritime,
                 path: Path { nodes: path },
             });
             self.track_map.entry(start).or_default().insert(end, track);
@@ -3630,7 +3676,11 @@ impl Civs {
                     self.carve_track_into_terrain(ctx, &path);
 
                     // Take note of the track
-                    let track = self.tracks.insert(Track { cost, path });
+                    let track = self.tracks.insert(Track {
+                        cost,
+                        kind: TrackKind::Land,
+                        path,
+                    });
                     self.track_map
                         .entry(site)
                         .or_default()
@@ -3877,7 +3927,11 @@ impl Civs {
             }
             let node_count = nodes.len();
 
-            let track = self.tracks.insert(Track { cost, path });
+            let track = self.tracks.insert(Track {
+                cost,
+                kind: TrackKind::Land,
+                path,
+            });
             self.track_map
                 .entry(target_site)
                 .or_default()
@@ -4352,11 +4406,32 @@ pub struct Place {
      *    nat_res: NaturalResources, */
 }
 
+/// Distinguishes a `Track`'s origin -- specifically, whether it represents a
+/// real walkable road (`Land`) or an authored sea-lane logged only for
+/// worldgen-time reachability bookkeeping (`Maritime`, see
+/// `Civs::establish_authored_cromatolis_maritime_routes`).
+///
+/// This is *not* a save-compat surface: `Track` derives no `Serialize` and is
+/// worldgen-only. It exists so runtime NPC movement code
+/// (`rtsim/src/rule/npc_ai/movement.rs`) can keep land-bound NPCs off a
+/// `Track` that crosses open ocean, while worldgen-time graph consumers
+/// (`Civs::neighbors`/`track_between`, and the reachability BFS in this
+/// module's tests) keep treating every `Track` uniformly, maritime included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackKind {
+    Land,
+    Maritime,
+}
+
 pub struct Track {
     /// Cost of using this track relative to other paths. This cost is an
     /// arbitrary unit and doesn't make sense unless compared to other track
     /// costs.
     pub cost: f32,
+    /// See `TrackKind`. Set to `Land` explicitly at every track-construction
+    /// site except the authored maritime route pass (`Track` has no
+    /// `Default` impl -- every construction site sets this explicitly).
+    pub kind: TrackKind,
     path: Path<Vec2<i32>>,
 }
 
@@ -4421,6 +4496,17 @@ impl Site {
         self.authored
             .as_ref()
             .is_none_or(|settlement| settlement.start_eligible)
+    }
+
+    /// The authored settlement id (e.g. `"site.dromos_city"`), if this site
+    /// was established from an authored settlement pin. `None` for a
+    /// landmark, a procedural site, or any other non-settlement origin --
+    /// narrower than `authored_name` in the same way `is_authored_settlement`
+    /// is narrower than `authored_name`'s landmark-inclusive counterpart.
+    pub fn authored_id(&self) -> Option<&str> {
+        self.authored
+            .as_ref()
+            .map(|settlement| settlement.id.as_str())
     }
 
     /// The authored name for this site, if it was established from an
@@ -6616,6 +6702,111 @@ mod tests {
                  have closed this gap (COW-24)"
             );
         }
+    }
+
+    /// The reachability BFS above proves the maritime `Track` graph is used
+    /// for worldgen-time connectivity, but says nothing about whether a land
+    /// NPC would be handed one of those edges to walk. Several of the real
+    /// settlement-to-settlement maritime routes connect two mainland
+    /// settlements (not `site.rios_port`'s island group), so a land NPC's
+    /// pathfinder could otherwise route across open ocean between any of
+    /// them.
+    ///
+    /// Every `Track` the authored maritime route pass installs must carry
+    /// `TrackKind::Maritime` (never `Land`), while a genuine authored land
+    /// route between two mainland settlements must carry `TrackKind::Land`.
+    /// `Civs::neighbors` and the reachability BFS above deliberately don't
+    /// care about this distinction -- only the rtsim land-pathing consumer
+    /// (`rtsim::rule::npc_ai::movement::path_between_sites`) is supposed to
+    /// exclude maritime edges; that exclusion is exercised end-to-end by
+    /// `path_between_sites_excludes_mainland_to_mainland_maritime_tracks` in
+    /// `rtsim/src/rule/npc_ai/movement.rs`.
+    ///
+    /// This only lists pairs whose direct maritime `Track` is actually the
+    /// one `track_between`/`neighbors` (and therefore `path_between_sites`)
+    /// resolve to. `Civs::generate` runs the maritime pass before the land
+    /// route pass, and both pass's `track_map.entry(start).or_default()
+    /// .insert(end, ..)` write to the same directed slot -- so wherever the
+    /// real export *also* has a genuine land route directly between the same
+    /// two settlements in the same direction (e.g. `site.andiran` <->
+    /// `site.timos`, `site.andiran` <-> `site.garens_town`,
+    /// `site.dove_city` <-> `site.sutar_town`, `site.dromos_city` <->
+    /// `site.mazon_town`, `site.kalthis` <-> `site.portland`), the land Track
+    /// overwrites the maritime one in `track_map` and a land NPC already
+    /// gets the land route there regardless of this fix -- the maritime
+    /// `Track` still exists (tagged `Maritime`) but is orphaned, unreachable
+    /// through the graph. Excluded here for that reason, not because they
+    /// are edge cases the fix doesn't need to cover.
+    #[test]
+    #[ignore]
+    fn civs_generate_marks_mainland_to_mainland_maritime_tracks_as_maritime_not_land() {
+        let mut sim = generate_cromatolis_world();
+        let mut index = crate::index::Index::new(0);
+        let civs = crate::civ::Civs::generate(0, &mut sim, &mut index, None, &|_| {});
+
+        let sites_by_authored_id = civs
+            .sites
+            .iter()
+            .filter_map(|(id, site)| site.authored.as_ref().map(|meta| (meta.id.as_str(), id)))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        // Mainland-to-mainland maritime routes with no colliding land route
+        // over the same pair -- these are the ones actually reachable as a
+        // Maritime Track via `track_between`/`neighbors` today. See the
+        // doc comment above for the 5 pairs excluded and why.
+        const MAINLAND_MARITIME_PAIRS: &[(&str, &str)] = &[
+            ("site.dove_city", "site.kalitos"),
+            ("site.dromos_city", "site.portland"),
+            ("site.dromos_city", "site.timos"),
+            ("site.bronze_shore", "site.portland"),
+            ("site.dove_city", "site.hita"),
+            ("site.garens_town", "site.portland"),
+            ("site.hita", "site.kalitos"),
+        ];
+
+        for &(a_id, b_id) in MAINLAND_MARITIME_PAIRS {
+            let &a = sites_by_authored_id
+                .get(a_id)
+                .unwrap_or_else(|| panic!("{a_id} missing from generated civs"));
+            let &b = sites_by_authored_id
+                .get(b_id)
+                .unwrap_or_else(|| panic!("{b_id} missing from generated civs"));
+            let (track_id, _) = civs.track_between(a, b).unwrap_or_else(|| {
+                panic!(
+                    "expected a real Track between {a_id} and {b_id} (authored maritime route) \
+                     but found none"
+                )
+            });
+            assert_eq!(
+                civs.tracks.get(track_id).kind,
+                TrackKind::Maritime,
+                "{a_id} <-> {b_id} is a mainland-to-mainland maritime route and must be \
+                 TrackKind::Maritime, not Land -- a land NPC must never be routed across it"
+            );
+        }
+
+        // Contrast: a genuine authored land route between two mainland
+        // settlements must still be Land, so this test would actually catch
+        // a bug where every Track came out Maritime by accident.
+        let routes = real_routes();
+        let first_land_route = routes
+            .routes
+            .first()
+            .expect("the real authored route export must be non-empty");
+        let &land_start = sites_by_authored_id
+            .get(first_land_route.start_site_id.as_str())
+            .expect("land route start settlement missing from generated civs");
+        let &land_end = sites_by_authored_id
+            .get(first_land_route.end_site_id.as_str())
+            .expect("land route end settlement missing from generated civs");
+        let (land_track_id, _) = civs
+            .track_between(land_start, land_end)
+            .expect("expected a real Track for the first authored land route");
+        assert_eq!(
+            civs.tracks.get(land_track_id).kind,
+            TrackKind::Land,
+            "a genuine authored land route must be TrackKind::Land"
+        );
     }
 
     #[test]
