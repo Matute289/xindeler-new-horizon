@@ -11,6 +11,20 @@
           {
             "type": "command",
             "command": "cmd=$(jq -r '.tool_input.command // empty'); if echo \"$cmd\" | grep -qE '(^|[;&|`]|[[:space:]])gh[[:space:]]+pr[[:space:]]+(create|edit)[[:space:]]+--' && echo \"$cmd\" | grep -qE -- '--repo[[:space:]]+Matute289/xindeler-new-horizon(\\.git)?([[:space:]]|$)'; then base=$(echo \"$cmd\" | grep -oE -- '--base[[:space:]]+[^ ]+' | awk '{print $2}'); if [ \"$base\" != \"new-horizon/open-world-cromatolis\" ]; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Bloqueado: los PRs a Matute289/xindeler-new-horizon en este worktree (proyecto Cromatolis) deben usar --base new-horizon/open-world-cromatolis. Nunca development/main salvo instruccion EXPLICITA de Matias en la conversacion actual -- en ese caso pedile que lo corra el, o editen/deshabiliten este hook a mano para esa vez puntual.\"}}'; exit 0; fi; fi; exit 0"
+          },
+          {
+            "type": "command",
+            "command": "input=$(cat); dir=\"$(pwd)\"; while [ \"$dir\" != \"/\" ] && [ ! -f \"$dir/.claude/hooks/guard_docs_design_main_commit.py\" ]; do dir=\"$(dirname \"$dir\")\"; done; if [ -f \"$dir/.claude/hooks/guard_docs_design_main_commit.py\" ]; then echo \"$input\" | python3 \"$dir/.claude/hooks/guard_docs_design_main_commit.py\"; else exit 0; fi"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(cat); dir=\"$(pwd)\"; while [ \"$dir\" != \"/\" ] && [ ! -f \"$dir/.claude/hooks/guard_docs_design_unpushed_on_stop.py\" ]; do dir=\"$(dirname \"$dir\")\"; done; if [ -f \"$dir/.claude/hooks/guard_docs_design_unpushed_on_stop.py\" ]; then echo \"$input\" | python3 \"$dir/.claude/hooks/guard_docs_design_unpushed_on_stop.py\"; else exit 0; fi"
           }
         ]
       }
