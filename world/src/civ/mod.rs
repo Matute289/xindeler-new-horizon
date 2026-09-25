@@ -2,6 +2,7 @@
 
 pub mod airship_travel;
 mod econ;
+mod maritime_traffic;
 
 #[cfg(feature = "airship_maps")]
 pub mod airship_route_map;
