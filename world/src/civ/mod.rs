@@ -1514,22 +1514,45 @@ const CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS: &[&str] = &[
     "site.tenoxitlan",
 ];
 
-/// Members of `CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS` that
-/// `establish_procedural_cromatolis_route_connectors` cannot currently
-/// connect: measured against the real installed world, `find_path` finds no
-/// path at all from any of these three to any of the 8 nearest
-/// authored-connected settlements, even with an unbounded cost budget. All
-/// three sit in the far northwest of the map (chunk coordinates roughly
-/// x:69-156, y:145-213), 269-568 chunks in a straight line from the nearest
-/// authored-connected settlement (`site.mazon_town` and others) -- the
-/// pathfinder's walking-plus-small-cardinal-gap model (`walk_in_all_dirs`,
-/// up to a ~5-chunk unauthored gap) cannot bridge whatever separates them
-/// from the rest of the road network. This needs its own design decision
-/// (e.g. an authored bridge/route, or reclassifying them alongside
-/// `CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS`) rather than a silent
-/// engine-side workaround here.
+/// Members of `CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS` that are not
+/// reachable from the capital by any real, engine-generated road -- authored
+/// or procedural. Measured against the real installed world, `find_path`
+/// finds no path at all from any of these three to any of the 8 nearest
+/// *mainland* authored-connected settlements, even with an unbounded cost
+/// budget. All three sit in the far northwest of the map (chunk coordinates
+/// roughly x:69-156, y:145-213), 269-568 chunks in a straight line from the
+/// nearest mainland authored-connected settlement (`site.mazon_town` and
+/// others) -- the pathfinder's walking-plus-small-cardinal-gap model
+/// (`walk_in_all_dirs`, up to a ~5-chunk unauthored gap) cannot bridge
+/// whatever separates them from the mainland road network (~233 chunks of
+/// open ocean, consistent with a real strait/separate landmass, not a bug).
+///
+/// These three are, in fact, their own isolated northwest **island group**:
+/// close enough to each other (62-109 chunks apart, real land) for
+/// `find_path` to connect them internally, even though none of them can
+/// reach the mainland. `site.rios_port` is meant to get its own maritime
+/// connection to the mainland through a separate, not-yet-built system
+/// (`cromatolis_v0_maritime_routes.ron`); `site.itos_village` and
+/// `site.nugget_field_mines` are both inland on the island (not coastal like
+/// Rios Port), so instead they get a real **land** connector within the
+/// island (`CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS`, a second,
+/// island-scoped call to `establish_procedural_cromatolis_route_connectors`
+/// right after the mainland pass) rather than their own maritime stop.
+///
+/// That island connector makes `site.itos_village` and
+/// `site.nugget_field_mines` reachable from `site.rios_port` (and from each
+/// other) -- but it does NOT, and cannot, make any of the three reachable
+/// from the capital: the island group as a whole is still cut off from the
+/// mainland by the same ~233 chunks of ocean, until the separate maritime
+/// system lands. All three therefore correctly stay on this list, which
+/// documents exactly one thing -- "not reachable from the capital" -- the
+/// invariant the BFS-from-capital regression test below asserts.
+/// `civs_generate_connects_the_rios_port_island_group_to_itself_but_not_the_mainland`
+/// is the dedicated real-asset test for the island-internal connectivity
+/// described here.
 ///
 /// `establish_procedural_cromatolis_route_connectors` still attempts these
+/// three against the mainland network in its first (unscoped) call
 /// (skip-with-a-warning on failure is its normal behavior for any target,
 /// not special-cased for this list) -- this list exists so the real-data
 /// reachability regression can pin the current gap explicitly instead of
@@ -1539,6 +1562,38 @@ const CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED: &[&str] = &[
     "site.itos_village",
     "site.nugget_field_mines",
 ];
+
+/// Cromatolis's isolated northwest island group's own settlements that
+/// should get a real, engine-computed **land** connector to
+/// `site.rios_port` (and to each other): see
+/// `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED`'s doc comment
+/// for the full story of why these two, specifically, get an island-internal
+/// connector instead of their own path off the island. Deliberately does NOT
+/// include `site.rios_port` itself -- Rios Port is the island's anchor point
+/// (see `CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS`), not a target that
+/// needs its own connector carved.
+///
+/// Both members are also members of
+/// `CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS` (the mainland connector
+/// pass already tried, and failed, to reach them from the mainland network --
+/// see `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED`); this list
+/// is a deliberately-scoped second attempt for the same two settlements,
+/// never a substitute for the reviewed roadless/deliberately-roadless
+/// bookkeeping above.
+const CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS: &[&str] =
+    &["site.itos_village", "site.nugget_field_mines"];
+
+/// Seeds `site.rios_port` into
+/// `establish_procedural_cromatolis_route_connectors`'s "already reachable"
+/// set for the island-scoped call, even though Rios Port has no real Track
+/// of its own yet (the mainland pass already gave up on it -- see
+/// `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED`). Without this
+/// explicit seed the island-scoped pass would have nothing to anchor its
+/// first target to (its normal "already reachable" set is derived from real
+/// Track edges, and nothing on the island has one yet) and every island
+/// target would fail immediately with "no already-connected settlement to
+/// anchor to".
+const CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS: &[&str] = &["site.rios_port"];
 
 impl Civs {
     pub fn generate(
@@ -1800,6 +1855,17 @@ impl Civs {
                 this.establish_procedural_cromatolis_route_connectors(
                     &mut ctx,
                     CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS,
+                    &[],
+                );
+                // Island-scoped follow-up: connects the settlements that the
+                // mainland pass above could not reach (see
+                // `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED`)
+                // to each other instead, since they sit on their own
+                // landmass the mainland pass never considers.
+                this.establish_procedural_cromatolis_route_connectors(
+                    &mut ctx,
+                    CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS,
+                    CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS,
                 );
             }
             report_stage(WorldCivStage::CivCreation(1, 1));
@@ -3346,10 +3412,20 @@ impl Civs {
     /// target sites exist) and after `establish_authored_cromatolis_routes`
     /// (so "already reachable" reflects every authored route before any
     /// connector is added).
+    ///
+    /// `seed_anchor_ids` pre-seeds specific settlements into the "already
+    /// reachable" set even when they have no real Track edge of their own --
+    /// needed when `connector_target_ids` is a scoped subset that is not
+    /// itself reachable from the settlements the default (empty) seeding
+    /// would find, e.g. an island group whose only shared anchor has no
+    /// mainland connection either. A caller connecting targets to the
+    /// general, already-Track-connected network (the normal case) passes
+    /// `&[]`.
     fn establish_procedural_cromatolis_route_connectors(
         &mut self,
         ctx: &mut GenCtx<impl Rng>,
         connector_target_ids: &[&str],
+        seed_anchor_ids: &[&str],
     ) {
         // Owned `String` keys, deliberately not `&str` borrowed from
         // `self.sites` (as `establish_authored_cromatolis_routes` above
@@ -3370,11 +3446,16 @@ impl Civs {
         // "Already reachable" grows as connectors are added below, so a
         // second target settlement near a freshly-carved connector can
         // anchor onto it instead of always reaching back to an original
-        // authored road.
+        // authored road. A settlement listed in `seed_anchor_ids` counts as
+        // reachable here regardless of whether it has a real Track edge yet
+        // (see this fn's doc comment).
         let mut connected: std::collections::HashSet<Id<Site>> = sites_by_authored_id
-            .values()
-            .copied()
-            .filter(|&id| self.neighbors(id).next().is_some())
+            .iter()
+            .filter(|&(authored_id, &site_id)| {
+                seed_anchor_ids.contains(&authored_id.as_str())
+                    || self.neighbors(site_id).next().is_some()
+            })
+            .map(|(_, &site_id)| site_id)
             .collect();
 
         let mut established = 0usize;
@@ -4932,6 +5013,49 @@ mod tests {
         }
     }
 
+    /// The island-scoped connector pass's own lists
+    /// (`CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS`,
+    /// `CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS`) must stay a
+    /// consistent subset of the reviewed mainland bookkeeping above: every
+    /// island target and seed anchor must be a real, known-unresolved
+    /// connector target, and a settlement must never be both a target (gets
+    /// its own connector carved) and a seed anchor (is the thing other
+    /// targets connect to) in the same pass.
+    #[test]
+    fn cromatolis_island_route_connector_lists_are_consistent_with_the_still_unresolved_set() {
+        let still_unresolved: HashSet<&str> =
+            CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED
+                .iter()
+                .copied()
+                .collect();
+        let island_targets: HashSet<&str> = CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS
+            .iter()
+            .copied()
+            .collect();
+        let island_seed_anchors: HashSet<&str> = CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS
+            .iter()
+            .copied()
+            .collect();
+
+        assert_eq!(
+            island_targets.len(),
+            CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS.len(),
+            "island connector target list contains a duplicate"
+        );
+        assert!(
+            island_targets.is_disjoint(&island_seed_anchors),
+            "a settlement appears both as an island connector target and as an island seed anchor"
+        );
+        for &site_id in island_targets.iter().chain(island_seed_anchors.iter()) {
+            assert!(
+                still_unresolved.contains(site_id),
+                "{site_id} is on the island connector pass but not on \
+                 CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED -- the island pass only \
+                 makes sense for settlements the mainland pass already failed to reach"
+            );
+        }
+    }
+
     #[test]
     fn cromatolis_authored_bridges_parse_and_validate_real_export_without_panicking() {
         let bridges = real_bridges();
@@ -5854,6 +5978,109 @@ mod tests {
                 civs.neighbors(site).next().is_some(),
                 "procedural connector target {target_id} has no real Track edge in the generated \
                  world"
+            );
+        }
+    }
+
+    /// Real-data regression for the island-scoped follow-up half of
+    /// `Civs::establish_procedural_cromatolis_route_connectors`
+    /// (`CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS` /
+    /// `CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS`): proves the two
+    /// things this pass does and does not achieve.
+    ///
+    /// Does: `site.itos_village` and `site.nugget_field_mines` each resolve
+    /// onto a real `Track` of their own, and a BFS over the real `Track`
+    /// graph starting at `site.rios_port` reaches all three island
+    /// settlements -- they are a single, mutually-connected component.
+    ///
+    /// Does not: none of the three is reachable from the capital by that
+    /// same BFS. The island group stays cut off from the mainland (still
+    /// ~233 chunks of ocean) until the separate maritime-route system lands
+    /// -- this pass never attempts, and must never fake, mainland
+    /// reachability for the island group.
+    #[test]
+    #[ignore]
+    fn civs_generate_connects_the_rios_port_island_group_to_itself_but_not_the_mainland() {
+        let mut sim = generate_cromatolis_world();
+        let mut index = crate::index::Index::new(0);
+        let civs = crate::civ::Civs::generate(0, &mut sim, &mut index, None, &|_| {});
+
+        let sites_by_authored_id = civs
+            .sites
+            .iter()
+            .filter_map(|(id, site)| site.authored.as_ref().map(|meta| (meta.id.as_str(), id)))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let rios_port = *sites_by_authored_id
+            .get("site.rios_port")
+            .expect("site.rios_port must be present in the generated world");
+        let itos_village = *sites_by_authored_id
+            .get("site.itos_village")
+            .expect("site.itos_village must be present in the generated world");
+        let nugget_field_mines = *sites_by_authored_id
+            .get("site.nugget_field_mines")
+            .expect("site.nugget_field_mines must be present in the generated world");
+        let capital = *sites_by_authored_id
+            .get("site.kalthis")
+            .expect("the capital settlement must be present in the generated world");
+
+        // Each island target resolved onto a real Track of its own, not
+        // merely transitive reachability through some other mechanism --
+        // same discipline as the mainland test above.
+        assert!(
+            civs.neighbors(itos_village).next().is_some(),
+            "site.itos_village has no real Track edge in the generated world"
+        );
+        assert!(
+            civs.neighbors(nugget_field_mines).next().is_some(),
+            "site.nugget_field_mines has no real Track edge in the generated world"
+        );
+
+        // BFS from Rios Port must reach both island targets: the three form
+        // a single connected component.
+        let mut island_reachable = HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        island_reachable.insert(rios_port);
+        queue.push_back(rios_port);
+        while let Some(site) = queue.pop_front() {
+            for neighbor in civs.neighbors(site) {
+                if island_reachable.insert(neighbor) {
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        assert!(
+            island_reachable.contains(&itos_village),
+            "site.itos_village is not reachable from site.rios_port over the real Track graph"
+        );
+        assert!(
+            island_reachable.contains(&nugget_field_mines),
+            "site.nugget_field_mines is not reachable from site.rios_port over the real Track \
+             graph"
+        );
+
+        // BFS from the capital must NOT reach any of the three: the island
+        // group is connected to itself, not to the mainland.
+        let mut mainland_reachable = HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        mainland_reachable.insert(capital);
+        queue.push_back(capital);
+        while let Some(site) = queue.pop_front() {
+            for neighbor in civs.neighbors(site) {
+                if mainland_reachable.insert(neighbor) {
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        for (site_id, site) in [
+            ("site.rios_port", rios_port),
+            ("site.itos_village", itos_village),
+            ("site.nugget_field_mines", nugget_field_mines),
+        ] {
+            assert!(
+                !mainland_reachable.contains(&site),
+                "{site_id} is reachable from the capital -- the island group must stay cut off \
+                 from the mainland until the separate maritime-route system lands"
             );
         }
     }
