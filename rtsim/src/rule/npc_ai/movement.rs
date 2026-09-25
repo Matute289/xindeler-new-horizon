@@ -101,19 +101,26 @@ fn path_between_sites(
 
     let mut astar = Astar::new(250, start, BuildHasherDefault::<FxHasher64>::default());
 
-    let transition = |a: Id<civ::Site>, b: Id<civ::Site>| {
-        world
-            .civs()
-            .track_between(a, b)
-            .map(|(id, _)| world.civs().tracks.get(id).cost)
-            .unwrap_or(f32::INFINITY)
-    };
+    // A maritime `Track` (an authored sea-lane, logged only for
+    // worldgen-time reachability bookkeeping -- see `civ::TrackKind`) is
+    // never a valid edge for a land-bound NPC's path. `Civs::neighbors`
+    // deliberately stays undirected/kind-agnostic (the worldgen reachability
+    // BFS in `world/src/civ/mod.rs` needs it to keep counting maritime
+    // edges), so the exclusion happens here instead, at the one caller that
+    // actually walks NPCs across the result -- via `Civs::land_track_between`
+    // rather than `Civs::track_between` plus a `kind` check, since an
+    // authored maritime route can register the opposite direction of an
+    // already-authored land route between the same two settlements, leaving
+    // `track_between` able to resolve to either one depending on argument
+    // order (see `land_track_between`'s doc comment). Both the neighbor step
+    // below and the final reconstruction call the same `land_track_between`,
+    // so they can never resolve to different tracks for the same edge.
     let neighbors = |site: &Id<civ::Site>| {
         let site = *site;
-        world
-            .civs()
-            .neighbors(site)
-            .map(move |n| (n, transition(n, site)))
+        world.civs().neighbors(site).filter_map(move |n| {
+            let (id, _) = world.civs().land_track_between(site, n)?;
+            Some((n, world.civs().tracks.get(id).cost))
+        })
     };
 
     let path = astar.poll(250, heuristic, neighbors, |site| *site == end);
@@ -122,8 +129,9 @@ fn path_between_sites(
         let path = path
             .into_iter()
             .tuple_windows::<(_, _)>()
-            // Since we get a, b from neighbors, track_between shouldn't return None.
-            .filter_map(|(a, b)| world.civs().track_between(a, b))
+            // Since we get a, b from neighbors, land_track_between shouldn't
+            // return None.
+            .filter_map(|(a, b)| world.civs().land_track_between(a, b))
             .collect();
         Path { nodes: path }
     })
@@ -477,4 +485,118 @@ pub fn travel_to_site<S: State>(tgt_site: SiteId, speed_factor: f32) -> impl Act
     })
         .debug(move || format!("travel_to_site {:?}", tgt_site))
         .map(|_, _| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::Site as RtsimSite;
+
+    // ---- Heavy, real-terrain-backed test: requires the real Cromatolis LFS
+    // assets pulled locally. Not run automated, same precedent as
+    // `xindeler-world`'s `cromatolis_world_*_regression_against_real_lfs_assets`
+    // tests (see `world/src/civ/mod.rs`). Recommended:
+    // `cargo test -p xindeler-rtsim -- --ignored mainland_to_mainland` ----
+
+    /// A land-bound NPC's path between two mainland settlements must never
+    /// use a maritime `Track` edge, even when one connects them directly and
+    /// is cheaper than the real road network (see
+    /// `civs_generate_marks_mainland_to_mainland_maritime_tracks_as_maritime_not_land`
+    /// in `world/src/civ/mod.rs` for the worldgen-side half of this
+    /// guarantee: that every such edge really is `TrackKind::Maritime`).
+    /// `site.dromos_city` and `site.portland` are one of the real
+    /// mainland-to-mainland pairs a direct authored maritime route connects.
+    #[test]
+    #[ignore]
+    fn path_between_sites_excludes_mainland_to_mainland_maritime_tracks() {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        let (world, _index) = World::generate(
+            0,
+            world::sim::WorldOpts {
+                seed_elements: true,
+                world_file: world::sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        );
+
+        let sites_by_authored_id = world
+            .civs()
+            .sites
+            .iter()
+            .filter_map(|(id, site)| site.authored_id().map(|authored_id| (authored_id, id)))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let dromos_city = *sites_by_authored_id
+            .get("site.dromos_city")
+            .expect("site.dromos_city must be present in the generated world");
+        let portland = *sites_by_authored_id
+            .get("site.portland")
+            .expect("site.portland must be present in the generated world");
+
+        // Confirms the premise: without today's fix this really is a direct
+        // maritime edge, so a passing test below is evidence the exclusion
+        // works rather than evidence there was nothing to exclude.
+        let (direct_track, _) = world
+            .civs()
+            .track_between(dromos_city, portland)
+            .expect("expected a direct Track between site.dromos_city and site.portland");
+        assert_eq!(
+            world.civs().tracks.get(direct_track).kind,
+            civ::TrackKind::Maritime,
+            "test premise broken: site.dromos_city <-> site.portland is no longer a direct \
+             maritime Track in the real authored data"
+        );
+
+        let dromos_world_site = world
+            .civs()
+            .sites
+            .get(dromos_city)
+            .site_tmp
+            .expect("site.dromos_city must have resolved onto a real world site");
+        let portland_world_site = world
+            .civs()
+            .sites
+            .get(portland)
+            .site_tmp
+            .expect("site.portland must have resolved onto a real world site");
+
+        let mut sites = Sites::default();
+        let start = sites.create(RtsimSite {
+            seed: 0,
+            wpos: Vec2::zero(),
+            faction: None,
+            known_reports: Default::default(),
+            count_loaded_chunks: 0,
+            world_site: Some(dromos_world_site),
+            population: Default::default(),
+            nearby_sites_by_size: Default::default(),
+        });
+        let end = sites.create(RtsimSite {
+            seed: 0,
+            wpos: Vec2::zero(),
+            faction: None,
+            known_reports: Default::default(),
+            count_loaded_chunks: 0,
+            world_site: Some(portland_world_site),
+            population: Default::default(),
+            nearby_sites_by_size: Default::default(),
+        });
+
+        let (path, _cost) = path_between_sites(start, end, &sites, &world)
+            .into_path()
+            .expect(
+                "a land route must still exist between site.dromos_city and site.portland via the \
+                 road network with the direct maritime Track excluded",
+            );
+        for &(track_id, _) in &path.nodes {
+            assert_ne!(
+                world.civs().tracks.get(track_id).kind,
+                civ::TrackKind::Maritime,
+                "path_between_sites returned a maritime Track edge for a land NPC route between \
+                 site.dromos_city and site.portland"
+            );
+        }
+    }
 }
