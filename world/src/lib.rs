@@ -1001,6 +1001,11 @@ impl World {
                             Rgb::black(),
                             lod::ObjectKind::CliffTownAirshipDock,
                         )),
+                        site::plot::PlotKind::NavalPort(_) => Some((
+                            site.tile_wpos(plot.root_tile),
+                            Rgb::black(),
+                            lod::ObjectKind::NavalPort,
+                        )),
                         _ => None,
                     })
                 })

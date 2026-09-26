@@ -168,6 +168,10 @@ impl Lod {
                     lod::ObjectKind::CliffTownAirshipDock,
                     make_lod_object("cliff_town_airship_dock", renderer),
                 ),
+                (
+                    lod::ObjectKind::NavalPort,
+                    make_lod_object("naval_port", renderer),
+                ),
             ]
             .into(),
         }

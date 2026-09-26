@@ -12,7 +12,7 @@
 //! (`git lfs pull` against the VPS store) and is therefore `#[ignore]`d.
 
 use super::*;
-use crate::site::PortClass;
+use crate::site::{PlotKind, PortClass, Structure};
 
 /// Requires the real Cromatolis LFS assets to be pulled locally (`git lfs
 /// pull` against the VPS store); not run automated, matching this
@@ -1293,5 +1293,138 @@ fn every_authored_maritime_route_stop_gets_a_naval_port_footprint() {
         "these decks do not reach {} tiles of water deep enough for their own tier's berths, so \
          they end on the beach: {beached:?}",
         site::SHORE_MIN_DEEP_TILES
+    );
+}
+
+/// **Real, walkable dock geometry -- not just the tile claim.**
+///
+/// `every_authored_maritime_route_stop_gets_a_naval_port_footprint` (above)
+/// already covers the tile-grid claim every one of the 13 route stops makes.
+/// This test covers the layer built on top of it: that the `Jetty`/`Pier`
+/// settlements actually construct a `PlotKind::NavalPort` plot -- real
+/// `Painter` geometry a player can walk to -- and not just the bare
+/// apron/deck tiles. `Quay`/`Harbour` (Kalthis, Dove City, Dromos City) are
+/// excluded on purpose: no `generate_city` call site builds a plot for those
+/// two tiers yet, so their tiles are expected to stay plot-less.
+///
+/// Requires the real Cromatolis LFS assets to be pulled locally. Recommended
+/// command: `cargo test -p xindeler-world
+/// the_13_route_stops_all_generate_a_naval_port -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn the_13_route_stops_all_generate_a_naval_port() {
+    let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+    let (world, index) = World::generate(
+        0,
+        sim::WorldOpts {
+            seed_elements: true,
+            world_file: sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+            calendar: None,
+        },
+        &threadpool,
+        &|_| {},
+    );
+    let index_ref = index.as_index_ref();
+
+    let jetty_or_pier: std::collections::HashMap<&str, PortClass> = EXPECTED_NAVAL_PORTS
+        .iter()
+        .copied()
+        .filter(|(_, class)| matches!(class, PortClass::Jetty | PortClass::Pier))
+        .collect();
+
+    let mut built = Vec::new();
+    let mut missing = Vec::new();
+
+    for civ_site in world.civs.sites.values() {
+        let Some(authored_id) = civ_site.authored_id() else {
+            continue;
+        };
+        let Some(&class) = jetty_or_pier.get(authored_id) else {
+            continue;
+        };
+        let Some(site_id) = civ_site.site_tmp else {
+            missing.push((
+                authored_id.to_string(),
+                "settlement did not generate a site".to_string(),
+            ));
+            continue;
+        };
+        let site = index_ref.sites.get(site_id);
+
+        let Some(port) = site.plots().find_map(|plot| match plot.kind() {
+            PlotKind::NavalPort(port) => Some(port),
+            _ => None,
+        }) else {
+            missing.push((authored_id.to_string(), "no NavalPort plot".to_string()));
+            continue;
+        };
+
+        assert_eq!(
+            port.class, class,
+            "{authored_id} built a {:?} NavalPort plot, expected {class:?}",
+            port.class
+        );
+
+        // The plot's own geometry has to be built from the same footprint
+        // the placement pass recorded, not a second, independently-derived
+        // one -- otherwise the plot and the tile claim could silently drift
+        // apart.
+        let placement = site.naval_port.unwrap_or_else(|| {
+            panic!("{authored_id} has a NavalPort plot but no recorded ShorePlacement")
+        });
+        let to_wpos_aabr = |aabr: Aabr<i32>| Aabr {
+            min: site.tile_wpos(aabr.min),
+            max: site.tile_wpos(aabr.max),
+        };
+        assert_eq!(
+            port.apron,
+            to_wpos_aabr(placement.apron),
+            "{authored_id}'s plot apron does not match the placement it was built from"
+        );
+        assert_eq!(
+            port.deck,
+            to_wpos_aabr(placement.deck),
+            "{authored_id}'s plot deck does not match the placement it was built from"
+        );
+
+        assert!(
+            Structure::door_tile(port).is_some(),
+            "{authored_id}'s NavalPort plot must report a door tile"
+        );
+
+        built.push((
+            authored_id.to_string(),
+            port.class,
+            placement.deck.size().product(),
+            placement.apron.size().product(),
+            port.water_alt,
+            port.alt,
+        ));
+    }
+
+    built.sort_by(|a, b| a.0.cmp(&b.0));
+    println!(
+        "\n{:<16} {:<6} {:>10} {:>11} {:>9} {:>5}",
+        "settlement", "tier", "deck_tiles", "apron_tiles", "water_alt", "alt"
+    );
+    for (id, class, deck_tiles, apron_tiles, water_alt, alt) in &built {
+        println!(
+            "{id:<16} {:<6} {deck_tiles:>10} {apron_tiles:>11} {water_alt:>9} {alt:>5}",
+            format!("{class:?}"),
+        );
+    }
+
+    assert!(
+        missing.is_empty(),
+        "{} of {} Jetty/Pier route stops did not build a real NavalPort plot: {missing:?}",
+        missing.len(),
+        jetty_or_pier.len(),
+    );
+    assert_eq!(
+        built.len(),
+        jetty_or_pier.len(),
+        "expected all {} Jetty/Pier settlements to build a NavalPort plot, found {}",
+        jetty_or_pier.len(),
+        built.len(),
     );
 }
