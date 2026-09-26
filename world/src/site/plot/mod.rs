@@ -29,6 +29,7 @@ mod house;
 mod jungle_ruin;
 mod myrmidon_arena;
 mod myrmidon_house;
+mod naval_port;
 mod pirate_hideout;
 mod plaza;
 mod road;
@@ -79,6 +80,7 @@ pub use self::{
     jungle_ruin::JungleRuin,
     myrmidon_arena::MyrmidonArena,
     myrmidon_house::MyrmidonHouse,
+    naval_port::NavalPort,
     pirate_hideout::PirateHideout,
     plaza::Plaza,
     road::{Road, RoadKind, RoadLights, RoadMaterial},
@@ -195,6 +197,7 @@ pub enum PlotKind {
     MyrmidonArena(MyrmidonArena),
     MyrmidonHouse(MyrmidonHouse),
     Building(Building),
+    NavalPort(NavalPort),
 }
 
 /// # Syntax
@@ -253,6 +256,7 @@ macro_rules! foreach_plot {
             PlotKind::MyrmidonArena($x) => $y,
             PlotKind::MyrmidonHouse($x) => $y,
             PlotKind::Building($x) => $y,
+            PlotKind::NavalPort($x) => $y,
         }
     };
 }
