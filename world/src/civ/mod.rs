@@ -12,7 +12,10 @@ use crate::{
     civ::airship_travel::Airships,
     config::CONFIG,
     sim::WorldSim,
-    site::{self, PortClass, Site as WorldSite, SiteKind, SitesGenMeta, namegen::NameGen},
+    site::{
+        self, NavalPortRequest, PortClass, PortExclusion, Site as WorldSite, SiteKind,
+        SitesGenMeta, namegen::NameGen,
+    },
     util::{DHashMap, NEIGHBORS, attempt, seed_expan},
 };
 use common::{
@@ -1091,6 +1094,44 @@ fn resolve_naval_port(
     has_port.then(|| authored.category.naval_port_class())
 }
 
+/// Blocks of breathing room kept between an authored landmark's own footprint
+/// and anything the generic site generator places near it.
+///
+/// Lives here, not in `site::shore`, because it is a judgement about *authored
+/// landmarks* rather than about the shoreline search: only this side of the
+/// boundary knows what kind of thing the keep-out region describes, and
+/// therefore how much room it deserves.
+const AUTHORED_LANDMARK_CLEARANCE_BLOCKS: i32 = 12;
+
+/// Every established authored landmark, as a keep-out region for the shoreline
+/// port search.
+///
+/// Authored landmarks are established as their own `Site`s, so their tile grids
+/// never collide with a settlement's -- nothing in the engine would otherwise
+/// stop a capital's quay landing straight on top of an authored river-port
+/// landmark a couple of hundred metres from the town centre.
+///
+/// The radius handed over is the landmark's authored `footprint_radius` plus
+/// `AUTHORED_LANDMARK_CLEARANCE_BLOCKS`, already summed: `PortExclusion` is a
+/// plain circle and deliberately knows nothing about landmarks. A landmark
+/// whose profile failed to load contributes no region at all -- there is no
+/// authored footprint to measure, and inventing one would be a silent
+/// placement constraint with no data behind it.
+fn authored_landmark_exclusions(sites: &Store<Site>) -> Vec<PortExclusion> {
+    sites
+        .values()
+        .filter_map(|site| {
+            let profile = site.authored_landmark.as_ref()?.profile.as_ref()?;
+            Some(PortExclusion {
+                centre_wpos: site.center.map2(TerrainChunkSize::RECT_SIZE, |e, sz: u32| {
+                    e * sz as i32 + sz as i32 / 2
+                }),
+                radius: profile.footprint_radius + AUTHORED_LANDMARK_CLEARANCE_BLOCKS,
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
 enum AuthoredLandmarkKind {
     TreeOfLife,
@@ -1405,9 +1446,10 @@ struct AuthoredLandmarkMeta {
     name: String,
     #[expect(dead_code)]
     kind: AuthoredLandmarkKind,
-    /// Carried through for a future bespoke-renderer consumer (see the
-    /// module-level note above); nothing reads this yet.
-    #[expect(dead_code)]
+    /// The landmark's authored geometry. `footprint_radius` is read to keep
+    /// settlement waterfront plots off the landmark (see
+    /// `authored_landmark_exclusions`); the rest is carried through for a
+    /// future bespoke-renderer consumer (see the module-level note above).
     profile: Option<AuthoredLandmarkProfile>,
 }
 
@@ -2368,6 +2410,16 @@ impl Civs {
         // Tick
         //=== old economy is gone
 
+        // Authored landmarks are established as their own `Site`s, so their
+        // tile grids never collide with a settlement's -- nothing in the
+        // engine would stop a settlement's waterfront plot being placed
+        // straight on top of an authored river-port landmark a couple of
+        // hundred metres from the town centre. Collect every landmark's
+        // centre and authored footprint up front (the loop below borrows
+        // `this.sites` mutably, so this cannot be done inside it) and hand
+        // them to the shoreline search as explicit keep-out regions.
+        let naval_port_exclusions = authored_landmark_exclusions(&this.sites);
+
         // Place sites in world
         prof_span!(guard, "Place sites in world");
         let mut cnt = 0;
@@ -2397,7 +2449,8 @@ impl Civs {
                         let naval_port = resolve_naval_port(
                             sim_site.authored.as_ref(),
                             authored_maritime_routes.as_ref(),
-                        );
+                        )
+                        .map(|class| NavalPortRequest::new(class, &naval_port_exclusions));
                         WorldSite::generate_city(
                             &Land::from_sim(ctx.sim),
                             index_ref,
