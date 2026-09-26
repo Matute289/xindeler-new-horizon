@@ -1300,12 +1300,13 @@ fn every_authored_maritime_route_stop_gets_a_naval_port_footprint() {
 ///
 /// `every_authored_maritime_route_stop_gets_a_naval_port_footprint` (above)
 /// already covers the tile-grid claim every one of the 13 route stops makes.
-/// This test covers the layer built on top of it: that the `Jetty`/`Pier`
-/// settlements actually construct a `PlotKind::NavalPort` plot -- real
+/// This test covers the layer built on top of it: that every one of the 13
+/// settlements actually constructs a `PlotKind::NavalPort` plot -- real
 /// `Painter` geometry a player can walk to -- and not just the bare
-/// apron/deck tiles. `Quay`/`Harbour` (Kalthis, Dove City, Dromos City) are
-/// excluded on purpose: no `generate_city` call site builds a plot for those
-/// two tiers yet, so their tiles are expected to stay plot-less.
+/// apron/deck tiles. Originally covered only the 10 `Jetty`/`Pier`
+/// settlements, since `Quay`/`Harbour` (Kalthis, Dove City, Dromos City) had
+/// no dedicated builders yet; now covers all 13, with those three asserted
+/// to build real quay-wall/warehouse/crane/harbourmaster-hall geometry too.
 ///
 /// Requires the real Cromatolis LFS assets to be pulled locally. Recommended
 /// command: `cargo test -p xindeler-world
@@ -1326,11 +1327,8 @@ fn the_13_route_stops_all_generate_a_naval_port() {
     );
     let index_ref = index.as_index_ref();
 
-    let jetty_or_pier: std::collections::HashMap<&str, PortClass> = EXPECTED_NAVAL_PORTS
-        .iter()
-        .copied()
-        .filter(|(_, class)| matches!(class, PortClass::Jetty | PortClass::Pier))
-        .collect();
+    let expected: std::collections::HashMap<&str, PortClass> =
+        EXPECTED_NAVAL_PORTS.iter().copied().collect();
 
     let mut built = Vec::new();
     let mut missing = Vec::new();
@@ -1339,7 +1337,7 @@ fn the_13_route_stops_all_generate_a_naval_port() {
         let Some(authored_id) = civ_site.authored_id() else {
             continue;
         };
-        let Some(&class) = jetty_or_pier.get(authored_id) else {
+        let Some(&class) = expected.get(authored_id) else {
             continue;
         };
         let Some(site_id) = civ_site.site_tmp else {
@@ -1416,15 +1414,15 @@ fn the_13_route_stops_all_generate_a_naval_port() {
 
     assert!(
         missing.is_empty(),
-        "{} of {} Jetty/Pier route stops did not build a real NavalPort plot: {missing:?}",
+        "{} of {} route stops did not build a real NavalPort plot: {missing:?}",
         missing.len(),
-        jetty_or_pier.len(),
+        expected.len(),
     );
     assert_eq!(
         built.len(),
-        jetty_or_pier.len(),
-        "expected all {} Jetty/Pier settlements to build a NavalPort plot, found {}",
-        jetty_or_pier.len(),
+        expected.len(),
+        "expected all {} settlements to build a NavalPort plot, found {}",
+        expected.len(),
         built.len(),
     );
 }

@@ -1414,37 +1414,32 @@ impl Site {
         if let Some(request) = naval_port
             && let Some(placement) = site.place_naval_port(land, &mut rng, &name, request)
         {
-            // A real plot (walkable dock geometry, not just the tile claim)
-            // is only built for the two tiers that have their own sub-
-            // builders so far. `Quay`/`Harbour` keep exactly the claimed
-            // apron/deck the placement pass above already blitted with no
-            // plot id -- the same as before a `NavalPort` plot kind existed
-            // -- until they get their own builders.
-            if matches!(placement.class, PortClass::Jetty | PortClass::Pier) {
-                let naval_port =
-                    plot::NavalPort::generate(land, &mut reseed(&mut rng), &site, placement);
-                let plot = site.create_plot(Plot {
-                    kind: PlotKind::NavalPort(naval_port),
-                    root_tile: placement.hinge.center(),
-                    tiles: aabr_tiles(placement.apron)
-                        .chain(aabr_tiles(placement.deck))
-                        .collect(),
-                });
-                // Re-blit both halves with the same `kind`/`hard_alt` the
-                // placement pass already wrote, now carrying the plot id --
-                // `Site::render` iterates plots, so nothing drew until this
-                // ran, per `Site::place_naval_port`'s own doc comment.
-                site.blit_aabr(placement.apron, Tile {
-                    kind: TileKind::Building,
-                    plot: Some(plot),
-                    hard_alt: Some(placement.apron_hard_alt),
-                });
-                site.blit_aabr(placement.deck, Tile {
-                    kind: TileKind::Pier,
-                    plot: Some(plot),
-                    hard_alt: None,
-                });
-            }
+            // Every tier now builds real walkable dock geometry, not just the
+            // tile claim -- `Jetty`/`Pier` and `Quay`/`Harbour` each have
+            // their own `NavalPort` sub-builders (see `plot::naval_port`).
+            let naval_port =
+                plot::NavalPort::generate(land, &mut reseed(&mut rng), &site, placement);
+            let plot = site.create_plot(Plot {
+                kind: PlotKind::NavalPort(naval_port),
+                root_tile: placement.hinge.center(),
+                tiles: aabr_tiles(placement.apron)
+                    .chain(aabr_tiles(placement.deck))
+                    .collect(),
+            });
+            // Re-blit both halves with the same `kind`/`hard_alt` the
+            // placement pass already wrote, now carrying the plot id --
+            // `Site::render` iterates plots, so nothing drew until this
+            // ran, per `Site::place_naval_port`'s own doc comment.
+            site.blit_aabr(placement.apron, Tile {
+                kind: TileKind::Building,
+                plot: Some(plot),
+                hard_alt: Some(placement.apron_hard_alt),
+            });
+            site.blit_aabr(placement.deck, Tile {
+                kind: TileKind::Pier,
+                plot: Some(plot),
+                hard_alt: None,
+            });
         }
 
         let build_chance = Lottery::from(vec![
