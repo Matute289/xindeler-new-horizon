@@ -9418,10 +9418,33 @@ mod tests {
         // 179,833) plus 20 in `Taiga` (46,052 -> 46,072), which is the cold
         // high ground right at the pocket's old corners. `Mountain` and
         // `Snowland` do not move.
-        assert_eq!(biome_count(BiomeKind::Savannah), 2_288);
-        assert_eq!(biome_count(BiomeKind::Grassland), 179_833);
+        //
+        // ⚠️ Re-baselined again 2026-09-26 for COW-18.5's `heightmap_manual_v23`,
+        // which authored the four Malicious Haven volcanic cones (they had no relief
+        // at all before: 93.14 / 260.07 / 93.14 / 245.03 m of bare island ground)
+        // plus the relocated Cobalt Depths submarine cone. Both terms the comment
+        // above separates are visible, and the small one is the reason THIS test
+        // moved at all, because the edit itself is nowhere near the Savannah pocket:
+        //
+        //   Mountain  27,879 -> 27,995  (+116)   <- the relief itself: the new cones
+        //   Savannah   2,288 ->  2,225  ( -63)   <- CDF knock-on
+        //   Grassland 179,833 -> 179,781 ( -52)  <- CDF knock-on
+        //   Jungle    68,339 -> 68,325  ( -14)   } inside the 0.5% bands below,
+        //   Forest   310,459 -> 310,473 ( +14)   } left alone deliberately
+        //   Swamp     13,786 -> 13,785  (  -1)   }
+        //   Ocean / Lake / Snowland / Taiga: unchanged
+        //
+        // Measured: the edit moved 2,611 chunks by more than 0.05 m of `alt` (five
+        // connected components, one per authored cone, and nothing else), but it
+        // perturbed 256k chunks in their last float bits — median 6.1e-5 m — because
+        // the land CDFs are rank-based over the whole map. So a Cromatolis heightmap
+        // edit ANYWHERE re-ranks temperature/humidity everywhere, and 115 chunks
+        // sitting on a biome threshold thousands of chunks away flip. That is the
+        // mechanism; it is not a sign the edit leaked outside its footprint.
+        assert_eq!(biome_count(BiomeKind::Savannah), 2_225);
+        assert_eq!(biome_count(BiomeKind::Grassland), 179_781);
         assert_eq!(biome_count(BiomeKind::Taiga), 46_072);
-        assert_eq!(biome_count(BiomeKind::Mountain), 27_879);
+        assert_eq!(biome_count(BiomeKind::Mountain), 27_995);
         assert_eq!(biome_count(BiomeKind::Snowland), 32_983);
         // Banded instead: the biomes where a small move really would be the CDF
         // knock-on rather than a design change, so that an unrelated CDF shift
