@@ -1,29 +1,29 @@
 //! The naval port plot: real, walkable dock geometry over the waterfront
 //! footprint `Site::find_shore_aabr` claims (see `site::shore`).
 //!
-//! # Only `Jetty` and `Pier` are wired up at a `generate_city` call site
+//! # All four tiers are wired up at the `generate_city` call site
 //!
-//! [`PortClass::Quay`] and [`PortClass::Harbour`] still claim their
-//! footprint via the ordinary placement pass, but no `generate_city` call
-//! site turns that claim into a `NavalPort` plot yet -- so those two tiers'
-//! tiles render as bare claimed ground/deck with nothing on them, exactly as
-//! before this module existed. That is deliberate: it keeps a settlement's
-//! waterfront from regressing to a half-built structure before those two
-//! tiers get their own dedicated builders (quay wall, warehouse, crane,
-//! harbourmaster hall -- more vertical presence than `Jetty`/`Pier` call
-//! for). `render_inner` below is still exhaustive over all four
-//! [`PortClass`] values, so the two unbuilt tiers fall back to the `Pier`
-//! tier's art (a real, if under-detailed, structure) rather than a panic --
-//! but that arm is unreached by any plot actually constructed today.
+//! `Jetty` and `Pier` shipped in Phase 3a. Phase 3b adds
+//! [`PortClass::Quay`] and [`PortClass::Harbour`]'s own dedicated builders
+//! (quay wall with backfill, warehouse, crane, harbourmaster hall -- more
+//! vertical presence than `Jetty`/`Pier` call for) and their own night
+//! lighting, so every one of the 13 authored route stops now generates a
+//! real `PlotKind::NavalPort` plot rather than a bare claimed tile.
 //!
 //! # One file, one plot kind
 //!
 //! The four tiers differ in *scale* (berth count, deck length, vertical
 //! presence, prop density), not in biome *art* -- so every tier is one
-//! `PlotKind::NavalPort` built from the same small set of sub-builders
-//! (`build_causeway`, `build_deck_cap`, `build_pilings`/`build_footings`,
-//! `build_bollard_line`, `build_prop_scatter`, `build_cargo_shed`), composed
-//! per tier in [`NavalPort::render_jetty`] / [`NavalPort::render_pier`].
+//! `PlotKind::NavalPort` built from a small set of sub-builders composed per
+//! tier: `Jetty`/`Pier` reuse Phase 3a's `build_causeway`, `build_deck_cap`,
+//! `build_pilings`/`build_footings`, `build_bollard_line`,
+//! `build_prop_scatter`, `build_cargo_shed`
+//! ([`NavalPort::render_jetty`] / [`NavalPort::render_pier`]); `Quay`/
+//! `Harbour` add `build_quay_wall`, `build_finger_bollards`,
+//! `build_quay_prop_scatter`, `build_warehouse`, `build_crane` and
+//! `build_harbourmaster_hall` ([`NavalPort::render_quay`] /
+//! [`NavalPort::render_harbour`]), since their deck is a wider quay with
+//! finger piers projecting off it rather than one narrow lane.
 //!
 //! # Geometry is axis-aligned by construction
 //!
@@ -52,14 +52,20 @@ use common::terrain::{Block, BlockKind, SpriteKind};
 use rand::prelude::*;
 use vek::*;
 
-/// Crates/barrels/rope per deck tile, by tier. `Jetty` and `Pier` are the
-/// only two tiers any `generate_city` call site builds a plot for today;
-/// `Quay`/`Harbour` are named here so their own builders have a density to
-/// read from once they land.
+/// Crates/barrels/rope per deck tile, by tier (spec §4.3).
 const PROP_DENSITY_JETTY: f32 = 0.05;
 const PROP_DENSITY_PIER: f32 = 0.1;
 const PROP_DENSITY_QUAY: f32 = 0.2;
 const PROP_DENSITY_HARBOUR: f32 = 0.3;
+
+/// Along-shore spacing (blocks) between night-lighting sprites for the two
+/// tiers that get them (task T18). `Jetty` gets no lighting at all -- the
+/// absence is deliberate and the cheapest tier difference to get wrong by
+/// accident, so there is no constant for it -- and `Pier` gets a single
+/// fixed lantern rather than a spaced run (see
+/// [`NavalPort::build_pier_lantern`]).
+const LIGHT_SPACING_QUAY: i32 = 4 * TILE_SIZE as i32;
+const LIGHT_SPACING_HARBOUR: i32 = 3 * TILE_SIZE as i32;
 
 /// Vertical clearance a piling/footing column reaches below the sampled
 /// water surface, so it reads as driven into the seabed rather than floating
@@ -130,8 +136,8 @@ impl NavalPort {
     ///
     /// Called from `Site::generate_city` immediately after
     /// `Site::place_naval_port` succeeds, before the plot `Lottery` loop --
-    /// see that call site for why a plot (rather than just the tile claim)
-    /// is only created for `Jetty`/`Pier` today.
+    /// see that call site for why the waterfront is claimed unconditionally,
+    /// ahead of anything else that could compete for it.
     pub fn generate(
         land: &Land,
         rng: &mut impl Rng,
@@ -305,6 +311,105 @@ impl NavalPort {
         }
     }
 
+    /// `Quay`/`Harbour`-only tier parameters: `(quay_depth_tiles,
+    /// finger_count, finger_width_tiles)`. The quay wall's own depth plus
+    /// the finger length is always `class.deck_dims().h` exactly (the deck
+    /// is projected at a fixed size, never grown -- see `ShorePlacement`'s
+    /// own doc comment), so the finger length itself is derived from
+    /// [`Self::deck_reach_blocks`] rather than named again here.
+    ///
+    /// Spec §4.3: `Harbour` is a 4-tile-deep quay with 3 finger piers 4
+    /// tiles wide; `Quay` a 3-tile-deep quay with 2 finger piers 3 tiles
+    /// wide.
+    fn quay_params(&self) -> (i32, i32, i32) {
+        match self.class {
+            PortClass::Harbour => (4, 3, 4),
+            PortClass::Quay => (3, 2, 3),
+            PortClass::Jetty | PortClass::Pier => {
+                unreachable!("quay_params is only meaningful for Quay/Harbour")
+            },
+        }
+    }
+
+    /// The deck's own along-shore extent, in blocks -- the axis
+    /// perpendicular to the seaward normal, as opposed to
+    /// [`Self::deck_reach_blocks`]'s seaward one.
+    fn deck_along_shore_blocks(&self) -> i32 {
+        if self.seaward_is_x() {
+            self.deck.size().h
+        } else {
+            self.deck.size().w
+        }
+    }
+
+    /// `(from, to)` block offsets, along the deck's own along-shore extent,
+    /// of each finger pier this tier's [`Self::quay_params`] calls for --
+    /// evenly spaced with a gap before the first, after the last, and
+    /// between every pair, so the fingers read as a comb rather than
+    /// touching the apron's own edges.
+    fn finger_bands(&self) -> Vec<(i32, i32)> {
+        let (_, count, width_tiles) = self.quay_params();
+        let width = width_tiles * TILE_SIZE as i32;
+        let total = self.deck_along_shore_blocks();
+        let gaps = count + 1;
+        let gap = (total - count * width) / gaps;
+        let mut bands = Vec::with_capacity(count as usize);
+        let mut cursor = gap;
+        for _ in 0..count {
+            bands.push((cursor, cursor + width));
+            cursor += width + gap;
+        }
+        bands
+    }
+
+    /// A sub-rectangle of `strip` (itself already sliced along the seaward
+    /// normal via [`Self::deck_strip`]) restricted to the along-shore band
+    /// `[from, to)` blocks from the deck's own along-shore minimum edge --
+    /// the perpendicular-axis counterpart to `deck_strip`, used to carve
+    /// individual finger piers out of the deck's full along-shore width.
+    fn along_shore_strip(&self, strip: Aabr<i32>, from: i32, to: i32) -> Aabr<i32> {
+        if self.seaward_is_x() {
+            Aabr {
+                min: Vec2::new(strip.min.x, self.deck.min.y + from),
+                max: Vec2::new(strip.max.x, self.deck.min.y + to),
+            }
+        } else {
+            Aabr {
+                min: Vec2::new(self.deck.min.x + from, strip.min.y),
+                max: Vec2::new(self.deck.min.x + to, strip.max.y),
+            }
+        }
+    }
+
+    /// A world-space point `inland` blocks landward of the hinge and
+    /// `along` blocks from the apron's own along-shore centre -- used to
+    /// lay out `Quay`/`Harbour`'s vertical structures on the apron without
+    /// hand-picking coordinates per settlement. Mirrors `build_cargo_shed`'s
+    /// own `center` computation, generalised with an along-shore offset for
+    /// tiers that place more than one structure.
+    fn apron_center(&self, inland: i32, along: i32) -> Vec2<i32> {
+        let base = self.hinge.center() + (-self.normal) * inland;
+        if self.seaward_is_x() {
+            base + Vec2::new(0, along)
+        } else {
+            base + Vec2::new(along, 0)
+        }
+    }
+
+    /// Maps a symmetric `(along_half, inland_half)` extent onto world
+    /// `(x, y)` half-extents, oriented onto whichever axis
+    /// [`Self::seaward_is_x`] happens to be -- so a structure's footprint
+    /// can be described in the port's own along-shore/inland terms and
+    /// still come out axis-aligned in world space, the same way
+    /// [`Self::deck_strip`] does for the deck.
+    fn oriented_half(&self, along_half: i32, inland_half: i32) -> Vec2<i32> {
+        if self.seaward_is_x() {
+            Vec2::new(inland_half, along_half)
+        } else {
+            Vec2::new(along_half, inland_half)
+        }
+    }
+
     /// A staircase of solid columns bridging the apron's grade to the deck's
     /// own walking-surface grade, across the causeway span -- the part of
     /// the deck crossing the dilated hazard band rather than standing over
@@ -433,25 +538,292 @@ impl NavalPort {
         let mut offset = run_blocks;
         while offset + TILE_SIZE as i32 <= reach {
             let cell = self.deck_strip(offset, offset + TILE_SIZE as i32);
-            let seed_pos = cell.min.with_z(self.deck_alt);
-            if field.chance(seed_pos, density) {
-                let inset_w = (cell.size().w - 2).max(1);
-                let inset_h = (cell.size().h - 2).max(1);
-                let x = cell.min.x
-                    + 1
-                    + (field.get_f32(seed_pos + Vec3::new(1, 0, 0)) * inset_w as f32) as i32;
-                let y = cell.min.y
-                    + 1
-                    + (field.get_f32(seed_pos + Vec3::new(0, 1, 0)) * inset_h as f32) as i32;
-                let sprite = match field.get(seed_pos + Vec3::new(0, 0, 1)) % 3 {
-                    0 => SpriteKind::Barrel,
-                    1 => SpriteKind::CrateBlock,
-                    _ => SpriteKind::Crate,
-                };
-                painter.sprite(Vec2::new(x, y).with_z(self.deck_alt + 1), sprite);
-            }
+            self.scatter_cell(painter, cell, field, density);
             offset += TILE_SIZE as i32;
         }
+    }
+
+    /// One roll of the prop scatter for a single deck-tile-sized `cell`,
+    /// shared by [`Self::build_prop_scatter`] (`Jetty`/`Pier`'s single-lane
+    /// deck) and [`Self::build_quay_prop_scatter`] (`Quay`/`Harbour`'s wider
+    /// quay body plus finger piers, which cannot iterate the deck's full
+    /// width as one strip without scattering props into the gaps between
+    /// fingers).
+    fn scatter_cell(&self, painter: &Painter, cell: Aabr<i32>, field: RandomField, density: f32) {
+        let seed_pos = cell.min.with_z(self.deck_alt);
+        if field.chance(seed_pos, density) {
+            let inset_w = (cell.size().w - 2).max(1);
+            let inset_h = (cell.size().h - 2).max(1);
+            let x = cell.min.x
+                + 1
+                + (field.get_f32(seed_pos + Vec3::new(1, 0, 0)) * inset_w as f32) as i32;
+            let y = cell.min.y
+                + 1
+                + (field.get_f32(seed_pos + Vec3::new(0, 1, 0)) * inset_h as f32) as i32;
+            let sprite = match field.get(seed_pos + Vec3::new(0, 0, 1)) % 3 {
+                0 => SpriteKind::Barrel,
+                1 => SpriteKind::CrateBlock,
+                _ => SpriteKind::Crate,
+            };
+            painter.sprite(Vec2::new(x, y).with_z(self.deck_alt + 1), sprite);
+        }
+    }
+
+    /// A solid dressed-stone quay wall with fill behind it, replacing
+    /// `Jetty`/`Pier`'s spaced pilings/footings with one continuous
+    /// retaining wall across the quay body's full along-shore width, then
+    /// one per finger pier -- the material difference that marks
+    /// `Quay`/`Harbour` as the two heavier tiers. The causeway ramp is
+    /// shared with every other tier.
+    fn build_quay_wall(&self, painter: &Painter) {
+        let fill = self.stone_fill();
+        self.build_causeway(painter, fill.clone());
+
+        let run_blocks = self.ramp_tiles * TILE_SIZE as i32;
+        let (quay_depth_tiles, ..) = self.quay_params();
+        let quay_depth_blocks = quay_depth_tiles * TILE_SIZE as i32;
+        let reach = self.deck_reach_blocks();
+
+        if quay_depth_blocks > run_blocks {
+            let body = self.deck_strip(run_blocks, quay_depth_blocks);
+            painter
+                .aabb(Aabb {
+                    min: body.min.with_z(self.water_alt - SUPPORT_DEPTH_BELOW_WATER),
+                    max: body.max.with_z(self.deck_alt + 1),
+                })
+                .fill(fill.clone());
+        }
+
+        for (from, to) in self.finger_bands() {
+            let finger =
+                self.along_shore_strip(self.deck_strip(quay_depth_blocks, reach), from, to);
+            painter
+                .aabb(Aabb {
+                    min: finger
+                        .min
+                        .with_z(self.water_alt - SUPPORT_DEPTH_BELOW_WATER),
+                    max: finger.max.with_z(self.deck_alt + 1),
+                })
+                .fill(fill.clone());
+        }
+    }
+
+    /// Mooring posts along both edges of each finger pier, spaced
+    /// [`SUPPORT_SPACING`] blocks apart -- the `Quay`/`Harbour` counterpart
+    /// to [`Self::build_bollard_line`], restricted to the finger bands so a
+    /// bollard never lands in the water gap between two fingers.
+    fn build_finger_bollards(&self, painter: &Painter) {
+        let fill = self.wood_fill();
+        let (quay_depth_tiles, ..) = self.quay_params();
+        let quay_depth_blocks = quay_depth_tiles * TILE_SIZE as i32;
+        let reach = self.deck_reach_blocks();
+        for (from, to) in self.finger_bands() {
+            let mut offset = quay_depth_blocks + SUPPORT_SPACING / 2;
+            while offset < reach {
+                let strip = self.along_shore_strip(self.deck_strip(offset, offset + 1), from, to);
+                for min_edge in [true, false] {
+                    let sliver = self.edge_sliver(strip, min_edge);
+                    painter
+                        .aabb(Aabb {
+                            min: sliver.min.with_z(self.deck_alt + 1),
+                            max: sliver.max.with_z(self.deck_alt + 2),
+                        })
+                        .fill(fill.clone());
+                }
+                offset += SUPPORT_SPACING;
+            }
+        }
+    }
+
+    /// [`Self::build_prop_scatter`]'s counterpart for `Quay`/`Harbour`: rolls
+    /// the same per-cell scatter over the quay body (the causeway-to-quay-
+    /// depth run, full along-shore width) and then over each finger pier's
+    /// own band, rather than over the deck's full width as one strip --
+    /// which would scatter crates into the open-water gaps between fingers.
+    fn build_quay_prop_scatter(&self, painter: &Painter, density: f32) {
+        let field = RandomField::new(0x506C_5254);
+        let run_blocks = self.ramp_tiles * TILE_SIZE as i32;
+        let (quay_depth_tiles, ..) = self.quay_params();
+        let quay_depth_blocks = quay_depth_tiles * TILE_SIZE as i32;
+        let reach = self.deck_reach_blocks();
+
+        let mut offset = run_blocks;
+        while offset + TILE_SIZE as i32 <= quay_depth_blocks {
+            let cell = self.deck_strip(offset, offset + TILE_SIZE as i32);
+            self.scatter_cell(painter, cell, field, density);
+            offset += TILE_SIZE as i32;
+        }
+
+        for (from, to) in self.finger_bands() {
+            let mut offset = quay_depth_blocks;
+            while offset + TILE_SIZE as i32 <= reach {
+                let cell = self.along_shore_strip(
+                    self.deck_strip(offset, offset + TILE_SIZE as i32),
+                    from,
+                    to,
+                );
+                self.scatter_cell(painter, cell, field, density);
+                offset += TILE_SIZE as i32;
+            }
+        }
+    }
+
+    /// A stone warehouse on the apron (~8 blocks tall) -- the `Quay` tier's
+    /// vertical presence, and one of `Harbour`'s two. `along_offset` lets
+    /// `Harbour` place a second one beside the first without overlapping it.
+    fn build_warehouse(&self, painter: &Painter, along_offset: i32) {
+        const HALF_ALONG: i32 = 4;
+        const HALF_INLAND: i32 = 5;
+        const HEIGHT: i32 = 8;
+        const SETBACK: i32 = 5;
+
+        let half = self.oriented_half(HALF_ALONG, HALF_INLAND);
+        let center = self.apron_center(SETBACK + HALF_INLAND, along_offset);
+        let base = self.alt;
+        let wall = self.stone_fill();
+        let roof = self.wood_fill();
+
+        painter
+            .aabb(Aabb {
+                min: (center - half).with_z(base),
+                max: (center + half).with_z(base + HEIGHT),
+            })
+            .fill(wall);
+        painter
+            .pyramid(Aabb {
+                min: (center - half - 1).with_z(base + HEIGHT),
+                max: (center + half + 1).with_z(base + HEIGHT + 3),
+            })
+            .fill(roof);
+    }
+
+    /// A dockside crane standing right at the hinge (the quay's own edge,
+    /// not set back on the apron -- a crane's whole job is to reach cargo on
+    /// a hull moored just beyond it): a stone mast ~12 blocks tall with a
+    /// timber boom projecting seaward and a short hanging cable cue.
+    /// `along_offset` spaces `Harbour`'s two cranes apart.
+    fn build_crane(&self, painter: &Painter, along_offset: i32) {
+        const MAST_HEIGHT: i32 = 12;
+        const MAST_RADIUS: f32 = 1.0;
+        const BOOM_LEN: i32 = 6;
+
+        let base = self.apron_center(0, along_offset);
+        let mast_fill = self.stone_fill();
+        let boom_fill = self.wood_fill();
+
+        painter
+            .cylinder_with_radius(base.with_z(self.alt), MAST_RADIUS, MAST_HEIGHT as f32)
+            .fill(mast_fill);
+
+        let boom_z = self.alt + MAST_HEIGHT - 1;
+        let boom_tip = base + self.normal * BOOM_LEN;
+        painter
+            .line(base.with_z(boom_z), boom_tip.with_z(boom_z), 0.6)
+            .fill(boom_fill.clone());
+        painter
+            .line(boom_tip.with_z(boom_z), boom_tip.with_z(boom_z - 3), 0.2)
+            .fill(boom_fill);
+    }
+
+    /// The `Harbour` tier's harbourmaster hall: a two-storey stone hall
+    /// ~14 blocks tall with a bell on the roof and an enterable, hollow
+    /// ground floor -- the tallest single structure any tier builds, which
+    /// is deliberate: this is a settlement's vertical silhouette from the
+    /// air, and the four tiers are meant to read as different things from
+    /// up there.
+    fn build_harbourmaster_hall(&self, painter: &Painter) {
+        const HALF_ALONG: i32 = 5;
+        const HALF_INLAND: i32 = 6;
+        const GROUND_HEIGHT: i32 = 7;
+        const UPPER_HEIGHT: i32 = 6;
+        const SETBACK: i32 = 6;
+        const DOOR_HALF_WIDTH: i32 = 1;
+
+        let half = self.oriented_half(HALF_ALONG, HALF_INLAND);
+        let center = self.apron_center(SETBACK + HALF_INLAND, 0);
+        let base = self.alt;
+        let top = base + GROUND_HEIGHT + UPPER_HEIGHT;
+        let wall = self.stone_fill();
+        let roof = self.wood_fill();
+
+        let outer = painter.aabb(Aabb {
+            min: (center - half).with_z(base),
+            max: (center + half).with_z(top),
+        });
+        let interior = painter.aabb(Aabb {
+            min: (center - half + 1).with_z(base + 1),
+            max: (center + half - 1).with_z(top - 1),
+        });
+        outer.without(interior).fill(wall);
+
+        // The seaward wall, punched through so the ground floor is
+        // genuinely enterable from the deck side rather than merely hollow.
+        let door_half = self.oriented_half(DOOR_HALF_WIDTH, 2);
+        let door_centre = center + self.normal * HALF_INLAND;
+        painter
+            .aabb(Aabb {
+                min: (door_centre - door_half).with_z(base + 1),
+                max: (door_centre + door_half).with_z(base + 4),
+            })
+            .clear();
+
+        painter
+            .pyramid(Aabb {
+                min: (center - half - 1).with_z(top),
+                max: (center + half + 1).with_z(top + 4),
+            })
+            .fill(roof);
+        painter.sprite(center.with_z(top + 4), SpriteKind::Bell);
+    }
+
+    /// `sprite` every `spacing` blocks along the seaward-facing edge of the
+    /// quay wall body (just landward of the fingers) -- the shared
+    /// implementation behind [`Self::build_quay_lighting`] and
+    /// [`Self::build_harbour_lighting`].
+    fn build_edge_lights(&self, painter: &Painter, sprite: SpriteKind, spacing: i32) {
+        let (quay_depth_tiles, ..) = self.quay_params();
+        let quay_depth_blocks = quay_depth_tiles * TILE_SIZE as i32;
+        let face = self.deck_strip(quay_depth_blocks - 1, quay_depth_blocks);
+        let total = self.deck_along_shore_blocks();
+        let mut offset = spacing / 2;
+        while offset < total {
+            let lit = self.along_shore_strip(face, offset, offset + 1).center();
+            painter.sprite(lit.with_z(self.deck_alt + 1), sprite);
+            offset += spacing;
+        }
+    }
+
+    /// `StreetLamp` every 4 tiles along the quay wall -- the `Quay` tier's
+    /// night lighting.
+    fn build_quay_lighting(&self, painter: &Painter) {
+        self.build_edge_lights(painter, SpriteKind::StreetLamp, LIGHT_SPACING_QUAY);
+    }
+
+    /// `StreetLampTall` every 3 tiles along the quay wall, plus one
+    /// `StreetLamp` at each finger pier's head -- the `Harbour` tier's night
+    /// lighting, and the only tier that combines both a spaced run and a
+    /// per-finger light.
+    fn build_harbour_lighting(&self, painter: &Painter) {
+        self.build_edge_lights(painter, SpriteKind::StreetLampTall, LIGHT_SPACING_HARBOUR);
+
+        let reach = self.deck_reach_blocks();
+        let tip = self.deck_strip(reach - 1, reach);
+        for (from, to) in self.finger_bands() {
+            let lit = self.along_shore_strip(tip, from, to).center();
+            painter.sprite(lit.with_z(self.deck_alt + 1), SpriteKind::StreetLamp);
+        }
+    }
+
+    /// One `LanternpostWoodLantern` at the pier head -- the only lighting a
+    /// `Pier` gets. `Jetty` gets none; `Quay`/`Harbour` get their own spaced
+    /// street lighting above.
+    fn build_pier_lantern(&self, painter: &Painter) {
+        let reach = self.deck_reach_blocks();
+        let tip = self.deck_strip(reach - 1, reach).center();
+        painter.sprite(
+            tip.with_z(self.deck_alt + 1),
+            SpriteKind::LanternpostWoodLantern,
+        );
     }
 
     /// A small cargo shed on the apron, set back from the hinge so the
@@ -493,19 +865,48 @@ impl NavalPort {
         self.build_prop_scatter(painter, PROP_DENSITY_JETTY);
     }
 
-    /// Stone footings with a timber deck, and a cargo shed on the apron, at
-    /// the given prop density -- shared by the `Pier` tier and, until
-    /// `Quay`/`Harbour` get their own dedicated builders, by those two tiers
-    /// as well (see `render_inner`).
-    fn render_pier(&self, painter: &Painter, density: f32) {
+    /// Stone footings with a timber deck, a cargo shed on the apron, and one
+    /// lantern at the pier head -- the `Pier` tier.
+    fn render_pier(&self, painter: &Painter) {
         let stone = self.stone_fill();
         let wood = self.wood_fill();
         self.build_causeway(painter, stone);
         self.build_deck_cap(painter, wood);
         self.build_footings(painter);
         self.build_bollard_line(painter);
-        self.build_prop_scatter(painter, density);
+        self.build_prop_scatter(painter, PROP_DENSITY_PIER);
         self.build_cargo_shed(painter);
+        self.build_pier_lantern(painter);
+    }
+
+    /// A dressed-stone quay wall with one finger pier's worth of berthing on
+    /// each side, one warehouse and one crane on the apron, and street
+    /// lighting along the quay -- the `Quay` tier.
+    fn render_quay(&self, painter: &Painter) {
+        self.build_quay_wall(painter);
+        self.build_finger_bollards(painter);
+        self.build_quay_prop_scatter(painter, PROP_DENSITY_QUAY);
+        self.build_warehouse(painter, 0);
+        self.build_crane(painter, 0);
+        self.build_quay_lighting(painter);
+    }
+
+    /// The capital-scale tier: a dressed-stone quay wall with three finger
+    /// piers, two warehouses, two cranes, the harbourmaster hall, and the
+    /// only tier with both a spaced quay-light run and per-finger lighting
+    /// -- the `Harbour` tier.
+    fn render_harbour(&self, painter: &Painter) {
+        const STRUCTURE_SPACING: i32 = 10;
+
+        self.build_quay_wall(painter);
+        self.build_finger_bollards(painter);
+        self.build_quay_prop_scatter(painter, PROP_DENSITY_HARBOUR);
+        self.build_warehouse(painter, -STRUCTURE_SPACING);
+        self.build_warehouse(painter, STRUCTURE_SPACING);
+        self.build_crane(painter, -STRUCTURE_SPACING);
+        self.build_crane(painter, STRUCTURE_SPACING);
+        self.build_harbourmaster_hall(painter);
+        self.build_harbour_lighting(painter);
     }
 }
 
@@ -519,16 +920,9 @@ impl Structure for NavalPort {
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         match self.class {
             PortClass::Jetty => self.render_jetty(painter),
-            PortClass::Pier => self.render_pier(painter, PROP_DENSITY_PIER),
-            // `Quay`/`Harbour` are meant to get their own quay-wall /
-            // warehouse / crane / harbourmaster-hall builders. Until then
-            // this falls back to the `Pier` tier's art (at each tier's own
-            // prop density) rather than panicking on an exhaustiveness gap
-            // -- but no `generate_city` call site constructs a `NavalPort`
-            // plot for these two tiers yet (see the module doc), so this arm
-            // is unreached by any plot actually built today.
-            PortClass::Quay => self.render_pier(painter, PROP_DENSITY_QUAY),
-            PortClass::Harbour => self.render_pier(painter, PROP_DENSITY_HARBOUR),
+            PortClass::Pier => self.render_pier(painter),
+            PortClass::Quay => self.render_quay(painter),
+            PortClass::Harbour => self.render_harbour(painter),
         }
     }
 
@@ -539,31 +933,41 @@ impl Structure for NavalPort {
 mod tests {
     use super::*;
 
-    fn port(normal: Vec2<i32>) -> NavalPort {
+    /// A `NavalPort` with a deck of `along` × `seaward` blocks, oriented onto
+    /// `normal`, for whichever `class` the test needs. `port` below is the
+    /// original fixture (`Pier`'s own deck dims), kept as-is so the existing
+    /// geometry tests are untouched.
+    fn port_of(class: PortClass, normal: Vec2<i32>, along: i32, seaward: i32) -> NavalPort {
+        let (dx, dy) = if normal.x != 0 {
+            (seaward, along)
+        } else {
+            (along, seaward)
+        };
+        let deck = match (normal.x, normal.y) {
+            (1, 0) => Aabr {
+                min: Vec2::new(30, -dy / 2),
+                max: Vec2::new(30 + dx, dy / 2),
+            },
+            (-1, 0) => Aabr {
+                min: Vec2::new(-30 - dx, -dy / 2),
+                max: Vec2::new(-30, dy / 2),
+            },
+            (0, 1) => Aabr {
+                min: Vec2::new(-dx / 2, 18),
+                max: Vec2::new(dx / 2, 18 + dy),
+            },
+            _ => Aabr {
+                min: Vec2::new(-dx / 2, -18 - dy),
+                max: Vec2::new(dx / 2, -18),
+            },
+        };
         NavalPort {
-            class: PortClass::Pier,
+            class,
             apron: Aabr {
-                min: Vec2::new(-30, -18),
-                max: Vec2::new(30, 18),
+                min: Vec2::new(-60, -60),
+                max: Vec2::new(60, 60),
             },
-            deck: match (normal.x, normal.y) {
-                (1, 0) => Aabr {
-                    min: Vec2::new(30, -9),
-                    max: Vec2::new(96, 9),
-                },
-                (-1, 0) => Aabr {
-                    min: Vec2::new(-96, -9),
-                    max: Vec2::new(-30, 9),
-                },
-                (0, 1) => Aabr {
-                    min: Vec2::new(-9, 18),
-                    max: Vec2::new(9, 84),
-                },
-                _ => Aabr {
-                    min: Vec2::new(-9, -84),
-                    max: Vec2::new(9, -18),
-                },
-            },
+            deck,
             hinge: Aabr::new_empty(Vec2::zero()),
             door_tile: Vec2::zero(),
             normal,
@@ -573,6 +977,25 @@ mod tests {
             ramp_tiles: 2,
             wood_color: Rgb::new(102, 87, 63),
         }
+    }
+
+    fn port(normal: Vec2<i32>) -> NavalPort { port_of(PortClass::Pier, normal, 18, 66) }
+
+    /// `along`/`seaward` blocks matching `class.deck_dims()` (spec §4.3),
+    /// so `finger_bands`/`quay_params` are tested against the same deck size
+    /// the real placement pass would actually hand them.
+    fn quay_port(class: PortClass, normal: Vec2<i32>) -> NavalPort {
+        let (along_tiles, seaward_tiles) = match class {
+            PortClass::Harbour => (24, 13),
+            PortClass::Quay => (16, 12),
+            PortClass::Jetty | PortClass::Pier => unreachable!("test fixture is Quay/Harbour only"),
+        };
+        port_of(
+            class,
+            normal,
+            along_tiles * TILE_SIZE as i32,
+            seaward_tiles * TILE_SIZE as i32,
+        )
     }
 
     #[test]
@@ -630,5 +1053,101 @@ mod tests {
     fn door_tile_is_reported_through_the_structure_trait() {
         let port = port(Vec2::new(1, 0));
         assert_eq!(Structure::door_tile(&port), Some(Vec2::zero()));
+    }
+
+    #[test]
+    fn finger_bands_tile_the_deck_without_overlapping_or_touching_the_edges() {
+        for class in [PortClass::Quay, PortClass::Harbour] {
+            for normal in [
+                Vec2::new(1, 0),
+                Vec2::new(-1, 0),
+                Vec2::new(0, 1),
+                Vec2::new(0, -1),
+            ] {
+                let port = quay_port(class, normal);
+                let (_, count, width_tiles) = port.quay_params();
+                let width = width_tiles * TILE_SIZE as i32;
+                let total = port.deck_along_shore_blocks();
+                let bands = port.finger_bands();
+
+                assert_eq!(
+                    bands.len(),
+                    count as usize,
+                    "{class:?} should place exactly {count} finger piers, normal {normal:?}"
+                );
+
+                let mut prev_to = 0;
+                for &(from, to) in &bands {
+                    assert_eq!(
+                        to - from,
+                        width,
+                        "{class:?}'s finger band is not {width} blocks wide, normal {normal:?}"
+                    );
+                    assert!(
+                        from > prev_to,
+                        "{class:?}'s finger bands must not touch or overlap, normal {normal:?}"
+                    );
+                    assert!(
+                        to <= total,
+                        "{class:?}'s finger band must stay within the deck's along-shore extent, \
+                         normal {normal:?}"
+                    );
+                    prev_to = to;
+                }
+                assert!(
+                    prev_to < total,
+                    "{class:?} must leave a gap after the last finger, normal {normal:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn quay_depth_leaves_room_for_the_fingers_to_actually_project() {
+        for class in [PortClass::Quay, PortClass::Harbour] {
+            let port = quay_port(class, Vec2::new(1, 0));
+            let (quay_depth_tiles, ..) = port.quay_params();
+            let quay_depth_blocks = quay_depth_tiles * TILE_SIZE as i32;
+            assert!(
+                quay_depth_blocks < port.deck_reach_blocks(),
+                "{class:?}'s quay body must not consume the deck's entire seaward reach, leaving \
+                 no room for finger piers"
+            );
+        }
+    }
+
+    #[test]
+    fn oriented_half_maps_along_inland_onto_world_axes_by_seaward_direction() {
+        let along_x = port(Vec2::new(1, 0)).oriented_half(3, 7);
+        assert_eq!(
+            along_x,
+            Vec2::new(7, 3),
+            "seaward-along-x: inland maps to world x, along-shore to world y"
+        );
+        let along_y = port(Vec2::new(0, 1)).oriented_half(3, 7);
+        assert_eq!(
+            along_y,
+            Vec2::new(3, 7),
+            "seaward-along-y: along-shore maps to world x, inland to world y"
+        );
+    }
+
+    #[test]
+    fn apron_center_moves_inland_of_the_hinge_and_offsets_along_shore() {
+        // The fixture's hinge is the empty aabr at the origin, so
+        // `hinge.center()` is `Vec2::zero()` and every offset below is
+        // relative to world zero.
+        let seaward_x = port(Vec2::new(1, 0));
+        assert_eq!(
+            seaward_x.apron_center(5, 3),
+            Vec2::new(-5, 3),
+            "inland is opposite the seaward normal (world x here); along-shore is world y"
+        );
+        let seaward_y = port(Vec2::new(0, -1));
+        assert_eq!(
+            seaward_y.apron_center(5, 3),
+            Vec2::new(3, 5),
+            "inland is opposite the seaward normal (world y here); along-shore is world x"
+        );
     }
 }
