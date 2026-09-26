@@ -12,6 +12,7 @@
 //! (`git lfs pull` against the VPS store) and is therefore `#[ignore]`d.
 
 use super::*;
+use crate::site::PortClass;
 
 /// Requires the real Cromatolis LFS assets to be pulled locally (`git lfs
 /// pull` against the VPS store); not run automated, matching this
@@ -1050,4 +1051,247 @@ fn cromatolis_authored_inns_and_posts_get_a_town_marker() {
     // procedural minor sites, so Cromatolis itself has none to check here),
     // and is covered directly by the `SiteKind::marker` unit tests in
     // `site::mod::tests` instead of by asset-dependent generation.
+}
+
+/// The authored settlements that appear as `Site(...)` stops of an authored
+/// maritime route, and therefore the naval-port tier their authored category
+/// resolves to. Spelled out here rather than derived, so the test states the
+/// expectation instead of restating the implementation it is checking.
+///
+/// **This is a golden list and has to be updated by hand** whenever
+/// `assets/world/map/cromatolis_v0_maritime_routes.ron` gains or loses a
+/// `Site(...)` stop, or a settlement's `category` changes in
+/// `cromatolis_v0_sites.ron`. It fails loudly rather than silently when it goes
+/// stale -- a stop that was added shows up as a `stray` port, one that was
+/// removed as a `missing` one, and a re-tiered settlement trips the per-class
+/// assertion -- but the message will name the settlement, not this constant, so
+/// start here.
+const EXPECTED_NAVAL_PORTS: &[(&str, PortClass)] = &[
+    ("site.kalthis", PortClass::Harbour),
+    ("site.dove_city", PortClass::Quay),
+    ("site.dromos_city", PortClass::Quay),
+    ("site.bronze_shore", PortClass::Pier),
+    ("site.kalitos", PortClass::Pier),
+    ("site.sutar_town", PortClass::Pier),
+    ("site.mazon_town", PortClass::Pier),
+    ("site.portland", PortClass::Pier),
+    ("site.rios_port", PortClass::Pier),
+    ("site.andiran", PortClass::Jetty),
+    ("site.garens_town", PortClass::Jetty),
+    ("site.hita", PortClass::Jetty),
+    ("site.timos", PortClass::Jetty),
+];
+
+/// Chebyshev tile distance from `from` to the nearest `is_road()` tile of
+/// `site`'s grid, brute-forced over the grid's own bounds. Only used to
+/// report what the placement actually achieved, so clarity beats speed.
+fn nearest_road_tiles(site: &site::Site, from: Vec2<i32>) -> Option<i32> {
+    let bounds = site.tiles.bounds;
+    let mut best = None;
+    for y in bounds.min.y..=bounds.max.y {
+        for x in bounds.min.x..=bounds.max.x {
+            let tpos = Vec2::new(x, y);
+            if site.tiles.get(tpos).is_road() {
+                let d = (tpos - from).map(|e| e.abs()).reduce_max();
+                best = Some(best.map_or(d, |b: i32| b.min(d)));
+            }
+        }
+    }
+    best
+}
+
+/// How many `TileKind::Pier` tiles a site's grid carries.
+fn pier_tile_count(site: &site::Site) -> usize {
+    let bounds = site.tiles.bounds;
+    let mut count = 0;
+    for y in bounds.min.y..=bounds.max.y {
+        for x in bounds.min.x..=bounds.max.x {
+            if site.tiles.get(Vec2::new(x, y)).is_pier() {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// **The waterfront placement pass, against the real authored region.**
+///
+/// Requires the real Cromatolis LFS assets to be pulled locally (`git lfs
+/// pull` against the VPS store); `#[ignore]`d for the same reason every other
+/// test in this file is. Recommended command:
+/// `cargo test -p xindeler-world
+/// every_authored_maritime_route_stop_gets_a_naval_port_footprint -- --ignored
+/// --nocapture`
+///
+/// Reports, per settlement, whether a footprint was claimed and where, so the
+/// numbers can be read against the measurement pass that gated this work --
+/// and asserts the four things that would otherwise be silent failures:
+///
+/// * every one of the 13 route stops gets a footprint, of the tier its authored
+///   category implies (a settlement that fails names itself and its reason in
+///   the generation log, and the assertion message below lists it);
+/// * the deck was blitted whole -- exactly one `TileKind::Pier` tile per tile
+///   of the recorded rectangle, so nothing was clipped or overlapped;
+/// * each deck reaches water deep enough for its own tier's berths, rather than
+///   ending on the beach;
+/// * no settlement that was never asked for a port has a single
+///   `TileKind::Pier` tile, which is what "non-port settlements are untouched"
+///   reduces to once `place_naval_port` is only reachable behind `naval_port:
+///   Some(_)` and the `None` path consumes no RNG (pinned separately by
+///   `site::tests::an_unviable_waterfront_places_no_port_and_no_fallback`).
+#[test]
+#[ignore]
+fn every_authored_maritime_route_stop_gets_a_naval_port_footprint() {
+    let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+    let (world, index) = World::generate(
+        0,
+        sim::WorldOpts {
+            seed_elements: true,
+            world_file: sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+            calendar: None,
+        },
+        &threadpool,
+        &|_| {},
+    );
+    let index_ref = index.as_index_ref();
+
+    let expected: std::collections::HashMap<&str, PortClass> =
+        EXPECTED_NAVAL_PORTS.iter().copied().collect();
+
+    let mut placed = Vec::new();
+    let mut missing = Vec::new();
+    let mut stray = Vec::new();
+    let mut beached = Vec::new();
+
+    for civ_site in world.civs.sites.values() {
+        let Some(authored_id) = civ_site.authored_id() else {
+            continue;
+        };
+        let Some(site_id) = civ_site.site_tmp else {
+            continue;
+        };
+        let site = index_ref.sites.get(site_id);
+        let pier_count = pier_tile_count(site);
+
+        match (expected.get(authored_id).copied(), site.naval_port) {
+            (Some(class), Some(placement)) => {
+                assert_eq!(
+                    placement.class, class,
+                    "{authored_id} got a {:?} port, expected {class:?}",
+                    placement.class
+                );
+                let deck_tiles = placement.deck.size().product() as usize;
+                assert_eq!(
+                    pier_count, deck_tiles,
+                    "{authored_id} recorded a {deck_tiles}-tile {class:?} deck but its grid \
+                     carries {pier_count} Pier tiles"
+                );
+                let apron_face_centre = placement.hinge.center();
+                let d_centre_blocks = site
+                    .tile_center_wpos(apron_face_centre)
+                    .as_::<f32>()
+                    .distance(site.origin.as_::<f32>());
+                let d_road = nearest_road_tiles(site, placement.door_tile);
+                // A deck that stopped on the beach is what this catches: the
+                // placement records how much of the deck's centre line was over
+                // adequately deep water. Asserting the *recorded* figure rather
+                // than re-measuring the terrain is the point -- re-measuring
+                // would test the terrain again, where what is in question is
+                // whether the search's own gate was actually applied.
+                if placement.deck_deep_tiles < site::SHORE_MIN_DEEP_TILES {
+                    beached.push((authored_id.to_string(), placement.deck_deep_tiles));
+                }
+                placed.push((
+                    authored_id.to_string(),
+                    class,
+                    placement.apron.size(),
+                    placement.deck.size(),
+                    placement.outward,
+                    d_road,
+                    d_centre_blocks,
+                    pier_count,
+                    placement.causeway,
+                    placement.deck_deep_tiles,
+                    placement.score,
+                ));
+            },
+            (Some(class), None) => missing.push((authored_id.to_string(), class)),
+            // A settlement that was never asked for a port must have neither a
+            // recorded placement nor a claimed tile. Both halves are checked
+            // unconditionally -- gating the recorded-placement half on the tile
+            // count would let a port that recorded itself and blitted nothing
+            // pass silently.
+            (None, Some(_)) => stray.push((authored_id.to_string(), pier_count)),
+            (None, None) if pier_count > 0 => stray.push((authored_id.to_string(), pier_count)),
+            (None, None) => {},
+        }
+    }
+
+    placed.sort_by(|a, b| a.0.cmp(&b.0));
+    println!(
+        "\n{:<20} {:<8} {:>9} {:>9} {:>8} {:>6} {:>6} {:>9} {:>4} {:>6} {:>5} {:>5}",
+        "settlement",
+        "tier",
+        "apron",
+        "deck",
+        "outward",
+        "cswy",
+        "deep",
+        "d_centre",
+        "road",
+        "doorrd",
+        "run",
+        "altv",
+    );
+    for (id, class, apron, deck, outward, door_road, d_centre, piers, causeway, deep, score) in
+        &placed
+    {
+        println!(
+            "{:<20} {:<8} {:>4}x{:<4} {:>4}x{:<4} {:>4},{:<3} {:>6} {:>6} {:>9.1} {:>4} {:>6} \
+             {:>5} {:>5.1}  ({piers} pier tiles)",
+            id,
+            format!("{class:?}"),
+            apron.w,
+            apron.h,
+            deck.w,
+            deck.h,
+            outward.x,
+            outward.y,
+            causeway,
+            deep,
+            d_centre,
+            score.d_road,
+            door_road.map_or("-".to_string(), |d| d.to_string()),
+            score.water_run,
+            score.alt_var,
+        );
+    }
+    println!();
+
+    assert!(
+        missing.is_empty(),
+        "{} of {} authored maritime route stops got no naval port footprint: {missing:?} -- the \
+         generation log names each failure's reason",
+        missing.len(),
+        EXPECTED_NAVAL_PORTS.len(),
+    );
+    assert_eq!(
+        placed.len(),
+        EXPECTED_NAVAL_PORTS.len(),
+        "expected all {} route stops to be present as generated settlements, found {}",
+        EXPECTED_NAVAL_PORTS.len(),
+        placed.len(),
+    );
+    assert!(
+        stray.is_empty(),
+        "settlements with no maritime route stop must be untouched by the placement pass, but \
+         these carry Pier tiles: {stray:?}"
+    );
+
+    assert!(
+        beached.is_empty(),
+        "these decks do not reach {} tiles of water deep enough for their own tier's berths, so \
+         they end on the beach: {beached:?}",
+        site::SHORE_MIN_DEEP_TILES
+    );
 }

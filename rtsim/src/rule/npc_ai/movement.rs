@@ -16,7 +16,13 @@ fn path_in_site(start: Vec2<i32>, end: Vec2<i32>, site: &site::Site) -> PathResu
 
         let terrain = match &b_tile.kind {
             TileKind::Empty => 3.0,
-            TileKind::Hazard(_) => 50.0,
+            // A naval port's deck is priced like the water it stands over,
+            // not like the building-grade structure it will become. The tiles
+            // are claimed before anything walkable is built on them, and even
+            // once it is, a deck is a dead end: routing across one is never a
+            // shortcut, so a high cost costs nothing and keeps NPCs off the
+            // water in the meantime.
+            TileKind::Hazard(_) | TileKind::Pier => 50.0,
             TileKind::Field => 8.0,
             TileKind::Plaza | TileKind::Road { .. } | TileKind::Path { .. } | TileKind::Bridge => {
                 1.0

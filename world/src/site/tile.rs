@@ -184,6 +184,7 @@ pub enum TileKind {
     Road { a: u16, b: u16, w: u16, alt: f32 },
     Path { closest_pos: Vec2<f32>, path: Path },
     Building,
+    Pier,
     Castle,
     Wall(Dir2),
     Tower(RoofKind),
@@ -206,6 +207,7 @@ impl fmt::Display for TileKind {
             TileKind::Road { .. } => write!(f, "Road"),
             TileKind::Path { .. } => write!(f, "Path"),
             TileKind::Building => write!(f, "Building"),
+            TileKind::Pier => write!(f, "Pier"),
             TileKind::Castle => write!(f, "Castle"),
             TileKind::Wall(_) => write!(f, "Wall"),
             TileKind::Tower(_) => write!(f, "Tower"),
@@ -266,6 +268,45 @@ impl Tile {
             || matches!(self.kind, TileKind::Hazard(_))
             || matches!(self.kind, TileKind::Path { .. })
             || matches!(self.kind, TileKind::Field)
+            // A pier deck is an obstacle, but not a *building*: nothing may
+            // be grown against it, and nothing may treat it as buildable
+            // ground either (see `TileKind::Pier`).
+            || matches!(self.kind, TileKind::Pier)
+    }
+
+    /// Whether this tile is the seaward deck of a naval port: deck planking,
+    /// quay wall or jetty claimed over the water hazard band.
+    ///
+    /// `TileKind::Pier` carries its explanation here rather than on the
+    /// variant because a doc comment anywhere inside `TileKind` makes rustfmt
+    /// expand `Road` and `Path` too, and this enum is upstream-owned -- ten
+    /// lines of reformatting for a one-line addition is a bad trade in a file
+    /// that has to survive a monthly merge.
+    ///
+    /// It is deliberately **not** `TileKind::Building`, which is what the
+    /// landward half of the same port (the apron) uses. Two reasons:
+    ///
+    /// * A `Building` tile over water is a perfectly ordinary `is_obstacle()`
+    ///   neighbour, which invites a house to be grown against the outer end of
+    ///   a pier. `Pier` is an obstacle too, so it is excluded from every
+    ///   placement search by the same mechanism -- but it is its own kind, so
+    ///   nothing can mistake it for buildable ground.
+    /// * `hard_alt` is a claim about *ground* level, and over water that claim
+    ///   is simply false. The apron carries a `hard_alt`; the deck never does.
+    ///
+    /// It also makes "is this tile pier deck?" a question the rest of the
+    /// engine can ask, which the berth contract and any dockside NPC spawn
+    /// will want. See `site::shore` for the search that claims these tiles.
+    pub fn is_pier(&self) -> bool { matches!(self.kind, TileKind::Pier) }
+
+    /// Whether this tile carries any hazard stamped by
+    /// `Site::demarcate_obstacles`.
+    pub fn is_hazard(&self) -> bool { matches!(self.kind, TileKind::Hazard(_)) }
+
+    /// Whether this tile is specifically the *water* half of that hazard
+    /// band, as opposed to a steep-gradient hill.
+    pub fn is_water_hazard(&self) -> bool {
+        matches!(self.kind, TileKind::Hazard(HazardKind::Water))
     }
 
     pub fn is_building(&self) -> bool {
