@@ -640,7 +640,7 @@
         ),
         (
             id: "site.meyenahone",
-            name: "Meyenahone",
+            name: "Myenahone",
             category: Town,
             size: Medium,
             population: (
