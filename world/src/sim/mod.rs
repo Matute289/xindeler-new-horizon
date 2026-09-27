@@ -3519,7 +3519,8 @@ impl WorldSim {
             // of vanishing outright.
             let masks_loaded = authored_water_layer.is_some()
                 || authored_elevated_lakes_layer.is_some()
-                || authored_river_channels_layer.is_some();
+                || authored_river_channels_layer.is_some()
+                || authored_elevated_rivers_layer.is_some();
             for (idx, river) in rivers.iter_mut().enumerate() {
                 let is_elevated_lake = mask_value(&authored_elevated_lakes_layer, idx)
                     .is_some_and(|v| v >= AUTHORED_WATER_THRESHOLD);
