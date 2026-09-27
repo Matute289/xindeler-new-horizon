@@ -978,11 +978,24 @@ enum AuthoredLayerKind {
     RiverChannels,
     ClimateZone,
     EcologyZone,
+    /// COW18.5-C2: binary presence for the 9 Whitekasing mountain-descent
+    /// rivers authored in `elevated_river_mask_manual`. See
+    /// [`ElevatedRiverBedDepth`](Self::ElevatedRiverBedDepth) for the paired
+    /// magnitude layer, and `authored_river_kind_override` for how the two
+    /// combine into a real `RiverKind::River`.
+    ElevatedRivers,
+    /// COW18.5-C2: per-chunk elevated-river channel bed depth, normalized
+    /// `[0, 1]` over `[ELEVATED_RIVER_BED_DEPTH_MIN_M,
+    /// ELEVATED_RIVER_BED_DEPTH_MAX_M]`. Meaningless outside
+    /// [`ElevatedRivers`](Self::ElevatedRivers)'s footprint -- always gate on
+    /// that layer's presence first, same discipline as `river_channels`'
+    /// engine-derived width.
+    ElevatedRiverBedDepth,
 }
 
 impl AuthoredLayerKind {
     /// All layer kinds a region can ship, in the order they're loaded.
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 10] = [
         Self::Routes,
         Self::Vegetation,
         Self::GroundCover,
@@ -991,6 +1004,8 @@ impl AuthoredLayerKind {
         Self::RiverChannels,
         Self::ClimateZone,
         Self::EcologyZone,
+        Self::ElevatedRivers,
+        Self::ElevatedRiverBedDepth,
     ];
 
     fn asset_suffix(self) -> &'static str {
@@ -1003,9 +1018,25 @@ impl AuthoredLayerKind {
             Self::RiverChannels => "river_channels",
             Self::ClimateZone => "climate_zone",
             Self::EcologyZone => "ecology_zone",
+            Self::ElevatedRivers => "elevated_rivers",
+            Self::ElevatedRiverBedDepth => "elevated_river_bed_depth",
         }
     }
 }
+
+/// COW18.5-C2: the real metres an `ElevatedRiverBedDepth` normalized `[0, 1]`
+/// value spans. Must stay in sync with `xindeler-open-world`'s
+/// `tools/cromatolis_elevated_rivers.py` (`BED_DEPTH_MIN_M`/`BED_DEPTH_MAX_M`)
+/// -- there is no shared schema between the two repos for this constant, so a
+/// change on either side needs the other updated by hand.
+const ELEVATED_RIVER_BED_DEPTH_MIN_M: f32 = 1.0;
+const ELEVATED_RIVER_BED_DEPTH_MAX_M: f32 = 8.0;
+/// Fixed channel width for an elevated (mountain-descent) river. The design
+/// only specifies bed-depth variance, not width, so this is a deliberate,
+/// narrow "small mountain stream" default rather than a derived value --
+/// unlike `river_channels`, whose width comes from
+/// `local_channel_radius_chunks` because that mask's strokes vary widely.
+const ELEVATED_RIVER_WIDTH_M: f32 = 8.0;
 
 /// A hand-authored map region that ships extra raster layers alongside its
 /// base heightmap `.bin`, keyed by the `FileOpts::LoadAsset` specifier that
@@ -2472,6 +2503,8 @@ impl WorldSim {
             authored_river_channels_layer,
             authored_climate_zone_layer,
             authored_ecology_zone_layer,
+            authored_elevated_rivers_layer,
+            authored_elevated_river_bed_depth_layer,
         ) = if let Some(region) = authored_region {
             (
                 load_authored_layer(region, AuthoredLayerKind::Routes),
@@ -2482,9 +2515,11 @@ impl WorldSim {
                 load_authored_layer(region, AuthoredLayerKind::RiverChannels),
                 load_authored_layer(region, AuthoredLayerKind::ClimateZone),
                 load_authored_layer(region, AuthoredLayerKind::EcologyZone),
+                load_authored_layer(region, AuthoredLayerKind::ElevatedRivers),
+                load_authored_layer(region, AuthoredLayerKind::ElevatedRiverBedDepth),
             )
         } else {
-            (None, None, None, None, None, None, None, None)
+            (None, None, None, None, None, None, None, None, None, None)
         };
         let authored_ecology_zone_layer =
             authored_ecology_zone_layer.and_then(
@@ -3492,11 +3527,30 @@ impl WorldSim {
                     .is_some_and(|v| v >= AUTHORED_WATER_THRESHOLD);
                 let is_river_channel = mask_value(&authored_river_channels_layer, idx)
                     .is_some_and(|v| v >= AUTHORED_WATER_THRESHOLD);
+                // COW18.5-C2: the 9 Whitekasing mountain-descent rivers. A
+                // narrow fixed width (unlike `river_channels`, whose strokes
+                // vary widely) and a per-chunk bed depth exported by
+                // `tools/cromatolis_elevated_rivers.py`, denormalized back
+                // from `[0, 1]`.
+                let is_elevated_river = mask_value(&authored_elevated_rivers_layer, idx)
+                    .is_some_and(|v| v >= AUTHORED_WATER_THRESHOLD);
+                let authored_elevated_river_depth = mask_value(
+                    &authored_elevated_river_bed_depth_layer,
+                    idx,
+                )
+                .map_or(ELEVATED_RIVER_BED_DEPTH_MIN_M, |raw| {
+                    ELEVATED_RIVER_BED_DEPTH_MIN_M
+                        + raw.clamp(0.0, 1.0)
+                            * (ELEVATED_RIVER_BED_DEPTH_MAX_M - ELEVATED_RIVER_BED_DEPTH_MIN_M)
+                });
                 let channel_width = authored_channel_width
                     .as_ref()
                     .map_or(0.0, |widths| widths[idx]);
-                let authored_river_cross_section =
-                    cromatolis_authored_river_cross_section(channel_width);
+                let authored_river_cross_section = if is_elevated_river {
+                    Vec2::new(ELEVATED_RIVER_WIDTH_M, authored_elevated_river_depth)
+                } else {
+                    cromatolis_authored_river_cross_section(channel_width)
+                };
 
                 let neighbor_pass_pos = uniform_idx_as_vec2(map_size_lg, idx);
                 river.river_kind = if !masks_loaded && alt[idx] < 0.0 {
@@ -3513,6 +3567,7 @@ impl WorldSim {
                         is_elevated_lake,
                         is_water_body,
                         is_river_channel,
+                        is_elevated_river,
                         channel_fits_max_river_width: channel_width <= CROMATOLIS_MAX_RIVER_WIDTH,
                         // `SimChunk::generate` maps `dh == -2` (an ocean
                         // boundary node) to `downhill: None`, which `column.rs`
@@ -3585,14 +3640,23 @@ impl WorldSim {
                             let nidx = vec2_as_uniform_idx(map_size_lg, Vec2::new(x, y));
                             near_water |= mask_hit(&authored_water_layer, nidx)
                                 || mask_hit(&authored_elevated_lakes_layer, nidx)
-                                || mask_hit(&authored_river_channels_layer, nidx);
+                                || mask_hit(&authored_river_channels_layer, nidx)
+                                || mask_hit(&authored_elevated_rivers_layer, nidx);
                             adjacent_to_marine |= nidx != posi && is_marine(nidx);
                         }
                     }
+                    // COW18.5-C2: an elevated (mountain-descent) river is a
+                    // flowing corridor for this classification's purposes,
+                    // exactly like `river_channels` -- `authored_water_body_kind`
+                    // and `authored_river_kind_override` must agree on which
+                    // chunks are rivers (see `cromatolis_water_body_and_river_kind_
+                    // agree_against_real_lfs_assets`), and the elevated-river mask
+                    // is the higher-priority signal in that function too.
                     let water_body = authored_water_body_kind(AuthoredWaterBodyInputs {
                         is_elevated_lake: mask_hit(&authored_elevated_lakes_layer, posi),
                         is_water_body: mask_hit(&authored_water_layer, posi),
-                        is_river_channel: mask_hit(&authored_river_channels_layer, posi),
+                        is_river_channel: mask_hit(&authored_river_channels_layer, posi)
+                            || mask_hit(&authored_elevated_rivers_layer, posi),
                         is_marine: is_marine(posi),
                         is_adjacent_to_marine: adjacent_to_marine,
                         // Nothing computes the offshore band that splits
@@ -6111,6 +6175,11 @@ struct AuthoredRiverKindInputs {
     is_elevated_lake: bool,
     is_water_body: bool,
     is_river_channel: bool,
+    /// COW18.5-C2: this chunk is on one of the 9 Whitekasing mountain-descent
+    /// rivers authored in `elevated_river_mask`. Checked ahead of
+    /// `is_river_channel` -- see [`authored_river_kind_override`]'s doc
+    /// comment for the full priority order.
+    is_elevated_river: bool,
     /// Whether this corridor chunk's precomputed local channel width is within
     /// [`CROMATOLIS_MAX_RIVER_WIDTH`], i.e. whether it can be carved as a real
     /// river at all. Meaningless unless `is_river_channel`.
@@ -6154,6 +6223,7 @@ fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<River
         is_elevated_lake,
         is_water_body,
         is_river_channel,
+        is_elevated_river,
         channel_fits_max_river_width,
         has_downhill,
         is_ocean,
@@ -6164,6 +6234,20 @@ fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<River
 
     if is_elevated_lake {
         Some(RiverKind::Lake { neighbor_pass_pos })
+    } else if is_elevated_river {
+        // COW18.5-C2: same "no downhill" edge-case guard as the
+        // `is_river_channel` arm below -- a boundary node with nowhere to
+        // flow would panic in `column.rs`'s neighbour-river sampling if typed
+        // as a river. `authored_river_cross_section` already carries the
+        // elevated-river's own fixed width/hashed depth (set at the call
+        // site), so no further width check is needed here.
+        if has_downhill {
+            Some(RiverKind::River {
+                cross_section: authored_river_cross_section,
+            })
+        } else {
+            Some(RiverKind::Lake { neighbor_pass_pos })
+        }
     } else if is_river_channel {
         // COW-22 `C22-1b`: checked *before* the water mask (it used to be
         // checked after). Every authored corridor cell also sits inside the
@@ -7427,7 +7511,7 @@ mod tests {
     // ---- Region registry ----
 
     #[test]
-    fn registry_resolves_cromatolis_map_asset_with_all_six_layers() {
+    fn registry_resolves_cromatolis_map_asset_with_all_layers() {
         let region = authored_region_for_map_asset("world.map.cromatolis_v0")
             .expect("cromatolis_v0 must be registered");
         assert_eq!(region.id, "cromatolis_v0");
@@ -7509,6 +7593,14 @@ mod tests {
         assert_eq!(
             asset_specifier_for(region, AuthoredLayerKind::RiverChannels),
             "world.map.cromatolis_v0_river_channels"
+        );
+        assert_eq!(
+            asset_specifier_for(region, AuthoredLayerKind::ElevatedRivers),
+            "world.map.cromatolis_v0_elevated_rivers"
+        );
+        assert_eq!(
+            asset_specifier_for(region, AuthoredLayerKind::ElevatedRiverBedDepth),
+            "world.map.cromatolis_v0_elevated_river_bed_depth"
         );
     }
 
@@ -7796,6 +7888,7 @@ mod tests {
             is_elevated_lake: false,
             is_water_body: false,
             is_river_channel: false,
+            is_elevated_river: false,
             channel_fits_max_river_width: true,
             has_downhill: true,
             is_ocean: false,
@@ -8778,6 +8871,108 @@ mod tests {
         );
     }
 
+    /// COW18.5-C2. Requires the real Cromatolis LFS assets, same precedent as
+    /// `cromatolis_world_orientation_regression_against_real_lfs_assets`
+    /// above. Verifies the 9 Whitekasing elevated-descent rivers (the
+    /// `elevated_river_mask_manual_v1` component with `min_x < 10000` -- the
+    /// SW-island Y-stroke, whose branch point lands in a pre-existing marine
+    /// strait rather than on a real mountain, see COW18.5-C2's 2026-09-27
+    /// investigation -- is deliberately excluded and never reaches this
+    /// raster at all) against `xindeler-open-world`'s
+    /// `tools/cromatolis_elevated_rivers.py` output:
+    /// - every chunk the `elevated_rivers` raster marks is a real
+    ///   `RiverKind::River` with nonzero flow velocity, never a spurious
+    ///   `Lake`/`Ocean`;
+    /// - each of the 9 components' authored source chunk sits strictly higher
+    ///   than every one of its mouth chunks (source/mouth pairs pinned from the
+    ///   same real master TIFFs this raster was derived from, 2026-09-27).
+    #[test]
+    #[ignore]
+    fn cromatolis_elevated_rivers_descend_from_source_to_mouth_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let map_size_lg = sim.map_size_lg();
+
+        let elevated_rivers =
+            AuthoredF32Layer::load_owned("world.map.cromatolis_v0_elevated_rivers")
+                .expect("real Cromatolis LFS assets must include the elevated-river raster");
+        assert_eq!(elevated_rivers.values.len(), map_size_lg.chunks_len());
+        assert!(
+            elevated_rivers
+                .values
+                .iter()
+                .all(|value| *value == 0.0 || *value == 1.0),
+            "elevated-river raster must remain binary"
+        );
+        let marked_count = elevated_rivers
+            .values
+            .iter()
+            .filter(|value| **value == 1.0)
+            .count();
+        assert_eq!(
+            marked_count, 808,
+            "the 9 Whitekasing components must cover exactly 808 chunks; a different count              means the mask, the SW-island exclusion rule, or the carve pipeline changed              upstream without this regression being re-baselined"
+        );
+
+        let bed_depth =
+            AuthoredF32Layer::load_owned("world.map.cromatolis_v0_elevated_river_bed_depth")
+                .expect("real Cromatolis LFS assets must include the elevated-river depth raster");
+        assert_eq!(bed_depth.values.len(), elevated_rivers.values.len());
+
+        for idx in 0..map_size_lg.chunks_len() {
+            if authored_layer_value_for_cromatolis_v0(map_size_lg, idx, &elevated_rivers.values)
+                < AUTHORED_WATER_THRESHOLD
+            {
+                continue;
+            }
+            let pos = uniform_idx_as_vec2(map_size_lg, idx);
+            let chunk = sim.get(pos).expect("in-bounds chunk");
+            assert!(
+                matches!(chunk.river.river_kind, Some(RiverKind::River { .. })),
+                "elevated-river chunk {pos:?} must be RiverKind::River, got {:?}",
+                chunk.river.river_kind
+            );
+            assert_ne!(
+                chunk.river.velocity,
+                Vec3::zero(),
+                "elevated-river chunk {pos:?} must have nonzero flow velocity"
+            );
+        }
+
+        // Source/mouth chunk pairs for the 9 Whitekasing components, pinned
+        // from the real master TIFFs (heightmap_manual_v23,
+        // water_mask_manual_v12, elevated_river_mask_manual_v1) by
+        // `tools/cromatolis_elevated_rivers.py`'s skeleton/endpoint
+        // classification, 2026-09-27. `(component_id, source_chunk,
+        // [mouth_chunks])`.
+        let components: &[(u32, (i32, i32), &[(i32, i32)])] = &[
+            (2, (559, 90), &[(549, 109)]),
+            (3, (533, 66), &[(524, 88)]),
+            (4, (511, 51), &[(513, 82), (509, 78)]),
+            (5, (484, 51), &[(478, 73)]),
+            (6, (497, 53), &[(494, 69)]),
+            (7, (473, 47), &[(471, 69)]),
+            (8, (437, 43), &[(437, 68)]),
+            (9, (463, 44), &[(459, 68)]),
+            (10, (450, 44), &[(450, 66)]),
+        ];
+        for &(component_id, source, mouths) in components {
+            let source_alt = sim
+                .get(Vec2::new(source.0, source.1))
+                .expect("in-bounds source chunk")
+                .alt;
+            for &mouth in mouths {
+                let mouth_alt = sim
+                    .get(Vec2::new(mouth.0, mouth.1))
+                    .expect("in-bounds mouth chunk")
+                    .alt;
+                assert!(
+                    source_alt > mouth_alt,
+                    "component {component_id}: source {source:?} (alt {source_alt:.1}) must sit                      strictly above mouth {mouth:?} (alt {mouth_alt:.1})"
+                );
+            }
+        }
+    }
+
     /// Requires the real Cromatolis LFS assets, same precedent as
     /// `cromatolis_world_orientation_regression_against_real_lfs_assets`
     /// above. Sanity-bounds `Swamp` coverage (re-enabled by this row, COW-4)
@@ -9118,6 +9313,21 @@ mod tests {
     /// A known authoring inconsistency, tracked separately -- *not*
     /// engine/exporter drift.
     const STRAY_ELEVATED_LAKE_CELLS: usize = 2;
+    /// COW18.5-C2 (2026-09-27): of the 808 chunks
+    /// `cromatolis_v0_elevated_rivers.f32le` marks, 189 sit outside the
+    /// pre-existing `water`/`river_channels` masks entirely -- previously
+    /// dry land, now real river chunks. Every `EXPORTED_*`/`AUTHORED_*`
+    /// constant above this one is a raw count of the *painted* masks the
+    /// exporter measured independently, none of which know about the new
+    /// elevated-river raster, so any golden count downstream of `water`/
+    /// `river_channels` alone (the `Lake` biome count, `WaterBodyKind::River`,
+    /// salinity) is short by exactly this many cells now that
+    /// `authored_river_kind_override`'s `is_elevated_river` branch and
+    /// `AuthoredWaterBodyInputs.is_river_channel`'s elevated-river fold both
+    /// treat these 189 cells as real river/water. Measured directly
+    /// (`(elevated_rivers >= 0.5) & !(water | river_channels)`) against the
+    /// real regenerated masters, not derived analytically.
+    const ELEVATED_RIVER_NET_NEW_WET_CELLS: usize = 189;
     /// Corridor cells sitting in a channel narrow enough to carve as a real
     /// `RiverKind::River` (local channel width within
     /// `CROMATOLIS_MAX_RIVER_WIDTH`): 12.4% of them. Cromatolis genuinely has
@@ -9129,7 +9339,22 @@ mod tests {
     /// It moves with the corridor raster (the width transform runs over that
     /// mask) and with relief (carving also needs a downhill neighbour), so the
     /// marine-shelf terrain package moved it on both counts.
-    const CARVEABLE_RIVER_CELLS: usize = 4_151;
+    ///
+    /// ⚠️ **2026-09-27 (COW18.5-C2):** +797 from the prior 4,151. All 808
+    /// chunks the new `cromatolis_v0_elevated_rivers.f32le` marks (the 9
+    /// Whitekasing elevated-descent rivers) resolve to `RiverKind::River`
+    /// here (verified by
+    /// `cromatolis_elevated_rivers_descend_from_source_to_mouth_against_real_lfs_assets`),
+    /// but 619 of them already sit inside the pre-existing `river_channels`
+    /// corridor mask, of which 11 were already classified
+    /// `RiverKind::River` under that mask alone -- those 11 don't move the
+    /// count. The other 608 overlap chunks flip from `RiverKind::Lake`
+    /// (too wide, or no downhill, under `river_channels`' own width/depth
+    /// rules) to `River` under the elevated-river override, which has no
+    /// width gate; the remaining 189 marked chunks are genuinely new wet
+    /// terrain. 608 + 189 = 797. Measured against the real regenerated
+    /// engine, not derived analytically.
+    const CARVEABLE_RIVER_CELLS: usize = 4_948;
 
     /// Counts every `WaterBodyKind` across the real Cromatolis map and
     /// reconciles it against the numbers the open-world exporter measured
@@ -9148,8 +9373,14 @@ mod tests {
                 .count()
         };
 
-        // Exporter: 33,566 corridor cells across 72 substantial systems.
-        assert_eq!(count(WaterBodyKind::River), EXPORTED_RIVER_CELLS);
+        // Exporter: 33,566 corridor cells across 72 substantial systems, plus
+        // COW18.5-C2's 189 net-new elevated-river cells the exporter's own
+        // river_channels count does not (and should not) include -- see
+        // `ELEVATED_RIVER_NET_NEW_WET_CELLS`.
+        assert_eq!(
+            count(WaterBodyKind::River),
+            EXPORTED_RIVER_CELLS + ELEVATED_RIVER_NET_NEW_WET_CELLS
+        );
         // Exporter: 24 lagoon basins, 2,815 cells.
         assert_eq!(count(WaterBodyKind::Lagoon), EXPORTED_LAGOON_CELLS);
         // Exporter: 14 lake basins, 13,872 cells, plus the stray
@@ -9166,7 +9397,10 @@ mod tests {
 
         // And the partition is exactly the authored water footprint: the
         // `water`-mask cells plus the stray `elevated_lakes` ones, with no
-        // chunk counted twice and none left over.
+        // chunk counted twice and none left over -- plus
+        // `ELEVATED_RIVER_NET_NEW_WET_CELLS` (COW18.5-C2, 2026-09-27), the
+        // elevated-descent river chunks outside the painted `water` mask
+        // entirely.
         let classified = sim
             .chunks
             .iter()
@@ -9174,7 +9408,9 @@ mod tests {
             .count();
         assert_eq!(
             classified,
-            AUTHORED_WATER_MASK_CELLS + STRAY_ELEVATED_LAKE_CELLS
+            AUTHORED_WATER_MASK_CELLS
+                + STRAY_ELEVATED_LAKE_CELLS
+                + ELEVATED_RIVER_NET_NEW_WET_CELLS
         );
         assert_eq!(
             classified,
@@ -9183,6 +9419,7 @@ mod tests {
                 + EXPORTED_LAKE_CELLS
                 + EXPORTED_MARINE_CELLS
                 + STRAY_ELEVATED_LAKE_CELLS
+                + ELEVATED_RIVER_NET_NEW_WET_CELLS
         );
     }
 
@@ -9318,9 +9555,15 @@ mod tests {
                 ),
             }
         }
+        // COW18.5-C2 (2026-09-27): total `WaterBodyKind::River` cells is now
+        // `EXPORTED_RIVER_CELLS + ELEVATED_RIVER_NET_NEW_WET_CELLS` (see that
+        // constant and `cromatolis_water_body_histogram_regression_against_
+        // real_lfs_assets`), while every one of the 808 elevated-river chunks
+        // resolves to a real `RiverKind::River` (no width gate on that path),
+        // so they never add to this "typed River but physically Lake" count.
         assert_eq!(
             wide_rivers_typed_as_lakes,
-            EXPORTED_RIVER_CELLS - CARVEABLE_RIVER_CELLS
+            EXPORTED_RIVER_CELLS + ELEVATED_RIVER_NET_NEW_WET_CELLS - CARVEABLE_RIVER_CELLS
         );
     }
 
@@ -9356,10 +9599,16 @@ mod tests {
         // body gets in on the strength of a bed painted below sea level.
         assert_eq!(biome_count(BiomeKind::Ocean), EXPORTED_MARINE_CELLS);
         // ...and every classified water chunk that is not marine lands in
-        // `Lake`, the inland bodies that used to read as ocean included.
+        // `Lake`, the inland bodies that used to read as ocean included. Plus
+        // `ELEVATED_RIVER_NET_NEW_WET_CELLS` (COW18.5-C2, 2026-09-27):
+        // `get_biome()` answers `Lake` for every Cromatolis `RiverKind::River`
+        // chunk too, and the 9 Whitekasing elevated-descent rivers add real
+        // river chunks outside the painted `water` mask this formula's other
+        // terms are built from.
         assert_eq!(
             biome_count(BiomeKind::Lake),
             AUTHORED_WATER_MASK_CELLS + STRAY_ELEVATED_LAKE_CELLS - EXPORTED_MARINE_CELLS
+                + ELEVATED_RIVER_NET_NEW_WET_CELLS
         );
 
         // Two mechanisms move the land biomes, and they differ by two orders of
@@ -9441,11 +9690,23 @@ mod tests {
         // edit ANYWHERE re-ranks temperature/humidity everywhere, and 115 chunks
         // sitting on a biome threshold thousands of chunks away flip. That is the
         // mechanism; it is not a sign the edit leaked outside its footprint.
-        assert_eq!(biome_count(BiomeKind::Savannah), 2_225);
-        assert_eq!(biome_count(BiomeKind::Grassland), 179_781);
-        assert_eq!(biome_count(BiomeKind::Taiga), 46_072);
-        assert_eq!(biome_count(BiomeKind::Mountain), 27_995);
-        assert_eq!(biome_count(BiomeKind::Snowland), 32_983);
+        // ⚠️ Re-baselined again 2026-09-27 for COW18.5-C2's elevated-river
+        // canyon carve, which -- unlike the Malicious Haven volcanic cones
+        // above, which moved these numbers through the CDF-rank knock-on
+        // alone -- directly rewrites real `alt` at the ~800 Whitekasing
+        // mountain chunks the 9 elevated rivers touch. That is real, local
+        // relief change (same mechanism as the Mountain +116 note above, not
+        // pure CDF noise), which is why Taiga/Snowland/Mountain move by more
+        // than the single-digit counts a CDF knock-on alone produces:
+        //
+        //   Savannah    2,225 ->  2,232  ( +7)   Grassland 179,781 -> 179,755 ( -26)
+        //   Taiga      46,072 -> 45,915  (-157)  Mountain   27,995 ->  27,970 ( -25)
+        //   Snowland   32,983 -> 32,965  ( -18)
+        assert_eq!(biome_count(BiomeKind::Savannah), 2_232);
+        assert_eq!(biome_count(BiomeKind::Grassland), 179_755);
+        assert_eq!(biome_count(BiomeKind::Taiga), 45_915);
+        assert_eq!(biome_count(BiomeKind::Mountain), 27_970);
+        assert_eq!(biome_count(BiomeKind::Snowland), 32_965);
         // Banded instead: the biomes where a small move really would be the CDF
         // knock-on rather than a design change, so that an unrelated CDF shift
         // reads as one signal instead of three simultaneous "failures".
@@ -10068,7 +10329,16 @@ mod tests {
                 .count()
         };
 
-        assert_eq!(count(Salinity::Fresh), 24_526);
+        // ⚠️ Re-baselined 2026-09-27 for COW18.5-C2. Only `Fresh` and
+        // `River/Fresh` move, both by exactly `ELEVATED_RIVER_NET_NEW_WET_CELLS`
+        // (189): the 9 elevated-descent rivers are high mountain chunks, so
+        // every net-new one lands in the map's existing "far from the sea"
+        // freshwater rule. Everything else (Ocean/Lake/Lagoon crosses,
+        // Brackish, Saline) is untouched.
+        assert_eq!(
+            count(Salinity::Fresh),
+            24_526 + ELEVATED_RIVER_NET_NEW_WET_CELLS
+        );
         assert_eq!(count(Salinity::Brackish), 7_624);
         assert_eq!(count(Salinity::Saline), 334_787);
 
@@ -10077,7 +10347,10 @@ mod tests {
         assert_eq!(cross(WaterBodyKind::Ocean, Salinity::Brackish), 0);
         assert_eq!(cross(WaterBodyKind::Ocean, Salinity::Fresh), 0);
         // The estuary gradient: fresh above it, salt at the waterline.
-        assert_eq!(cross(WaterBodyKind::River, Salinity::Fresh), 15_134);
+        assert_eq!(
+            cross(WaterBodyKind::River, Salinity::Fresh),
+            15_134 + ELEVATED_RIVER_NET_NEW_WET_CELLS
+        );
         assert_eq!(cross(WaterBodyKind::River, Salinity::Brackish), 5_471);
         assert_eq!(cross(WaterBodyKind::River, Salinity::Saline), 12_961);
         // Two of the map's fourteen lake basins are closed depressions below
