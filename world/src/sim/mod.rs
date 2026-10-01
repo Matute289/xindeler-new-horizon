@@ -978,8 +978,9 @@ enum AuthoredLayerKind {
     RiverChannels,
     ClimateZone,
     EcologyZone,
-    /// COW18.5-C2: binary presence for the 9 Whitekasing mountain-descent
-    /// rivers authored in `elevated_river_mask_manual`. See
+    /// COW18.5-C2: binary presence for the 10 elevated-descent rivers (9
+    /// Whitekasing + the SW-island Y-fork) authored in
+    /// `elevated_river_mask_manual`. See
     /// [`ElevatedRiverBedDepth`](Self::ElevatedRiverBedDepth) for the paired
     /// magnitude layer, and `authored_river_kind_override` for how the two
     /// combine into a real `RiverKind::River`.
@@ -3528,7 +3529,8 @@ impl WorldSim {
                     .is_some_and(|v| v >= AUTHORED_WATER_THRESHOLD);
                 let is_river_channel = mask_value(&authored_river_channels_layer, idx)
                     .is_some_and(|v| v >= AUTHORED_WATER_THRESHOLD);
-                // COW18.5-C2: the 9 Whitekasing mountain-descent rivers. A
+                // COW18.5-C2: the 10 elevated-descent rivers (9 Whitekasing +
+                // the SW-island Y-fork). A
                 // narrow fixed width (unlike `river_channels`, whose strokes
                 // vary widely) and a per-chunk bed depth exported by
                 // `tools/cromatolis_elevated_rivers.py`, denormalized back
@@ -6176,8 +6178,9 @@ struct AuthoredRiverKindInputs {
     is_elevated_lake: bool,
     is_water_body: bool,
     is_river_channel: bool,
-    /// COW18.5-C2: this chunk is on one of the 9 Whitekasing mountain-descent
-    /// rivers authored in `elevated_river_mask`. Checked ahead of
+    /// COW18.5-C2: this chunk is on one of the 10 elevated-descent rivers (9
+    /// Whitekasing + the SW-island Y-fork) authored in
+    /// `elevated_river_mask`. Checked ahead of
     /// `is_river_channel` -- see [`authored_river_kind_override`]'s doc
     /// comment for the full priority order.
     is_elevated_river: bool,
