@@ -756,8 +756,18 @@ impl Site {
             return Err(ShoreFailure::NoFrontier);
         }
 
+        let road_dist = RoadDistanceField::build(self);
+
         if let Some(facing_frontier) = frontier_facing(&frontier, facing) {
-            match self.find_shore_aabr_in(land, rng, class, exclusions, anchor, &facing_frontier) {
+            match self.find_shore_aabr_in(
+                land,
+                rng,
+                class,
+                exclusions,
+                anchor,
+                &facing_frontier,
+                &road_dist,
+            ) {
                 Ok(placement) => return Ok(placement),
                 Err(reason) => warn!(
                     ?facing,
@@ -771,7 +781,7 @@ impl Site {
                 "no shoreline candidate faces the authored direction, searching every direction"
             );
         }
-        self.find_shore_aabr_in(land, rng, class, exclusions, anchor, &frontier)
+        self.find_shore_aabr_in(land, rng, class, exclusions, anchor, &frontier, &road_dist)
     }
 
     /// [`Self::find_shore_aabr`] over an explicit candidate list.
@@ -783,8 +793,8 @@ impl Site {
         exclusions: &[PortExclusion],
         anchor: Option<ShoreAnchor>,
         frontier: &[ShoreFrontierTile],
+        road_dist: &RoadDistanceField,
     ) -> Result<ShorePlacement, ShoreFailure> {
-        let road_dist = RoadDistanceField::build(self);
         let (_, min_dims) = class.apron_dims();
         // What "near the centre" means for the distance term: the site origin,
         // or the anchor tile when the footprint has to sit beside something.
@@ -799,7 +809,7 @@ impl Site {
                 !self.shore_point_is_excluded(candidate.land_tpos, exclusions)
             })
             .filter_map(|candidate| {
-                self.score_shore_candidate(land, *candidate, &road_dist, min_dims, centre_wpos)
+                self.score_shore_candidate(land, *candidate, road_dist, min_dims, centre_wpos)
             })
             .collect();
 
@@ -881,7 +891,7 @@ impl Site {
                 continue;
             }
 
-            let door_tile = self.shore_door_tile(apron, outward, &road_dist);
+            let door_tile = self.shore_door_tile(apron, outward, road_dist);
             // Same idiom as `Plaza::generate`: one `get_alt_approx` at the
             // footprint's centre. The deck's own altitude needs per-corner
             // `water_level`/`alt` sampling, which belongs with the geometry
