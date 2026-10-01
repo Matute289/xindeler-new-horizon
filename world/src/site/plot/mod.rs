@@ -40,6 +40,7 @@ mod savannah_guard_hut;
 mod savannah_hut;
 mod savannah_workshop;
 mod sea_chapel;
+mod shipyard;
 pub mod tavern;
 mod terracotta_house;
 mod terracotta_palace;
@@ -80,7 +81,7 @@ pub use self::{
     jungle_ruin::JungleRuin,
     myrmidon_arena::MyrmidonArena,
     myrmidon_house::MyrmidonHouse,
-    naval_port::NavalPort,
+    naval_port::{NavalPort, PortDressing},
     pirate_hideout::PirateHideout,
     plaza::Plaza,
     road::{Road, RoadKind, RoadLights, RoadMaterial},
@@ -91,6 +92,7 @@ pub use self::{
     savannah_hut::SavannahHut,
     savannah_workshop::SavannahWorkshop,
     sea_chapel::SeaChapel,
+    shipyard::Shipyard,
     tavern::Tavern,
     terracotta_house::TerracottaHouse,
     terracotta_palace::TerracottaPalace,
@@ -198,6 +200,7 @@ pub enum PlotKind {
     MyrmidonHouse(MyrmidonHouse),
     Building(Building),
     NavalPort(NavalPort),
+    Shipyard(Shipyard),
 }
 
 /// # Syntax
@@ -257,6 +260,7 @@ macro_rules! foreach_plot {
             PlotKind::MyrmidonHouse($x) => $y,
             PlotKind::Building($x) => $y,
             PlotKind::NavalPort($x) => $y,
+            PlotKind::Shipyard($x) => $y,
         }
     };
 }
