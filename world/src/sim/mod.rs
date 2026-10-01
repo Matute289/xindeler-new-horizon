@@ -8874,19 +8874,27 @@ mod tests {
 
     /// COW18.5-C2. Requires the real Cromatolis LFS assets, same precedent as
     /// `cromatolis_world_orientation_regression_against_real_lfs_assets`
-    /// above. Verifies the 9 Whitekasing elevated-descent rivers (the
-    /// `elevated_river_mask_manual_v1` component with `min_x < 10000` -- the
-    /// SW-island Y-stroke, whose branch point lands in a pre-existing marine
-    /// strait rather than on a real mountain, see COW18.5-C2's 2026-09-27
-    /// investigation -- is deliberately excluded and never reaches this
-    /// raster at all) against `xindeler-open-world`'s
+    /// above. Verifies all 10 elevated-descent river components (9
+    /// Whitekasing + the SW-island Y-fork) against `xindeler-open-world`'s
     /// `tools/cromatolis_elevated_rivers.py` output:
     /// - every chunk the `elevated_rivers` raster marks is a real
     ///   `RiverKind::River` with nonzero flow velocity, never a spurious
     ///   `Lake`/`Ocean`;
-    /// - each of the 9 components' authored source chunk sits strictly higher
+    /// - each of the 10 components' authored source chunk sits strictly higher
     ///   than every one of its mouth chunks (source/mouth pairs pinned from the
-    ///   same real master TIFFs this raster was derived from, 2026-09-27).
+    ///   same real master TIFFs this raster was derived from,
+    ///   2026-09-27/2026-09-30).
+    ///
+    /// ⚠️ 2026-09-30: the SW-island component (id 1) used to be hard-excluded
+    /// here (`elevated_river_mask_manual_v1`'s component with
+    /// `min_x < 10000`, whose branch point landed in a pre-existing marine
+    /// strait at -195.8m instead of the real 1167.8m summit ~180px south).
+    /// `elevated_river_mask_manual_v2` redraws that component's branch point
+    /// onto the real summit and routes both descending arms down the real
+    /// terrain to the same two water_mask mouths the old (wrong) arms used
+    /// -- see `xindeler-open-world`'s COW18.5-C2 SW-island-fix PR. The
+    /// exclusion is gone and component 1 is asserted here exactly like the
+    /// other 9.
     #[test]
     #[ignore]
     fn cromatolis_elevated_rivers_descend_from_source_to_mouth_against_real_lfs_assets() {
@@ -8910,8 +8918,8 @@ mod tests {
             .filter(|value| **value == 1.0)
             .count();
         assert_eq!(
-            marked_count, 808,
-            "the 9 Whitekasing components must cover exactly 808 chunks; a different count              means the mask, the SW-island exclusion rule, or the carve pipeline changed              upstream without this regression being re-baselined"
+            marked_count, 924,
+            "all 10 elevated-river components (9 Whitekasing + the SW-island Y-fork) must cover              exactly 924 chunks (808 Whitekasing + 116 SW-island); a different count means the              mask or the carve pipeline changed upstream without this regression being              re-baselined"
         );
 
         let bed_depth =
@@ -8939,13 +8947,15 @@ mod tests {
             );
         }
 
-        // Source/mouth chunk pairs for the 9 Whitekasing components, pinned
-        // from the real master TIFFs (heightmap_manual_v23,
-        // water_mask_manual_v12, elevated_river_mask_manual_v1) by
+        // Source/mouth chunk pairs for all 10 components (9 Whitekasing +
+        // the SW-island Y-fork, id 1), pinned from the real master TIFFs
+        // (heightmap_manual_v23, water_mask_manual_v12,
+        // elevated_river_mask_manual_v2) by
         // `tools/cromatolis_elevated_rivers.py`'s skeleton/endpoint
-        // classification, 2026-09-27. `(component_id, source_chunk,
-        // [mouth_chunks])`.
+        // classification, 2026-09-27/2026-09-30. `(component_id,
+        // source_chunk, [mouth_chunks])`.
         let components: &[(u32, (i32, i32), &[(i32, i32)])] = &[
+            (1, (92, 201), &[(109, 215), (97, 214)]),
             (2, (559, 90), &[(549, 109)]),
             (3, (533, 66), &[(524, 88)]),
             (4, (511, 51), &[(513, 82), (509, 78)]),
@@ -9314,21 +9324,32 @@ mod tests {
     /// A known authoring inconsistency, tracked separately -- *not*
     /// engine/exporter drift.
     const STRAY_ELEVATED_LAKE_CELLS: usize = 2;
-    /// COW18.5-C2 (2026-09-27): of the 808 chunks
-    /// `cromatolis_v0_elevated_rivers.f32le` marks, 189 sit outside the
-    /// pre-existing `water`/`river_channels` masks entirely -- previously
-    /// dry land, now real river chunks. Every `EXPORTED_*`/`AUTHORED_*`
-    /// constant above this one is a raw count of the *painted* masks the
-    /// exporter measured independently, none of which know about the new
-    /// elevated-river raster, so any golden count downstream of `water`/
-    /// `river_channels` alone (the `Lake` biome count, `WaterBodyKind::River`,
-    /// salinity) is short by exactly this many cells now that
+    /// COW18.5-C2 (2026-09-27), updated 2026-09-30 for the SW-island fix:
+    /// of the 924 chunks `cromatolis_v0_elevated_rivers.f32le` marks (808
+    /// Whitekasing + 116 SW-island), 264 sit outside the pre-existing
+    /// `water`/`river_channels` masks entirely -- previously dry land, now
+    /// real river chunks. Every `EXPORTED_*`/`AUTHORED_*` constant above
+    /// this one is a raw count of the *painted* masks the exporter measured
+    /// independently, none of which know about the new elevated-river
+    /// raster, so any golden count downstream of `water`/`river_channels`
+    /// alone (the `Lake` biome count, `WaterBodyKind::River`, salinity) is
+    /// short by exactly this many cells now that
     /// `authored_river_kind_override`'s `is_elevated_river` branch and
     /// `AuthoredWaterBodyInputs.is_river_channel`'s elevated-river fold both
-    /// treat these 189 cells as real river/water. Measured directly
+    /// treat these 264 cells as real river/water. Measured directly
     /// (`(elevated_rivers >= 0.5) & !(water | river_channels)`) against the
     /// real regenerated masters, not derived analytically.
-    const ELEVATED_RIVER_NET_NEW_WET_CELLS: usize = 189;
+    ///
+    /// ⚠️ 2026-09-30: +75 from the prior 189. `elevated_river_mask_manual_v2`
+    /// adds the SW-island Y-fork's 116 chunks; 75 of them sit entirely
+    /// outside the authored `water`/`river_channels` masks (dry headland
+    /// slopes the two descending arms now cross), while the other 41 are
+    /// near the component's two mouths, already inside the pre-existing
+    /// tidal-strait `water` mask area and so already counted there -- not
+    /// newly wet. Measured against the real regenerated engine
+    /// (`count(WaterBodyKind::River)` moved from 33,566+189=33,755 to
+    /// 33,830, i.e. 33,566 unchanged + 264), not derived analytically.
+    const ELEVATED_RIVER_NET_NEW_WET_CELLS: usize = 264;
     /// Corridor cells sitting in a channel narrow enough to carve as a real
     /// `RiverKind::River` (local channel width within
     /// `CROMATOLIS_MAX_RIVER_WIDTH`): 12.4% of them. Cromatolis genuinely has
@@ -9355,7 +9376,17 @@ mod tests {
     /// width gate; the remaining 189 marked chunks are genuinely new wet
     /// terrain. 608 + 189 = 797. Measured against the real regenerated
     /// engine, not derived analytically.
-    const CARVEABLE_RIVER_CELLS: usize = 4_948;
+    ///
+    /// ⚠️ **2026-09-30 (SW-island fix):** +106 from 4,948. The SW-island
+    /// Y-fork's 116 newly-marked chunks all resolve to `RiverKind::River`
+    /// under the same elevated-river override (no width gate), but 10 of
+    /// them were already `RiverKind::River` beforehand (already inside the
+    /// pre-existing `river_channels` corridor near the component's two
+    /// mouths), so only 106 are a net-new carveable count. Measured against
+    /// the real regenerated engine
+    /// (`cromatolis_rivers_are_carveable_against_real_lfs_assets`: 5,054),
+    /// not derived analytically.
+    const CARVEABLE_RIVER_CELLS: usize = 5_054;
 
     /// Counts every `WaterBodyKind` across the real Cromatolis map and
     /// reconciles it against the numbers the open-world exporter measured
@@ -9703,18 +9734,38 @@ mod tests {
         //   Savannah    2,225 ->  2,232  ( +7)   Grassland 179,781 -> 179,755 ( -26)
         //   Taiga      46,072 -> 45,915  (-157)  Mountain   27,995 ->  27,970 ( -25)
         //   Snowland   32,983 -> 32,965  ( -18)
+        //
+        // ⚠️ Re-baselined again 2026-09-30 for COW18.5-C2's SW-island fix
+        // (`elevated_river_mask_manual_v2`), which directly rewrites real
+        // `alt` at the new component's 116 chunks -- same relief-edit
+        // mechanism as the two notes above, not CDF noise alone:
+        //
+        //   Savannah    2,232 (unchanged)        Grassland 179,755 -> 179,746 ( -9)
+        //   Taiga      45,915 -> 45,900  (-15)    Mountain   27,970 (unchanged)
+        //   Snowland   32,965 -> 32,962  ( -3)
+        //
+        // The -27 these three lose is absorbed by the banded Jungle/Forest/
+        // Swamp group below (deliberately not pinned exactly) and by `Lake`
+        // (already re-baselined via `ELEVATED_RIVER_NET_NEW_WET_CELLS`).
         assert_eq!(biome_count(BiomeKind::Savannah), 2_232);
-        assert_eq!(biome_count(BiomeKind::Grassland), 179_755);
-        assert_eq!(biome_count(BiomeKind::Taiga), 45_915);
+        assert_eq!(biome_count(BiomeKind::Grassland), 179_746);
+        assert_eq!(biome_count(BiomeKind::Taiga), 45_900);
         assert_eq!(biome_count(BiomeKind::Mountain), 27_970);
-        assert_eq!(biome_count(BiomeKind::Snowland), 32_965);
+        assert_eq!(biome_count(BiomeKind::Snowland), 32_962);
         // Banded instead: the biomes where a small move really would be the CDF
         // knock-on rather than a design change, so that an unrelated CDF shift
         // reads as one signal instead of three simultaneous "failures".
+        //
+        // ⚠️ 2026-09-30: `Swamp`'s reference moved 13,786 -> 13,856 (+70,
+        // just over the 0.5% band) for the same COW18.5-C2 SW-island-fix
+        // relief edit as the pinned biomes above -- re-measured against the
+        // real engine, not assumed. `Jungle` (68,339 -> 68,319) and `Forest`
+        // (310,459 -> 310,390) moved too but stayed inside the band, so their
+        // references are left as-is per this loop's own design.
         for (biome, measured) in [
             (BiomeKind::Jungle, 68_339.0),
             (BiomeKind::Forest, 310_459.0),
-            (BiomeKind::Swamp, 13_786.0),
+            (BiomeKind::Swamp, 13_856.0),
         ] {
             let counted = biome_count(biome) as f64;
             assert!(
@@ -10483,8 +10534,17 @@ mod tests {
             (lowest - -3.4).abs() < 0.1,
             "lowest substantial source sits at {lowest} m"
         );
+        // ⚠️ 2026-09-30: 1034.5 -> 905.1957 (re-measured against the real
+        // engine after the COW18.5-C2 SW-island fix added 116 real river
+        // chunks there). Same mechanism already documented above this test
+        // and in `cromatolis_biome_mask_density_regression_against_real_lfs_
+        // assets`: a direct `alt` edit at a handful of chunks feeds the
+        // shared drainage/erosion network and `get_oceans`/component
+        // labelling run over the WHOLE map, so a local relief change can
+        // alter which distant component ends up tallest/substantial, not
+        // just the edited footprint's own classification.
         assert!(
-            (highest - 1034.5).abs() < 0.1,
+            (highest - 905.1957).abs() < 0.1,
             "highest substantial source sits at {highest} m"
         );
 
