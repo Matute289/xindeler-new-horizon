@@ -1005,22 +1005,15 @@ impl NavalPort {
         }
     }
 
-    /// Unit vector along the quay/pier/finger face -- a hull moored
-    /// alongside it is assumed to point this way. A placeholder in the
-    /// honest sense: nothing downstream yet uses which way a hull's bow
-    /// faces, and picking one fixed direction per axis is simplest until
-    /// something does.
-    fn along_shore_unit(&self) -> Vec2<f32> {
-        if self.seaward_is_x() {
-            Vec2::new(0.0, 1.0)
-        } else {
-            Vec2::new(1.0, 0.0)
-        }
-    }
-
     /// One berth's geometry, from a seaward-sliced `strip` (already
     /// restricted to the berth's own along-shore band for a finger pier) and
     /// which of its two edges to moor against.
+    ///
+    /// A berth's mooring edge runs along the lane/finger's own seaward
+    /// reach -- the same axis `build_bollard_line`/`build_pilings` already
+    /// walk to place mooring posts -- not along the shoreline. A hull tied
+    /// up against that edge therefore points along `self.normal` (out to
+    /// sea), not across it.
     fn edge_berth(&self, class: BerthClass, min_edge: bool, strip: Aabr<i32>) -> BerthSlot {
         let sliver = self.edge_sliver(strip, min_edge);
         let gangway = sliver.center();
@@ -1034,7 +1027,7 @@ impl NavalPort {
             },
             gangway,
             mooring,
-            heading: self.along_shore_unit(),
+            heading: self.normal.as_::<f32>(),
         }
     }
 
@@ -1161,10 +1154,17 @@ impl NavalPort {
     /// in the generation log rather than silently becoming a decorative
     /// plank.
     fn measure_berths(&self, land: &Land, site_name: &str) -> Vec<Berth> {
+        // `local_id` must be assigned AFTER filtering, not before: a
+        // surviving berth's id has to be a dense `0..len()` range with no
+        // gaps, because `all_naval_berths` advances its global counter by
+        // `berths.len()` (not by `max(id) + 1`) to assign the next site's
+        // ids. Numbering before the filter would leave a gap whenever a
+        // non-last slot is dropped (shallow water, blocked approach),
+        // colliding this port's surviving high id with the next port's
+        // first id.
         self.berth_layout()
             .into_iter()
-            .enumerate()
-            .filter_map(|(local_id, slot)| {
+            .filter_map(|slot| {
                 let min_depth = match slot.class {
                     BerthClass::Small => BERTH_MIN_DEPTH_SMALL,
                     BerthClass::Large => BERTH_MIN_DEPTH_LARGE,
@@ -1201,7 +1201,8 @@ impl NavalPort {
                     return None;
                 }
                 Some(Berth {
-                    id: local_id as u32,
+                    // Placeholder; overwritten below once filtering is done.
+                    id: 0,
                     class: slot.class,
                     mooring_pos: slot.mooring.with_z(self.water_alt),
                     heading: slot.heading,
@@ -1210,6 +1211,11 @@ impl NavalPort {
                     approach,
                     depth,
                 })
+            })
+            .enumerate()
+            .map(|(local_id, mut berth)| {
+                berth.id = local_id as u32;
+                berth
             })
             .collect()
     }
@@ -1655,6 +1661,37 @@ mod tests {
                 1,
                 "a berth's mooring position must be exactly one block off its gangway"
             );
+        }
+    }
+
+    #[test]
+    fn berth_heading_points_out_to_sea_along_the_port_s_own_normal() {
+        for normal in [
+            Vec2::new(1, 0),
+            Vec2::new(-1, 0),
+            Vec2::new(0, 1),
+            Vec2::new(0, -1),
+        ] {
+            for class in [
+                PortClass::Jetty,
+                PortClass::Pier,
+                PortClass::Quay,
+                PortClass::Harbour,
+            ] {
+                let port = match class {
+                    PortClass::Jetty => jetty_port(normal),
+                    PortClass::Pier => port(normal),
+                    PortClass::Quay | PortClass::Harbour => quay_port(class, normal),
+                };
+                for slot in port.berth_layout() {
+                    assert_eq!(
+                        slot.heading,
+                        normal.as_::<f32>(),
+                        "{class:?}'s berth heading must point out to sea along the port's own \
+                         normal, not across the mooring edge, for normal {normal:?}"
+                    );
+                }
+            }
         }
     }
 
