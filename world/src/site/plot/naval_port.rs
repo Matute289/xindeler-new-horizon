@@ -1082,6 +1082,16 @@ impl NavalPort {
     /// both edges to the same class -- `Large`-designated fingers first --
     /// which is the only split that keeps a finger's two berths from
     /// disagreeing about how much clear water the hull on each side needs.
+    ///
+    /// ⚠️ This function assumes a finger pier's two berths always share one
+    /// class. A port whose layout instead splits a single finger's two
+    /// berths by class along its length (e.g. `Large` at the head, `Small`
+    /// inshore on a longer finger) cannot be expressed by overriding
+    /// [`PortClass::berth_counts`] alone -- this match (and
+    /// `berth_counts`) would need to branch on finger length/position, not
+    /// just on [`PortClass`]. The `Berth`/`Anchorage`/[`NavalDockInfo`]
+    /// data shapes themselves place no such constraint; only this
+    /// generation algorithm does.
     fn berth_layout(&self) -> Vec<BerthSlot> {
         match self.class {
             PortClass::Jetty => {
@@ -1296,14 +1306,18 @@ struct BerthSlot {
 }
 
 impl PortClass {
-    /// `(small, large)` berth counts per tier (spec §4.3): `Jetty` 1 `Small`
-    /// only; `Pier` 1 + 1; `Quay` 2 + 2; `Harbour` 2 + 4.
+    /// `(small, large)` berth counts for the two finger-pier tiers (spec
+    /// §4.3): `Quay` 2 + 2; `Harbour` 2 + 4. `Jetty` and `Pier` have no
+    /// finger piers -- [`NavalPort::berth_layout`] builds their single/
+    /// double lane berth directly and never calls this, so this function
+    /// only covers the two tiers that do.
     fn berth_counts(self) -> (usize, usize) {
         match self {
-            Self::Jetty => (1, 0),
-            Self::Pier => (1, 1),
             Self::Quay => (2, 2),
             Self::Harbour => (2, 4),
+            Self::Jetty | Self::Pier => {
+                unreachable!("berth_counts is only called for Quay/Harbour; see berth_layout")
+            },
         }
     }
 }
