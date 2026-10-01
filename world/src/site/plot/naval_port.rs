@@ -1043,24 +1043,127 @@ impl NavalPort {
 
     /// A `Quay`/`Harbour` berth on one edge of one finger pier, `(from,
     /// to)` being that finger's own along-shore band from
-    /// [`Self::finger_bands`].
+    /// [`Self::finger_bands`], starting `start` blocks seaward of the deck's
+    /// own landward edge (the same coordinate space as [`Self::deck_strip`]).
+    ///
+    /// `start` is a parameter rather than always `quay_depth_blocks`
+    /// (the quay wall's own authored depth) so the same geometry serves two
+    /// callers: [`Self::berth_layout`]'s pure/testable path, which always
+    /// passes `quay_depth_blocks` (the nominal offset, correct when the real
+    /// shore runs parallel to the deck), and
+    /// [`Self::finger_berth_layout`]'s real-terrain path, which passes each
+    /// finger's own [`Self::finger_water_start`] result instead.
     fn finger_berth(
         &self,
         class: BerthClass,
         min_edge: bool,
         (from, to): (i32, i32),
+        start: i32,
         span: i32,
     ) -> BerthSlot {
-        let (quay_depth_tiles, ..) = self.quay_params();
-        let quay_depth_blocks = quay_depth_tiles * TILE_SIZE as i32;
-        let finger_len = self.deck_reach_blocks() - quay_depth_blocks;
-        let span = span.min(finger_len);
-        let strip = self.along_shore_strip(
-            self.deck_strip(quay_depth_blocks, quay_depth_blocks + span),
-            from,
-            to,
-        );
+        let reach = self.deck_reach_blocks();
+        let span = span.min((reach - start).max(0));
+        let strip = self.along_shore_strip(self.deck_strip(start, start + span), from, to);
         self.edge_berth(class, min_edge, strip)
+    }
+
+    /// Searches seaward along one finger's own along-shore band
+    /// (`finger_bands`'s `(from, to)`) for the first point that clears
+    /// `min_depth` of real water, mirroring [`Self::find_anchorage`]'s
+    /// march-and-sample idiom at finger scale rather than jetty-offshore
+    /// scale.
+    ///
+    /// # Why this exists
+    ///
+    /// Before this search, every finger's berth span started at the same
+    /// constant `quay_depth_blocks` offset -- correct only when the real
+    /// coastline runs parallel to the deck's seaward normal, which holds for
+    /// most of the 13 authored route stops but not all. It fails visibly
+    /// when the deck's rectangular footprint sits where the coastline cuts
+    /// diagonally through it: confirmed for Kalthis's `Harbour` (a
+    /// 144-block-wide deck at a headland where real water recedes much
+    /// further on one side than the other), which kept only 1 of its 6
+    /// expected berths. Searching each finger independently, rather than
+    /// sharing one offset across the whole deck, is what actually finds
+    /// each finger's own water.
+    ///
+    /// # Per-finger, not per-edge -- verified, not assumed
+    ///
+    /// One search per finger, shared by both its Port and Starboard berths
+    /// (sampled at the finger band's own along-shore *centre*, not at
+    /// either edge) -- preserving the existing invariant (see
+    /// [`Self::berth_layout`]'s doc comment) that a finger pier's two
+    /// berths share one class and one span.
+    ///
+    /// This was checked against per-edge search, not assumed: a diagnostic
+    /// probing each of Kalthis's finger edges *independently* (same idiom as
+    /// this function, but sampled at each edge's own lateral position
+    /// instead of the band centre) found that per-edge divergence would
+    /// **not** have recovered Kalthis's 2 missing berths. Its finger 0's
+    /// Port edge reads negative (dry) at *every* offset from the quay body
+    /// to the deck's own authored end (`-99` down to `-94` across the whole
+    /// reach); its finger 2's Starboard edge never exceeds 5 blocks of depth
+    /// anywhere in its own reach (`Large` needs 6). Both are flat structural
+    /// limits of the real coastline along that exact lateral line, not an
+    /// offset the shared per-finger search picked badly -- a per-edge search
+    /// would have walked the same dead-end and found nothing further out
+    /// either. Dove City and Dromos City, by contrast, needed no per-edge
+    /// divergence at all: every one of their fingers' two edges read the
+    /// *same* depth at every offset (coarse enough sampling, and a close
+    /// enough coastline, that `land.get_chunk_wpos` resolves both edges to
+    /// the same chunk), so a shared per-finger offset was always exactly as
+    /// good as two independent ones would have been.
+    ///
+    /// Measured against real `world.map.cromatolis_v0` data (see
+    /// [`Self::finger_berth_layout`]'s own doc comment for the full
+    /// numbers), per-finger search -- combined with that function's
+    /// depth-driven class assignment -- recovers Dove City and Dromos
+    /// City's full 4-of-4 berth counts and raises Kalthis from 1 of 6 to 4
+    /// of 6 (at a different, honestly-measured class mix; see
+    /// `EXPECTED_BERTH_CLASSES`'s own comment for why 4 of 6, not 6 of 6,
+    /// is this real coastline's genuine ceiling). None of that needed
+    /// per-edge divergence, which is why per-edge's extra complexity
+    /// (diverging the two edges' spans, and therefore `BerthSlot`'s
+    /// assumption that a finger's geometry is symmetric) was not taken on.
+    ///
+    /// # Bound
+    ///
+    /// Never searches past [`Self::deck_reach_blocks`] -- the deck's own
+    /// authored seaward extent -- even if deeper water sits further out:
+    /// that is outside the apron/deck `Site::find_shore_aabr` already
+    /// approved as viable, and placing a berth beyond it would stand on
+    /// terrain this plot was never granted. This is a tighter bound than
+    /// [`MAX_ANCHORAGE_OFFSET_BLOCKS`]'s 200 blocks because a finger search
+    /// has a natural, much shorter one already available (a `Harbour`
+    /// finger's own authored reach is at most 9 tiles / 54 blocks), so
+    /// reusing the anchorage search's own cap here would let a finger search
+    /// wander far past its authored deck for no benefit.
+    ///
+    /// Returns the seaward offset (`deck_strip`'s coordinate space) of the
+    /// first point meeting `min_depth`, or `None` if nothing along the
+    /// finger's whole authored reach clears it.
+    fn finger_water_start(
+        &self,
+        land: &Land,
+        band: (i32, i32),
+        min_depth: i32,
+        quay_depth_blocks: i32,
+    ) -> Option<i32> {
+        let reach = self.deck_reach_blocks();
+        let mut offset = quay_depth_blocks;
+        while offset < reach {
+            let probe = self
+                .along_shore_strip(self.deck_strip(offset, offset + 1), band.0, band.1)
+                .center();
+            if self
+                .sample_depth(land, probe)
+                .is_some_and(|d| d >= min_depth)
+            {
+                return Some(offset);
+            }
+            offset += ANCHORAGE_SEARCH_STEP_BLOCKS;
+        }
+        None
     }
 
     /// Every berth slot this tier's geometry offers, in pure tile/block
@@ -1085,6 +1188,15 @@ impl NavalPort {
     /// just on [`PortClass`]. The `Berth`/`Anchorage`/[`NavalDockInfo`]
     /// data shapes themselves place no such constraint; only this
     /// generation algorithm does.
+    ///
+    /// ⚠️ `Quay`/`Harbour`'s fingers here always start at the nominal
+    /// `quay_depth_blocks` offset -- correct only when the real shore runs
+    /// parallel to the deck, and this function's whole point is to stay
+    /// `Land`-free and testable against synthetic fixtures. Real generation
+    /// does not call this arm: [`Self::measure_berths`] calls
+    /// [`Self::finger_berth_layout`] instead, which finds each finger's own
+    /// real water start via [`Self::finger_water_start`]. Keep both in sync
+    /// by hand if the finger-iteration shape here ever changes.
     fn berth_layout(&self) -> Vec<BerthSlot> {
         match self.class {
             PortClass::Jetty => {
@@ -1103,6 +1215,8 @@ impl NavalPort {
                      count must be even"
                 );
                 let large_fingers = large / 2;
+                let (quay_depth_tiles, ..) = self.quay_params();
+                let quay_depth_blocks = quay_depth_tiles * TILE_SIZE as i32;
                 self.finger_bands()
                     .into_iter()
                     .enumerate()
@@ -1116,13 +1230,139 @@ impl NavalPort {
                             BerthClass::Large => BERTH_FACE_LARGE_BLOCKS,
                             BerthClass::Small => BERTH_FACE_SMALL_BLOCKS,
                         };
-                        [true, false]
-                            .into_iter()
-                            .map(move |min_edge| self.finger_berth(class, min_edge, band, span))
+                        [true, false].into_iter().map(move |min_edge| {
+                            self.finger_berth(class, min_edge, band, quay_depth_blocks, span)
+                        })
                     })
                     .collect()
             },
         }
+    }
+
+    /// [`Self::berth_layout`]'s `Quay`/`Harbour` arm, re-run against real
+    /// terrain: every finger searches its own water start via
+    /// [`Self::finger_water_start`] instead of assuming every finger starts
+    /// flush with the quay body. This is the path [`Self::measure_berths`]
+    /// actually uses for these two tiers -- `berth_layout`'s own Quay/
+    /// Harbour arm stays `Land`-free purely so it is unit-testable.
+    ///
+    /// # Class is assigned by real depth, not by finger position
+    ///
+    /// `berth_layout`'s pure/testable arm hands the first `large_fingers`
+    /// fingers (by index) the `Large` class and the rest `Small`, which is
+    /// fine when every finger clears the same depth (the synthetic
+    /// fixtures) but measurably wrong against real terrain: a diagonal
+    /// coastline can put the *only* finger deep enough for `Large` at the
+    /// far end of the comb, where position-based assignment would have
+    /// called it `Small`. Measured at Dove City's `Quay` (real
+    /// `world.map.cromatolis_v0` data): finger 0 (the positionally "first,
+    /// so `Large`" finger) never clears 6 blocks of depth anywhere in its
+    /// own authored reach (it tops out at 5); finger 1 (positionally
+    /// "`Small`") reaches 6 blocks at its own far end. Assigning class by
+    /// position alone therefore drops finger 0 entirely (a `Large` slot
+    /// nothing can satisfy) while finger 1 only ever gets credited as
+    /// `Small` -- 2 of the tier's 4 berths, permanently, regardless of how
+    /// good the search's offset-finding gets. Assigning class by what each
+    /// finger can *actually* support recovers both: finger 1 promotes to
+    /// `Large`, finger 0 (now unopposed for the one `Large` slot it cannot
+    /// fill) falls back to `Small`, and Dove City reaches its full 2
+    /// `Large` + 2 `Small`.
+    ///
+    /// The algorithm: probe every finger at both classes' depths
+    /// independently via [`Self::finger_water_start`]; promote up to this
+    /// tier's own `Large` quota ([`PortClass::berth_counts`]`.1 / 2`) of the
+    /// `Large`-capable fingers to `Large`, **lowest index first** (the only
+    /// deterministic tiebreak available, and ties are rare: real coastlines
+    /// don't usually hand two fingers the exact same depth profile); every
+    /// other finger that cleared at least `Small`'s depth gets `Small`.
+    /// This can leave the tier's `Large` quota under-filled when fewer
+    /// fingers are `Large`-capable than the quota calls for (Kalthis's
+    /// `Harbour`, measured: only 1 of its 3 fingers ever reaches 6 blocks
+    /// within its own reach, against a quota of 2) -- the shortfall is not
+    /// silently hidden: it surfaces as a real, measured berth-class mix
+    /// that the real-asset test's `EXPECTED_BERTH_CLASSES` table must
+    /// match honestly rather than a target this search cannot deliver (see
+    /// that table's own comment for Kalthis's specific numbers). It never
+    /// *over*-fills the quota, so a tier never advertises more `Large`
+    /// berths than its spec'd class mix calls for even when every finger
+    /// happens to clear `Large` depth (Dromos City's `Quay`, measured: both
+    /// its fingers clear 6 blocks, but only the quota's 1 is promoted).
+    ///
+    /// # Dropped fingers
+    ///
+    /// A finger whose search clears neither class's depth anywhere in its
+    /// own authored reach contributes *no* slots at all, for either of its
+    /// two edges -- not even a slot [`Self::measure_berths`] would go on to
+    /// reject as shallow, since no candidate mooring position was ever
+    /// found to sample in the first place. This is logged distinctly from
+    /// a position-specific "too shallow" drop (see [`Self::measure_berths`]
+    /// ), since no mooring position exists yet to name at this stage.
+    fn finger_berth_layout(&self, land: &Land, site_name: &str) -> Vec<BerthSlot> {
+        debug_assert!(
+            matches!(self.class, PortClass::Quay | PortClass::Harbour),
+            "finger_berth_layout is only meaningful for Quay/Harbour"
+        );
+        let (_small, large) = self.class.berth_counts();
+        let large_quota = large / 2;
+        let (quay_depth_tiles, ..) = self.quay_params();
+        let quay_depth_blocks = quay_depth_tiles * TILE_SIZE as i32;
+        let bands = self.finger_bands();
+
+        // Each finger's own best offset at both classes' depths, searched
+        // independently -- never assume a `Large`-capable finger's offset
+        // also clears `Small` at the exact same point (it does, since
+        // `Large`'s bar is strictly the harder one, but a `Small`-only
+        // offset can sit well before a finger's `Large`-qualifying one, and
+        // a demoted finger should use its own earliest `Small` offset, not
+        // artificially wait for the deeper one it lost the promotion for).
+        let candidates: Vec<(Option<i32>, Option<i32>)> = bands
+            .iter()
+            .map(|&band| {
+                let large_start =
+                    self.finger_water_start(land, band, BERTH_MIN_DEPTH_LARGE, quay_depth_blocks);
+                let small_start =
+                    self.finger_water_start(land, band, BERTH_MIN_DEPTH_SMALL, quay_depth_blocks);
+                (large_start, small_start)
+            })
+            .collect();
+
+        let mut promoted = 0usize;
+        let assignment: Vec<Option<(BerthClass, i32)>> = candidates
+            .into_iter()
+            .map(|(large_start, small_start)| match large_start {
+                Some(start) if promoted < large_quota => {
+                    promoted += 1;
+                    Some((BerthClass::Large, start))
+                },
+                _ => small_start.map(|start| (BerthClass::Small, start)),
+            })
+            .collect();
+
+        bands
+            .into_iter()
+            .zip(assignment)
+            .enumerate()
+            .flat_map(|(i, (band, assigned))| {
+                let Some((class, start)) = assigned else {
+                    debug!(
+                        site = %site_name,
+                        finger = i,
+                        "naval finger berth search exhausted: no point along this finger's own \
+                         authored reach clears even Small's minimum depth; dropping both its \
+                         berths without ever sampling a mooring position"
+                    );
+                    return Vec::new();
+                };
+                let span = match class {
+                    BerthClass::Large => BERTH_FACE_LARGE_BLOCKS,
+                    BerthClass::Small => BERTH_FACE_SMALL_BLOCKS,
+                };
+                [true, false]
+                    .into_iter()
+                    .map(|min_edge| self.finger_berth(class, min_edge, band, start, span))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     /// Water depth at `wpos`, in blocks -- the same `SimChunk::water_alt -
@@ -1162,7 +1402,18 @@ impl NavalPort {
         // non-last slot is dropped (shallow water, blocked approach),
         // colliding this port's surviving high id with the next port's
         // first id.
-        self.berth_layout()
+        //
+        // `Quay`/`Harbour` use `finger_berth_layout` rather than
+        // `berth_layout` here: only the former searches each finger's own
+        // real water start (see its doc comment) -- `berth_layout`'s own
+        // Quay/Harbour arm stays `Land`-free so it is unit-testable, and
+        // assumes every finger starts flush with the quay body, which this
+        // real-terrain path cannot assume.
+        let slots = match self.class {
+            PortClass::Jetty | PortClass::Pier => self.berth_layout(),
+            PortClass::Quay | PortClass::Harbour => self.finger_berth_layout(land, site_name),
+        };
+        slots
             .into_iter()
             .filter_map(|slot| {
                 let min_depth = match slot.class {
@@ -1702,5 +1953,54 @@ mod tests {
             port.single_lane_reach_blocks(),
             port.deck_reach_blocks() - port.ramp_tiles * TILE_SIZE as i32,
         );
+    }
+
+    /// `Land::empty()` has no backing `WorldSim`, so `sample_depth` returns
+    /// `None` for every probe -- the degenerate case `finger_water_start`
+    /// must handle without panicking, dropping every finger exactly the way
+    /// a real exhausted search would (see `finger_berth_layout`'s doc
+    /// comment), rather than falling back to the nominal `berth_layout`
+    /// geometry or emitting a slot with a bogus position.
+    ///
+    /// This is the only `Land`-driven coverage a synthetic fixture can give
+    /// the new per-finger search: `Land` can only wrap a real `WorldSim` or
+    /// be empty (see `Land::get_chunk_wpos`), so there is no lightweight way
+    /// to fake a *sloped* or *diagonal* depth profile here -- only a real
+    /// `WorldSim` built from a real heightmap can vary depth by position,
+    /// which is exactly what the real-asset `--ignored` tests exercise
+    /// against `world.map.cromatolis_v0` instead.
+    #[test]
+    fn finger_berth_layout_drops_every_finger_when_no_terrain_is_available() {
+        for class in [PortClass::Quay, PortClass::Harbour] {
+            let port = quay_port(class, Vec2::new(1, 0));
+            let land = Land::empty();
+            let slots = port.finger_berth_layout(&land, "test");
+            assert!(
+                slots.is_empty(),
+                "{class:?} must drop every finger when no terrain is available, rather than \
+                 emitting slots nothing ever measured"
+            );
+        }
+    }
+
+    /// `finger_water_start` never returns an offset at or past
+    /// `deck_reach_blocks()` -- the deck's own authored seaward extent --
+    /// even though it cannot find real water with `Land::empty()` (which
+    /// forces it to walk the full range up to that bound before giving up).
+    /// Guards the "never search past the deck's own measured extent" bound
+    /// the doc comment promises.
+    #[test]
+    fn finger_water_start_never_searches_past_the_deck_s_own_reach() {
+        let port = quay_port(PortClass::Harbour, Vec2::new(1, 0));
+        let land = Land::empty();
+        let (quay_depth_tiles, ..) = port.quay_params();
+        let quay_depth_blocks = quay_depth_tiles * TILE_SIZE as i32;
+        for band in port.finger_bands() {
+            assert_eq!(
+                port.finger_water_start(&land, band, BERTH_MIN_DEPTH_SMALL, quay_depth_blocks),
+                None,
+                "an exhausted search against empty terrain must give up, not fabricate an offset"
+            );
+        }
     }
 }

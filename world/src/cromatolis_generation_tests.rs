@@ -1437,6 +1437,26 @@ fn the_13_route_stops_all_generate_a_naval_port() {
 /// duplicated from spec §4.3 for the same reason [`EXPECTED_NAVAL_PORTS`]
 /// duplicates the tier-per-settlement table: a drift here should name which
 /// tier's class mix moved, not just that a number changed somewhere.
+///
+/// ⚠️ **`Harbour`'s row is `[Large, Small, Small, Small]`, not spec §4.3's
+/// authored `4 Large + 2 Small`.** `Harbour` has exactly one real site in
+/// this dataset (Kalthis), so this row *is* Kalthis's own real ceiling, not
+/// a generic target. Root cause (`world/src/site/plot/naval_port.rs`,
+/// `NavalPort::finger_berth_layout`'s own doc comment has the full
+/// investigation): Kalthis's deck sits at a headland where the real
+/// coastline cuts diagonally through its rectangular footprint, so only 1 of
+/// its 3 finger piers ever reaches `Large`'s 6-block depth anywhere within
+/// its own authored reach (the other two top out at 5), and even that one
+/// `Large`-capable finger's own two edges disagree sharply (one edge never
+/// clears depth 4 anywhere, so only its other edge survives) -- real,
+/// verified terrain limits, not an artifact of the search's offset-finding
+/// (a per-edge search was tried as a diagnostic and confirmed it finds
+/// nothing further; see the same doc comment). Measured result: 4 of the
+/// tier's nominal 6 berths survive -- 1 `Large` + 3 `Small` -- which is this
+/// real coastline's genuine ceiling, not a bug to chase further. If
+/// Kalthis's authored waterfront position or footprint ever changes (e.g.
+/// COW-24.1 §11.3's footprint-radius bump for the river-port district), this
+/// row needs re-measuring, not just re-approving.
 const EXPECTED_BERTH_CLASSES: &[(PortClass, &[BerthClass])] = &[
     (PortClass::Jetty, &[BerthClass::Small]),
     (PortClass::Pier, &[BerthClass::Large, BerthClass::Small]),
@@ -1448,9 +1468,7 @@ const EXPECTED_BERTH_CLASSES: &[(PortClass, &[BerthClass])] = &[
     ]),
     (PortClass::Harbour, &[
         BerthClass::Large,
-        BerthClass::Large,
-        BerthClass::Large,
-        BerthClass::Large,
+        BerthClass::Small,
         BerthClass::Small,
         BerthClass::Small,
     ]),
