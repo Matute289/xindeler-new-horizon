@@ -12,7 +12,13 @@
 //! (`git lfs pull` against the VPS store) and is therefore `#[ignore]`d.
 
 use super::*;
-use crate::site::{PlotKind, PortClass, Structure};
+use crate::{
+    civ::naval_berths::all_naval_berths,
+    site::{
+        PlotKind, PortClass, Structure,
+        plot::{BerthClass, BerthSide},
+    },
+};
 
 /// Requires the real Cromatolis LFS assets to be pulled locally (`git lfs
 /// pull` against the VPS store); not run automated, matching this
@@ -1424,5 +1430,275 @@ fn the_13_route_stops_all_generate_a_naval_port() {
         "expected all {} settlements to build a NavalPort plot, found {}",
         expected.len(),
         built.len(),
+    );
+}
+
+/// Per-tier berth class layout the real placement is expected to produce,
+/// duplicated from spec §4.3 for the same reason [`EXPECTED_NAVAL_PORTS`]
+/// duplicates the tier-per-settlement table: a drift here should name which
+/// tier's class mix moved, not just that a number changed somewhere.
+///
+/// ⚠️ **`Harbour`'s row is `[Large, Small, Small, Small]`, not spec §4.3's
+/// authored `4 Large + 2 Small`.** `Harbour` has exactly one real site in
+/// this dataset (Kalthis), so this row *is* Kalthis's own real ceiling, not
+/// a generic target. Root cause (`world/src/site/plot/naval_port.rs`,
+/// `NavalPort::finger_berth_layout`'s own doc comment has the full
+/// investigation): Kalthis's deck sits at a headland where the real
+/// coastline cuts diagonally through its rectangular footprint, so only 1 of
+/// its 3 finger piers ever reaches `Large`'s 6-block depth anywhere within
+/// its own authored reach (the other two top out at 5), and even that one
+/// `Large`-capable finger's own two edges disagree sharply (one edge never
+/// clears depth 4 anywhere, so only its other edge survives) -- real,
+/// verified terrain limits, not an artifact of the search's offset-finding
+/// (a per-edge search was tried as a diagnostic and confirmed it finds
+/// nothing further; see the same doc comment). Measured result: 4 of the
+/// tier's nominal 6 berths survive -- 1 `Large` + 3 `Small` -- which is this
+/// real coastline's genuine ceiling, not a bug to chase further. If
+/// Kalthis's authored waterfront position or footprint ever changes (e.g.
+/// COW-24.1 §11.3's footprint-radius bump for the river-port district), this
+/// row needs re-measuring, not just re-approving.
+const EXPECTED_BERTH_CLASSES: &[(PortClass, &[BerthClass])] = &[
+    (PortClass::Jetty, &[BerthClass::Small]),
+    (PortClass::Pier, &[BerthClass::Large, BerthClass::Small]),
+    (PortClass::Quay, &[
+        BerthClass::Large,
+        BerthClass::Large,
+        BerthClass::Small,
+        BerthClass::Small,
+    ]),
+    (PortClass::Harbour, &[
+        BerthClass::Large,
+        BerthClass::Small,
+        BerthClass::Small,
+        BerthClass::Small,
+    ]),
+];
+
+/// The settlements whose `Jetty` berth is small enough that the hull-cap
+/// table (spec §4.4) depends on an anchorage existing for their routes to
+/// take a `Galleon` at all.
+const EXPECTED_JETTY_VILLAGES: &[&str] = &[
+    "site.andiran",
+    "site.garens_town",
+    "site.hita",
+    "site.timos",
+];
+
+/// The one village whose waterfront is too shallow for any anchorage (spec
+/// §11.2, measured independently): its routes are expected to stay
+/// `SailBoat`-capped rather than fail the generation run.
+const EXPECTED_ANCHORAGE_EXCEPTION: &str = "site.hita";
+
+/// **The berth contract, against the real authored region.**
+///
+/// This is the `desert_city_airship_dock.rs` regression (spec §2.5), turned
+/// into an assertion: a `NavalPort` plot with complete geometry but an
+/// unimplemented or dropped discovery hook would pass
+/// `the_13_route_stops_all_generate_a_naval_port` above and still be
+/// invisible to [`all_naval_berths`] -- the only path the rest of COW-24 has
+/// to a berth's or anchorage's real id. Also covers berth class counts
+/// (spec §4.3), per-class minimum depth, and that every emitted id is
+/// unique world-wide.
+///
+/// Requires the real Cromatolis LFS assets to be pulled locally. Recommended
+/// command: `cargo test -p xindeler-world
+/// every_naval_berth_is_discoverable_with_the_right_classes_and_depth --
+/// --ignored --nocapture`
+#[test]
+#[ignore]
+fn every_naval_berth_is_discoverable_with_the_right_classes_and_depth() {
+    let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+    let (world, index) = World::generate(
+        0,
+        sim::WorldOpts {
+            seed_elements: true,
+            world_file: sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+            calendar: None,
+        },
+        &threadpool,
+        &|_| {},
+    );
+    let index_ref = index.as_index_ref();
+    let expected: std::collections::HashMap<&str, PortClass> =
+        EXPECTED_NAVAL_PORTS.iter().copied().collect();
+    let expected_classes_for = |class: PortClass| -> &'static [BerthClass] {
+        EXPECTED_BERTH_CLASSES
+            .iter()
+            .find(|(c, _)| *c == class)
+            .unwrap_or_else(|| panic!("no expected berth classes recorded for {class:?}"))
+            .1
+    };
+
+    let all_berths = all_naval_berths(&index_ref.sites);
+    let min_depth = |class: BerthClass| match class {
+        BerthClass::Small => 3,
+        BerthClass::Large => 6,
+    };
+
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut checked = 0usize;
+
+    for civ_site in world.civs.sites.values() {
+        let Some(authored_id) = civ_site.authored_id() else {
+            continue;
+        };
+        let Some(&class) = expected.get(authored_id) else {
+            continue;
+        };
+        let Some(site_id) = civ_site.site_tmp else {
+            panic!("{authored_id} did not generate a site, see the Phase-3 placement test");
+        };
+
+        let site_berths = all_berths
+            .iter()
+            .find(|sb| sb.site == site_id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{authored_id} built a NavalPort plot but all_naval_berths found no entry for \
+                     it -- the desert_city_airship_dock.rs failure mode"
+                )
+            });
+
+        let mut classes: Vec<BerthClass> = site_berths.berths.iter().map(|b| b.class).collect();
+        classes.sort_by_key(|c| matches!(c, BerthClass::Small));
+        let mut expected_sorted = expected_classes_for(class).to_vec();
+        expected_sorted.sort_by_key(|c| matches!(c, BerthClass::Small));
+        assert_eq!(
+            classes, expected_sorted,
+            "{authored_id} ({class:?}) built berth classes {classes:?}, expected \
+             {expected_sorted:?} (as unordered multisets)"
+        );
+
+        for berth in &site_berths.berths {
+            assert!(
+                berth.depth >= min_depth(berth.class),
+                "{authored_id}'s {:?} berth #{} measured {} blocks deep, below its class's \
+                 minimum of {}",
+                berth.class,
+                berth.id,
+                berth.depth,
+                min_depth(berth.class),
+            );
+            assert!(
+                seen_ids.insert(berth.id),
+                "{authored_id}'s berth #{} id collides with a berth or anchorage elsewhere in the \
+                 world",
+                berth.id
+            );
+        }
+        for anchorage in &site_berths.anchorages {
+            assert!(
+                anchorage.depth >= min_depth(anchorage.class),
+                "{authored_id}'s anchorage #{} measured {} blocks deep, below the Large minimum",
+                anchorage.id,
+                anchorage.depth,
+            );
+            assert!(
+                seen_ids.insert(anchorage.id),
+                "{authored_id}'s anchorage #{} id collides with a berth or anchorage elsewhere in \
+                 the world",
+                anchorage.id
+            );
+            assert!(
+                site_berths
+                    .berths
+                    .iter()
+                    .any(|b| b.id == anchorage.tender_berth),
+                "{authored_id}'s anchorage #{} names tender_berth {} which is not one of this \
+                 port's own berths",
+                anchorage.id,
+                anchorage.tender_berth,
+            );
+        }
+        checked += 1;
+    }
+
+    assert_eq!(
+        checked,
+        EXPECTED_NAVAL_PORTS.len(),
+        "expected to check all {} route-stop settlements' berth contracts, checked {checked}",
+        EXPECTED_NAVAL_PORTS.len(),
+    );
+}
+
+/// **The village anchorages that lift the hull cap (spec §4.4, §11.2).**
+///
+/// Re-asserts spec §4.4's table with anchorages in the picture: every
+/// `Jetty` village is expected to carry exactly one `Large`-class anchorage
+/// -- making its routes `Galleon`-capable -- except the one village whose
+/// waterfront measured too shallow for any anchorage to fit, which must
+/// still generate cleanly with zero and name itself, not fail the run.
+///
+/// Requires the real Cromatolis LFS assets to be pulled locally. Recommended
+/// command: `cargo test -p xindeler-world
+/// every_jetty_has_an_anchorage_or_the_known_exception -- --ignored
+/// --nocapture`
+#[test]
+#[ignore]
+fn every_jetty_has_an_anchorage_or_the_known_exception() {
+    let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+    let (world, index) = World::generate(
+        0,
+        sim::WorldOpts {
+            seed_elements: true,
+            world_file: sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+            calendar: None,
+        },
+        &threadpool,
+        &|_| {},
+    );
+    let index_ref = index.as_index_ref();
+    let all_berths = all_naval_berths(&index_ref.sites);
+
+    let mut capped = Vec::new();
+    let mut checked = 0usize;
+
+    for civ_site in world.civs.sites.values() {
+        let Some(authored_id) = civ_site.authored_id() else {
+            continue;
+        };
+        if !EXPECTED_JETTY_VILLAGES.contains(&authored_id) {
+            continue;
+        }
+        let Some(site_id) = civ_site.site_tmp else {
+            panic!("{authored_id} did not generate a site");
+        };
+        let site_berths = all_berths
+            .iter()
+            .find(|sb| sb.site == site_id)
+            .unwrap_or_else(|| panic!("{authored_id} has no entry in all_naval_berths"));
+        checked += 1;
+
+        match site_berths.anchorages.as_slice() {
+            [anchorage] => {
+                assert_eq!(anchorage.class, BerthClass::Large);
+                assert!(
+                    site_berths
+                        .berths
+                        .iter()
+                        .any(|b| b.id == anchorage.tender_berth
+                            && b.class == BerthClass::Small
+                            && b.side == BerthSide::Port),
+                    "{authored_id}'s anchorage must shuttle to this port's own Small berth"
+                );
+            },
+            [] => capped.push(authored_id.to_string()),
+            other => panic!(
+                "{authored_id} built {} anchorages, expected at most one per jetty",
+                other.len()
+            ),
+        }
+    }
+
+    assert_eq!(
+        checked,
+        EXPECTED_JETTY_VILLAGES.len(),
+        "expected to check all {} jetty villages, checked {checked}",
+        EXPECTED_JETTY_VILLAGES.len(),
+    );
+    assert!(
+        capped.iter().all(|id| id == EXPECTED_ANCHORAGE_EXCEPTION),
+        "only {EXPECTED_ANCHORAGE_EXCEPTION} is expected to have no anchorage (shallow \
+         waterfront); these villages unexpectedly also have none: {capped:?}"
     );
 }
