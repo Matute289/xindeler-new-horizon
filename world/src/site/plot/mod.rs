@@ -304,6 +304,10 @@ impl Structure for Plot {
         foreach_plot!(&self.kind, plot => plot.airship_dock_info())
     }
 
+    fn naval_dock_info(&self) -> Option<NavalDockInfo<'_>> {
+        foreach_plot!(&self.kind, plot => plot.naval_dock_info())
+    }
+
     fn door_tile(&self) -> Option<Vec2<i32>> { foreach_plot!(&self.kind, plot => plot.door_tile()) }
 
     fn render_ordering(&self) -> u32 { foreach_plot!(&self.kind, plot => plot.render_ordering()) }
@@ -313,6 +317,110 @@ pub struct AirshipDockInfo<'plot> {
     pub door_tile: Vec2<i32>,
     pub center: Vec2<i32>,
     pub docking_positions: &'plot [Vec3<i32>],
+}
+
+/// Which hull size a [`Berth`] or [`Anchorage`] is built for (spec §4.3's two
+/// berth classes, derived from the two merchant hulls COW-24 `[Q4]` confirmed
+/// -- `SailBoat` 12×32×6, `Galleon` 14×48×10, `common/src/comp/body/ship.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BerthClass {
+    /// `SailBoat`-sized: 6-tile quay face, 3 blocks minimum depth.
+    Small,
+    /// `Galleon`-sized: 9-tile quay face, 6 blocks minimum depth.
+    Large,
+}
+
+/// Which side of the hull faces the quay/pier/finger face when moored --
+/// decides which rail the gangway hangs off. The mapping of `Port`/
+/// `Starboard` onto a tier's two deck edges is
+/// [`NavalPort`](super::plot::NavalPort)'s own implementation detail; a
+/// consumer should treat the two variants as opaque, stable-per-berth
+/// labels rather than a compass direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BerthSide {
+    Port,
+    Starboard,
+}
+
+/// An addressable mooring slot alongside a naval port's quay, pier or jetty
+/// face (spec §5.2 -- every field's reasoning lives there).
+#[derive(Debug, Clone, Copy)]
+pub struct Berth {
+    /// Local to the port that built it -- [`crate::civ::naval_berths::
+    /// all_naval_berths`] is the only producer of a globally unique id (see
+    /// its own doc comment for why this field cannot carry one at plot
+    /// construction time: nothing at that point knows how many berths every
+    /// *other* port in the world already claimed). Stable per port for an
+    /// unchanged world seed; **not** stable across a change to port
+    /// generation.
+    pub id: u32,
+    pub class: BerthClass,
+    /// Hull centre when moored: x/y at the water surface, z = water_alt.
+    pub mooring_pos: Vec3<i32>,
+    /// Unit direction the bow points when moored (along the quay face).
+    pub heading: Vec2<f32>,
+    /// Which side of the hull faces the deck -- decides which rail gets the
+    /// gangway.
+    pub side: BerthSide,
+    /// A walkable deck block flush with the hull's rail. Guaranteed
+    /// adjacent to `mooring_pos` horizontally.
+    pub gangway: Vec3<i32>,
+    /// Offshore waypoint from which `mooring_pos` is reachable in a straight
+    /// line over water only.
+    pub approach: Vec2<i32>,
+    /// Measured water depth at `mooring_pos`, in blocks. Recorded, not
+    /// assumed, so a berth whose real depth disagrees with its tier is a
+    /// loud, testable inconsistency instead of a hull on the seabed.
+    pub depth: i32,
+}
+
+/// An offshore mooring for a hull too large for any berth the port itself
+/// offers (spec §11.2) -- today, emitted only where a `Jetty`'s single
+/// `Small` berth would otherwise cap a route to `SailBoat`.
+///
+/// A **separate type from [`Berth`]**, deliberately: it carries no gangway,
+/// heading or side, so a consumer cannot mistake it for a quayside slot and
+/// try to walk crew off a hull sitting in open water.
+#[derive(Debug, Clone, Copy)]
+pub struct Anchorage {
+    /// See [`Berth::id`] -- same provisional-then-global id scheme, same
+    /// producer.
+    pub id: u32,
+    /// Always `Large`: an anchorage exists so a `Galleon` can call where no
+    /// `Large` berth does.
+    pub class: BerthClass,
+    /// Hull centre at anchor: x/y at the water surface, z = water_alt.
+    pub pos: Vec3<i32>,
+    /// Blocks of clear water around `pos` the hull swings through on its
+    /// cable.
+    pub swing_radius: i32,
+    /// Measured water depth at `pos`, in blocks.
+    pub depth: i32,
+    /// Offshore waypoint from which `pos` is reachable over water only.
+    pub approach: Vec2<i32>,
+    /// The local id (see [`Berth::id`]) of this port's own `Small` berth --
+    /// the jetty a tender shuttles cargo/passengers to and from.
+    pub tender_berth: u32,
+}
+
+/// The berth/anchorage discovery hook (spec §5.1). Mirrors
+/// [`AirshipDockInfo`] exactly -- forwarded through every plot kind by the
+/// same [`foreach_plot!`] idiom and defaulted to `None` by
+/// [`crate::site::generation::Structure::naval_dock_info`] -- because
+/// `desert_city_airship_dock.rs` (spec §2.5) is the proof that a structure
+/// whose discovery hook is never implemented looks finished and is invisible
+/// to everything downstream.
+pub struct NavalDockInfo<'plot> {
+    /// Landward entry on the apron's road-facing edge -- where an NPC walks
+    /// in.
+    pub door_tile: Vec2<i32>,
+    /// The apron/deck hinge, in the plot's own world-space blocks -- the
+    /// port's identity for logging and map marking.
+    pub center: Vec2<i32>,
+    pub class: PortClass,
+    pub berths: &'plot [Berth],
+    /// Empty for every tier but `Jetty` (spec §11.2).
+    pub anchorages: &'plot [Anchorage],
 }
 
 /// Builds the sprite fill for a dungeon's key-gated keyhole: it opts out of

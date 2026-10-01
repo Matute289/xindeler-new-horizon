@@ -1849,6 +1849,8 @@ pub trait Structure: core::any::Any {
 
     fn airship_dock_info(&self) -> Option<AirshipDockInfo<'_>> { None }
 
+    fn naval_dock_info(&self) -> Option<NavalDockInfo<'_>> { None }
+
     fn door_tile(&self) -> Option<Vec2<i32>> { None }
 
     // TODO: Something more principled than this

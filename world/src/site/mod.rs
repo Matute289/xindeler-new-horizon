@@ -1418,7 +1418,7 @@ impl Site {
             // tile claim -- `Jetty`/`Pier` and `Quay`/`Harbour` each have
             // their own `NavalPort` sub-builders (see `plot::naval_port`).
             let naval_port =
-                plot::NavalPort::generate(land, &mut reseed(&mut rng), &site, placement);
+                plot::NavalPort::generate(land, &mut reseed(&mut rng), &site, &name, placement);
             let plot = site.create_plot(Plot {
                 kind: PlotKind::NavalPort(naval_port),
                 root_tile: placement.hinge.center(),
