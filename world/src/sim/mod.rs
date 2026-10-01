@@ -10006,8 +10006,11 @@ mod tests {
         // edit: 1,116 chunks that read `Lake` (the old wide tributary beds) now
         // read as land, and the land biomes take them together with the usual
         // CDF knock-on. Measured on the regenerated engine (old values are the
-        // ones pinned above and, for the banded biomes, their last measured
-        // references):
+        // ones pinned above and, for the banded biomes, the counts measured
+        // just before this edit: the old band references were Jungle 68,339,
+        // Forest 310,459 and Swamp 13,856, and Jungle and Forest had drifted
+        // to 68,319 and 310,390 inside their bands without the references
+        // being touched):
         //
         //   Savannah   2,232 ->   2,266  ( +34)   Grassland 179,746 -> 180,103 (+357)
         //   Taiga     45,900 ->  45,922  ( +22)   Mountain   27,970 ->  27,971 (  +1)
