@@ -1326,17 +1326,7 @@ impl NavalPort {
             })
             .collect();
 
-        let mut promoted = 0usize;
-        let assignment: Vec<Option<(BerthClass, i32)>> = candidates
-            .into_iter()
-            .map(|(large_start, small_start)| match large_start {
-                Some(start) if promoted < large_quota => {
-                    promoted += 1;
-                    Some((BerthClass::Large, start))
-                },
-                _ => small_start.map(|start| (BerthClass::Small, start)),
-            })
-            .collect();
+        let assignment = assign_berth_classes(&candidates, large_quota);
 
         bands
             .into_iter()
@@ -1543,6 +1533,36 @@ impl NavalPort {
         );
         Vec::new()
     }
+}
+
+/// The pure decision half of [`NavalPort::finger_berth_layout`]: given every
+/// finger's own best offset at `Large`'s and `Small`'s depth (`None` if that
+/// finger's authored reach never clears the class at all), promote up to
+/// `large_quota` of the `Large`-capable fingers to `Large`, lowest index
+/// first; every other finger that cleared at least `Small`'s depth falls
+/// back to `Small`; a finger that cleared neither gets `None` (dropped
+/// entirely -- see [`NavalPort::finger_berth_layout`]'s own doc comment for
+/// why that never drops a berth a `Large`-capable finger could otherwise
+/// fill, and never over-fills the quota). Pulled out of
+/// `finger_berth_layout` as a free function, with no [`Land`]/terrain
+/// dependency, specifically so this decision logic -- which the real-terrain
+/// search above it only exercises indirectly, through the `#[ignore]`d
+/// real-asset tests -- has direct, synthetic-input unit coverage of its own.
+fn assign_berth_classes(
+    candidates: &[(Option<i32>, Option<i32>)],
+    large_quota: usize,
+) -> Vec<Option<(BerthClass, i32)>> {
+    let mut promoted = 0usize;
+    candidates
+        .iter()
+        .map(|&(large_start, small_start)| match large_start {
+            Some(start) if promoted < large_quota => {
+                promoted += 1;
+                Some((BerthClass::Large, start))
+            },
+            _ => small_start.map(|start| (BerthClass::Small, start)),
+        })
+        .collect()
 }
 
 /// One computed berth slot before depth/approach are checked against real
@@ -2002,5 +2022,83 @@ mod tests {
                 "an exhausted search against empty terrain must give up, not fabricate an offset"
             );
         }
+    }
+
+    /// `assign_berth_classes` promotes `Large`-capable fingers up to the
+    /// quota, lowest index first, and never drops a finger that cleared at
+    /// least `Small`'s depth just because it lost the `Large` promotion --
+    /// the exact property `finger_berth_layout`'s real-terrain search relies
+    /// on implicitly (ecs-design-reviewer, 2026-10-01: this was previously
+    /// only exercised indirectly through the `#[ignore]`d real-asset tests).
+    #[test]
+    fn assign_berth_classes_promotes_large_capable_fingers_lowest_index_first() {
+        // Three fingers, all Large-capable, quota of 2: the first two (by
+        // index) promote, the third demotes to Small rather than being
+        // dropped.
+        let assignment = assign_berth_classes(
+            &[
+                (Some(10), Some(5)),
+                (Some(20), Some(5)),
+                (Some(30), Some(5)),
+            ],
+            2,
+        );
+        assert_eq!(
+            assignment,
+            vec![
+                Some((BerthClass::Large, 10)),
+                Some((BerthClass::Large, 20)),
+                Some((BerthClass::Small, 5)),
+            ],
+            "the first `large_quota` Large-capable fingers by index must promote; the rest must \
+             demote to their own Small offset, never be dropped"
+        );
+    }
+
+    #[test]
+    fn assign_berth_classes_never_overfills_the_quota_even_when_every_finger_qualifies() {
+        // Dromos City's real shape: both fingers clear Large, quota is 1.
+        let assignment = assign_berth_classes(&[(Some(10), Some(5)), (Some(20), Some(5))], 1);
+        assert_eq!(
+            assignment,
+            vec![Some((BerthClass::Large, 10)), Some((BerthClass::Small, 5))],
+            "only the quota's worth of fingers may promote, even when every finger clears Large"
+        );
+    }
+
+    #[test]
+    fn assign_berth_classes_demotes_a_positionally_first_finger_that_cannot_support_large() {
+        // Dove City's real shape: finger 0 can't clear Large (only Small);
+        // finger 1 can. Position-based assignment would wrongly drop finger
+        // 0's Large slot entirely; depth-driven assignment must instead
+        // promote finger 1 and demote finger 0 to Small.
+        let assignment = assign_berth_classes(&[(None, Some(5)), (Some(20), Some(5))], 1);
+        assert_eq!(
+            assignment,
+            vec![Some((BerthClass::Small, 5)), Some((BerthClass::Large, 20))],
+            "a finger that cannot clear Large must demote to Small rather than being dropped, and \
+             a later finger that CAN clear Large must still be promoted"
+        );
+    }
+
+    #[test]
+    fn assign_berth_classes_drops_a_finger_that_clears_neither_class() {
+        let assignment = assign_berth_classes(&[(Some(10), Some(5)), (None, None)], 1);
+        assert_eq!(
+            assignment,
+            vec![Some((BerthClass::Large, 10)), None],
+            "a finger whose search found no depth at either class must be dropped (None), not \
+             fabricate a slot nothing ever measured"
+        );
+    }
+
+    #[test]
+    fn assign_berth_classes_handles_zero_fingers_and_zero_quota() {
+        assert_eq!(assign_berth_classes(&[], 0), Vec::new());
+        assert_eq!(
+            assign_berth_classes(&[(Some(10), Some(5))], 0),
+            vec![Some((BerthClass::Small, 5))],
+            "a zero Large quota must demote every Large-capable finger to Small, never promote"
+        );
     }
 }
