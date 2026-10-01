@@ -22,7 +22,7 @@
         (site_id: "site.bs_lighthouse", physical_template: Lighthouse, style: KeeperHouse, material: PaleStone, footprint_radius: 15, height: 72, keeper_house: true, light_range: 275),
         (site_id: "site.kalitos_last_light", physical_template: Lighthouse, style: BandedHarbour, material: PaintedMasonry, footprint_radius: 17, height: 94, keeper_house: false, light_range: 360),
         (site_id: "site.temple_arch_wright", physical_template: Chapel, style: MonumentalChapel, material: PaleStone, footprint_radius: 24, height: 48, keeper_house: false, light_range: 0),
-        (site_id: "site.kalthis_river_port", physical_template: Harbour, style: RiverPort, material: WeatheredStone, footprint_radius: 80, height: 24, keeper_house: false, light_range: 0, facing: West),
-        (site_id: "site.duren_river_port", physical_template: Harbour, style: RiverPort, material: WeatheredStone, footprint_radius: 80, height: 24, keeper_house: false, light_range: 0, facing: East),
+        (site_id: "site.kalthis_river_port", physical_template: Harbour, style: RiverPort, material: WeatheredStone, footprint_radius: 80, height: 24, keeper_house: false, light_range: 0, facing: West, district_seat: Some("site.kalthis")),
+        (site_id: "site.duren_river_port", physical_template: Harbour, style: RiverPort, material: WeatheredStone, footprint_radius: 80, height: 24, keeper_house: false, light_range: 0, facing: North, district_seat: Some("site.kalthis")),
     ],
 )

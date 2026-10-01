@@ -110,6 +110,9 @@ fn timber_colour(forest: Option<ForestKind>) -> Rgb<u8> {
 /// anchor position rather than each port's own apron, so two ports on
 /// different banks of a river cannot land on different species by a
 /// biome-boundary accident.
+///
+/// The shared lighting only changes the `Pier` tier (see `render_pier`); a
+/// `Harbour`-tier member of a district keeps its own lighting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortDressing {
     /// World position whose local forest decides the district's timber --

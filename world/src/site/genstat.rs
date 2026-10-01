@@ -56,6 +56,7 @@ pub enum GenStatSiteKind {
     SavannahTown,
     CoastalTown,
     DesertCity,
+    RiverPort,
 }
 
 impl fmt::Display for GenStatSiteKind {
@@ -68,6 +69,7 @@ impl fmt::Display for GenStatSiteKind {
             GenStatSiteKind::SavannahTown => "SavannahTown",
             GenStatSiteKind::CoastalTown => "CoastalTown",
             GenStatSiteKind::DesertCity => "DesertCity",
+            GenStatSiteKind::RiverPort => "RiverPort",
         };
         write!(f, "{}", s)
     }
@@ -382,6 +384,22 @@ impl SitesGenMeta {
                                 GenStatPlotKind::House => {
                                     gensite.at_least(1, kind, genplot, &mut stat_err_str);
                                     gensite.success_rate(0.2, kind, genplot, &mut stat_warn_str);
+                                },
+                                _ => {},
+                            }
+                        }
+                    },
+                    GenStatSiteKind::RiverPort => {
+                        for (kind, genplot) in gensite.stats.iter() {
+                            match &kind {
+                                GenStatPlotKind::InitialPlaza => {
+                                    gensite.at_least(1, kind, genplot, &mut stat_err_str);
+                                },
+                                GenStatPlotKind::Plaza => {
+                                    gensite.should_not_be_zero(kind, genplot, &mut stat_warn_str);
+                                },
+                                GenStatPlotKind::House => {
+                                    gensite.at_least(1, kind, genplot, &mut stat_err_str);
                                 },
                                 _ => {},
                             }

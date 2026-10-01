@@ -1759,24 +1759,16 @@ fn every_jetty_has_an_anchorage_or_the_known_exception() {
     );
 }
 
-/// The two river-port landmarks: the cardinal each is authored to face, and
-/// the cardinal its port was measured to actually land on.
+/// The two river-port landmarks.
+const EXPECTED_RIVER_PORTS: &[&str] = &["site.kalthis_river_port", "site.duren_river_port"];
+
+/// River ports whose port is allowed to land on a different cardinal than the
+/// one their profile authors, each with the cardinal it was measured to land
+/// on and why. Every other river port must face exactly its authored cardinal.
 ///
-/// Duren River Port does not get its authored `East` face. Of the 29
-/// east-facing shoreline candidates its site offers, 26 cannot grow even the
-/// `Pier` tier's minimum apron (the bank is steep hill hazard) and the other 3
-/// fail on the deck gap or the depth gate, so the search falls back to the
-/// whole frontier and lands on `North`. That is real terrain at the authored
-/// pin, not a placement bug: moving the pin, not this table, is what would
-/// give Duren its east-facing port.
-const EXPECTED_RIVER_PORTS: &[(&str, Vec2<i32>, Vec2<i32>)] = &[
-    (
-        "site.kalthis_river_port",
-        Vec2::new(-1, 0),
-        Vec2::new(-1, 0),
-    ),
-    ("site.duren_river_port", Vec2::new(1, 0), Vec2::new(0, 1)),
-];
+/// None today: Duren River Port's authored facing is `North`, the cardinal
+/// its shoreline actually admits (its east bank is steep hill hazard).
+const EXPECTED_RIVER_PORT_FACING_EXCEPTIONS: &[(&str, Vec2<i32>, &str)] = &[];
 
 /// The radius, in blocks, around each river-port landmark that the capital's
 /// own harbour must stay out of: the landmark's authored footprint plus the
@@ -1831,7 +1823,7 @@ fn the_river_ports_generate_as_one_dressed_district() {
         .expect("Kalthis generated a site with a port");
 
     let mut checked = 0usize;
-    for &(landmark_id, _authored_facing, facing) in EXPECTED_RIVER_PORTS {
+    for &landmark_id in EXPECTED_RIVER_PORTS {
         let civ_site = world
             .civs
             .sites
@@ -1894,9 +1886,20 @@ fn the_river_ports_generate_as_one_dressed_district() {
             .naval_port
             .unwrap_or_else(|| panic!("{landmark_id} recorded no naval port footprint"));
         assert_eq!(placement.class, PortClass::Pier);
+        let authored_facing = civ_site
+            .authored_landmark_facing()
+            .unwrap_or_else(|| panic!("{landmark_id} has no authored landmark profile"));
+        let expected_facing = EXPECTED_RIVER_PORT_FACING_EXCEPTIONS
+            .iter()
+            .find(|(id, ..)| *id == landmark_id)
+            .map_or(authored_facing, |&(_, realized, reason)| {
+                println!("{landmark_id}: facing exception ({reason})");
+                realized
+            });
         assert_eq!(
-            placement.outward, facing,
-            "{landmark_id}'s port does not face its authored cardinal"
+            placement.outward, expected_facing,
+            "{landmark_id}'s port does not face its authored cardinal {authored_facing:?} and is \
+             not a listed exception"
         );
 
         assert_eq!(
@@ -2010,7 +2013,7 @@ fn the_river_ports_generate_as_one_dressed_district() {
         .map(|site_id| index_ref.sites.get(site_id))
         .expect("Kalthis generated a site");
     let harbour = kalthis.naval_port.expect("Kalthis has a harbour");
-    for &(landmark_id, ..) in EXPECTED_RIVER_PORTS {
+    for &landmark_id in EXPECTED_RIVER_PORTS {
         let centre = world
             .civs
             .sites

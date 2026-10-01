@@ -223,6 +223,9 @@ impl SiteKind {
         }
     }
 
+    /// `SiteKind::RiverPort` is left out on purpose: river ports are populated
+    /// through their settlement metadata but do not take part in the economy
+    /// simulation.
     pub fn should_do_economic_simulation(&self) -> bool {
         matches!(
             self,
@@ -1515,7 +1518,9 @@ impl Site {
         naval_port: NavalPortRequest<'_>,
     ) -> Self {
         /// The waterfront footprint a shipyard claims: the smallest tier's, a
-        /// warehouse yard and one slipway rather than a berthing deck.
+        /// warehouse yard and one slipway rather than a berthing deck. It
+        /// borrows the `Jetty` tier's apron dimensions, so retuning `Jetty`
+        /// resizes shipyards too.
         const SHIPYARD_FOOTPRINT: PortClass = PortClass::Jetty;
         /// The farthest, in tiles, the shipyard may sit from the naval port.
         const SHIPYARD_MAX_DISTANCE_TILES: i32 = 24;
@@ -1537,7 +1542,7 @@ impl Site {
         };
 
         site.demarcate_obstacles(land);
-        generator_stats.add(site.name(), GenStatSiteKind::City);
+        generator_stats.add(site.name(), GenStatSiteKind::RiverPort);
         site.make_initial_plaza_default(land, index, &mut rng, generator_stats, &name, road_kind);
 
         if let Some(placement) = site.place_naval_port(land, &mut rng, &name, naval_port) {
