@@ -1474,6 +1474,28 @@ const EXPECTED_BERTH_CLASSES: &[(PortClass, &[BerthClass])] = &[
     ]),
 ];
 
+/// Per-site overrides of [`EXPECTED_BERTH_CLASSES`], for a settlement whose
+/// real measured ceiling differs from its tier's generic expectation -- the
+/// same named, measured-exception shape [`EXPECTED_ANCHORAGE_EXCEPTIONS`]
+/// below already uses for `Jetty`'s anchorage search, applied here to the
+/// berth-class check instead.
+///
+/// ⚠️ **`site.portland` (`Pier`) is `[Small]`, not the tier's generic
+/// `[Large, Small]`.** Root cause (`world/src/site/plot/naval_port.rs`,
+/// `NavalPort::lane_water_start`'s own doc comment has the full
+/// investigation): Portland's `Pier` lane never clears `Large`'s 6-block
+/// minimum anywhere in its own authored reach, on *either* edge -- the
+/// deepest point found is 5 blocks, on both edges, in the same offset band
+/// -- a real, verified terrain limit, not an artifact of the search's
+/// offset-finding (every other `Pier` site in this dataset -- Bronze Shore,
+/// Kalitos, Sutar Town, Mazon Town, Rios Port -- reaches its own `Large`
+/// berth fine, so this is Portland's own waterfront, not a `Pier`-wide
+/// ceiling). If Portland's authored waterfront position or footprint ever
+/// changes (e.g. COW-24.1 §11.9's Portland redesign), this row needs
+/// re-measuring, not just re-approving.
+const EXPECTED_BERTH_CLASS_OVERRIDES: &[(&str, &[BerthClass])] =
+    &[("site.portland", &[BerthClass::Small])];
+
 /// The settlements whose `Jetty` berth is small enough that the hull-cap
 /// table (spec §4.4) depends on an anchorage existing for their routes to
 /// take a `Galleon` at all.
@@ -1484,10 +1506,33 @@ const EXPECTED_JETTY_VILLAGES: &[&str] = &[
     "site.timos",
 ];
 
-/// The one village whose waterfront is too shallow for any anchorage (spec
-/// §11.2, measured independently): its routes are expected to stay
+/// The villages whose waterfront is too shallow/narrow for any anchorage
+/// (spec §11.2, measured independently): their routes are expected to stay
 /// `SailBoat`-capped rather than fail the generation run.
-const EXPECTED_ANCHORAGE_EXCEPTION: &str = "site.hita";
+///
+/// ⚠️ **Three villages, not one** -- `site.andiran` and `site.timos` joined
+/// `site.hita` here 2026-10-01, after `NavalPort::lane_berth_layout`'s fix
+/// (the lane berth's own constant-offset bug, `world/src/site/plot/
+/// naval_port.rs`) gave both of them a real `Small` berth for the first
+/// time (previously dropped for being sampled at a dry/shallow fixed
+/// offset, which masked this as "no anchorage because no tender berth"
+/// rather than revealing the anchorage search's own real result). With a
+/// real tender berth in hand, [`NavalPort::find_anchorage`]'s swing-circle
+/// search was re-run against real terrain and still finds nothing for
+/// either, for the same reason as `Hita`: the real coastline never offers
+/// [`ANCHORAGE_SWING_RADIUS_BLOCKS`]-worth of *uniformly* deep water, even
+/// where a single sampled point clears `Large`'s 6-block minimum. Measured
+/// (`NavalPort::find_anchorage`'s own march, every 6 blocks out to 200):
+/// Andiran's centre-line depth does reach 6 for five consecutive samples
+/// (offsets 54-78), but drops back to 4-5 immediately outside that band, so
+/// no 30-block swing circle around any of those points clears; Timos's
+/// depth is highly uneven (271, 71, 4, 5, 34, 88 across its own range) and
+/// never holds 6+ across a full circle either; Hita's centre-line depth
+/// never exceeds 5 anywhere in the search range, the same flat ceiling
+/// already documented for its berth. All three are real, verified terrain
+/// limits -- not an artifact of the lane-berth fix, which only supplied the
+/// tender berth the search needs to run at all.
+const EXPECTED_ANCHORAGE_EXCEPTIONS: &[&str] = &["site.andiran", "site.hita", "site.timos"];
 
 /// **The berth contract, against the real authored region.**
 ///
@@ -1521,12 +1566,18 @@ fn every_naval_berth_is_discoverable_with_the_right_classes_and_depth() {
     let index_ref = index.as_index_ref();
     let expected: std::collections::HashMap<&str, PortClass> =
         EXPECTED_NAVAL_PORTS.iter().copied().collect();
-    let expected_classes_for = |class: PortClass| -> &'static [BerthClass] {
-        EXPECTED_BERTH_CLASSES
+    let expected_classes_for = |authored_id: &str, class: PortClass| -> &'static [BerthClass] {
+        EXPECTED_BERTH_CLASS_OVERRIDES
             .iter()
-            .find(|(c, _)| *c == class)
-            .unwrap_or_else(|| panic!("no expected berth classes recorded for {class:?}"))
-            .1
+            .find(|(id, _)| *id == authored_id)
+            .map(|(_, classes)| *classes)
+            .unwrap_or_else(|| {
+                EXPECTED_BERTH_CLASSES
+                    .iter()
+                    .find(|(c, _)| *c == class)
+                    .unwrap_or_else(|| panic!("no expected berth classes recorded for {class:?}"))
+                    .1
+            })
     };
 
     let all_berths = all_naval_berths(&index_ref.sites);
@@ -1561,7 +1612,7 @@ fn every_naval_berth_is_discoverable_with_the_right_classes_and_depth() {
 
         let mut classes: Vec<BerthClass> = site_berths.berths.iter().map(|b| b.class).collect();
         classes.sort_by_key(|c| matches!(c, BerthClass::Small));
-        let mut expected_sorted = expected_classes_for(class).to_vec();
+        let mut expected_sorted = expected_classes_for(authored_id, class).to_vec();
         expected_sorted.sort_by_key(|c| matches!(c, BerthClass::Small));
         assert_eq!(
             classes, expected_sorted,
@@ -1625,9 +1676,10 @@ fn every_naval_berth_is_discoverable_with_the_right_classes_and_depth() {
 ///
 /// Re-asserts spec §4.4's table with anchorages in the picture: every
 /// `Jetty` village is expected to carry exactly one `Large`-class anchorage
-/// -- making its routes `Galleon`-capable -- except the one village whose
-/// waterfront measured too shallow for any anchorage to fit, which must
-/// still generate cleanly with zero and name itself, not fail the run.
+/// -- making its routes `Galleon`-capable -- except the villages named in
+/// [`EXPECTED_ANCHORAGE_EXCEPTIONS`], whose waterfront measured too
+/// shallow/narrow for any anchorage to fit, which must still generate
+/// cleanly with zero and name itself, not fail the run.
 ///
 /// Requires the real Cromatolis LFS assets to be pulled locally. Recommended
 /// command: `cargo test -p xindeler-world
@@ -1697,8 +1749,10 @@ fn every_jetty_has_an_anchorage_or_the_known_exception() {
         EXPECTED_JETTY_VILLAGES.len(),
     );
     assert!(
-        capped.iter().all(|id| id == EXPECTED_ANCHORAGE_EXCEPTION),
-        "only {EXPECTED_ANCHORAGE_EXCEPTION} is expected to have no anchorage (shallow \
+        capped
+            .iter()
+            .all(|id| EXPECTED_ANCHORAGE_EXCEPTIONS.contains(&id.as_str())),
+        "only {EXPECTED_ANCHORAGE_EXCEPTIONS:?} are expected to have no anchorage (shallow/narrow \
          waterfront); these villages unexpectedly also have none: {capped:?}"
     );
 }

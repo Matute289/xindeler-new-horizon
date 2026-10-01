@@ -979,14 +979,6 @@ impl NavalPort {
         self.build_harbour_lighting(painter);
     }
 
-    /// How many blocks of the deck's own seaward reach lie beyond the
-    /// causeway -- the span `Jetty`/`Pier` berths are laid out over, since
-    /// neither tier has fingers to subdivide. Mirrors `quay_depth_blocks`'s
-    /// role for `Quay`/`Harbour`.
-    fn single_lane_reach_blocks(&self) -> i32 {
-        self.deck_reach_blocks() - self.ramp_tiles * TILE_SIZE as i32
-    }
-
     /// The one-block step, perpendicular to the seaward normal, from a
     /// berth's gangway (on the deck) out to its mooring position (in open
     /// water) -- away from the deck's own body on whichever edge `min_edge`
@@ -1032,12 +1024,23 @@ impl NavalPort {
     }
 
     /// A `Jetty`/`Pier` berth: the single lane has no fingers to subdivide,
-    /// so the berth's seaward span starts right after the causeway and runs
-    /// `span` blocks, clamped to the lane's own reach.
-    fn lane_berth(&self, class: BerthClass, min_edge: bool, span: i32) -> BerthSlot {
-        let run_blocks = self.ramp_tiles * TILE_SIZE as i32;
-        let span = span.min(self.single_lane_reach_blocks());
-        let strip = self.deck_strip(run_blocks, run_blocks + span);
+    /// so the berth's seaward span starts `start` blocks seaward of the
+    /// deck's own landward edge (the same coordinate space as
+    /// [`Self::deck_strip`]) and runs `span` blocks, clamped to whatever
+    /// reach remains beyond `start`.
+    ///
+    /// `start` is a parameter rather than always the causeway's own end --
+    /// mirroring [`Self::finger_berth`]'s own `start` parameter and for the
+    /// same reason -- so the same geometry serves two callers:
+    /// [`Self::berth_layout`]'s pure/testable path, which always passes the
+    /// nominal `run_blocks` (correct only when real water starts right where
+    /// the causeway ends), and [`Self::lane_berth_layout`]'s real-terrain
+    /// path, which passes each berth's own [`Self::lane_water_start`] result
+    /// instead.
+    fn lane_berth(&self, class: BerthClass, min_edge: bool, start: i32, span: i32) -> BerthSlot {
+        let reach = self.deck_reach_blocks();
+        let span = span.min((reach - start).max(0));
+        let strip = self.deck_strip(start, start + span);
         self.edge_berth(class, min_edge, strip)
     }
 
@@ -1166,6 +1169,73 @@ impl NavalPort {
         None
     }
 
+    /// Searches seaward along one edge of the `Jetty`/`Pier` single lane for
+    /// the first point that clears `min_depth` of real water, mirroring
+    /// [`Self::finger_water_start`]'s march-and-sample idiom at lane scale.
+    ///
+    /// # Why this exists
+    ///
+    /// Before this search, both of a `Pier`'s berths (and a `Jetty`'s one)
+    /// started at the same constant `run_blocks` offset -- the causeway's
+    /// own end -- correct only when real water begins right where the
+    /// causeway stops, which [`Self::finger_water_start`]'s own doc comment
+    /// already established does not hold everywhere on this coastline. It
+    /// fails the same way at lane scale: confirmed for `site.sutar_town`'s
+    /// `Pier` (deck 3 tiles / 18 blocks wide, 11 tiles / 66 blocks seaward),
+    /// whose causeway-end offset sampled dry on *both* edges, dropping every
+    /// berth it was ever going to offer -- 0 of its expected 2.
+    ///
+    /// # Per-edge, not per-lane -- and why that differs from the finger fix
+    ///
+    /// [`Self::finger_water_start`] searches once per finger and shares that
+    /// one offset across both of the finger's edges, because a finger pier's
+    /// two berths always share one class (same depth requirement), and
+    /// per-edge divergence was checked there and found not to matter. Neither
+    /// half of that reasoning holds for `Jetty`/`Pier`: the lane's two edges
+    /// are not interchangeable copies of each other -- `Pier`'s `Large`
+    /// berth is hard-assigned to the min edge (`BerthSide::Port`) and its
+    /// `Small` berth to the max edge (`BerthSide::Starboard`, see
+    /// [`Self::berth_layout`]'s `Pier` arm). That assignment is static per
+    /// tier, not terrain-driven: unlike [`Self::finger_berth_layout`]'s
+    /// `assign_berth_classes`, which exists specifically to promote whichever
+    /// finger the real terrain supports, nothing here swaps which edge gets
+    /// which class on a per-site basis -- not because anything downstream
+    /// requires the `Port` edge specifically, simply because no such
+    /// promotion logic was ever written for `Jetty`/`Pier`. Each edge
+    /// therefore gets its own independent search, called with its own
+    /// `min_edge` and its own class's `min_depth`, rather than one shared
+    /// lane-wide offset: the two berths were never going to need the same
+    /// depth or live at the same lateral position in the first place, so
+    /// there is no "shared" search to fall back on the way the finger case
+    /// has one.
+    ///
+    /// # Bound
+    ///
+    /// Never searches past [`Self::deck_reach_blocks`], for the same reason
+    /// [`Self::finger_water_start`]'s own doc comment gives: that is outside
+    /// the deck `Site::find_shore_aabr` already approved as viable.
+    ///
+    /// Returns the seaward offset (`deck_strip`'s coordinate space) of the
+    /// first point on this edge meeting `min_depth`, or `None` if nothing
+    /// along the lane's whole authored reach clears it.
+    fn lane_water_start(&self, land: &Land, min_edge: bool, min_depth: i32) -> Option<i32> {
+        let run_blocks = self.ramp_tiles * TILE_SIZE as i32;
+        let reach = self.deck_reach_blocks();
+        let mut offset = run_blocks;
+        while offset < reach {
+            let strip = self.deck_strip(offset, offset + 1);
+            let probe = self.edge_sliver(strip, min_edge).center();
+            if self
+                .sample_depth(land, probe)
+                .is_some_and(|d| d >= min_depth)
+            {
+                return Some(offset);
+            }
+            offset += ANCHORAGE_SEARCH_STEP_BLOCKS;
+        }
+        None
+    }
+
     /// Every berth slot this tier's geometry offers, in pure tile/block
     /// space -- no terrain sampling, so it is unit-testable against the
     /// synthetic fixtures the rest of this module's tests already use.
@@ -1197,14 +1267,37 @@ impl NavalPort {
     /// [`Self::finger_berth_layout`] instead, which finds each finger's own
     /// real water start via [`Self::finger_water_start`]. Keep both in sync
     /// by hand if the finger-iteration shape here ever changes.
+    ///
+    /// ⚠️ `Jetty`/`Pier`'s lane berths here always start at the nominal
+    /// `run_blocks` (the causeway's own end) -- the same "correct only when
+    /// the real shore runs parallel to the deck" nominal assumption, for the
+    /// same reason. Real generation does not call this arm for `Jetty`/
+    /// `Pier` either: [`Self::measure_berths`] calls
+    /// [`Self::lane_berth_layout`] instead, which finds each berth's own
+    /// real water start via [`Self::lane_water_start`].
+    ///
+    /// `#[cfg(test)]`: now that every tier's real-generation path
+    /// ([`Self::measure_berths`]) goes through its own `Land`-aware layout
+    /// (`lane_berth_layout` for `Jetty`/`Pier`, `finger_berth_layout` for
+    /// `Quay`/`Harbour`), this nominal/pure arm has no remaining
+    /// non-test caller -- it exists solely as the synthetic-fixture-testable
+    /// geometry reference the tests below check the per-tier counts and
+    /// classes against.
+    #[cfg(test)]
     fn berth_layout(&self) -> Vec<BerthSlot> {
+        let run_blocks = self.ramp_tiles * TILE_SIZE as i32;
         match self.class {
             PortClass::Jetty => {
-                vec![self.lane_berth(BerthClass::Small, true, BERTH_FACE_SMALL_BLOCKS)]
+                vec![self.lane_berth(BerthClass::Small, true, run_blocks, BERTH_FACE_SMALL_BLOCKS)]
             },
             PortClass::Pier => vec![
-                self.lane_berth(BerthClass::Large, true, BERTH_FACE_LARGE_BLOCKS),
-                self.lane_berth(BerthClass::Small, false, BERTH_FACE_SMALL_BLOCKS),
+                self.lane_berth(BerthClass::Large, true, run_blocks, BERTH_FACE_LARGE_BLOCKS),
+                self.lane_berth(
+                    BerthClass::Small,
+                    false,
+                    run_blocks,
+                    BERTH_FACE_SMALL_BLOCKS,
+                ),
             ],
             PortClass::Quay | PortClass::Harbour => {
                 let (_small, large) = self.class.berth_counts();
@@ -1355,6 +1448,76 @@ impl NavalPort {
             .collect()
     }
 
+    /// [`Self::berth_layout`]'s `Jetty`/`Pier` arms, re-run against real
+    /// terrain: each berth searches its own edge's real water start via
+    /// [`Self::lane_water_start`] instead of assuming the lane starts flush
+    /// with the causeway's end. This is the path [`Self::measure_berths`]
+    /// actually uses for these two tiers -- `berth_layout`'s own Jetty/Pier
+    /// arms stay `Land`-free purely so they are unit-testable.
+    ///
+    /// # No class promotion, unlike [`Self::finger_berth_layout`]
+    ///
+    /// `finger_berth_layout` has to *choose* which finger gets the scarce
+    /// `Large` class, because any finger could plausibly take it and the
+    /// real terrain should decide. `Jetty`/`Pier` have no such choice to
+    /// make: each tier's berth-to-edge mapping is fixed by
+    /// [`Self::berth_layout`] (`Pier`'s `Large` is always the min edge /
+    /// `BerthSide::Port`, its `Small` always the max edge /
+    /// `BerthSide::Starboard`; `Jetty`'s one `Small` is always the min
+    /// edge), and [`Self::find_anchorage`] downstream depends on that
+    /// mapping staying fixed (it specifically looks for a `Port`-side
+    /// `Small` berth to shuttle from). So this function does not promote or
+    /// reassign classes -- it only finds each already-assigned berth's own
+    /// real mooring offset, independently per edge (see
+    /// [`Self::lane_water_start`]'s own doc comment for why per-edge, not
+    /// shared, is correct here even though `finger_berth_layout` shares one
+    /// offset across a finger's two edges).
+    ///
+    /// # Dropped berths
+    ///
+    /// A berth whose edge clears neither its own class's depth anywhere in
+    /// the lane's authored reach contributes no slot -- logged distinctly
+    /// (see [`Self::measure_berths`]'s own "too shallow" log, which this
+    /// precedes), since no candidate mooring position was ever found to
+    /// sample in the first place.
+    fn lane_berth_layout(&self, land: &Land, site_name: &str) -> Vec<BerthSlot> {
+        debug_assert!(
+            matches!(self.class, PortClass::Jetty | PortClass::Pier),
+            "lane_berth_layout is only meaningful for Jetty/Pier"
+        );
+        let specs: &[(BerthClass, bool, i32)] = match self.class {
+            PortClass::Jetty => &[(BerthClass::Small, true, BERTH_FACE_SMALL_BLOCKS)],
+            PortClass::Pier => &[
+                (BerthClass::Large, true, BERTH_FACE_LARGE_BLOCKS),
+                (BerthClass::Small, false, BERTH_FACE_SMALL_BLOCKS),
+            ],
+            PortClass::Quay | PortClass::Harbour => {
+                unreachable!("lane_berth_layout is only meaningful for Jetty/Pier")
+            },
+        };
+        specs
+            .iter()
+            .filter_map(|&(class, min_edge, span)| {
+                let min_depth = match class {
+                    BerthClass::Small => BERTH_MIN_DEPTH_SMALL,
+                    BerthClass::Large => BERTH_MIN_DEPTH_LARGE,
+                };
+                let Some(start) = self.lane_water_start(land, min_edge, min_depth) else {
+                    debug!(
+                        site = %site_name,
+                        ?class,
+                        min_edge,
+                        "naval lane berth search exhausted: no point along this lane's own \
+                         authored reach clears this berth's minimum depth on its own edge; \
+                         dropping it without ever sampling a mooring position"
+                    );
+                    return None;
+                };
+                Some(self.lane_berth(class, min_edge, start, span))
+            })
+            .collect()
+    }
+
     /// Water depth at `wpos`, in blocks -- the same `SimChunk::water_alt -
     /// alt` field `Site::deck_centre_line_depth` measures the deck's own
     /// placement against, so a berth's recorded depth and the placement
@@ -1393,14 +1556,14 @@ impl NavalPort {
         // colliding this port's surviving high id with the next port's
         // first id.
         //
-        // `Quay`/`Harbour` use `finger_berth_layout` rather than
-        // `berth_layout` here: only the former searches each finger's own
-        // real water start (see its doc comment) -- `berth_layout`'s own
-        // Quay/Harbour arm stays `Land`-free so it is unit-testable, and
-        // assumes every finger starts flush with the quay body, which this
-        // real-terrain path cannot assume.
+        // Every tier uses its own real-terrain layout here rather than
+        // `berth_layout` directly: `berth_layout` stays `Land`-free so it is
+        // unit-testable, and assumes every berth/finger starts flush with
+        // the causeway/quay body, which no real-terrain path can assume (see
+        // `lane_berth_layout`'s and `finger_berth_layout`'s own doc
+        // comments for why each tier needs its own per-position search).
         let slots = match self.class {
-            PortClass::Jetty | PortClass::Pier => self.berth_layout(),
+            PortClass::Jetty | PortClass::Pier => self.lane_berth_layout(land, site_name),
             PortClass::Quay | PortClass::Harbour => self.finger_berth_layout(land, site_name),
         };
         slots
@@ -1852,8 +2015,8 @@ mod tests {
         );
     }
 
-    /// `Jetty`'s single lane of `single_lane_reach_blocks` -- as sized by
-    /// the real deck dims -- fits the `Small` berth span exactly.
+    /// `Jetty`'s single lane -- as sized by the real deck dims -- fits the
+    /// `Small` berth span exactly in the reach beyond the causeway.
     fn jetty_port(normal: Vec2<i32>) -> NavalPort {
         port_of(
             PortClass::Jetty,
@@ -1966,15 +2129,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn single_lane_reach_excludes_the_causeway() {
-        let port = port(Vec2::new(1, 0));
-        assert_eq!(
-            port.single_lane_reach_blocks(),
-            port.deck_reach_blocks() - port.ramp_tiles * TILE_SIZE as i32,
-        );
-    }
-
     /// `Land::empty()` has no backing `WorldSim`, so `sample_depth` returns
     /// `None` for every probe -- the degenerate case `finger_water_start`
     /// must handle without panicking, dropping every finger exactly the way
@@ -2018,6 +2172,44 @@ mod tests {
         for band in port.finger_bands() {
             assert_eq!(
                 port.finger_water_start(&land, band, BERTH_MIN_DEPTH_SMALL, quay_depth_blocks),
+                None,
+                "an exhausted search against empty terrain must give up, not fabricate an offset"
+            );
+        }
+    }
+
+    /// Mirrors
+    /// `finger_berth_layout_drops_every_finger_when_no_terrain_is_available`
+    /// at lane scale: `Land::empty()` makes every `sample_depth` call return
+    /// `None`, so `lane_berth_layout` must drop every berth -- including
+    /// `Jetty`'s only one -- rather than emitting a slot nothing ever
+    /// measured.
+    #[test]
+    fn lane_berth_layout_drops_every_berth_when_no_terrain_is_available() {
+        let land = Land::empty();
+        for test_port in [jetty_port(Vec2::new(1, 0)), port(Vec2::new(1, 0))] {
+            let slots = test_port.lane_berth_layout(&land, "test");
+            assert!(
+                slots.is_empty(),
+                "{:?} must drop every lane berth when no terrain is available, rather than \
+                 emitting slots nothing ever measured",
+                test_port.class
+            );
+        }
+    }
+
+    /// `lane_water_start` never returns an offset at or past
+    /// `deck_reach_blocks()` -- the deck's own authored seaward extent --
+    /// even though it cannot find real water with `Land::empty()` (which
+    /// forces it to walk the full range up to that bound before giving up).
+    /// Mirrors `finger_water_start_never_searches_past_the_deck_s_own_reach`.
+    #[test]
+    fn lane_water_start_never_searches_past_the_deck_s_own_reach() {
+        let test_port = port(Vec2::new(1, 0)); // Pier
+        let land = Land::empty();
+        for min_edge in [true, false] {
+            assert_eq!(
+                test_port.lane_water_start(&land, min_edge, BERTH_MIN_DEPTH_SMALL),
                 None,
                 "an exhausted search against empty terrain must give up, not fabricate an offset"
             );
