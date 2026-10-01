@@ -12,10 +12,10 @@ pub use self::{
     economy::Economy,
     generation::{Fill, Painter, Primitive, PrimitiveRef, Structure, aabr_with_z},
     genstat::{GenStatPlotKind, GenStatSiteKind, SitesGenMeta},
-    plot::{Plot, PlotKind, foreach_plot},
+    plot::{Plot, PlotKind, PortDressing, foreach_plot},
     shore::{
-        NavalPortRequest, PortClass, PortExclusion, SHORE_MIN_DEEP_TILES, ShoreFailure,
-        ShorePlacement,
+        NavalPortRequest, PortClass, PortExclusion, SHORE_MIN_DEEP_TILES, ShoreAnchor,
+        ShoreFailure, ShorePlacement,
     },
     tile::TileKind,
 };
@@ -45,8 +45,8 @@ use hashbrown::DefaultHashBuilder;
 use namegen::NameGen;
 use rand::{SeedableRng, prelude::*, seq::IndexedRandom};
 use rand_chacha::{ChaCha8Rng, ChaChaRng};
-use std::ops::Range;
-use tracing::debug;
+use std::ops::{Range, RangeInclusive};
+use tracing::{debug, warn};
 use vek::*;
 
 /// Seed a new RNG from an old RNG, thereby making the old RNG independent of
@@ -165,6 +165,9 @@ impl Default for SpawnRules {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SiteKind {
     Refactor,
+    /// A small settlement on a river bank: a port with a shipyard, an inn and
+    /// a handful of houses.
+    RiverPort,
     CliffTown,
     SavannahTown,
     DesertCity,
@@ -194,7 +197,9 @@ pub enum SiteKind {
 impl SiteKind {
     pub fn meta(&self) -> Option<SiteKindMeta> {
         match self {
-            SiteKind::Refactor => Some(SiteKindMeta::Settlement(SettlementKindMeta::Default)),
+            SiteKind::Refactor | SiteKind::RiverPort => {
+                Some(SiteKindMeta::Settlement(SettlementKindMeta::Default))
+            },
             SiteKind::CliffTown => Some(SiteKindMeta::Settlement(SettlementKindMeta::CliffTown)),
             SiteKind::SavannahTown => {
                 Some(SiteKindMeta::Settlement(SettlementKindMeta::SavannahTown))
@@ -242,6 +247,7 @@ impl SiteKind {
     pub fn marker(&self, is_authored_settlement: bool) -> Option<MarkerKind> {
         match self {
             SiteKind::Refactor
+            | SiteKind::RiverPort
             | SiteKind::CliffTown
             | SiteKind::SavannahTown
             | SiteKind::CoastalTown
@@ -1375,6 +1381,249 @@ impl Site {
         site
     }
 
+    /// Turns a claimed naval port footprint into its `NavalPort` plot.
+    ///
+    /// Every tier builds real walkable dock geometry, not just the tile claim
+    /// -- `Jetty`/`Pier` and `Quay`/`Harbour` each have their own `NavalPort`
+    /// sub-builders (see `plot::naval_port`).
+    fn create_naval_port_plot(
+        &mut self,
+        land: &Land,
+        rng: &mut impl Rng,
+        site_name: &str,
+        placement: ShorePlacement,
+        dressing: Option<PortDressing>,
+    ) {
+        let naval_port =
+            plot::NavalPort::generate(land, &mut reseed(rng), self, site_name, placement, dressing);
+        let plot = self.create_plot(Plot {
+            kind: PlotKind::NavalPort(naval_port),
+            root_tile: placement.hinge.center(),
+            tiles: aabr_tiles(placement.apron)
+                .chain(aabr_tiles(placement.deck))
+                .collect(),
+        });
+        self.stamp_waterfront_plot(placement, plot);
+    }
+
+    /// Re-blits both halves of a waterfront footprint with the same
+    /// `kind`/`hard_alt` the placement pass already wrote, now carrying the
+    /// plot id -- `Site::render` iterates plots, so nothing draws until this
+    /// runs, per `Site::place_naval_port`'s own doc comment.
+    fn stamp_waterfront_plot(&mut self, placement: ShorePlacement, plot: Id<Plot>) {
+        self.blit_aabr(placement.apron, Tile {
+            kind: TileKind::Building,
+            plot: Some(plot),
+            hard_alt: Some(placement.apron_hard_alt),
+        });
+        self.blit_aabr(placement.deck, Tile {
+            kind: TileKind::Pier,
+            plot: Some(plot),
+            hard_alt: None,
+        });
+    }
+
+    /// Places one tavern on a roadside plot, as an inn too when `lodging` is
+    /// set. Returns whether a plot was found for it.
+    ///
+    /// An inn is retried with fresh seeds until its lodging storey is
+    /// reachable by a staircase, since whether the storey fits depends on the
+    /// room layout the generator happened to roll.
+    fn place_tavern(
+        &mut self,
+        land: &Land,
+        index: IndexRef,
+        rng: &mut impl Rng,
+        lodging: bool,
+    ) -> bool {
+        // Inns are built on the larger plot sizes so a ground-floor room is
+        // big enough to carry a storey above it.
+        const INN_MIN_TILES: u32 = 6;
+        const INN_ATTEMPTS: usize = 8;
+
+        let mut size = (4.5 + rng.random::<f32>().powf(5.0) * 2.0).round() as u32;
+        if lodging {
+            size = size.max(INN_MIN_TILES);
+        }
+        let Some((aabr, door_tile, door_dir, alt)) = attempt(32, || {
+            self.find_roadside_aabr(rng, 8..(size + 1).pow(2), Extent2::broadcast(size))
+        }) else {
+            return false;
+        };
+
+        let attempts = if lodging { INN_ATTEMPTS } else { 1 };
+        let mut tavern = None;
+        for _ in 0..attempts {
+            let candidate = plot::Tavern::generate(
+                land,
+                index,
+                &mut reseed(rng),
+                self,
+                door_tile,
+                Dir2::from_vec2(door_dir),
+                aabr,
+                alt,
+                lodging,
+            );
+            let done = !lodging || candidate.lodging;
+            tavern = Some(candidate);
+            if done {
+                break;
+            }
+        }
+        let Some(tavern) = tavern else {
+            return false;
+        };
+        if lodging && !tavern.lodging {
+            warn!(
+                site = self.name().unwrap_or(""),
+                "no inn layout with a reachable lodging storey was found, the tavern has no beds"
+            );
+        }
+        let tavern_alt = tavern.door_wpos.z;
+        let plot = self.create_plot(Plot {
+            kind: PlotKind::Tavern(tavern),
+            root_tile: aabr.center(),
+            tiles: aabr_tiles(aabr).collect(),
+        });
+        self.blit_aabr(aabr, Tile {
+            kind: TileKind::Building,
+            plot: Some(plot),
+            hard_alt: Some(tavern_alt),
+        });
+        true
+    }
+
+    /// A small river-bank settlement with a fixed plot list rather than the
+    /// plot lottery a city rolls: a plaza, a naval port, a shipyard, a tavern,
+    /// an inn and a handful of houses.
+    ///
+    /// It is a reduced copy of `generate_city`'s skeleton instead of a call
+    /// into it because the name is authored (a city rolls its own) and a river
+    /// hamlet should not draw farms, barns or airship docks from the lottery.
+    /// The naval port and the shipyard both go through the ordinary shoreline
+    /// search, so they cross the hazard band the way every other port does,
+    /// and both honour the request's authored facing.
+    pub fn generate_river_port(
+        land: &Land,
+        index: IndexRef,
+        rng: &mut impl Rng,
+        origin: Vec2<i32>,
+        name: String,
+        calendar: Option<&Calendar>,
+        generator_stats: &mut SitesGenMeta,
+        naval_port: NavalPortRequest<'_>,
+    ) -> Self {
+        /// The waterfront footprint a shipyard claims: the smallest tier's, a
+        /// warehouse yard and one slipway rather than a berthing deck.
+        const SHIPYARD_FOOTPRINT: PortClass = PortClass::Jetty;
+        /// The farthest, in tiles, the shipyard may sit from the naval port.
+        const SHIPYARD_MAX_DISTANCE_TILES: i32 = 24;
+        /// How many houses the hamlet gets, inclusive.
+        const HOUSES: RangeInclusive<u32> = 4..=8;
+        /// Placement attempts per house before the hamlet makes do with fewer.
+        const HOUSE_ATTEMPTS: u32 = 4;
+
+        let mut rng = reseed(rng);
+        let mut site = Site {
+            origin,
+            name: Some(name.clone()),
+            kind: Some(SiteKind::RiverPort),
+            ..Site::default()
+        };
+        let road_kind = plot::RoadKind {
+            lights: plot::RoadLights::Default,
+            material: plot::RoadMaterial::Cobblestone,
+        };
+
+        site.demarcate_obstacles(land);
+        generator_stats.add(site.name(), GenStatSiteKind::City);
+        site.make_initial_plaza_default(land, index, &mut rng, generator_stats, &name, road_kind);
+
+        if let Some(placement) = site.place_naval_port(land, &mut rng, &name, naval_port) {
+            site.create_naval_port_plot(land, &mut rng, &name, placement, naval_port.dressing);
+        }
+
+        // The yard sits on the same shore as the port, not wherever the next
+        // best stretch of river happens to be.
+        let mut yard_request = naval_port;
+        yard_request.class = SHIPYARD_FOOTPRINT;
+        if let Some(port) = site.naval_port {
+            yard_request = yard_request
+                .with_facing(port.outward)
+                .with_anchor(ShoreAnchor {
+                    tpos: port.hinge.center(),
+                    max_distance_tiles: SHIPYARD_MAX_DISTANCE_TILES,
+                });
+        }
+        if let Some(placement) =
+            site.claim_waterfront(land, &mut rng, &name, yard_request, "shipyard")
+        {
+            let shipyard = plot::Shipyard::generate(
+                land,
+                &mut reseed(&mut rng),
+                &site,
+                placement,
+                naval_port.dressing,
+            );
+            let plot = site.create_plot(Plot {
+                kind: PlotKind::Shipyard(shipyard),
+                root_tile: placement.hinge.center(),
+                tiles: aabr_tiles(placement.apron)
+                    .chain(aabr_tiles(placement.deck))
+                    .collect(),
+            });
+            site.stamp_waterfront_plot(placement, plot);
+        }
+
+        for lodging in [false, true] {
+            if !site.place_tavern(land, index, &mut rng, lodging) {
+                site.make_plaza(land, index, &mut rng, generator_stats, &name, road_kind);
+                site.place_tavern(land, index, &mut rng, lodging);
+            }
+        }
+
+        let houses = rng.random_range(HOUSES);
+        for _ in 0..houses {
+            for _ in 0..HOUSE_ATTEMPTS {
+                let size = (1.5 + rng.random::<f32>().powf(5.0) * 1.0).round() as u32;
+                if let Some((aabr, door_tile, door_dir, alt)) = attempt(32, || {
+                    site.find_roadside_aabr(
+                        &mut rng,
+                        4..(size + 1).pow(2),
+                        Extent2::broadcast(size),
+                    )
+                }) {
+                    let house = plot::House::generate(
+                        land,
+                        &mut reseed(&mut rng),
+                        &site,
+                        door_tile,
+                        door_dir,
+                        aabr,
+                        calendar,
+                        alt,
+                    );
+                    let house_alt = house.alt;
+                    let plot = site.create_plot(Plot {
+                        kind: PlotKind::House(house),
+                        root_tile: aabr.center(),
+                        tiles: aabr_tiles(aabr).collect(),
+                    });
+                    site.blit_aabr(aabr, Tile {
+                        kind: TileKind::Building,
+                        plot: Some(plot),
+                        hard_alt: Some(house_alt),
+                    });
+                    break;
+                }
+                site.make_plaza(land, index, &mut rng, generator_stats, &name, road_kind);
+            }
+        }
+
+        site
+    }
+
     // Size is 0..1
     pub fn generate_city(
         land: &Land,
@@ -1414,32 +1663,7 @@ impl Site {
         if let Some(request) = naval_port
             && let Some(placement) = site.place_naval_port(land, &mut rng, &name, request)
         {
-            // Every tier now builds real walkable dock geometry, not just the
-            // tile claim -- `Jetty`/`Pier` and `Quay`/`Harbour` each have
-            // their own `NavalPort` sub-builders (see `plot::naval_port`).
-            let naval_port =
-                plot::NavalPort::generate(land, &mut reseed(&mut rng), &site, &name, placement);
-            let plot = site.create_plot(Plot {
-                kind: PlotKind::NavalPort(naval_port),
-                root_tile: placement.hinge.center(),
-                tiles: aabr_tiles(placement.apron)
-                    .chain(aabr_tiles(placement.deck))
-                    .collect(),
-            });
-            // Re-blit both halves with the same `kind`/`hard_alt` the
-            // placement pass already wrote, now carrying the plot id --
-            // `Site::render` iterates plots, so nothing drew until this
-            // ran, per `Site::place_naval_port`'s own doc comment.
-            site.blit_aabr(placement.apron, Tile {
-                kind: TileKind::Building,
-                plot: Some(plot),
-                hard_alt: Some(placement.apron_hard_alt),
-            });
-            site.blit_aabr(placement.deck, Tile {
-                kind: TileKind::Pier,
-                plot: Some(plot),
-                hard_alt: None,
-            });
+            site.create_naval_port_plot(land, &mut rng, &name, placement, request.dressing);
         }
 
         let build_chance = Lottery::from(vec![
@@ -1775,6 +1999,7 @@ impl Site {
                             Dir2::from_vec2(door_dir),
                             aabr,
                             alt,
+                            false,
                         );
                         let tavern_alt = tavern.door_wpos.z;
                         let plot = site.create_plot(Plot {

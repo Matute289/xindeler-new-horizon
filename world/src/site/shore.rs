@@ -290,9 +290,9 @@ pub struct PortExclusion {
 /// placement pass.
 ///
 /// Bundled into one struct rather than passed as loose parameters so that
-/// later additions (an authored facing, a berth-count override) can add a
-/// field without another signature change rippling through every
-/// `generate_city` call site in the workspace.
+/// later additions (a berth-count override) can add a field without another
+/// signature change rippling through every `generate_city` call site in the
+/// workspace.
 #[derive(Debug, Clone, Copy)]
 pub struct NavalPortRequest<'a> {
     /// The tier to build. Derived from the settlement's authored category at
@@ -300,12 +300,78 @@ pub struct NavalPortRequest<'a> {
     pub class: PortClass,
     /// Regions the shoreline search must avoid; may be empty.
     pub exclusions: &'a [PortExclusion],
+    /// The cardinal the port's deck must project along, as an authored
+    /// landmark can state which bank of a river its port belongs on. A unit
+    /// cardinal pointing from land out to water, the same convention as
+    /// [`ShorePlacement::outward`]. `None` accepts any waterfront.
+    pub facing: Option<Vec2<i32>>,
+    /// The shared look of a multi-site port district, if this port belongs to
+    /// one.
+    pub dressing: Option<PortDressing>,
+    /// A tile the waterfront must stay close to, for a structure that has to
+    /// sit beside another one already placed. `None` accepts anywhere.
+    pub anchor: Option<ShoreAnchor>,
+}
+
+/// A tile a waterfront footprint has to stay near.
+///
+/// The candidates farther than `max_distance_tiles` (Chebyshev, in tiles) are
+/// dropped outright, and the rest are scored by their distance to `tpos`
+/// instead of to the site origin, so the nearest viable stretch of shore wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShoreAnchor {
+    /// The tile to stay near.
+    pub tpos: Vec2<i32>,
+    /// The farthest a candidate's land tile may be from it, in tiles.
+    pub max_distance_tiles: i32,
 }
 
 impl<'a> NavalPortRequest<'a> {
     pub fn new(class: PortClass, exclusions: &'a [PortExclusion]) -> Self {
-        Self { class, exclusions }
+        Self {
+            class,
+            exclusions,
+            facing: None,
+            dressing: None,
+            anchor: None,
+        }
     }
+
+    /// The same request, restricted to the shore near `anchor`.
+    pub fn with_anchor(mut self, anchor: ShoreAnchor) -> Self {
+        self.anchor = Some(anchor);
+        self
+    }
+
+    /// The same request, restricted to a waterfront facing `facing`.
+    pub fn with_facing(mut self, facing: Vec2<i32>) -> Self {
+        self.facing = Some(facing);
+        self
+    }
+
+    /// The same request, dressed in a district's shared look.
+    pub fn with_dressing(mut self, dressing: PortDressing) -> Self {
+        self.dressing = Some(dressing);
+        self
+    }
+}
+
+/// Keeps only the frontier candidates whose outward normal is `facing`.
+///
+/// Returns the filtered candidates, or `None` when `facing` is `None` or
+/// nothing on the frontier faces that way -- the caller then falls back to
+/// the whole frontier rather than giving the settlement no port.
+fn frontier_facing(
+    frontier: &[ShoreFrontierTile],
+    facing: Option<Vec2<i32>>,
+) -> Option<Vec<ShoreFrontierTile>> {
+    let facing = facing?;
+    let kept: Vec<ShoreFrontierTile> = frontier
+        .iter()
+        .filter(|candidate| candidate.outward == facing)
+        .copied()
+        .collect();
+    (!kept.is_empty()).then_some(kept)
 }
 
 /// One shoreline frontier candidate: a buildable land tile with water within
@@ -662,20 +728,67 @@ impl Site {
     /// `rng` is used only to break near-exact scoring ties (see
     /// [`SHORE_SCORE_TIE_BAND`]); the result is deterministic for a given
     /// world seed.
+    ///
+    /// When `facing` is given the search is first restricted to frontier
+    /// candidates whose outward normal is that cardinal; if no such candidate
+    /// yields a viable footprint the restriction is dropped (with a `warn!`)
+    /// and the whole frontier is searched, so an authored facing can steer a
+    /// port but never leave a settlement without one.
     pub(crate) fn find_shore_aabr(
         &self,
         land: &Land,
         rng: &mut impl Rng,
         class: PortClass,
         exclusions: &[PortExclusion],
+        facing: Option<Vec2<i32>>,
+        anchor: Option<ShoreAnchor>,
     ) -> Result<ShorePlacement, ShoreFailure> {
-        let frontier = self.shore_frontier();
+        let mut frontier = self.shore_frontier();
+        if let Some(anchor) = anchor {
+            frontier.retain(|candidate| {
+                (candidate.land_tpos - anchor.tpos)
+                    .map(|e| e.abs())
+                    .reduce_max()
+                    <= anchor.max_distance_tiles
+            });
+        }
         if frontier.is_empty() {
             return Err(ShoreFailure::NoFrontier);
         }
 
+        if let Some(facing_frontier) = frontier_facing(&frontier, facing) {
+            match self.find_shore_aabr_in(land, rng, class, exclusions, anchor, &facing_frontier) {
+                Ok(placement) => return Ok(placement),
+                Err(reason) => warn!(
+                    ?facing,
+                    %reason,
+                    "no waterfront facing the authored direction was viable, searching every direction"
+                ),
+            }
+        } else if facing.is_some() {
+            warn!(
+                ?facing,
+                "no shoreline candidate faces the authored direction, searching every direction"
+            );
+        }
+        self.find_shore_aabr_in(land, rng, class, exclusions, anchor, &frontier)
+    }
+
+    /// [`Self::find_shore_aabr`] over an explicit candidate list.
+    fn find_shore_aabr_in(
+        &self,
+        land: &Land,
+        rng: &mut impl Rng,
+        class: PortClass,
+        exclusions: &[PortExclusion],
+        anchor: Option<ShoreAnchor>,
+        frontier: &[ShoreFrontierTile],
+    ) -> Result<ShorePlacement, ShoreFailure> {
         let road_dist = RoadDistanceField::build(self);
         let (_, min_dims) = class.apron_dims();
+        // What "near the centre" means for the distance term: the site origin,
+        // or the anchor tile when the footprint has to sit beside something.
+        let centre_wpos = anchor.map_or(self.origin, |anchor| self.tile_center_wpos(anchor.tpos));
 
         let mut candidates: Vec<ScoredCandidate> = frontier
             .iter()
@@ -686,7 +799,7 @@ impl Site {
                 !self.shore_point_is_excluded(candidate.land_tpos, exclusions)
             })
             .filter_map(|candidate| {
-                self.score_shore_candidate(land, *candidate, &road_dist, min_dims)
+                self.score_shore_candidate(land, *candidate, &road_dist, min_dims, centre_wpos)
             })
             .collect();
 
@@ -824,7 +937,35 @@ impl Site {
         site_name: &str,
         request: NavalPortRequest<'_>,
     ) -> Option<ShorePlacement> {
-        match self.find_shore_aabr(land, rng, request.class, request.exclusions) {
+        let placement = self.claim_waterfront(land, rng, site_name, request, "naval port")?;
+        self.naval_port = Some(placement);
+        Some(placement)
+    }
+
+    /// The claim half of [`Self::place_naval_port`]: find a waterfront
+    /// footprint for `request` and blit its apron and deck into the tile grid,
+    /// without recording it as the settlement's naval port.
+    ///
+    /// Split out so a second waterfront structure on the same settlement (a
+    /// shipyard beside its port) can claim a footprint of its own through the
+    /// identical search, exclusions and blits. `what` names the structure in
+    /// the generation log.
+    pub(crate) fn claim_waterfront(
+        &mut self,
+        land: &Land,
+        rng: &mut impl Rng,
+        site_name: &str,
+        request: NavalPortRequest<'_>,
+        what: &str,
+    ) -> Option<ShorePlacement> {
+        match self.find_shore_aabr(
+            land,
+            rng,
+            request.class,
+            request.exclusions,
+            request.facing,
+            request.anchor,
+        ) {
             Ok(placement) => {
                 // The apron is ordinary ground, so it gets the airship dock's
                 // idiom exactly: `TileKind::Building` with a `hard_alt`.
@@ -866,17 +1007,18 @@ impl Site {
                     alt_var = placement.score.alt_var,
                     d_centre_blocks = placement.score.d_centre_blocks,
                     cost = placement.score.cost,
-                    "placed naval port footprint"
+                    structure = what,
+                    "placed waterfront footprint"
                 );
-                self.naval_port = Some(placement);
                 Some(placement)
             },
             Err(reason) => {
                 warn!(
                     site = %site_name,
                     class = ?request.class,
+                    structure = what,
                     %reason,
-                    "no naval port could be placed on this settlement's waterfront"
+                    "no waterfront footprint could be placed on this settlement's waterfront"
                 );
                 None
             },
@@ -891,6 +1033,7 @@ impl Site {
         tile: ShoreFrontierTile,
         road_dist: &RoadDistanceField,
         min_dims: Extent2<u32>,
+        centre_wpos: Vec2<i32>,
     ) -> Option<ScoredCandidate> {
         let d_road = road_dist.get(tile.land_tpos)?;
         let water_run = self.shore_water_run(tile);
@@ -898,7 +1041,7 @@ impl Site {
         let d_centre_blocks = self
             .tile_center_wpos(tile.land_tpos)
             .as_::<f32>()
-            .distance(self.origin.as_::<f32>());
+            .distance(centre_wpos.as_::<f32>());
 
         let cost = SHORE_W_D_ROAD * (f32::from(d_road) / SHORE_D_ROAD_SCALE)
             + SHORE_W_WATER_RUN * (1.0 - water_run as f32 / SHORE_WATER_RUN_PROBE as f32)
@@ -1411,11 +1554,63 @@ mod tests {
         let mut rng = ChaChaRng::from_seed([7u8; 32]);
         assert_eq!(
             with_port
-                .find_shore_aabr(&Land::empty(), &mut rng, PortClass::Harbour, &[])
+                .find_shore_aabr(
+                    &Land::empty(),
+                    &mut rng,
+                    PortClass::Harbour,
+                    &[],
+                    None,
+                    None
+                )
                 .err(),
             Some(ShoreFailure::NoFrontier),
             "a domain that is water hazard end to end has no waterfront to find"
         );
+    }
+
+    fn frontier_tile(outward: Vec2<i32>) -> ShoreFrontierTile {
+        ShoreFrontierTile {
+            land_tpos: Vec2::zero(),
+            water_tpos: outward * 3,
+            outward,
+            band: 2,
+        }
+    }
+
+    #[test]
+    fn frontier_facing_keeps_only_the_authored_cardinal() {
+        let frontier = [
+            frontier_tile(Vec2::new(1, 0)),
+            frontier_tile(Vec2::new(-1, 0)),
+            frontier_tile(Vec2::new(-1, 0)),
+            frontier_tile(Vec2::new(0, 1)),
+        ];
+        let kept = frontier_facing(&frontier, Some(Vec2::new(-1, 0))).expect("two face west");
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|c| c.outward == Vec2::new(-1, 0)));
+    }
+
+    #[test]
+    fn frontier_facing_yields_nothing_to_restrict_to_when_no_candidate_faces_the_cardinal() {
+        let frontier = [
+            frontier_tile(Vec2::new(1, 0)),
+            frontier_tile(Vec2::new(0, 1)),
+        ];
+        assert!(frontier_facing(&frontier, Some(Vec2::new(-1, 0))).is_none());
+        assert!(
+            frontier_facing(&frontier, None).is_none(),
+            "no authored facing means no restriction at all"
+        );
+    }
+
+    #[test]
+    fn a_request_carries_its_facing_and_dressing_without_changing_its_tier() {
+        let request = NavalPortRequest::new(PortClass::Pier, &[]);
+        assert_eq!(request.facing, None);
+        assert!(request.dressing.is_none());
+        let faced = request.with_facing(Vec2::new(0, -1));
+        assert_eq!(faced.facing, Some(Vec2::new(0, -1)));
+        assert_eq!(faced.class, PortClass::Pier);
     }
 
     #[test]

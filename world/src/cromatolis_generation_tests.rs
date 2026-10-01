@@ -1454,9 +1454,11 @@ fn the_13_route_stops_all_generate_a_naval_port() {
 /// nothing further; see the same doc comment). Measured result: 4 of the
 /// tier's nominal 6 berths survive -- 1 `Large` + 3 `Small` -- which is this
 /// real coastline's genuine ceiling, not a bug to chase further. If
-/// Kalthis's authored waterfront position or footprint ever changes (e.g.
-/// COW-24.1 §11.3's footprint-radius bump for the river-port district), this
-/// row needs re-measuring, not just re-approving.
+/// Kalthis's authored waterfront position or footprint ever changes, this
+/// row needs re-measuring, not just re-approving. (Raising the river-port
+/// landmarks' footprint radius from 26 to 80 blocks was re-measured against
+/// the real asset and moved nothing: the harbour sits 432 and 734 blocks from
+/// the two river ports' centres, far outside their 92-block exclusion zones.)
 const EXPECTED_BERTH_CLASSES: &[(PortClass, &[BerthClass])] = &[
     (PortClass::Jetty, &[BerthClass::Small]),
     (PortClass::Pier, &[BerthClass::Large, BerthClass::Small]),
@@ -1781,3 +1783,291 @@ fn every_jetty_has_an_anchorage_or_the_known_exception() {
 /// Per-site layout digests, determinism and terrain-perturbation
 /// experiments for the authored world's civ layer.
 pub(crate) mod site_layouts;
+
+/// The two river-port landmarks: the cardinal each is authored to face, and
+/// the cardinal its port was measured to actually land on.
+///
+/// Duren River Port does not get its authored `East` face. Of the 29
+/// east-facing shoreline candidates its site offers, 26 cannot grow even the
+/// `Pier` tier's minimum apron (the bank is steep hill hazard) and the other 3
+/// fail on the deck gap or the depth gate, so the search falls back to the
+/// whole frontier and lands on `North`. That is real terrain at the authored
+/// pin, not a placement bug: moving the pin, not this table, is what would
+/// give Duren its east-facing port.
+const EXPECTED_RIVER_PORTS: &[(&str, Vec2<i32>, Vec2<i32>)] = &[
+    (
+        "site.kalthis_river_port",
+        Vec2::new(-1, 0),
+        Vec2::new(-1, 0),
+    ),
+    ("site.duren_river_port", Vec2::new(1, 0), Vec2::new(0, 1)),
+];
+
+/// The radius, in blocks, around each river-port landmark that the capital's
+/// own harbour must stay out of: the landmark's authored footprint plus the
+/// clearance the civ layer adds on top of it.
+const RIVER_PORT_EXCLUSION_BLOCKS: i32 = 80 + 12;
+
+/// **The Kalthis-Duren river ports, against the real authored region.**
+///
+/// Each of the two authored river-port landmarks must generate as a real small
+/// settlement rather than a bare landmark: a plaza, a naval port facing its
+/// authored cardinal, a shipyard, a tavern, an inn with a reachable lodging
+/// storey and a handful of houses. Both must share one timber palette and the
+/// district lighting with the capital's own harbour, and their berths must be
+/// discoverable through the same world-wide pass every other port's are.
+///
+/// Requires the real Cromatolis LFS assets to be pulled locally. Recommended
+/// command: `cargo test -p xindeler-world --release --lib
+/// the_river_ports_generate_as_one_dressed_district -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn the_river_ports_generate_as_one_dressed_district() {
+    let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+    let (world, index) = World::generate(
+        0,
+        sim::WorldOpts {
+            seed_elements: true,
+            world_file: sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+            calendar: None,
+        },
+        &threadpool,
+        &|_| {},
+    );
+    let index_ref = index.as_index_ref();
+    let all_berths = all_naval_berths(&index_ref.sites);
+
+    let timber_of = |site: &site::Site| {
+        site.plots()
+            .find_map(|plot| match plot.kind() {
+                PlotKind::NavalPort(port) => Some(port.timber_colour()),
+                _ => None,
+            })
+            .expect("a port site carries a NavalPort plot")
+    };
+
+    let kalthis_timber = world
+        .civs
+        .sites
+        .values()
+        .find(|civ_site| civ_site.authored_id() == Some("site.kalthis"))
+        .and_then(|civ_site| civ_site.site_tmp)
+        .map(|site_id| timber_of(index_ref.sites.get(site_id)))
+        .expect("Kalthis generated a site with a port");
+
+    let mut checked = 0usize;
+    for &(landmark_id, _authored_facing, facing) in EXPECTED_RIVER_PORTS {
+        let civ_site = world
+            .civs
+            .sites
+            .values()
+            .find(|civ_site| civ_site.authored_landmark_id() == Some(landmark_id))
+            .unwrap_or_else(|| panic!("{landmark_id} was not established as a landmark site"));
+        let site_id = civ_site
+            .site_tmp
+            .unwrap_or_else(|| panic!("{landmark_id} did not generate a site"));
+        let site = index_ref.sites.get(site_id);
+
+        assert_eq!(
+            site.kind,
+            Some(site::SiteKind::RiverPort),
+            "{landmark_id} did not generate as a river port"
+        );
+        assert!(
+            matches!(
+                site.meta(),
+                Some(common::terrain::SiteKindMeta::Settlement(_))
+            ),
+            "{landmark_id} must be a settlement so the simulation populates it"
+        );
+        assert!(
+            !civ_site.is_eligible_as_starting_site(),
+            "a landmark must never be a player starting site, even as a settlement"
+        );
+
+        let count = |pick: &dyn Fn(&PlotKind) -> bool| {
+            site.plots().filter(|plot| pick(plot.kind())).count()
+        };
+        let plazas = count(&|k| matches!(k, PlotKind::Plaza(_)));
+        let ports = count(&|k| matches!(k, PlotKind::NavalPort(_)));
+        let yards = count(&|k| matches!(k, PlotKind::Shipyard(_)));
+        let houses = count(&|k| matches!(k, PlotKind::House(_)));
+        let taverns = count(&|k| matches!(k, PlotKind::Tavern(_)));
+        let inns = count(&|k| matches!(k, PlotKind::Tavern(t) if t.lodging));
+        println!(
+            "{landmark_id}: plots={} plaza={plazas} port={ports} shipyard={yards} \
+             tavern={taverns} (inn {inns}) house={houses} placement={:?}",
+            site.plots().len(),
+            site.naval_port
+                .map(|p| (p.class, p.outward, p.apron.size(), p.deck.size())),
+        );
+
+        assert_eq!(ports, 1, "{landmark_id} needs exactly one naval port");
+        assert_eq!(yards, 1, "{landmark_id} needs a shipyard");
+        assert_eq!(taverns, 2, "{landmark_id} needs a tavern and an inn");
+        assert_eq!(
+            inns, 1,
+            "{landmark_id}'s inn needs a reachable lodging storey"
+        );
+        assert!(plazas >= 1, "{landmark_id} needs a plaza");
+        assert!(
+            (1..=8).contains(&houses),
+            "{landmark_id} built {houses} houses"
+        );
+
+        let placement = site
+            .naval_port
+            .unwrap_or_else(|| panic!("{landmark_id} recorded no naval port footprint"));
+        assert_eq!(placement.class, PortClass::Pier);
+        assert_eq!(
+            placement.outward, facing,
+            "{landmark_id}'s port does not face its authored cardinal"
+        );
+
+        assert_eq!(
+            timber_of(site),
+            kalthis_timber,
+            "{landmark_id} does not share the Kalthis harbour's timber"
+        );
+        assert!(
+            site.plots().any(|plot| matches!(
+                plot.kind(),
+                PlotKind::NavalPort(port) if port.is_district_lit()
+            )),
+            "{landmark_id}'s port is not on the district lighting"
+        );
+
+        let site_berths = all_berths
+            .iter()
+            .find(|sb| sb.site == site_id)
+            .unwrap_or_else(|| panic!("{landmark_id}'s port has no entry in all_naval_berths"));
+        // Render the chunks under the shipyard and the inn: the geometry has
+        // to actually be drawn, not just planned. The inn must hold beds and
+        // the yard must carry the district's timber.
+        let timber = timber_of(site);
+        let render_blocks = |plot: &site::Plot| {
+            use common::{
+                terrain::{CoordinateConversions, TerrainChunkSize},
+                vol::{ReadVol, RectVolSize},
+            };
+            let tiles: Vec<Vec2<i32>> = plot.tiles().collect();
+            let min = tiles.iter().fold(tiles[0], |a, b| a.map2(*b, i32::min));
+            let max = tiles.iter().fold(tiles[0], |a, b| a.map2(*b, i32::max));
+            let wmin = site.tile_wpos(min);
+            let wmax = site.tile_wpos(max + 1);
+            let (cmin, cmax) = (wmin.wpos_to_cpos(), wmax.wpos_to_cpos());
+            let (mut beds, mut timber_blocks) = (0usize, 0usize);
+            for cy in cmin.y..=cmax.y {
+                for cx in cmin.x..=cmax.x {
+                    let cpos = Vec2::new(cx, cy);
+                    let Ok((chunk, _)) =
+                        world.generate_chunk(index_ref, cpos, None, || false, None, None)
+                    else {
+                        continue;
+                    };
+                    let origin = cpos * TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+                    for y in 0..TerrainChunkSize::RECT_SIZE.y as i32 {
+                        for x in 0..TerrainChunkSize::RECT_SIZE.x as i32 {
+                            let w = origin + Vec2::new(x, y);
+                            if w.x < wmin.x || w.y < wmin.y || w.x >= wmax.x || w.y >= wmax.y {
+                                continue;
+                            }
+                            for z in chunk.get_min_z()..chunk.get_max_z() {
+                                let Ok(block) = chunk.get(Vec3::new(x, y, z)) else {
+                                    continue;
+                                };
+                                if block.get_sprite()
+                                    == Some(common::terrain::SpriteKind::BedWoodWoodlandHead)
+                                {
+                                    beds += 1;
+                                }
+                                if block.kind() == common::terrain::BlockKind::Wood
+                                    && block.get_color() == Some(timber)
+                                {
+                                    timber_blocks += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            (beds, timber_blocks)
+        };
+        let (inn_beds, _) = site
+            .plots()
+            .find(|plot| matches!(plot.kind(), PlotKind::Tavern(t) if t.lodging))
+            .map(render_blocks)
+            .expect("the inn exists");
+        let (_, yard_timber) = site
+            .plots()
+            .find(|plot| matches!(plot.kind(), PlotKind::Shipyard(_)))
+            .map(render_blocks)
+            .expect("the shipyard exists");
+        println!(
+            "{landmark_id}: rendered inn beds={inn_beds}, shipyard timber blocks={yard_timber}"
+        );
+        assert!(inn_beds >= 1, "{landmark_id}'s inn renders no beds");
+        assert!(
+            yard_timber >= 20,
+            "{landmark_id}'s shipyard renders almost no district timber ({yard_timber} blocks)"
+        );
+
+        println!(
+            "{landmark_id}: berths {:?}",
+            site_berths
+                .berths
+                .iter()
+                .map(|b| (b.class, b.depth))
+                .collect::<Vec<_>>()
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, EXPECTED_RIVER_PORTS.len());
+
+    // The capital's harbour must keep clear of both river ports' footprints,
+    // and the clearance it was measured to keep is recorded here.
+    let kalthis = world
+        .civs
+        .sites
+        .values()
+        .find(|civ_site| civ_site.authored_id() == Some("site.kalthis"))
+        .and_then(|civ_site| civ_site.site_tmp)
+        .map(|site_id| index_ref.sites.get(site_id))
+        .expect("Kalthis generated a site");
+    let harbour = kalthis.naval_port.expect("Kalthis has a harbour");
+    for &(landmark_id, ..) in EXPECTED_RIVER_PORTS {
+        let centre = world
+            .civs
+            .sites
+            .values()
+            .find(|civ_site| civ_site.authored_landmark_id() == Some(landmark_id))
+            .map(|civ_site| {
+                civ_site.center.map2(
+                    common::terrain::TerrainChunkSize::RECT_SIZE,
+                    |e, sz: u32| e * sz as i32 + sz as i32 / 2,
+                )
+            })
+            .expect("the landmark exists");
+        let clearance = [harbour.apron, harbour.deck]
+            .into_iter()
+            .map(|aabr| {
+                let wpos = Aabr {
+                    min: kalthis.tile_wpos(aabr.min),
+                    max: kalthis.tile_wpos(aabr.max),
+                };
+                wpos.projected_point(centre)
+                    .as_::<f32>()
+                    .distance(centre.as_::<f32>()) as i32
+            })
+            .min()
+            .unwrap();
+        println!(
+            "Kalthis harbour clears {landmark_id}'s centre by {clearance} blocks (exclusion \
+             {RIVER_PORT_EXCLUSION_BLOCKS})"
+        );
+        assert!(
+            clearance >= RIVER_PORT_EXCLUSION_BLOCKS,
+            "Kalthis's harbour footprint intrudes into {landmark_id}'s exclusion zone"
+        );
+    }
+}
