@@ -1195,12 +1195,14 @@ impl NavalPort {
     /// are not interchangeable copies of each other -- `Pier`'s `Large`
     /// berth is hard-assigned to the min edge (`BerthSide::Port`) and its
     /// `Small` berth to the max edge (`BerthSide::Starboard`, see
-    /// [`Self::berth_layout`]'s `Pier` arm), and the anchorage search
-    /// downstream ([`Self::find_anchorage`]) specifically requires the
-    /// tender berth to be the `Port`-side one -- so swapping which edge gets
-    /// which class on a per-site basis the way finger class *promotion* does
-    /// is not an option here regardless of what the terrain looks like. Each
-    /// edge therefore gets its own independent search, called with its own
+    /// [`Self::berth_layout`]'s `Pier` arm). That assignment is static per
+    /// tier, not terrain-driven: unlike [`Self::finger_berth_layout`]'s
+    /// `assign_berth_classes`, which exists specifically to promote whichever
+    /// finger the real terrain supports, nothing here swaps which edge gets
+    /// which class on a per-site basis -- not because anything downstream
+    /// requires the `Port` edge specifically, simply because no such
+    /// promotion logic was ever written for `Jetty`/`Pier`. Each edge
+    /// therefore gets its own independent search, called with its own
     /// `min_edge` and its own class's `min_depth`, rather than one shared
     /// lane-wide offset: the two berths were never going to need the same
     /// depth or live at the same lateral position in the first place, so
