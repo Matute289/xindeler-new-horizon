@@ -711,6 +711,18 @@ jobs:
           ssh mgrinberg@greenmountain.dev "mkdir -p /srv/xindeler/downloads/public/updater"
           rsync -avz --progress --delete dist/updater/ "mgrinberg@greenmountain.dev:/srv/xindeler/downloads/public/updater/"
 
+      - name: Retention - keep only this release + the previous one (best effort)
+        # Runs strictly AFTER latest.json was repointed at $VERSION, and the
+        # script itself re-validates latest.json (parses, its dir exists) and
+        # never deletes the latest.json dir, newer dirs, or non-vX.Y.Z entries.
+        # continue-on-error: a prune problem must never fail a published release.
+        # Uses the script from the VPS's live checkout; skipped if that checkout
+        # predates it. See deploy/README-retention.md.
+        continue-on-error: true
+        run: |
+          # shellcheck disable=SC2029
+          ssh mgrinberg@greenmountain.dev "P=/opt/xindeler-server/src/deploy/prune-old-builds.sh; if [ -x \$P ]; then \$P --apply --only downloads --from-deploy; else echo 'prune script not on VPS yet; skipping'; fi"
+
       - name: Report
         run: |
           echo "Published $VERSION to https://downloads.xindeler.com/releases/$VERSION/"
