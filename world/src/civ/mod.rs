@@ -968,6 +968,11 @@ struct AuthoredLandmarkProfile {
     /// then share one port palette and lighting.
     #[serde(default)]
     district_seat: Option<String>,
+    /// Authored ids of the settlements this landmark is linked to by a
+    /// walkable travel edge. A river port is not a settlement for the
+    /// automatic road linker, so its links are declared here instead.
+    #[serde(default)]
+    road_links: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -2247,6 +2252,7 @@ impl Civs {
                     CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS,
                 );
             }
+            this.establish_river_port_links();
             report_stage(WorldCivStage::CivCreation(1, 1));
         } else {
             for i in 0..initial_civ_count {
@@ -3597,6 +3603,57 @@ impl Civs {
             established,
             "Established authored Cromatolis RTSim route edges"
         );
+    }
+
+    /// Registers a land travel edge from every landmark whose profile lists
+    /// `road_links` to each settlement it names, so NPCs can walk between
+    /// the parts of a river-port district.
+    ///
+    /// Each edge is a straight two-node `Track` between the two site
+    /// centres. It carves nothing into the terrain, consumes no randomness,
+    /// and skips a pair that already has a track in either direction, so
+    /// every other site's tracks are exactly what they were without it.
+    /// Landmarks do not take part in the economy simulation, so the edges
+    /// add no economy neighbours.
+    fn establish_river_port_links(&mut self) {
+        let by_authored_id = self
+            .sites
+            .iter()
+            .filter_map(|(id, site)| site.authored_id().map(|authored| (authored.to_owned(), id)))
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut links = Vec::new();
+        for (landmark, site) in self.sites.iter() {
+            let Some(profile) = site
+                .authored_landmark
+                .as_ref()
+                .and_then(|landmark| landmark.profile.as_ref())
+            else {
+                continue;
+            };
+            for target_id in &profile.road_links {
+                match by_authored_id.get(target_id) {
+                    Some(&target) if target != landmark => links.push((landmark, target)),
+                    _ => warn!(
+                        landmark = ?site.authored_landmark_id(),
+                        target = %target_id,
+                        "Landmark road link has no settlement to reach"
+                    ),
+                }
+            }
+        }
+        for (from, to) in links {
+            if self.track_between(from, to).is_some() {
+                continue;
+            }
+            let path = vec![self.sites.get(from).center, self.sites.get(to).center];
+            let cost = path[0].as_::<f32>().distance(path[1].as_()).max(1.0);
+            let track = self.tracks.insert(Track {
+                cost,
+                kind: TrackKind::Land,
+                path: Path { nodes: path },
+            });
+            self.track_map.entry(from).or_default().insert(to, track);
+        }
     }
 
     /// Establishes logical travel edges for Cromatolis's authored maritime
@@ -6572,6 +6629,7 @@ mod tests {
                 light_range: 0,
                 facing: AuthoredLandmarkFacing::North,
                 district_seat: seat.map(str::to_string),
+                road_links: Vec::new(),
             }),
         });
         site
