@@ -8752,7 +8752,7 @@ mod tests {
     /// reviewed package. Belletoile is a dry authored lowland: the v22
     /// terrain master samples it at about 92.94 m above the external sea
     /// level. The real WorldSim interpolation yields about 96.82 m at the
-    /// matching chunk, while the paired river raster retains all 33,566
+    /// matching chunk, while the paired river raster retains all 31,842
     /// binary corridor cells.
     ///
     /// ⚠️ The cell count was **28,200** until COW-22 `[OQ3]`
@@ -8783,6 +8783,18 @@ mod tests {
     /// trusting the net alone. Belletoile is inland and its relief is
     /// bit-identical before and after (96.817 m), so this assertion still
     /// pins the terrain package as tightly as it did.
+    ///
+    /// ⚠️ The count moved a third time, 33,566 → 31,842 (-1,724), when the
+    /// nine overwide Whitekasing tributaries in `water_mask_manual` were
+    /// repainted as narrow channels (`water_mask_manual_v13`). The terrain did
+    /// not move: only the water mask did, and the corridor is derived from it.
+    /// 1,737 corridor cells left the mask -- 1,723 are the chunks of the old
+    /// 80-350 m wide tributaries, now dry, and 14 moved into the standing basin
+    /// of Grave Pond (`EXPORTED_LAKE_CELLS` +14 is the same cells seen from the
+    /// standing-water side) -- while 13 chunks of the new narrow channels lie
+    /// outside the old paint and joined it: net -1,724. Measured by diffing the
+    /// exporter's classifier output over the old and regenerated masters, not
+    /// derived analytically.
     ///
     /// Requires the real LFS assets, so CI without the VPS asset store skips
     /// it just like the other real-Cromatolis regressions in this module.
@@ -8848,9 +8860,9 @@ mod tests {
                 .iter()
                 .filter(|value| **value == 1.0)
                 .count(),
-            33_566,
-            "v22 terrain must never be paired with the obsolete 1,876-cell, 28,200-cell or \
-             33,127-cell river raster"
+            31_842,
+            "v22 terrain must never be paired with the obsolete 1,876-cell, 28,200-cell, \
+             33,127-cell or 33,566-cell river raster"
         );
 
         // The containment `authored_river_kind_override`'s and
@@ -8985,6 +8997,214 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Requires the real Cromatolis LFS assets, same precedent as
+    /// `cromatolis_world_orientation_regression_against_real_lfs_assets`
+    /// above. The consumer-side check for the Whitekasing tributary repaint
+    /// (`water_mask_manual_v13`).
+    ///
+    /// The nine Whitekasing elevated-descent rivers end at the foothills, and
+    /// the painted water they used to flow into was nine 80-350 m wide
+    /// tributaries fused with Grave Pond: wider than the engine's 64 m river
+    /// limit, so the whole network resolved as one flat sea-level `Lake` laid
+    /// across real mountain terrain (1,375 `Lake` chunks in the foothill box,
+    /// 17 separate lake components touching it, 35 of the chunks sitting on
+    /// authored relief of 300 m or more). The repaint replaces each tributary
+    /// with a single-chunk-wide channel routed down the real terrain from the
+    /// stroke's mouth to Grave Pond. This asserts, per channel and against the
+    /// real regenerated engine, that:
+    /// - the channel is a connected run of real `RiverKind::River` chunks with
+    ///   a legal cross-section, a downhill neighbour and nonzero flow velocity,
+    ///   with the exact chunk count the repaint produced (nine channels, 312
+    ///   chunks; the two mouths of the forked stroke share one);
+    /// - it never rises to the stroke's own mouth altitude (it descends away
+    ///   from the mountain), and touches Grave Pond;
+    /// - following `downhill` from the stroke's mouth chunk reaches Grave Pond
+    ///   (a `Lake` chunk), so every stroke really does drain into it; and
+    /// - the foothill flat pit is gone: exactly one lake component touches the
+    ///   foothill box, it is Grave Pond, and it holds 315 chunks there (down
+    ///   from 1,375).
+    ///
+    /// The channel's last chunk or two against the pond are `Lake` by
+    /// construction -- the chunk beside a wide body sits inside that body's
+    /// own wide disc -- so they are outside the `River` run counted here and
+    /// are checked through the pond-contact assertion instead.
+    #[test]
+    #[ignore]
+    fn cromatolis_whitekasing_tributaries_drain_into_grave_pond_against_real_lfs_assets() {
+        use std::collections::{HashSet, VecDeque};
+
+        let sim = generate_cromatolis_world();
+        let map_size_lg = sim.map_size_lg();
+        let elevated_rivers =
+            AuthoredF32Layer::load_owned("world.map.cromatolis_v0_elevated_rivers")
+                .expect("real Cromatolis LFS assets must include the elevated-river raster");
+        let is_stroke = |pos: Vec2<i32>| {
+            authored_layer_value_for_cromatolis_v0(
+                map_size_lg,
+                vec2_as_uniform_idx(map_size_lg, pos),
+                &elevated_rivers.values,
+            ) >= AUTHORED_WATER_THRESHOLD
+        };
+        let is_river = |pos: Vec2<i32>| {
+            sim.get(pos)
+                .is_some_and(|chunk| chunk.river.river_kind.is_some_and(|kind| kind.is_river()))
+        };
+        let is_lake = |pos: Vec2<i32>| {
+            sim.get(pos)
+                .is_some_and(|chunk| matches!(chunk.river.river_kind, Some(RiverKind::Lake { .. })))
+        };
+        let neighbours = |pos: Vec2<i32>| {
+            (-1..=1).flat_map(move |dy| {
+                (-1..=1)
+                    .filter(move |dx| *dx != 0 || dy != 0)
+                    .map(move |dx| pos + Vec2::new(dx, dy))
+            })
+        };
+
+        // Grave Pond, as one connected `Lake` component: the chunk at master
+        // pixel (15729, 21627), which is chunk (491, 901) from the top.
+        let pond_probe = Vec2::new(491, i32::from(map_size_lg.chunks().y) - 1 - 901);
+        assert!(
+            is_lake(pond_probe),
+            "Grave Pond's probe chunk must be a lake"
+        );
+        let mut pond = HashSet::new();
+        let mut queue = VecDeque::from([pond_probe]);
+        pond.insert(pond_probe);
+        while let Some(pos) = queue.pop_front() {
+            for next in neighbours(pos) {
+                if is_lake(next) && pond.insert(next) {
+                    queue.push_back(next);
+                }
+            }
+        }
+
+        // `(mouth chunk, River chunks in its channel)`, engine coordinates, the
+        // mouth chunks being the ones `cromatolis_elevated_rivers_descend_from_
+        // source_to_mouth_against_real_lfs_assets` pins. `(513, 82)` and
+        // `(509, 78)` are the two mouths of the forked stroke and drain
+        // through one shared channel.
+        let mouths: &[((i32, i32), usize)] = &[
+            ((549, 109), 43),
+            ((524, 88), 31),
+            ((513, 82), 40),
+            ((509, 78), 40),
+            ((478, 73), 34),
+            ((494, 69), 38),
+            ((471, 69), 35),
+            ((437, 68), 28),
+            ((459, 68), 32),
+            ((450, 66), 31),
+        ];
+        let mut distinct_channels: HashSet<Vec2<i32>> = HashSet::new();
+        for &((mouth_x, mouth_y), expected_chunks) in mouths {
+            let mouth = Vec2::new(mouth_x, mouth_y);
+            let mouth_alt = sim.get(mouth).expect("in-bounds mouth chunk").alt;
+
+            // The channel: River chunks outside every stroke, connected to one
+            // another, reachable from within three chunks of the mouth (the
+            // stroke is a few chunks wide, so its own tip is not adjacent).
+            let mut channel: HashSet<Vec2<i32>> = HashSet::new();
+            let mut queue = VecDeque::new();
+            for dy in -3..=3 {
+                for dx in -3..=3 {
+                    let pos = mouth + Vec2::new(dx, dy);
+                    if is_river(pos) && !is_stroke(pos) && channel.insert(pos) {
+                        queue.push_back(pos);
+                    }
+                }
+            }
+            while let Some(pos) = queue.pop_front() {
+                for next in neighbours(pos) {
+                    if is_river(next) && !is_stroke(next) && channel.insert(next) {
+                        queue.push_back(next);
+                    }
+                }
+            }
+            assert_eq!(
+                channel.len(),
+                expected_chunks,
+                "channel from mouth {mouth:?} must be the {expected_chunks} River chunks the \
+                 repaint produced"
+            );
+
+            let mut max_alt = f32::NEG_INFINITY;
+            let mut touches_pond = false;
+            for &pos in &channel {
+                let chunk = sim.get(pos).expect("in-bounds channel chunk");
+                let Some(RiverKind::River { cross_section }) = chunk.river.river_kind else {
+                    unreachable!("the channel is made of River chunks");
+                };
+                assert!(
+                    cross_section.x <= CROMATOLIS_MAX_RIVER_WIDTH,
+                    "channel chunk {pos:?} is wider than the carveable maximum: {cross_section:?}"
+                );
+                assert!(
+                    chunk.downhill.is_some(),
+                    "channel chunk {pos:?} has no downhill neighbour"
+                );
+                assert!(
+                    chunk.river.velocity.magnitude() > 0.0,
+                    "channel chunk {pos:?} has no flow velocity"
+                );
+                max_alt = max_alt.max(chunk.alt);
+                touches_pond |= neighbours(pos).any(|next| pond.contains(&next));
+            }
+            assert!(
+                max_alt < mouth_alt,
+                "channel from mouth {mouth:?} rises to {max_alt:.1} m, not below the stroke's \
+                 mouth chunk at {mouth_alt:.1} m"
+            );
+            assert!(
+                touches_pond,
+                "channel from mouth {mouth:?} never reaches Grave Pond"
+            );
+            distinct_channels.extend(channel);
+
+            // Follow the engine's own drainage from the mouth chunk.
+            let mut pos = mouth;
+            let mut steps = 0;
+            while !pond.contains(&pos) {
+                let downhill = sim
+                    .get(pos)
+                    .and_then(|chunk| chunk.downhill)
+                    .unwrap_or_else(|| {
+                        panic!("drainage from mouth {mouth:?} dead-ends at {pos:?}")
+                    });
+                pos = downhill.map(|e| e.div_euclid(TerrainChunkSize::RECT_SIZE.x as i32));
+                steps += 1;
+                assert!(
+                    steps <= 120,
+                    "drainage from mouth {mouth:?} has not reached Grave Pond in {steps} chunks"
+                );
+            }
+        }
+        assert_eq!(
+            distinct_channels.len(),
+            312,
+            "the nine channels hold 312 River chunks between them"
+        );
+
+        // The flat pit: the old network touched this foothill box (master
+        // chunk columns 434..=558, rows 913..=978) with 1,375 `Lake` chunks in
+        // 17 components. Now the only lake in it is Grave Pond.
+        let (box_x, box_y) = (434..=558, 45..=110);
+        let mut lakes_in_box = 0;
+        for y in box_y {
+            for x in box_x.clone() {
+                let pos = Vec2::new(x, y);
+                if is_lake(pos) {
+                    lakes_in_box += 1;
+                    assert!(
+                        pond.contains(&pos),
+                        "foothill chunk {pos:?} is a lake that is not part of Grave Pond"
+                    );
+                }
+            }
+        }
+        assert_eq!(lakes_in_box, 315, "Grave Pond's share of the foothill box");
     }
 
     /// Requires the real Cromatolis LFS assets, same precedent as
@@ -9310,14 +9530,22 @@ mod tests {
     // standing water touches it", which is exactly the drift that would
     // silently mis-paint a coastline.
 
-    /// Cells in the authored `water` mask.
-    const AUTHORED_WATER_MASK_CELLS: usize = 366_935;
-    /// Corridor cells, across 72 substantial river systems.
-    const EXPORTED_RIVER_CELLS: usize = 33_566;
+    /// Cells in the authored `water` mask. 366,935 until the nine overwide
+    /// Whitekasing tributaries were repainted as narrow channels
+    /// (`water_mask_manual_v13`): 1,723 chunks of old tributary water left the
+    /// mask and 13 channel chunks outside it joined, net -1,710.
+    const AUTHORED_WATER_MASK_CELLS: usize = 365_225;
+    /// Corridor cells, across 73 substantial river systems. 33,566 before the
+    /// tributary repaint, which removed 1,724 corridor cells net (see
+    /// `cromatolis_v22_relief_and_river_package_regression_against_real_lfs_assets`).
+    const EXPORTED_RIVER_CELLS: usize = 31_842;
     /// Standing-water cells in the 24 basins that touch marine water.
     const EXPORTED_LAGOON_CELLS: usize = 2_815;
-    /// Standing-water cells in the 14 landlocked basins.
-    const EXPORTED_LAKE_CELLS: usize = 13_872;
+    /// Standing-water cells in the 14 landlocked basins. 13,872 before the
+    /// tributary repaint; the +14 are corridor cells at the old tributary
+    /// mouths that the exporter's shape vote now assigns to Grave Pond's
+    /// standing basin.
+    const EXPORTED_LAKE_CELLS: usize = 13_886;
     /// Marine cells: `water` mask ∧ the `get_oceans` flood fill, minus the
     /// corridor cells the river mask claims first.
     const EXPORTED_MARINE_CELLS: usize = 316_682;
@@ -9352,7 +9580,19 @@ mod tests {
     /// newly wet. Measured against the real regenerated engine
     /// (`count(WaterBodyKind::River)` moved from 33,566+189=33,755 to
     /// 33,830, i.e. 33,566 unchanged + 264), not derived analytically.
-    const ELEVATED_RIVER_NET_NEW_WET_CELLS: usize = 264;
+    ///
+    /// ⚠️ **+594, 264 → 858, with the Whitekasing tributary repaint
+    /// (`water_mask_manual_v13`).** Nothing about the elevated rivers moved
+    /// (the raster and its 924 chunks are bit-identical). What moved is how
+    /// many of them sit inside the painted `water`/`river_channels` masks: the
+    /// old wide tributaries ran underneath the strokes, so 660 of the 924
+    /// chunks were already wet. The repaint erased that paint, so only 66 of
+    /// the 924 still overlap the corridor (near the channel mouths) and 594 of
+    /// the 660 are now wet only by virtue of the elevated-river override.
+    /// Measured as `(elevated_rivers >= 0.5) & !(water | river_channels)`
+    /// over the regenerated rasters (858) and confirmed by
+    /// `count(WaterBodyKind::River)` = 31,842 + 858 = 32,700.
+    const ELEVATED_RIVER_NET_NEW_WET_CELLS: usize = 858;
     /// Corridor cells sitting in a channel narrow enough to carve as a real
     /// `RiverKind::River` (local channel width within
     /// `CROMATOLIS_MAX_RIVER_WIDTH`): 12.4% of them. Cromatolis genuinely has
@@ -9389,7 +9629,17 @@ mod tests {
     /// the real regenerated engine
     /// (`cromatolis_rivers_are_carveable_against_real_lfs_assets`: 5,054),
     /// not derived analytically.
-    const CARVEABLE_RIVER_CELLS: usize = 5_054;
+    ///
+    /// ⚠️ **+312, 5,054 → 5,366, with the Whitekasing tributary repaint
+    /// (`water_mask_manual_v13`).** The 312 are exactly the chunks of the nine
+    /// narrow channels (43 + 31 + 40 + 34 + 38 + 35 + 28 + 32 + 31, one of the
+    /// nine shared by the two mouths of a forked stroke): every one is a
+    /// single-chunk-wide corridor, so it carves, where the 80-350 m
+    /// tributaries it replaced were typed `Lake` by their width. The 924
+    /// elevated-river chunks were already `River` and neither gain nor lose
+    /// anything. Verified channel by channel by
+    /// `cromatolis_whitekasing_tributaries_drain_into_grave_pond_against_real_lfs_assets`.
+    const CARVEABLE_RIVER_CELLS: usize = 5_366;
 
     /// Counts every `WaterBodyKind` across the real Cromatolis map and
     /// reconciles it against the numbers the open-world exporter measured
@@ -9408,7 +9658,7 @@ mod tests {
                 .count()
         };
 
-        // Exporter: 33,566 corridor cells across 72 substantial systems, plus
+        // Exporter: 31,842 corridor cells across 73 substantial systems, plus
         // COW18.5-C2's 189 net-new elevated-river cells the exporter's own
         // river_channels count does not (and should not) include -- see
         // `ELEVATED_RIVER_NET_NEW_WET_CELLS`.
@@ -9418,7 +9668,7 @@ mod tests {
         );
         // Exporter: 24 lagoon basins, 2,815 cells.
         assert_eq!(count(WaterBodyKind::Lagoon), EXPORTED_LAGOON_CELLS);
-        // Exporter: 14 lake basins, 13,872 cells, plus the stray
+        // Exporter: 14 lake basins, 13,886 cells, plus the stray
         // `elevated_lakes` cells (see `STRAY_ELEVATED_LAKE_CELLS`).
         assert_eq!(
             count(WaterBodyKind::Lake),
@@ -9750,11 +10000,33 @@ mod tests {
         // The -27 these three lose is absorbed by the banded Jungle/Forest/
         // Swamp group below (deliberately not pinned exactly) and by `Lake`
         // (already re-baselined via `ELEVATED_RIVER_NET_NEW_WET_CELLS`).
-        assert_eq!(biome_count(BiomeKind::Savannah), 2_232);
-        assert_eq!(biome_count(BiomeKind::Grassland), 179_746);
-        assert_eq!(biome_count(BiomeKind::Taiga), 45_900);
-        assert_eq!(biome_count(BiomeKind::Mountain), 27_970);
-        assert_eq!(biome_count(BiomeKind::Snowland), 32_962);
+        //
+        // ⚠️ Re-baselined again for the Whitekasing tributary repaint
+        // (`water_mask_manual_v13`), which is a water-mask edit and not a relief
+        // edit: 1,116 chunks that read `Lake` (the old wide tributary beds) now
+        // read as land, and the land biomes take them together with the usual
+        // CDF knock-on. Measured on the regenerated engine (old values are the
+        // ones pinned above and, for the banded biomes, the counts measured
+        // just before this edit: the old band references were Jungle 68,339,
+        // Forest 310,459 and Swamp 13,856, and Jungle and Forest had drifted
+        // to 68,319 and 310,390 inside their bands without the references
+        // being touched):
+        //
+        //   Savannah   2,232 ->   2,266  ( +34)   Grassland 179,746 -> 180,103 (+357)
+        //   Taiga     45,900 ->  45,922  ( +22)   Mountain   27,970 ->  27,971 (  +1)
+        //   Snowland  32,962 ->  32,971  (  +9)   Jungle     68,319 ->  69,084 (+765)
+        //   Forest   310,390 -> 310,520  (+130)   Swamp      13,856 ->  13,654 (-202)
+        //
+        // The eight add up to +1,116, exactly what `Lake` lost. `Swamp` is the
+        // only land biome that shrinks: it needs authored water next to dry
+        // ground, and the wide tributary network was the longest shoreline in
+        // the foothills. `Jungle` takes most of the freed ground because the
+        // Whitekasing foothills sit in the painted tropical south.
+        assert_eq!(biome_count(BiomeKind::Savannah), 2_266);
+        assert_eq!(biome_count(BiomeKind::Grassland), 180_103);
+        assert_eq!(biome_count(BiomeKind::Taiga), 45_922);
+        assert_eq!(biome_count(BiomeKind::Mountain), 27_971);
+        assert_eq!(biome_count(BiomeKind::Snowland), 32_971);
         // Banded instead: the biomes where a small move really would be the CDF
         // knock-on rather than a design change, so that an unrelated CDF shift
         // reads as one signal instead of three simultaneous "failures".
@@ -9766,9 +10038,9 @@ mod tests {
         // (310,459 -> 310,390) moved too but stayed inside the band, so their
         // references are left as-is per this loop's own design.
         for (biome, measured) in [
-            (BiomeKind::Jungle, 68_339.0),
-            (BiomeKind::Forest, 310_459.0),
-            (BiomeKind::Swamp, 13_856.0),
+            (BiomeKind::Jungle, 69_084.0),
+            (BiomeKind::Forest, 310_520.0),
+            (BiomeKind::Swamp, 13_654.0),
         ] {
             let counted = biome_count(biome) as f64;
             assert!(
@@ -10351,15 +10623,18 @@ mod tests {
     // those two files after `C22-3` regenerated them) -- reconciled in a
     // follow-up (corridor 33,566, marine 316,682, lagoon 2,815, lake
     // unchanged at 13,872, all re-confirmed against the `xindeler-open-world`
-    // exporter's own independent measurement, not just this engine's). The
+    // exporter's own independent measurement, not just this engine's; the
+    // tributary repaint later moved corridor to 31,842 and lake to 13,886,
+    // measured the same way). The
     // biome histogram in
     // `cromatolis_inland_water_is_no_longer_ocean_against_real_lfs_assets`
     // was reconciled in the same pass.
 
     /// Corridor chunks a component needs before it counts as a river *system*
     /// rather than a puddle or a one-chunk artefact of the raster. At this
-    /// threshold the engine's own component labelling finds 72 systems, which
-    /// is exactly the count the open-world exporter measured independently.
+    /// threshold the engine's own component labelling found 72 systems, which
+    /// was exactly the count the open-world exporter measured independently
+    /// before the Whitekasing tributary repaint split one of them into two.
     const SUBSTANTIAL_RIVER_COMPONENT_CHUNKS: usize = 20;
 
     /// Every `Salinity` across the real Cromatolis map.
@@ -10390,9 +10665,19 @@ mod tests {
         // every net-new one lands in the map's existing "far from the sea"
         // freshwater rule. Everything else (Ocean/Lake/Lagoon crosses,
         // Brackish, Saline) is untouched.
+        //
+        // ⚠️ Re-baselined again for the Whitekasing tributary repaint
+        // (`water_mask_manual_v13`): the freshwater base drops 24,526 → 22,816
+        // (-1,710), and nothing else moves. The 1,737 corridor cells that left
+        // the corridor were all `River/Fresh` (they sit far from the sea, so
+        // the estuary rule never touched them) and 13 new channel chunks joined
+        // it: 15,134 → 13,410 (-1,724). The 14 of those 1,737 that the pond
+        // basin took over are `Lake/Fresh`: 9,392 → 9,406. Brackish, Saline and
+        // every salt cross are bit-identical. Measured against the regenerated
+        // engine; the two deltas add up to the freshwater total.
         assert_eq!(
             count(Salinity::Fresh),
-            24_526 + ELEVATED_RIVER_NET_NEW_WET_CELLS
+            22_816 + ELEVATED_RIVER_NET_NEW_WET_CELLS
         );
         assert_eq!(count(Salinity::Brackish), 7_624);
         assert_eq!(count(Salinity::Saline), 334_787);
@@ -10404,13 +10689,13 @@ mod tests {
         // The estuary gradient: fresh above it, salt at the waterline.
         assert_eq!(
             cross(WaterBodyKind::River, Salinity::Fresh),
-            15_134 + ELEVATED_RIVER_NET_NEW_WET_CELLS
+            13_410 + ELEVATED_RIVER_NET_NEW_WET_CELLS
         );
         assert_eq!(cross(WaterBodyKind::River, Salinity::Brackish), 5_471);
         assert_eq!(cross(WaterBodyKind::River, Salinity::Saline), 12_961);
         // Two of the map's fourteen lake basins are closed depressions below
         // sea level; the other twelve drain to the sea.
-        assert_eq!(cross(WaterBodyKind::Lake, Salinity::Fresh), 9_392);
+        assert_eq!(cross(WaterBodyKind::Lake, Salinity::Fresh), 9_406);
         assert_eq!(cross(WaterBodyKind::Lake, Salinity::Saline), 4_482);
         assert_eq!(cross(WaterBodyKind::Lake, Salinity::Brackish), 0);
         // Eleven of the twenty-four lagoon basins have no freshwater channel
@@ -10496,7 +10781,14 @@ mod tests {
             &alt,
         );
 
-        assert_eq!(components.len(), 434, "components of the corridor network");
+        // ⚠️ 434 -> 435 with the Whitekasing tributary repaint. The nine
+        // elevated-descent rivers used to sit in three corridor components (3,709,
+        // 355 and 583 chunks) because the wide tributaries welded them together
+        // and to Grave Pond's corridor-labelled arms; they now sit in four (3,087,
+        // 132, 129 and 169 chunks), each narrow channel carrying its river into
+        // the pond. Measured by labelling `river_channels | elevated_rivers`
+        // before and after, and confirmed by the engine's own labelling here.
+        assert_eq!(components.len(), 435, "components of the corridor network");
         assert_eq!(
             components
                 .iter()
@@ -10513,14 +10805,14 @@ mod tests {
             .iter()
             .filter(|component| component.len >= SUBSTANTIAL_RIVER_COMPONENT_CHUNKS)
             .collect::<Vec<_>>();
-        assert_eq!(substantial.len(), 72, "substantial river systems");
+        assert_eq!(substantial.len(), 73, "substantial river systems");
         assert_eq!(
             substantial
                 .iter()
                 .filter(|component| !component.mouths.is_empty())
                 .count(),
             64,
-            "substantial systems reaching the sea; the other eight end in inland water the \
+            "substantial systems reaching the sea; the other nine end in inland water the \
              classification calls a lake"
         );
 
