@@ -1,0 +1,11 @@
+[Unit]
+Description=Monthly Xindeler VPS retention cleanup
+
+[Timer]
+OnCalendar=monthly
+# If the VPS was off at the scheduled time, run once at next boot.
+Persistent=true
+RandomizedDelaySec=2h
+
+[Install]
+WantedBy=timers.target
