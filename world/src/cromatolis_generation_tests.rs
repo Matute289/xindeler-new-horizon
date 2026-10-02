@@ -2074,3 +2074,71 @@ fn the_river_ports_generate_as_one_dressed_district() {
         );
     }
 }
+
+/// **The river ports are walkable-linked to Kalthis and Duren.**
+///
+/// Each river port declares `road_links` to both settlements, and the civ
+/// layer must turn every one into a land `Track` NPCs can path along. The
+/// links must add edges only at the landmarks: exactly four tracks touch a
+/// landmark, so no other site's tracks changed.
+///
+/// Requires the real Cromatolis LFS assets. Recommended command: `cargo test
+/// -p xindeler-world --release --lib the_river_ports_are_road_linked --
+/// --ignored`
+#[test]
+#[ignore]
+fn the_river_ports_are_road_linked_to_kalthis_and_duren() {
+    use crate::civ::TrackKind;
+    let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+    let (world, _index) = World::generate(
+        0,
+        sim::WorldOpts {
+            seed_elements: true,
+            world_file: sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+            calendar: None,
+        },
+        &threadpool,
+        &|_| {},
+    );
+    let by_authored = |id: &str| {
+        world
+            .civs
+            .sites
+            .iter()
+            .find(|(_, s)| s.authored_id() == Some(id) || s.authored_landmark_id() == Some(id))
+            .map(|(site_id, _)| site_id)
+            .unwrap_or_else(|| panic!("{id} was not established"))
+    };
+    let kalthis = by_authored("site.kalthis");
+    let duren = by_authored("site.duren");
+    for port_id in ["site.kalthis_river_port", "site.duren_river_port"] {
+        let port = by_authored(port_id);
+        for (name, target) in [("Kalthis", kalthis), ("Duren", duren)] {
+            let (track, _) = world
+                .civs
+                .land_track_between(port, target)
+                .unwrap_or_else(|| panic!("{port_id} has no land link to {name}"));
+            let track = world.civs.tracks.get(track);
+            assert_eq!(track.kind, TrackKind::Land);
+            println!("{port_id} -> {name}: cost {:.1}", track.cost);
+        }
+    }
+    let landmark_ids: Vec<_> = world
+        .civs
+        .sites
+        .iter()
+        .filter(|(_, s)| s.authored_landmark_id().is_some())
+        .map(|(id, _)| id)
+        .collect();
+    let touching = world
+        .civs
+        .track_map
+        .iter()
+        .flat_map(|(from, dests)| dests.keys().map(move |to| (*from, *to)))
+        .filter(|(a, b)| landmark_ids.contains(a) || landmark_ids.contains(b))
+        .count();
+    assert_eq!(
+        touching, 4,
+        "only the four river-port links may touch a landmark"
+    );
+}
