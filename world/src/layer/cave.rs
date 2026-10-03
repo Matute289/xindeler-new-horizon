@@ -64,7 +64,8 @@ fn node_at(cell: Vec2<i32>, level: u32, land: &Land) -> Option<Node> {
 
             if level > 0
                 || (!chunk.near_cliffs()
-                    && !chunk.river.near_water()
+                    // XINDELER: authored-aware (authored water regions).
+                    && !land.near_water_at(wpos).unwrap_or_else(|| chunk.river.near_water())
                     && chunk.sites.is_empty()
                     && land.get_gradient_approx(wpos) < 0.75)
             {

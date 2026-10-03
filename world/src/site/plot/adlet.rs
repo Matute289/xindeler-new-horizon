@@ -161,9 +161,10 @@ impl AdletStronghold {
                 };
 
                 // Check that structure not in the water or too close to another structure
+                // XINDELER: authored-aware (authored water regions).
                 if land
-                    .get_chunk_wpos(structure_center.as_() + entrance)
-                    .is_some_and(|c| c.is_underwater())
+                    .chunk_water_wpos(structure_center.as_() + entrance)
+                    .is_some_and(|w| w.underwater)
                     || outer_structures.iter().any(|(kind, rpos, _dir)| {
                         structure_center.distance_squared(*rpos)
                             < structure_kind.required_separation(kind).pow(2)

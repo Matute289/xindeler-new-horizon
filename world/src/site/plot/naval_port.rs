@@ -238,10 +238,7 @@ impl NavalPort {
         let sample_water_alt = |wpos: Vec2<i32>| {
             land.authored_water_at(wpos)
                 .map(|water| water.surface_alt() as i32)
-                .or_else(|| {
-                    land.get_chunk_wpos(wpos)
-                        .map(|chunk| chunk.water_alt as i32)
-                })
+                .or_else(|| land.chunk_water_wpos(wpos).map(|w| w.water_alt as i32))
         };
         let water_alt = [
             deck.min,
@@ -1539,8 +1536,7 @@ impl NavalPort {
         if let Some(depth) = land.authored_depth_at(wpos) {
             return Some(depth);
         }
-        land.get_chunk_wpos(wpos)
-            .map(|chunk| (chunk.water_alt - chunk.alt) as i32)
+        land.chunk_water_wpos(wpos).map(|w| w.depth() as i32)
     }
 
     /// Whether every sampled point of the straight segment `from -> to`
@@ -1551,8 +1547,7 @@ impl NavalPort {
     fn segment_is_over_water(&self, land: &Land, from: Vec2<i32>, to: Vec2<i32>) -> bool {
         (0..=WATER_SEGMENT_SAMPLES).all(|i| {
             let p = from + (to - from) * i / WATER_SEGMENT_SAMPLES;
-            land.get_chunk_wpos(p)
-                .is_some_and(|chunk| chunk.river.near_water())
+            land.near_water_at(p).is_some_and(|near| near)
         })
     }
 

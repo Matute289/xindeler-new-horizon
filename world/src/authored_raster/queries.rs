@@ -102,25 +102,80 @@ impl WorldSim {
         }
     }
 
-    /// Whether a chunk is water at chunk granularity: inside a region, at
-    /// least half its columns are authored water; elsewhere the table's
-    /// `river_kind.is_some()`. `None` outside the map.
-    pub fn chunk_is_wet(&self, chunk_pos: Vec2<i32>) -> Option<bool> {
-        let chunk = self.get(chunk_pos)?;
-        Some(match self.authored_chunk_wet(chunk_pos) {
-            Some(wet) => wet,
-            None => chunk.river.river_kind.is_some(),
+    /// The water facts of a chunk, authored-aware: inside a region from the
+    /// raster's per-chunk summary (a chunk is water when at least half its
+    /// columns are authored water; it keeps the table's kind when the table
+    /// also calls it lake or river, else it is ocean when its surface is at
+    /// the ocean's top block and lake otherwise; it is near water when it
+    /// or any of its 8 neighbours holds authored water); outside every
+    /// region exactly the table's values. `None` outside the map.
+    pub fn chunk_water(&self, chunk_pos: Vec2<i32>) -> Option<ChunkWater> {
+        let c = self.get(chunk_pos)?;
+        let table = ChunkWater {
+            river: c.river.is_river(),
+            lake: c.river.is_lake(),
+            ocean: c.river.is_ocean(),
+            underwater: c.is_underwater(),
+            near_water: c.river.near_water(),
+            water_alt: c.water_alt,
+            alt: c.alt,
+        };
+        let Some(rasters) = self
+            .authored_rasters
+            .as_ref()
+            .filter(|r| r.contains_chunk(chunk_pos))
+        else {
+            return Some(table);
+        };
+        let summary = rasters.chunk_summary(chunk_pos);
+        let wet = summary.is_some_and(|s| s.wet_majority());
+        let near_water = (-1..=1).any(|dy| {
+            (-1..=1).any(|dx| {
+                rasters
+                    .chunk_summary(chunk_pos + Vec2::new(dx, dy))
+                    .is_some_and(|s| s.wet_columns > 0)
+            })
+        });
+        let (river, lake, ocean) = match (wet, c.river.river_kind) {
+            (false, _) => (false, false, false),
+            (true, Some(crate::sim::RiverKind::River { .. })) => (true, false, false),
+            (true, Some(crate::sim::RiverKind::Lake { .. })) => (false, true, false),
+            (true, Some(crate::sim::RiverKind::Ocean)) => (false, false, true),
+            (true, None) => {
+                let sea = summary.is_some_and(|s| s.min_surface_block <= SEA_TOP_BLOCK);
+                (false, !sea, sea)
+            },
+        };
+        let water_alt = match summary.filter(|_| wet) {
+            Some(s) => ((s.max_surface_block + 1) as f32).max(c.alt + 1.0),
+            None => crate::CONFIG.sea_level.min(c.alt),
+        };
+        Some(ChunkWater {
+            river,
+            lake,
+            ocean,
+            underwater: wet,
+            near_water,
+            water_alt,
+            alt: c.alt,
         })
     }
 
-    /// `SimChunk::is_underwater` made authored-aware (see
-    /// [`Self::chunk_is_wet`]). `None` outside the map.
+    /// Whether a chunk is water (river, lake or ocean), authored-aware
+    /// ([`Self::chunk_water`]). `None` outside the map.
+    pub fn chunk_is_wet(&self, chunk_pos: Vec2<i32>) -> Option<bool> {
+        self.chunk_water(chunk_pos).map(|w| w.wet())
+    }
+
+    /// `SimChunk::is_underwater` made authored-aware. `None` outside the map.
     pub fn chunk_is_underwater(&self, chunk_pos: Vec2<i32>) -> Option<bool> {
-        let chunk = self.get(chunk_pos)?;
-        Some(match self.authored_chunk_wet(chunk_pos) {
-            Some(wet) => wet,
-            None => chunk.is_underwater(),
-        })
+        self.chunk_water(chunk_pos).map(|w| w.underwater)
+    }
+
+    /// `river.near_water()` of the chunk holding `wpos`, authored-aware.
+    pub fn near_water_at(&self, wpos: Vec2<i32>) -> Option<bool> {
+        self.chunk_water(wpos.map(|e| e.div_euclid(super::CHUNK)))
+            .map(|w| w.near_water)
     }
 
     /// Inside a region: whether the chunk is mostly authored water. `None`
@@ -134,29 +189,15 @@ impl WorldSim {
         })
     }
 
-    /// `SimChunk::water_alt` made authored-aware: inside a region, the
-    /// highest authored surface of a mostly wet chunk, or the sea level (no
-    /// water above it there); elsewhere the table's value. `None` outside
-    /// the map.
+    /// `SimChunk::water_alt` made authored-aware ([`Self::chunk_water`]).
     pub fn chunk_water_alt(&self, chunk_pos: Vec2<i32>) -> Option<f32> {
-        let chunk = self.get(chunk_pos)?;
-        Some(match self.authored_chunk_wet(chunk_pos) {
-            Some(true) => self
-                .authored_rasters
-                .as_ref()
-                .and_then(|r| r.chunk_summary(chunk_pos))
-                .map_or(crate::CONFIG.sea_level, |s| {
-                    (s.max_surface_block + 1) as f32
-                }),
-            Some(false) => crate::CONFIG.sea_level,
-            None => chunk.water_alt,
-        })
+        self.chunk_water(chunk_pos).map(|w| w.water_alt)
     }
 
-    /// Water depth of a chunk, `water_alt - alt` made authored-aware: inside
-    /// a region, the deepest authored water of a mostly wet chunk, or a dry
-    /// value (-8, the deepest "dry" the road cost cares about); elsewhere the
-    /// table's value. `None` outside the map.
+    /// Water depth of a chunk for the civ road cost, `water_alt - alt` made
+    /// authored-aware: inside a region, the deepest authored water of a
+    /// mostly wet chunk, or -8 for a dry one (the "dry" end of that cost);
+    /// elsewhere the table's value. `None` outside the map.
     pub fn chunk_water_depth(&self, chunk_pos: Vec2<i32>) -> Option<f32> {
         let chunk = self.get(chunk_pos)?;
         Some(match self.authored_chunk_wet(chunk_pos) {
@@ -170,39 +211,77 @@ impl WorldSim {
         })
     }
 
-    /// The chunk as the sim table would describe it if its water came from
-    /// the raster: inside a region, a mostly wet chunk reads underwater (its
-    /// `water_alt` lifted to the authored surface) and any other reads dry
-    /// (no river kind, `water_alt` not above `alt`). For predicates written
-    /// against `SimChunk` (spawn filters). Outside every region: the chunk
-    /// itself, borrowed.
-    pub fn chunk_with_authored_water(
+    /// The chunk as the table would describe it if its water came from the
+    /// raster ([`Self::chunk_water`]: river kind, `water_alt`, near-water
+    /// neighbours), for predicates written against `SimChunk` that run once
+    /// per world (spot placement). A clone only for chunks inside a region;
+    /// elsewhere the chunk itself, borrowed.
+    pub fn chunk_view(
         &self,
         chunk_pos: Vec2<i32>,
     ) -> Option<std::borrow::Cow<'_, crate::sim::SimChunk>> {
         let chunk = self.get(chunk_pos)?;
-        Some(match self.authored_chunk_wet(chunk_pos) {
-            None => std::borrow::Cow::Borrowed(chunk),
-            Some(wet) => {
-                let mut c = chunk.clone();
-                if wet {
-                    let surface = self.chunk_water_alt(chunk_pos).unwrap_or(c.water_alt);
-                    c.water_alt = surface.max(c.alt + 1.0);
-                } else {
-                    c.river.river_kind = None;
-                    c.water_alt = c.water_alt.min(c.alt);
-                }
-                std::borrow::Cow::Owned(c)
-            },
-        })
+        if self.authored_chunk_wet(chunk_pos).is_none() {
+            return Some(std::borrow::Cow::Borrowed(chunk));
+        }
+        let w = self.chunk_water(chunk_pos)?;
+        let mut c = chunk.clone();
+        c.river.river_kind = if w.ocean {
+            Some(crate::sim::RiverKind::Ocean)
+        } else if w.river {
+            chunk.river.river_kind
+        } else if w.lake {
+            chunk.river.river_kind.or(Some(crate::sim::RiverKind::Lake {
+                neighbor_pass_pos: chunk_pos * super::CHUNK,
+            }))
+        } else {
+            None
+        };
+        c.river.neighbor_rivers.clear();
+        if w.near_water && !w.wet() {
+            // A neighbour holds authored water: `near_river()` must say so.
+            c.river.neighbor_rivers.push(0);
+        }
+        c.water_alt = w.water_alt;
+        Some(std::borrow::Cow::Owned(c))
     }
+}
 
-    /// Whether authored water of a chunk sits at the ocean's level.
-    pub fn authored_chunk_is_sea(&self, chunk_pos: Vec2<i32>) -> bool {
-        self.authored_rasters
-            .as_ref()
-            .and_then(|r| r.chunk_summary(chunk_pos))
-            .is_some_and(|s| s.wet_majority() && s.min_surface_block <= SEA_TOP_BLOCK)
+/// The water facts of one chunk ([`WorldSim::chunk_water`]): the chunk
+/// table's predicates, answered from the raster inside authored regions.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChunkWater {
+    pub river: bool,
+    pub lake: bool,
+    pub ocean: bool,
+    /// `SimChunk::is_underwater`.
+    pub underwater: bool,
+    /// `RiverData::near_water`.
+    pub near_water: bool,
+    pub water_alt: f32,
+    pub alt: f32,
+}
+
+impl ChunkWater {
+    /// River, lake or ocean.
+    pub fn wet(&self) -> bool { self.river || self.lake || self.ocean }
+
+    /// `water_alt - alt`.
+    pub fn depth(&self) -> f32 { self.water_alt - self.alt }
+}
+
+/// `col.chunk.river.is_ocean()` for a column sample, authored-aware: an
+/// authored column is ocean when it is authored water at the ocean's top
+/// block in a chunk the table does not call lake or river (a sea-level
+/// mountain lake or a river mouth stays fresh water).
+pub fn column_is_ocean(col: &crate::ColumnSample) -> bool {
+    match col.authored {
+        Some(a) => {
+            matches!(a.cell, AuthoredCell::Wet { surface_block, .. } if surface_block <= SEA_TOP_BLOCK)
+                && !col.chunk.river.is_lake()
+                && !col.chunk.river.is_river()
+        },
+        None => col.chunk.river.is_ocean(),
     }
 }
 

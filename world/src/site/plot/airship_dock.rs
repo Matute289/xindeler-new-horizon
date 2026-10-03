@@ -76,7 +76,7 @@ impl AirshipDock {
         for x in (min_clearance_x..=max_clearance_x).step_by(22) {
             for y in (min_clearance_y..=max_clearance_y).step_by(22) {
                 let pos = Vec2::new(x, y);
-                let alt = land.get_surface_alt_approx(pos) as i32;
+                let alt = land.surface_alt_at(pos) as i32;
                 if alt > max_surface_alt {
                     max_surface_alt = alt;
                 }
@@ -101,7 +101,7 @@ impl AirshipDock {
         for x in (min_foundation_x..=max_foundation_x).step_by(10) {
             for y in (min_foundation_y..=max_foundation_y).step_by(10) {
                 let pos = Vec2::new(x, y);
-                let alt = land.get_surface_alt_approx(pos) as i32;
+                let alt = land.surface_alt_at(pos) as i32;
                 if alt > max_foundation_alt {
                     max_foundation_alt = alt;
                 }

@@ -204,9 +204,8 @@ pub fn goto<S: State>(wpos: Vec3<f32>, speed_factor: f32, goal_dist: f32) -> imp
         }
 
         // Get the next waypoint on the route toward the goal
-        let waypoint = waypoint.get_or_insert_with(|| {
-            wpos.with_z(ctx.world.sim().get_surface_alt_approx(wpos.xy().as_()))
-        });
+        let waypoint = waypoint
+            .get_or_insert_with(|| wpos.with_z(ctx.world.sim().surface_alt_at(wpos.xy().as_())));
 
         ctx.controller.do_goto(*waypoint, speed_factor);
     })
@@ -230,7 +229,7 @@ pub fn follow_actor<S: State>(actor: ActorId, distance: f32) -> impl Action<S> {
             // let tgt_wpos = if dist_sqr > STEP_DIST.powi(2) {
             //     let tgt_wpos_2d = ctx.actor.wpos.xy() + (tgt_wpos -
             // ctx.actor.wpos).xy().normalized() * STEP_DIST;     tgt_wpos_2d.
-            // with_z(ctx.world.sim().get_surface_alt_approx(tgt_wpos_2d.as_()))
+            // with_z(ctx.world.sim().surface_alt_at(tgt_wpos_2d.as_()))
             // } else {
             //     tgt_wpos
             // };
@@ -283,7 +282,7 @@ fn goto_flying<S: State>(
             let len = rpos.magnitude();
             let wpos = ctx.actor.wpos + (rpos / len) * len.min(step_dist);
 
-            wpos.with_z(ctx.world.sim().get_surface_alt_approx(wpos.xy().as_()) + height_offset)
+            wpos.with_z(ctx.world.sim().surface_alt_at(wpos.xy().as_()) + height_offset)
         });
 
         ctx.controller.do_goto(*waypoint, speed_factor);
@@ -305,7 +304,7 @@ fn goto_flying<S: State>(
 /// obstacles.
 pub fn goto_2d<S: State>(wpos2d: Vec2<f32>, speed_factor: f32, goal_dist: f32) -> impl Action<S> {
     now(move |ctx, _| {
-        let wpos = wpos2d.with_z(ctx.world.sim().get_surface_alt_approx(wpos2d.as_()));
+        let wpos = wpos2d.with_z(ctx.world.sim().surface_alt_at(wpos2d.as_()));
         goto(wpos, speed_factor, goal_dist).debug(move || {
             format!(
                 "goto 2d ({}, {}), z {}, goal dist {}",
@@ -326,8 +325,7 @@ pub fn goto_2d_flying<S: State>(
     height_offset: f32,
 ) -> impl Action<S> {
     now(move |ctx, _| {
-        let wpos =
-            wpos2d.with_z(ctx.world.sim().get_surface_alt_approx(wpos2d.as_()) + height_offset);
+        let wpos = wpos2d.with_z(ctx.world.sim().surface_alt_at(wpos2d.as_()) + height_offset);
         goto_flying(
             wpos,
             speed_factor,

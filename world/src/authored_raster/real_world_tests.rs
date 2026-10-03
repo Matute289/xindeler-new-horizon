@@ -649,3 +649,173 @@ fn authored_region_generation_cost() {
     );
     assert!(r50 < w50 * 1.25 && r99 < w99 * 1.25);
 }
+
+/// Identity next to the sim's own water: a region placed beside a real sim
+/// river chunk and beside a real sim lake chunk (wilderness, at least 1 km
+/// from every site) leaves every column and chunk outside it bit-identical,
+/// including the columns whose water comes from those chunks (the river/lake
+/// fold, the flood formula and the unfaded relief delta all run there).
+#[test]
+#[ignore]
+fn identity_next_to_a_sim_river_and_a_sim_lake() {
+    let (mut world, index) = generate_world();
+    let index_ref = index.as_index_ref();
+    let far_from_sites = |c: Vec2<i32>| {
+        let w = c * 32;
+        index.sites.values().all(|site| {
+            let b = site.bounds();
+            let dx = (b.min.x - w.x).max(w.x - b.max.x).max(0);
+            let dy = (b.min.y - w.y).max(w.y - b.max.y).max(0);
+            dx.max(dy) > 1000
+        })
+    };
+    let find = |pred: &dyn Fn(&crate::sim::SimChunk) -> bool| {
+        (40..980)
+            .step_by(7)
+            .flat_map(|y| (40..980).step_by(7).map(move |x| Vec2::new(x, y)))
+            .find(|c| {
+                world.sim.get(*c).is_some_and(pred)
+                    && (2..6).all(|dx| {
+                        world
+                            .sim
+                            .get(*c + Vec2::new(dx, 0))
+                            .is_some_and(|n| n.river.river_kind.is_none())
+                    })
+                    && far_from_sites(*c)
+            })
+    };
+    let river = find(&|c| c.river.is_river()).expect("a wilderness river chunk");
+    let lake = find(&|c| c.river.is_lake()).expect("a wilderness lake chunk");
+    for (name, water) in [("river", river), ("lake", lake)] {
+        // A 4 x 4-chunk region whose west edge is 2 chunks east of the water
+        // chunk: the water's own columns, and the band between, stay outside.
+        let min = (water + Vec2::new(2, -2)) * 32;
+        let max = min + 128;
+        let spec = RegionSpec::new(
+            format!("beside_{name}"),
+            min.into_tuple(),
+            max.into_tuple(),
+            16,
+            vec![PaintOp::Bank {
+                shape: rect(
+                    (min.x + 40) as f32,
+                    (min.y + 40) as f32,
+                    (min.x + 80) as f32,
+                    (min.y + 80) as f32,
+                ),
+                bed_cm: ((world.sim.get(water + Vec2::new(4, 0)).unwrap().alt + 3.0) * 100.0)
+                    as i32,
+            }],
+        );
+        let rasters = load_spec(&spec);
+        let cols: Vec<Vec2<i32>> = (min.y - 192..max.y + 192)
+            .step_by(3)
+            .flat_map(|y| {
+                (min.x - 192..max.x + 192)
+                    .step_by(3)
+                    .map(move |x| Vec2::new(x, y))
+            })
+            .filter(|p| !(p.x >= min.x && p.y >= min.y && p.x < max.x && p.y < max.y))
+            .collect();
+        let cmin = min / 32;
+        let cmax = max / 32;
+        let chunks: Vec<Vec2<i32>> = (cmin.y - 3..cmax.y + 3)
+            .flat_map(|y| (cmin.x - 3..cmax.x + 3).map(move |x| Vec2::new(x, y)))
+            .filter(|c| !(c.x >= cmin.x && c.y >= cmin.y && c.x < cmax.x && c.y < cmax.y))
+            .collect();
+        let sample = |world: &World| -> (Vec<Option<Vec<u32>>>, Vec<u64>) {
+            (
+                cols.par_iter()
+                    .map(|p| column_bits(world, index_ref, *p))
+                    .collect(),
+                chunks
+                    .par_iter()
+                    .map(|c| chunk_digest(world, index_ref, *c))
+                    .collect(),
+            )
+        };
+        world.sim.set_authored_rasters_for_test(None);
+        let a = sample(&world);
+        world.sim.set_authored_rasters_for_test(Some(rasters));
+        let b = sample(&world);
+        let wet_cols = cols
+            .iter()
+            .filter(|p| {
+                world
+                    .sample_columns()
+                    .get((**p, index_ref, None))
+                    .is_some_and(|c| c.water_level > c.alt)
+            })
+            .count();
+        let col_diff = a.0.iter().zip(&b.0).filter(|(x, y)| x != y).count();
+        let chunk_diff = a.1.iter().zip(&b.1).filter(|(x, y)| x != y).count();
+        println!(
+            "{name} at chunk {water:?}: {} columns ({wet_cols} with sim water), differing \
+             {col_diff}; {} chunks, differing {chunk_diff}",
+            cols.len(),
+            chunks.len()
+        );
+        assert!(wet_cols > 0, "the compared area must hold sim water");
+        assert_eq!(col_diff, 0);
+        // Chunks 2..3 out are identical; in ring 1, blocks may differ only
+        // within the decoration halo: a boulder or tree rooted inside the
+        // region (whose terrain changed where the sim's bank pull is now
+        // suppressed) reaching across the edge.
+        let mut halo = 0;
+        for (c, (x, y)) in chunks.iter().zip(a.1.iter().zip(&b.1)) {
+            if x == y {
+                continue;
+            }
+            let ring = (cmin.x - c.x)
+                .max(c.x - (cmax.x - 1))
+                .max(cmin.y - c.y)
+                .max(c.y - (cmax.y - 1));
+            assert_eq!(ring, 1, "chunk {c:?} {ring} chunks out differs");
+            world.sim.set_authored_rasters_for_test(None);
+            let before = seeded_chunk(&world, index_ref, *c);
+            world
+                .sim
+                .set_authored_rasters_for_test(Some(load_spec(&spec)));
+            let after = seeded_chunk(&world, index_ref, *c);
+            for z in
+                before.get_min_z().min(after.get_min_z())..before.get_max_z().max(after.get_max_z())
+            {
+                for yy in 0..32 {
+                    for xx in 0..32 {
+                        let p = Vec3::new(xx, yy, z);
+                        let get = |ch: &common::terrain::TerrainChunk| {
+                            ch.get(p).copied().unwrap_or_else(|_| Block::empty())
+                        };
+                        if block_class(&get(&before)) != block_class(&get(&after)) {
+                            let w = c * 32 + Vec2::new(xx, yy);
+                            let d = (min.x - w.x)
+                                .max(w.x - (max.x - 1))
+                                .max(min.y - w.y)
+                                .max(w.y - (max.y - 1));
+                            halo = halo.max(d);
+                        }
+                    }
+                }
+            }
+        }
+        println!("{name}: ring-1 differences reach {halo} m outside the box");
+        assert!(halo <= super::RECOMMENDED_REGION_MARGIN_M, "{halo} m");
+    }
+}
+
+/// A chunk generated with the seeded RNGs of [`chunk_digest`].
+fn seeded_chunk(
+    world: &World,
+    index: crate::IndexRef,
+    cpos: Vec2<i32>,
+) -> common::terrain::TerrainChunk {
+    let mut seed = [0u8; 32];
+    seed[..4].copy_from_slice(&cpos.x.to_le_bytes());
+    seed[4..8].copy_from_slice(&cpos.y.to_le_bytes());
+    crate::with_deterministic_dynamic_rng(seed, || {
+        world
+            .generate_chunk(index, cpos, None, || false, None, None)
+            .unwrap()
+            .0
+    })
+}

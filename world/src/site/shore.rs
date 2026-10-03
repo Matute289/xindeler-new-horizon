@@ -1069,9 +1069,7 @@ impl Site {
             // sampling uses, so placement and berths agree.
             let depth = match land.authored_depth_at(wpos) {
                 Some(depth) => Some(depth as f32),
-                None => land
-                    .get_chunk_wpos(wpos)
-                    .map(|chunk| chunk.water_alt - chunk.alt),
+                None => land.chunk_water_wpos(wpos).map(|w| w.depth()),
             };
             if let Some(depth) = depth {
                 max_depth = max_depth.max(depth);

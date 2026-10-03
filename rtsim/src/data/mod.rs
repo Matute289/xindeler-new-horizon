@@ -372,6 +372,58 @@ mod tests {
         assert!(data.terrain_overrides.active.is_empty());
     }
 
+    /// The exact wire shape of an rtsim save written before
+    /// `authored_rasters_digest` existed: today's fields minus that one.
+    #[derive(Serialize)]
+    struct PreAuthoredRastersDigestData {
+        version: u32,
+        nature: Nature,
+        actors: Actors,
+        sites: Sites,
+        factions: Factions,
+        reports: Reports,
+        architect: Architect,
+        quests: Quests,
+        banished: Banishments,
+        undercompact_gate: UndercompactGateLevers,
+        terrain_overrides: TerrainOverrides,
+        tick: u64,
+        time_of_day: TimeOfDay,
+        should_purge: bool,
+    }
+
+    /// `authored_rasters_digest` is additive `#[serde(default)]`, so a save
+    /// without it loads at the unchanged `CURRENT_VERSION` with `None` (which
+    /// makes the authored water NPC pass run once on the next start).
+    #[test]
+    fn a_save_written_before_the_authored_rasters_digest_still_loads() {
+        let old = PreAuthoredRastersDigestData {
+            version: CURRENT_VERSION,
+            nature: Nature {
+                chunks: Grid::populate_from(Vec2::new(1, 1), |_| nature::Chunk {
+                    res: Default::default(),
+                }),
+            },
+            actors: Default::default(),
+            sites: Default::default(),
+            factions: Default::default(),
+            reports: Default::default(),
+            architect: Default::default(),
+            quests: Default::default(),
+            banished: Default::default(),
+            undercompact_gate: Default::default(),
+            terrain_overrides: Default::default(),
+            tick: 21,
+            time_of_day: TimeOfDay(10.0),
+            should_purge: false,
+        };
+        let mut encoded = Vec::new();
+        rmp_serde::encode::write_named(&mut encoded, &old).expect("serialise the old save");
+        let data = Data::from_reader(&encoded[..]).expect("an old save must still load");
+        assert_eq!(data.tick, 21);
+        assert_eq!(data.authored_rasters_digest, None);
+    }
+
     /// `TerrainOverridePayload::Damage` is a brand new enum variant added
     /// alongside terrain-damage healing -- `TerrainOverrides` itself already
     /// loads fine on an old save (see the test above), but adding a variant

@@ -1995,7 +1995,7 @@ fn handle_goto_rand(
         rng.random_range(0..(2_u32.pow(map_size.x) * chunk_side)) as f32,
         rng.random_range(0..(2_u32.pow(map_size.y) * chunk_side)) as f32,
     );
-    let pos3d = pos2d.with_z(server.world.sim().get_surface_alt_approx(pos2d.as_()));
+    let pos3d = pos2d.with_z(server.world.sim().surface_alt_at(pos2d.as_()));
     server.state.position_mut_reposition(
         target,
         parse_cmd_args!(args, bool).unwrap_or(true),
@@ -2063,7 +2063,7 @@ fn handle_cromatolis_goto(
         )));
     };
 
-    let surface = server.world.sim().get_surface_alt_approx(wpos);
+    let surface = server.world.sim().surface_alt_at(wpos);
     server.state.position_mut_reposition(
         target,
         true,
@@ -9929,7 +9929,7 @@ fn handle_spot(
 
     if let Some(spot_chunk) = spot_chunk {
         let pos = spot_chunk.cpos_to_wpos_center();
-        let pos = (pos.as_() + 0.5).with_z(world.sim().get_surface_alt_approx(pos));
+        let pos = (pos.as_() + 0.5).with_z(world.sim().surface_alt_at(pos));
         drop(world);
         server.state.position_mut_reposition(
             target,

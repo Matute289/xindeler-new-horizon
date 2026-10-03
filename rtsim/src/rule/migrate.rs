@@ -208,9 +208,10 @@ impl Rule for Migrate {
                 ..
             } = data;
             super::authored_water::resolve_npcs(
-                actors.values_mut(),
+                actors,
                 authored_rasters_digest,
                 ctx.world,
+                ctx.index,
             );
         });
 

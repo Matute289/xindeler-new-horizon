@@ -232,9 +232,7 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                                 // or at the ground level and risk getting stuck.
                                 let base_height =
                                     if mode == FlightMode::FlyThrough || height.is_some() {
-                                        ctx.world
-                                            .sim()
-                                            .get_surface_alt_approx(actor.wpos.xy().as_())
+                                        ctx.world.sim().surface_alt_at(actor.wpos.xy().as_())
                                     } else {
                                         0.0
                                     };
@@ -310,13 +308,13 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                     actor.wpos = clamped_wpos.with_z(
                         ctx.world
                             .sim()
-                            .get_surface_alt_approx(clamped_wpos.as_())
+                            .surface_alt_at(clamped_wpos.as_())
                             .max(actor.wpos.z),
                     );
                 },
                 _ => {
                     actor.wpos = clamped_wpos.with_z(
-                        ctx.world.sim().get_surface_alt_approx(clamped_wpos.as_())
+                        ctx.world.sim().surface_alt_at(clamped_wpos.as_())
                             + actor.body.flying_height(),
                     );
                 },

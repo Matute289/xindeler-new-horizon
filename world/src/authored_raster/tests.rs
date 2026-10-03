@@ -182,6 +182,7 @@ fn resolve_wet_and_bank_are_exact_at_any_weight() {
         .resolve(engine(), dry());
         assert_eq!(wet.alt, 232.5);
         assert_eq!(wet.water_level, 238.5);
+        assert_eq!(wet.riverless_alt, 232.5, "paths and trees see the bed");
         assert_eq!(wet.warp_factor, 0.0);
         assert_eq!(wet.cliff_offset, 0.0);
         assert_eq!(wet.alt as i32, 232, "top ground block");
@@ -213,6 +214,8 @@ fn resolve_none_blends_engine_into_dry_terrain() {
     let r = col(0.0, None).resolve(engine(), dry());
     assert_eq!(r.alt, engine().alt);
     assert_eq!(r.water_level, 139.01);
+    // The water level is never blended (only authored water in a region).
+    assert_eq!(col(0.4, None).resolve(engine(), dry()).water_level, 139.01);
     assert_eq!(r.water_dist, Some(-3.0));
     // Core, far from authored water: full warp, the dry terrain.
     let r = col(1.0, None).resolve(engine(), dry());
@@ -586,13 +589,30 @@ fn consistency_is_checked_both_ways_against_a_budget() {
     // The sim also calls the river row water (masks painted): that row is
     // only partly authored (a 20 m river in a 32 m chunk row), so the sim's
     // sunk terrain shows there too.
+    // The two end chunks of the river row are on the region's outer ring
+    // and the river runs to the box edge there: border crossings, exempt.
     let table_river = |c: Vec2<i32>| Some(c.y == 34);
     let e = ar.check_consistency("t", table_river).unwrap_err();
     assert!(
-        e.0.contains("16 chunk(s) the sim table calls water"),
+        e.0.contains("14 chunk(s) the sim table calls water"),
         "{}",
         e.0
     );
+    assert!(
+        e.0.contains("run to the box edge"),
+        "the error explains the border case"
+    );
+    let mut spec = river_spec();
+    spec.consistency.max_authored_dry_table_wet_chunks = 14;
+    let r = load(&[build_region(&spec).unwrap()])
+        .unwrap()
+        .check_consistency("t", table_river)
+        .unwrap();
+    assert_eq!(r[0].border_crossings, vec![
+        Vec2::new(32, 34),
+        Vec2::new(47, 34)
+    ]);
+    assert_eq!(r[0].authored_dry_table_wet.len(), 14);
     let mut spec = river_spec();
     spec.consistency.max_authored_dry_table_wet_chunks = 32;
     spec.consistency.max_authored_wet_table_dry_chunks = Some(0);
@@ -712,4 +732,39 @@ fn column_lookup_cost() {
     let fresh = load(&[build_region(&river_spec()).unwrap()]).unwrap();
     fresh.prewarm();
     println!("load + prewarm of the river region: {:?}", t.elapsed());
+}
+
+#[test]
+fn the_process_wide_counter_follows_loaded_manifests() {
+    // Other tests load manifests concurrently: only compare this one's share.
+    let a = load(&[build_region(&river_spec()).unwrap()]).unwrap();
+    let share = a.resident_bytes;
+    assert!(share > 0);
+    assert!(global_resident_bytes() >= share);
+    assert!(global_resident_cap() >= GLOBAL_RESIDENT_CAP_BYTES.min(global_resident_cap()));
+    drop(a);
+    // A refused manifest leaves nothing reserved: the huge one of
+    // `the_memory_budget_is_checked_before_any_tile_is_read` fails before
+    // reserving, and a bad tile fails after reserving and must release.
+    let mut r = build_region(&river_spec()).unwrap();
+    r.manifest.tiles[0].sha256 = "00".repeat(32);
+    let before = global_resident_bytes();
+    assert!(load(&[r]).is_err());
+    // Concurrent tests may load and drop meanwhile; the failed load itself
+    // must not leave its reservation behind.
+    assert!(global_resident_bytes() <= before + share * 4);
+}
+
+#[test]
+fn the_process_wide_cap_refuses_with_a_clear_error() {
+    // A cap below what is already reserved plus the request is refused and
+    // reserves nothing; the error names the override.
+    let e = ReservedBytes::reserve(3 << 20, 2 << 20)
+        .err()
+        .expect("over the cap");
+    assert!(e.contains("process-wide cap of 2 MiB"), "{e}");
+    assert!(e.contains("XINDELER_AUTHORED_RASTERS_MAX_MIB"), "{e}");
+    let r = ReservedBytes::reserve(1 << 20, usize::MAX).expect("under the cap");
+    assert!(global_resident_bytes() >= 1 << 20);
+    drop(r);
 }

@@ -619,13 +619,16 @@ impl World {
         };
         let sim_chunk: &SimChunk = &sim_chunk;
 
+        let chunk_water = self.sim.chunk_water(chunk_pos);
         let meta = TerrainChunkMeta::new(
             sim_chunk.get_location_name(&index.sites, &self.civs.pois, chunk_center_wpos2d),
             sim_chunk.get_biome(),
             sim_chunk.alt,
             sim_chunk.tree_density,
-            sim_chunk.river.is_river(),
-            sim_chunk.river.near_water(),
+            // XINDELER: authored-aware (authored water regions); clients use
+            // these for ambience and weather.
+            chunk_water.map_or(sim_chunk.river.is_river(), |w| w.river),
+            chunk_water.map_or(sim_chunk.river.near_water(), |w| w.near_water),
             sim_chunk.river.velocity,
             sim_chunk.temp,
             sim_chunk.humidity,

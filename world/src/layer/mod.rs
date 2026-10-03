@@ -396,7 +396,12 @@ pub fn apply_trains_to(
 pub fn apply_coral_to(canvas: &mut Canvas) {
     let info = canvas.info();
 
-    if !info.chunk.river.near_water() {
+    // XINDELER: authored-aware (authored water regions).
+    if !info
+        .chunks()
+        .chunk_water(info.chunk_pos)
+        .map_or(info.chunk.river.near_water(), |w| w.near_water)
+    {
         return; // Don't bother with coral for a chunk nowhere near water
     }
 

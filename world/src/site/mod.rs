@@ -3601,10 +3601,8 @@ pub fn test_site() -> Site {
 }
 
 fn wpos_is_hazard(land: &Land, wpos: Vec2<i32>) -> Option<HazardKind> {
-    if land
-        .get_chunk_wpos(wpos)
-        .is_none_or(|c| c.river.near_water())
-    {
+    // XINDELER: authored-aware (authored water regions).
+    if land.near_water_at(wpos).is_none_or(|near| near) {
         Some(HazardKind::Water)
     } else {
         Some(land.get_gradient_approx(wpos))

@@ -1,7 +1,7 @@
 use crate::{
     ColumnSample, IndexRef,
     all::ForestKind,
-    authored_raster::AuthoredWater,
+    authored_raster::{AuthoredWater, queries::ChunkWater},
     column::ColumnGen,
     sim::{self, SimChunk},
     util::Sampler,
@@ -49,6 +49,26 @@ impl<'a> Land<'a> {
     /// without authored rasters.
     pub fn authored_water_at(&self, wpos: Vec2<i32>) -> Option<AuthoredWater> {
         self.sim.and_then(|sim| sim.authored_water_at(wpos))
+    }
+
+    /// XINDELER: the water facts of the chunk holding `wpos`, authored-aware
+    /// (see `WorldSim::chunk_water`).
+    pub fn chunk_water_wpos(&self, wpos: Vec2<i32>) -> Option<ChunkWater> {
+        self.sim.and_then(|sim| {
+            sim.chunk_water(wpos.map(|e| e.div_euclid(TerrainChunkSize::RECT_SIZE.x as i32)))
+        })
+    }
+
+    /// XINDELER: `river.near_water()` of the chunk holding `wpos`,
+    /// authored-aware. `None` outside the map.
+    pub fn near_water_at(&self, wpos: Vec2<i32>) -> Option<bool> {
+        self.chunk_water_wpos(wpos).map(|w| w.near_water)
+    }
+
+    /// XINDELER: [`Self::get_surface_alt_approx`] made authored-aware (see
+    /// `WorldSim::surface_alt_at`).
+    pub fn surface_alt_at(&self, wpos: Vec2<i32>) -> f32 {
+        self.sim.map(|sim| sim.surface_alt_at(wpos)).unwrap_or(0.0)
     }
 
     /// XINDELER: the number of water blocks of an authored wet column at

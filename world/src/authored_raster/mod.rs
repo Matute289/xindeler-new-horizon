@@ -96,6 +96,27 @@ pub const DIST_CAP_M: i32 = crate::column::WATER_WARP_FADE_M as i32;
 /// manifest. Over it, loading fails: split or shrink regions, or list fewer
 /// tiles (a tile without authored cells need not be listed).
 pub const RESIDENT_BUDGET_BYTES: usize = 256 << 20;
+/// Process-wide cap on the resident bytes of every loaded manifest
+/// together: a server hosting several worlds (one `WorldSim` each) holds one
+/// copy per world. Override with `XINDELER_AUTHORED_RASTERS_MAX_MIB`.
+pub const GLOBAL_RESIDENT_CAP_BYTES: usize = 1 << 30;
+/// Resident bytes of every live [`AuthoredRasters`] in this process.
+static GLOBAL_RESIDENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The process-wide cap in force ([`GLOBAL_RESIDENT_CAP_BYTES`] unless the
+/// environment overrides it).
+pub fn global_resident_cap() -> usize {
+    std::env::var("XINDELER_AUTHORED_RASTERS_MAX_MIB")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map_or(GLOBAL_RESIDENT_CAP_BYTES, |mib| mib << 20)
+}
+
+/// Resident bytes of every live [`AuthoredRasters`] in this process.
+pub fn global_resident_bytes() -> usize {
+    GLOBAL_RESIDENT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Regions must keep this far from the map rim, where the column sampler has
 /// no spline knots.
 pub const RIM_MARGIN_M: i32 = 64;
@@ -167,10 +188,14 @@ pub struct RegionManifest {
 #[serde(deny_unknown_fields)]
 pub struct ConsistencyBudget {
     /// Chunks the table calls wet (river, lake, ocean or underwater) that are
-    /// not fully authored (some column has no authored cell). Default **0**:
-    /// the sim lowers such a chunk's terrain, and the unauthored columns in
-    /// it render that pit next to the exact authored water (the masks were
-    /// painted inside the region).
+    /// not fully authored (some column has neither water nor bank). Default
+    /// **0**: the sim lowers such a chunk's terrain, and the unauthored
+    /// columns in it render that pit next to the exact authored water (the
+    /// masks were painted inside the region). A chunk counts as authored when
+    /// every column is a wet or bank cell: write bank cells for the ground the
+    /// author intends around a channel. Exempt: chunks on the region's outer
+    /// chunk ring whose authored water reaches the box edge (a river or the
+    /// sea continuing across the border); they are reported, not counted.
     #[serde(default)]
     pub max_authored_dry_table_wet_chunks: u32,
     /// Chunks with authored wet columns that the table calls dry. Default
@@ -330,19 +355,27 @@ impl AuthoredColumn {
     /// * none: no water above sea level; terrain blended by the feather weight
     ///   from the engine's (with the sim water's carving) to the engine's *dry*
     ///   terrain (same noise and warp, faded by the distance to the authored
-    ///   water instead of the sim's).
+    ///   water instead of the sim's). The water level is *not* blended, at any
+    ///   weight: inside a region only authored water exists (a fractional level
+    ///   would only move the cut-off of the sim's water somewhere less
+    ///   predictable), so sim water crossing the box edge ends at the edge
+    ///   unless the raster continues it (the exporter's seam rule).
     pub fn resolve(&self, engine: EngineColumn, dry: DryTerrain) -> EngineColumn {
         match self.cell {
             AuthoredCell::Wet {
                 surface_block,
                 bed_block,
-            } => EngineColumn {
-                alt: bed_block as f32 + 0.5,
-                water_level: (surface_block as f32 + 0.5).max(dry.base_sea_level),
-                water_dist: Some(-1.0),
-                warp_factor: 0.0,
-                cliff_offset: 0.0,
-                riverless_alt: bed_block as f32 + 0.5,
+            } => {
+                // Guaranteed by load-time validation.
+                debug_assert!(surface_block >= SEA_TOP_BLOCK && bed_block < surface_block);
+                EngineColumn {
+                    alt: bed_block as f32 + 0.5,
+                    water_level: (surface_block as f32 + 0.5).max(dry.base_sea_level),
+                    water_dist: Some(-1.0),
+                    warp_factor: 0.0,
+                    cliff_offset: 0.0,
+                    riverless_alt: bed_block as f32 + 0.5,
+                }
             },
             AuthoredCell::Bank { bed_block } => EngineColumn {
                 alt: bed_block as f32 + 0.5,
@@ -626,6 +659,15 @@ pub struct AuthoredRasters {
     chunk_summary: HashMap<Vec2<i32>, ChunkWaterSummary>,
     /// sha256 of the canonical manifest (it pins every tile by sha256).
     digest: String,
+    /// What this manifest adds to the process-wide counter (released on
+    /// drop).
+    resident_bytes: usize,
+}
+
+impl Drop for AuthoredRasters {
+    fn drop(&mut self) {
+        GLOBAL_RESIDENT.fetch_sub(self.resident_bytes, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl std::fmt::Debug for AuthoredRasters {
@@ -639,6 +681,34 @@ impl std::fmt::Debug for AuthoredRasters {
             .field("digest", &self.digest)
             .finish()
     }
+}
+
+/// A reservation on the process-wide counter, released on drop unless kept.
+struct ReservedBytes(usize);
+
+impl ReservedBytes {
+    /// Reserve `bytes` against `cap`, or explain why not (nothing is left
+    /// reserved on refusal).
+    fn reserve(bytes: usize, cap: usize) -> Result<Self, String> {
+        let before = GLOBAL_RESIDENT.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+        if before + bytes > cap {
+            GLOBAL_RESIDENT.fetch_sub(bytes, std::sync::atomic::Ordering::Relaxed);
+            return Err(format!(
+                "loading it would bring the authored rasters of every world in this process to {} \
+                 MiB, over the process-wide cap of {} MiB (set XINDELER_AUTHORED_RASTERS_MAX_MIB \
+                 to raise it)",
+                (before + bytes) >> 20,
+                cap >> 20
+            ));
+        }
+        Ok(Self(bytes))
+    }
+
+    fn keep(mut self) -> usize { std::mem::take(&mut self.0) }
+}
+
+impl Drop for ReservedBytes {
+    fn drop(&mut self) { GLOBAL_RESIDENT.fetch_sub(self.0, std::sync::atomic::Ordering::Relaxed); }
 }
 
 /// Why a manifest was refused. Always fatal for world generation.
@@ -655,6 +725,10 @@ pub struct RegionConsistency {
     pub region: String,
     pub authored_wet_table_dry: Vec<Vec2<i32>>,
     pub authored_dry_table_wet: Vec<Vec2<i32>>,
+    /// Table-wet, not fully authored chunks on the region's outer chunk ring
+    /// whose authored water reaches the box edge: water continuing across
+    /// the border (a river, the open sea). Exempt from the budget; reported.
+    pub border_crossings: Vec<Vec2<i32>>,
 }
 
 impl AuthoredRasters {
@@ -747,6 +821,9 @@ impl AuthoredRasters {
                 RESIDENT_BUDGET_BYTES >> 20
             )));
         }
+        // Reserve this manifest's share of the process-wide cap now (released
+        // by `Drop`, or below on any error).
+        let reserved = ReservedBytes::reserve(resident, global_resident_cap()).map_err(err)?;
         let mut regions: Vec<Region> = Vec::new();
         let mut chunk_summary: HashMap<Vec2<i32>, ChunkWaterSummary> = HashMap::new();
         for rm in manifest.regions {
@@ -904,6 +981,7 @@ impl AuthoredRasters {
             bounds,
             chunk_summary,
             digest,
+            resident_bytes: reserved.keep(),
         })
     }
 
@@ -1021,8 +1099,11 @@ impl AuthoredRasters {
                 region: r.id.clone(),
                 ..Default::default()
             };
-            for cy in r.min.y / CHUNK..r.max.y / CHUNK {
-                for cx in r.min.x / CHUNK..r.max.x / CHUNK {
+            // Region boxes are chunk-aligned (checked at load), so these
+            // divisions are exact.
+            let (c0, c1) = (r.min / CHUNK, r.max / CHUNK);
+            for cy in c0.y..c1.y {
+                for cx in c0.x..c1.x {
                     let cpos = Vec2::new(cx, cy);
                     let Some(table) = table_wet(cpos) else {
                         continue;
@@ -1037,7 +1118,12 @@ impl AuthoredRasters {
                     // The sim lowers the terrain of a chunk it calls water;
                     // only a chunk whose every column is authored hides that.
                     if table && !fully_authored {
-                        c.authored_dry_table_wet.push(cpos);
+                        let on_ring = cx == c0.x || cy == c0.y || cx == c1.x - 1 || cy == c1.y - 1;
+                        if on_ring && authored_wet && water_on_box_edge(r, cpos) {
+                            c.border_crossings.push(cpos);
+                        } else {
+                            c.authored_dry_table_wet.push(cpos);
+                        }
                     }
                 }
             }
@@ -1047,8 +1133,11 @@ impl AuthoredRasters {
                 errors.push(format!(
                     "region '{}': {dry_wet} chunk(s) the sim table calls water have unauthored \
                      columns (budget {}), e.g. {:?}: the sim sinks those chunks and the \
-                     unauthored terrain there with them; leave the water/elevated masks untouched \
-                     inside regions, or author every column of those chunks",
+                     unauthored terrain there with them. Leave the water/elevated masks untouched \
+                     inside regions; where the table's water is real (open sea, a river or lake \
+                     the region only partly covers) author every column of those chunks (water, \
+                     and bank cells for the ground the author intends), or let the water run to \
+                     the box edge (border chunks whose authored water reaches the edge are exempt)",
                     r.id,
                     r.budget.max_authored_dry_table_wet_chunks,
                     &c.authored_dry_table_wet[..dry_wet.min(5)]
@@ -1069,6 +1158,7 @@ impl AuthoredRasters {
                 region = r.id,
                 authored_wet_table_dry = wet_dry,
                 authored_dry_table_wet = dry_wet,
+                border_crossings = c.border_crossings.len(),
                 "Authored water vs the sim chunk table"
             );
             out.push(c);
@@ -1094,6 +1184,26 @@ impl AuthoredRasters {
                 .map(|c| c.river.river_kind.is_some() || c.is_underwater())
         })
     }
+}
+
+/// Whether any authored wet column of chunk `cpos` lies on the box edge of
+/// region `r` (water continuing across the border).
+fn water_on_box_edge(r: &Region, cpos: Vec2<i32>) -> bool {
+    let o = cpos * CHUNK;
+    (0..CHUNK).any(|k| {
+        [
+            Vec2::new(o.x + k, o.y),
+            Vec2::new(o.x + k, o.y + CHUNK - 1),
+            Vec2::new(o.x, o.y + k),
+            Vec2::new(o.x + CHUNK - 1, o.y + k),
+        ]
+        .into_iter()
+        .any(|p| {
+            r.contains(p)
+                && (p.x == r.min.x || p.y == r.min.y || p.x == r.max.x - 1 || p.y == r.max.y - 1)
+                && r.cell(p).is_wet()
+        })
+    })
 }
 
 fn io_error_kind(err: &assets::Error) -> Option<std::io::ErrorKind> {

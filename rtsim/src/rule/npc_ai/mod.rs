@@ -1580,8 +1580,9 @@ fn bird_large() -> impl Action<DefaultState> {
                 || ctx
                 .world
                 .sim()
-                .get(pos.as_().wpos_to_cpos()).is_none_or(|c| {
-                    c.alt - c.water_alt < -120.0 && (c.river.is_ocean() || c.river.is_lake())
+                // Authored-aware (authored water regions).
+                .chunk_water(pos.as_().wpos_to_cpos()).is_none_or(|w| {
+                    w.alt - w.water_alt < -120.0 && (w.ocean || w.lake)
                 });
         if is_deep_water {
             *bearing *= -1.0;
@@ -1734,10 +1735,9 @@ fn monster() -> impl Action<DefaultState> {
             let is_deep_water = ctx
                 .world
                 .sim()
-                .get(pos.as_().wpos_to_cpos())
-                .is_none_or(|c| {
-                    c.alt - c.water_alt < -10.0 && (c.river.is_ocean() || c.river.is_lake())
-                });
+                // Authored-aware (authored water regions).
+                .chunk_water(pos.as_().wpos_to_cpos())
+                .is_none_or(|w| w.alt - w.water_alt < -10.0 && (w.ocean || w.lake));
             if !is_deep_water {
             goto_2d(pos, 0.7, 8.0)
         } else {
