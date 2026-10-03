@@ -1,6 +1,7 @@
 use crate::{
     CONFIG, IndexRef, Land,
     all::ForestKind,
+    authored_raster,
     biome_profile::BiomeProfile,
     sim::{
         AuthoredGroundCoverProfile, CROMATOLIS_V0_REGION_ID, GroundSubstrate, Path, RiverKind,
@@ -100,6 +101,21 @@ impl ResolvedBiomeProfile<'_> {
     pub fn strength(&self) -> f32 { self.blend * self.intensity }
 }
 
+/// Distance from water (m) over which the column sampler fades warp and
+/// procedural relief back in; the authored water layer tracks distances to
+/// authored water up to the same value (`authored_raster::DIST_CAP_M`).
+pub(crate) const WATER_WARP_FADE_M: f32 = 64.0;
+
+/// A governing `BiomeProfile` override with a baked `flood_to` floods the
+/// water level up to that altitude, blended in by its strength, never below
+/// the ambient level (see the call site in [`ColumnGen::get`]).
+fn flooded_water_level(water_level: f32, biome_profile: Option<ResolvedBiomeProfile<'_>>) -> f32 {
+    match biome_profile.and_then(|rp| rp.flood_to.map(|flood_to| (rp, flood_to))) {
+        Some((rp, flood_to)) => water_level.max(Lerp::lerp(water_level, flood_to, rp.strength())),
+        None => water_level,
+    }
+}
+
 /// Generalised power function, pushes values in the range 0-1 to extremes.
 fn power(x: f64, t: f64) -> f64 {
     if x < 0.5 {
@@ -148,6 +164,13 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let chunk_pos = wpos.wpos_to_cpos();
 
         let sim = &self.sim;
+        // XINDELER: the authored water raster at this column, `None` outside
+        // every authored region (then nothing below changes). See
+        // `crate::authored_raster`.
+        let authored = sim
+            .authored_rasters
+            .as_ref()
+            .and_then(|rasters| rasters.column(wpos));
 
         // let turb = Vec2::new(
         //     sim.gen_ctx.turb_x_nz.get((wposf.div(48.0)).into_array()) as f32,
@@ -784,13 +807,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let flood_block = biome_profile
             .filter(|rp| rp.flood_to.is_some())
             .map_or(BlockKind::Water, |rp| rp.profile.flood_block);
-        let water_level =
-            match biome_profile.and_then(|rp| rp.flood_to.map(|flood_to| (rp, flood_to))) {
-                Some((rp, flood_to)) => {
-                    water_level.max(Lerp::lerp(water_level, flood_to, rp.strength()))
-                },
-                None => water_level,
-            };
+        let water_level = flooded_water_level(water_level, biome_profile);
 
         let mut spawn_rules = SpawnRules::default();
         for site in sim_chunk.sites.iter().map(|site| &index.sites[*site]) {
@@ -1023,13 +1040,46 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             * gradient.unwrap_or(0.0).min(1.0)
             * surface_rigidity;
 
-        let warp_factor = water_dist.map_or(1.0, |d| ((d - 0.0) / 64.0).clamped(0.0, 1.0));
+        let warp_factor =
+            water_dist.map_or(1.0, |d| ((d - 0.0) / WATER_WARP_FADE_M).clamped(0.0, 1.0));
         let warp_factor = warp_factor * spawn_rules.max_warp;
         // NOTE: To disable warp, uncomment this line.
         // let warp_factor = 0.0;
+        let riverless_alt_delta_unfaded = riverless_alt_delta;
         let riverless_alt_delta = Lerp::lerp(0.0, riverless_alt_delta, warp_factor);
         let alt = alt + riverless_alt_delta;
         let alt = alt + warp * warp_factor;
+
+        // XINDELER: inside an authored region the raster replaces the
+        // sim-derived water and the terrain it carved; regional overrides
+        // (flood here, `Damage` just below) stay on top. See
+        // `crate::authored_raster`.
+        let authored_raster::EngineColumn {
+            alt,
+            water_level,
+            water_dist,
+            warp_factor,
+            cliff_offset,
+            riverless_alt,
+        } = authored_raster::apply(
+            authored,
+            authored_raster::EngineColumn {
+                alt,
+                water_level,
+                water_dist,
+                warp_factor,
+                cliff_offset,
+                riverless_alt,
+            },
+            authored_raster::DryTerrain {
+                riverless_alt,
+                riverless_alt_delta: riverless_alt_delta_unfaded,
+                warp,
+                max_warp: spawn_rules.max_warp,
+                base_sea_level,
+            },
+            |level| flooded_water_level(level, biome_profile),
+        );
 
         // A `Damage` override's crater bowl/rim (see
         // `common::terrain::regional_override::DamageOverride`), applied
@@ -1568,6 +1618,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             surface_block_override,
             flood_block,
             governing_biome_profile: biome_profile,
+            authored,
 
             chunk: sim_chunk,
         })
@@ -1709,11 +1760,20 @@ pub struct ColumnSample<'a> {
     /// `world/src/layer/tree.rs`, `shrub.rs`, and `scatter.rs` for the
     /// profile's own forest/scatter-deny/scatter-boost lists.
     pub governing_biome_profile: Option<ResolvedBiomeProfile<'a>>,
+    /// XINDELER: the authored raster column here (`None` outside every
+    /// authored region). See `crate::authored_raster`.
+    pub authored: Option<authored_raster::AuthoredColumn>,
 
     pub chunk: &'a SimChunk,
 }
 
 impl ColumnSample<'_> {
+    /// Whether procedural decorations (boulders, trees, scatter) must not be
+    /// rooted here: authored water of a region that suppresses them.
+    pub fn authored_procedural_suppressed(&self) -> bool {
+        self.authored.is_some_and(|a| a.procedural_suppressed())
+    }
+
     pub fn get_info(&self) -> ColInfo {
         ColInfo {
             alt: self.alt,

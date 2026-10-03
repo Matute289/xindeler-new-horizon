@@ -327,6 +327,51 @@ impl TerrainGrid {
             })
     }
 
+    /// XINDELER: [`Self::try_find_ground`], but never a position standing in
+    /// liquid: when the ground found at `pos` is the bed under water (the
+    /// stand block or the one above it is liquid), the nearest column within
+    /// `radius` blocks horizontally whose ground is dry is used instead
+    /// (closest first, ties in a fixed scan order). When none is found, the
+    /// plain [`Self::try_find_ground`] result is returned, so callers lose
+    /// nothing. Used for login repositioning on worlds whose terrain can
+    /// change under saved positions (authored water rasters).
+    pub fn try_find_dry_ground(&self, pos: Vec3<i32>, radius: i32) -> Option<Vec3<i32>> {
+        let dry = |p: Vec3<i32>| {
+            (0..2).all(|z| {
+                self.get(p + Vec3::unit_z() * z)
+                    .map_or(true, |b| !b.is_liquid())
+            })
+        };
+        let first = self.try_find_ground(pos);
+        if first.is_none_or(dry) {
+            return first;
+        }
+        for r in 1..=radius {
+            let mut best: Option<(i32, Vec3<i32>)> = None;
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs() != r && dy.abs() != r {
+                        continue;
+                    }
+                    let d2 = dx * dx + dy * dy;
+                    if best.is_some_and(|(b, _)| b <= d2) {
+                        continue;
+                    }
+                    if let Some(p) = self
+                        .try_find_ground(pos + Vec3::new(dx, dy, 0))
+                        .filter(|p| dry(*p))
+                    {
+                        best = Some((d2, p));
+                    }
+                }
+            }
+            if let Some((_, p)) = best {
+                return Some(p);
+            }
+        }
+        first
+    }
+
     pub fn get_interpolated<T, F>(&self, pos: Vec2<i32>, mut f: F) -> Option<T>
     where
         T: Copy + Default + Add<Output = T> + Mul<f32, Output = T>,
@@ -624,4 +669,83 @@ pub fn quadratic_nearest_point(
                 .partial_cmp(&(b, !(0.0..=1.0).contains(&bp), bp))
                 .unwrap()
         })
+}
+
+#[cfg(test)]
+mod dry_ground_tests {
+    use super::*;
+    use crate::vol::WriteVol;
+    use std::sync::Arc;
+
+    /// One chunk: stone up to z = 9 (top block 9), a 6-wide channel at
+    /// x in 10..16 dug down to z = 3 and filled with water up to z = 8.
+    fn grid() -> TerrainGrid {
+        let air = Block::air(SpriteKind::Empty);
+        let stone = Block::new(BlockKind::Rock, Rgb::zero());
+        let water = Block::water(SpriteKind::Empty);
+        let mut chunk = TerrainChunk::new(0, stone, air, TerrainChunkMeta::void());
+        for y in 0..32 {
+            for x in 0..32 {
+                for z in 0..40 {
+                    let channel = (10..16).contains(&x);
+                    let b = if channel {
+                        if z <= 3 {
+                            stone
+                        } else if z <= 8 {
+                            water
+                        } else {
+                            air
+                        }
+                    } else if z <= 9 {
+                        stone
+                    } else {
+                        air
+                    };
+                    let _ = chunk.set(Vec3::new(x, y, z), b);
+                }
+            }
+        }
+        let mut grid = TerrainGrid::new(
+            MapSizeLg::new(Vec2::new(5, 5)).unwrap(),
+            Arc::new(chunk.clone()),
+        )
+        .unwrap();
+        grid.insert(Vec2::zero(), Arc::new(chunk));
+        grid
+    }
+
+    #[test]
+    fn plain_ground_search_lands_on_the_bed_underwater() {
+        // A player saved at z = 10 over what is now the channel.
+        let g = grid();
+        assert_eq!(
+            g.try_find_ground(Vec3::new(12, 16, 10)),
+            Some(Vec3::new(12, 16, 4))
+        );
+    }
+
+    #[test]
+    fn dry_ground_search_moves_to_the_nearest_bank() {
+        let g = grid();
+        // x = 12 is 3 columns from the west bank (x = 9) and 4 from the east
+        // bank (x = 16): the west bank wins.
+        assert_eq!(
+            g.try_find_dry_ground(Vec3::new(12, 16, 10), 16),
+            Some(Vec3::new(9, 16, 10))
+        );
+        assert_eq!(
+            g.try_find_dry_ground(Vec3::new(14, 16, 10), 16),
+            Some(Vec3::new(16, 16, 10))
+        );
+        // Already on dry ground: the plain result.
+        assert_eq!(
+            g.try_find_dry_ground(Vec3::new(5, 16, 12), 16),
+            g.try_find_ground(Vec3::new(5, 16, 12))
+        );
+        // No dry ground within reach: the plain result (the bed).
+        assert_eq!(
+            g.try_find_dry_ground(Vec3::new(12, 16, 10), 2),
+            Some(Vec3::new(12, 16, 4))
+        );
+    }
 }

@@ -1074,6 +1074,11 @@ struct AuthoredRegion {
     /// Fauna/flora-by-water-body-and-salinity profile table, see
     /// [`AuthoredAquaticEcology`].
     aquatic_ecology_profile: &'static str,
+    /// Whether this region *must* ship an authored raster manifest
+    /// (`<map_asset>_authored_rasters`, see `crate::authored_raster`). Every
+    /// authored region may ship one; when it is not required, a missing
+    /// manifest means the region has no authored water.
+    require_authored_rasters: bool,
 }
 
 /// Threshold above which an authored water/elevated-lake/river-channel mask
@@ -1112,6 +1117,7 @@ const AUTHORED_REGIONS: &[AuthoredRegion] = &[AuthoredRegion {
     tree_candidate_policy: "world.map.cromatolis_v0_tree_candidate_policy",
     alpine_policy: Some("world.map.cromatolis_v0_alpine"),
     aquatic_ecology_profile: "world.map.cromatolis_v0_aquatic_ecology",
+    require_authored_rasters: false,
 }];
 
 /// One regional alpine policy, loaded once per authored world. All heights
@@ -2339,6 +2345,10 @@ pub struct WorldSim {
     /// upstream `StructureGen2d` candidate sequence.
     authored_tree_candidate_policy: Option<RegionalTreeCandidatePolicy>,
     pub(crate) authored_alpine_policy: Option<(&'static str, AuthoredAlpinePolicy)>,
+    /// XINDELER: the authored water rasters of the loaded region, `None` for
+    /// every world without a manifest (then the column sampler never reaches
+    /// the authored path). See `crate::authored_raster`.
+    pub(crate) authored_rasters: Option<crate::authored_raster::AuthoredRasters>,
 }
 
 /// The forest-species lottery for a position, given the [`Environment`]
@@ -2444,6 +2454,7 @@ impl WorldSim {
             authored_ecology_zone_layer: None,
             authored_tree_candidate_policy: None,
             authored_alpine_policy: None,
+            authored_rasters: None,
         }
     }
 
@@ -2562,6 +2573,9 @@ impl WorldSim {
             .unwrap_or_else(|| AuthoredCromatolisClimate::default().resolve(map_size_lg.chunks()));
         // Never apply an authored terrain policy to the procedural fallback
         // produced when its binary map cannot load.
+        let authored_rasters_map_asset = authored_region
+            .filter(|_| parsed_world_file.is_some())
+            .map(|region| (region.map_asset, region.require_authored_rasters));
         let authored_alpine_policy = authored_region
             .filter(|_| parsed_world_file.is_some())
             .and_then(|region| region.alpine_policy.map(|specifier| (region.id, specifier)))
@@ -3862,6 +3876,7 @@ impl WorldSim {
             authored_ecology_zone_layer,
             authored_tree_candidate_policy,
             authored_alpine_policy,
+            authored_rasters: None,
         };
 
         this.generate_cliffs();
@@ -3870,11 +3885,58 @@ impl WorldSim {
             this.seed_elements();
         }
 
+        // Loaded last (the consistency report reads the finished chunk
+        // table) but before civ generation, whose ports read it. A manifest
+        // that exists but is wrong stops world generation here: rendering the
+        // unauthored terrain instead would hide the failure behind a
+        // plausible-looking world.
+        //
+        // This runs on the world-generation thread itself (inside
+        // `World::generate`'s `threadpool.install`, not in a parallel task),
+        // so the panic stops generation and `prewarm` can use the pool.
+        if let Some((map_asset, required)) = authored_rasters_map_asset {
+            let size_blocks = map_size_lg.chunks().map(|e| e as i32)
+                * TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+            let source = crate::authored_raster::manifest_specifier(map_asset);
+            match crate::authored_raster::AuthoredRasters::load_for_map(
+                map_asset,
+                size_blocks,
+                required,
+            ) {
+                Ok(Some(rasters)) => {
+                    if let Err(err) = rasters.check_consistency_with_sim(&source, &this) {
+                        panic!("{err}");
+                    }
+                    rasters.prewarm();
+                    this.authored_rasters = Some(rasters);
+                },
+                Ok(None) => {},
+                Err(err) => panic!("{err}"),
+            }
+        }
+
         this
     }
 
     #[inline(always)]
     pub const fn map_size_lg(&self) -> MapSizeLg { self.map_size_lg }
+
+    /// XINDELER: this world's authored water rasters, if its map ships a
+    /// manifest (see `crate::authored_raster`).
+    pub fn authored_rasters(&self) -> Option<&crate::authored_raster::AuthoredRasters> {
+        self.authored_rasters.as_ref()
+    }
+
+    /// Install (or remove) authored rasters on an already generated world,
+    /// for tests that compare the same world with and without a region.
+    /// Civ generation has already run, so ports are not regenerated.
+    #[cfg(test)]
+    pub(crate) fn set_authored_rasters_for_test(
+        &mut self,
+        rasters: Option<crate::authored_raster::AuthoredRasters>,
+    ) {
+        self.authored_rasters = rasters;
+    }
 
     pub fn get_size(&self) -> Vec2<u32> { self.map_size_lg().chunks().map(u32::from) }
 

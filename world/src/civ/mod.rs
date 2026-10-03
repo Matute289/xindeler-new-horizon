@@ -2736,7 +2736,8 @@ impl Civs {
             {
                 let distance_squared = s.origin.map(|e| e as i64).distance_squared(wpos);
                 s.economy_mut()
-                    .add_chunk(ctx.sim.get(chpos).unwrap(), distance_squared);
+                    // XINDELER: the chunk as the authored water sees it.
+                    .add_chunk(&ctx.sim.chunk_view(chpos).unwrap(), distance_squared);
             }
         });
         drop(guard);
@@ -4257,7 +4258,11 @@ fn walk_in_all_dirs(
         let Some(b_chunk) = chunks[i] else { continue };
 
         let hill_cost = ((b_chunk.alt - a_chunk.alt).abs() / 5.0).powi(2);
-        let water_cost = (b_chunk.water_alt - b_chunk.alt + 8.0).clamped(0.0, 8.0) * 3.0; // Try not to path swamps / tidal areas
+        // XINDELER: authored-aware depth (authored water in regions).
+        let depth = sim
+            .chunk_water_depth(adjacents[i])
+            .unwrap_or(b_chunk.water_alt - b_chunk.alt);
+        let water_cost = (depth + 8.0).clamped(0.0, 8.0) * 3.0; // Try not to path swamps / tidal areas
         let wild_cost = if b_chunk.path.0.is_way() {
             0.0 // Traversing existing paths has no additional cost!
         } else {
@@ -4300,8 +4305,8 @@ fn walk_in_all_dirs(
 fn loc_suitable_for_walking(sim: &WorldSim, loc: Vec2<i32>) -> bool {
     if sim.get(loc).is_some() {
         NEIGHBORS.iter().all(|n| {
-            sim.get(loc + *n)
-                .is_some_and(|chunk| !chunk.river.near_water())
+            // XINDELER: authored-aware (authored regions).
+            sim.chunk_water(loc + *n).is_some_and(|w| !w.near_water)
         })
     } else {
         false
@@ -4362,14 +4367,19 @@ fn town_attributes_of_site(loc: Vec2<i32>, sim: &WorldSim) -> Option<TownSiteAtt
             for y in (-RESOURCE_RADIUS)..RESOURCE_RADIUS {
                 let check_loc = loc + Vec2::new(x, y).cpos_to_wpos();
                 sim.get(check_loc).map(|c| {
+                    // XINDELER: authored-aware water kinds (authored regions).
+                    let (is_river, is_lake, is_ocean) = sim.chunk_water(check_loc).map_or(
+                        (c.river.is_river(), c.river.is_lake(), c.river.is_ocean()),
+                        |w| (w.river, w.lake, w.ocean),
+                    );
                     if num::abs(chunk.alt - c.alt) < 200.0 {
-                        if c.river.is_river() {
+                        if is_river {
                             river_chunks += 1;
                         }
-                        if c.river.is_lake() {
+                        if is_lake {
                             lake_chunks += 1;
                         }
-                        if c.river.is_ocean() {
+                        if is_ocean {
                             ocean_chunks += 1;
                         }
                         if c.tree_density > 0.3 {
@@ -4390,7 +4400,7 @@ fn town_attributes_of_site(loc: Vec2<i32>, sim: &WorldSim) -> Option<TownSiteAtt
                                 }
                             }
                         }
-                        if !c.river.is_river() && !c.river.is_lake() && !c.river.is_ocean() {
+                        if !is_river && !is_lake && !is_ocean {
                             land_chunks += 1;
                         }
                     }
@@ -4497,8 +4507,8 @@ fn nearest_authored_settlement_location(
 fn authored_settlement_has_dry_buffer(location: Vec2<i32>, sim: &WorldSim) -> bool {
     (-1..=1).all(|dy| {
         (-1..=1).all(|dx| {
-            sim.get(location + Vec2::new(dx, dy))
-                .is_some_and(|chunk| !chunk.is_underwater())
+            sim.chunk_is_underwater(location + Vec2::new(dx, dy))
+                .is_some_and(|underwater| !underwater)
         })
     })
 }
@@ -4660,11 +4670,12 @@ impl fmt::Display for Site {
 impl SiteKind {
     pub fn is_suitable_loc(&self, loc: Vec2<i32>, sim: &WorldSim) -> bool {
         let on_land = || -> bool {
-            if let Some(chunk) = sim.get(loc) {
-                !chunk.river.is_ocean()
-                    && !chunk.river.is_lake()
-                    && !chunk.river.is_river()
-                    && !chunk.is_underwater()
+            // XINDELER: authored-aware water facts (authored regions).
+            if let Some((chunk, w)) = sim.get(loc).zip(sim.chunk_water(loc)) {
+                !w.ocean
+                    && !w.lake
+                    && !w.river
+                    && !w.underwater
                     && !matches!(
                         chunk.get_biome(),
                         common::terrain::BiomeKind::Lake | common::terrain::BiomeKind::Ocean
@@ -4680,6 +4691,11 @@ impl SiteKind {
         };
 
         sim.get(loc).is_some_and(|chunk| {
+            // XINDELER: authored-aware water altitude (authored regions).
+            let water_alt = sim.chunk_water_alt(loc).unwrap_or(chunk.water_alt);
+            let near_water = sim
+                .chunk_water(loc)
+                .map_or(chunk.river.near_water(), |w| w.near_water);
             let suitable_for_town = || -> bool {
                 let attributes = town_attributes_of_site(loc, sim);
                 attributes.is_some_and(|attributes| {
@@ -4702,7 +4718,7 @@ impl SiteKind {
                 SiteKind::DwarvenMine => {
                     matches!(chunk.get_biome(), BiomeKind::Forest | BiomeKind::Desert)
                         && !chunk.near_cliffs()
-                        && !chunk.river.near_water()
+                        && !near_water
                         && on_flat_terrain()
                 },
                 SiteKind::Haniwa => {
@@ -4729,15 +4745,15 @@ impl SiteKind {
                 SiteKind::SavannahTown => {
                     matches!(chunk.get_biome(), BiomeKind::Savannah)
                         && !chunk.near_cliffs()
-                        && !chunk.river.near_water()
+                        && !near_water
                         && suitable_for_town()
                 },
                 SiteKind::CoastalTown => {
-                    (2.0..3.5).contains(&(chunk.water_alt - CONFIG.sea_level))
+                    (2.0..3.5).contains(&(water_alt - CONFIG.sea_level))
                         && suitable_for_town()
                 },
                 SiteKind::PirateHideout => {
-                    (0.5..3.5).contains(&(chunk.water_alt - CONFIG.sea_level))
+                    (0.5..3.5).contains(&(water_alt - CONFIG.sea_level))
                 },
                 SiteKind::Sahagin => {
                     matches!(chunk.get_biome(), BiomeKind::Ocean)
@@ -4746,20 +4762,20 @@ impl SiteKind {
                 SiteKind::JungleRuin => {
                     matches!(chunk.get_biome(), BiomeKind::Jungle)
                 },
-                SiteKind::RockCircle => !chunk.near_cliffs() && !chunk.river.near_water(),
+                SiteKind::RockCircle => !chunk.near_cliffs() && !near_water,
                 SiteKind::TrollCave => {
                     !chunk.near_cliffs()
                         && on_flat_terrain()
-                        && !chunk.river.near_water()
+                        && !near_water
                         && chunk.temp < 0.6
                 },
                 SiteKind::Camp => {
-                    !chunk.near_cliffs() && on_flat_terrain() && !chunk.river.near_water()
+                    !chunk.near_cliffs() && on_flat_terrain() && !near_water
                 },
                 SiteKind::DesertCity => {
                     (0.9..1.0).contains(&chunk.temp) && !chunk.near_cliffs() && suitable_for_town()
                         && on_land()
-                        && !chunk.river.near_water()
+                        && !near_water
                 },
                 SiteKind::ChapelSite => {
                     // Needs to be near the ocean surface, not just underwater
@@ -4774,17 +4790,17 @@ impl SiteKind {
                 SiteKind::Terracotta => {
                     (0.9..1.0).contains(&chunk.temp)
                         && on_land()
-                        && (chunk.water_alt - CONFIG.sea_level) > 50.0
+                        && (water_alt - CONFIG.sea_level) > 50.0
                         && on_flat_terrain()
-                        && !chunk.river.near_water()
+                        && !near_water
                         && !chunk.near_cliffs()
                 },
                 SiteKind::Myrmidon => {
                     (0.9..1.0).contains(&chunk.temp)
                         && on_land()
-                        && (chunk.water_alt - CONFIG.sea_level) > 50.0
+                        && (water_alt - CONFIG.sea_level) > 50.0
                         && on_flat_terrain()
-                        && !chunk.river.near_water()
+                        && !near_water
                         && !chunk.near_cliffs()
                 },
                 SiteKind::Cultist => on_land() && chunk.temp < 0.5 && chunk.near_cliffs(),

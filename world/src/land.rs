@@ -1,6 +1,7 @@
 use crate::{
     ColumnSample, IndexRef,
     all::ForestKind,
+    authored_raster::{AuthoredWater, queries::ChunkWater},
     column::ColumnGen,
     sim::{self, SimChunk},
     util::Sampler,
@@ -41,6 +42,39 @@ impl<'a> Land<'a> {
         self.sim
             .and_then(|sim| sim.get_alt_approx(wpos))
             .unwrap_or(0.0)
+    }
+
+    /// XINDELER: the authored water at `wpos`, if `wpos` is an authored wet
+    /// column (see `crate::authored_raster`). `None` everywhere for a world
+    /// without authored rasters.
+    pub fn authored_water_at(&self, wpos: Vec2<i32>) -> Option<AuthoredWater> {
+        self.sim.and_then(|sim| sim.authored_water_at(wpos))
+    }
+
+    /// XINDELER: the water facts of the chunk holding `wpos`, authored-aware
+    /// (see `WorldSim::chunk_water`).
+    pub fn chunk_water_wpos(&self, wpos: Vec2<i32>) -> Option<ChunkWater> {
+        self.sim.and_then(|sim| {
+            sim.chunk_water(wpos.map(|e| e.div_euclid(TerrainChunkSize::RECT_SIZE.x as i32)))
+        })
+    }
+
+    /// XINDELER: `river.near_water()` of the chunk holding `wpos`,
+    /// authored-aware. `None` outside the map.
+    pub fn near_water_at(&self, wpos: Vec2<i32>) -> Option<bool> {
+        self.chunk_water_wpos(wpos).map(|w| w.near_water)
+    }
+
+    /// XINDELER: [`Self::get_surface_alt_approx`] made authored-aware (see
+    /// `WorldSim::surface_alt_at`).
+    pub fn surface_alt_at(&self, wpos: Vec2<i32>) -> f32 {
+        self.sim.map(|sim| sim.surface_alt_at(wpos)).unwrap_or(0.0)
+    }
+
+    /// XINDELER: the number of water blocks of an authored wet column at
+    /// `wpos` (see [`Self::authored_water_at`]).
+    pub fn authored_depth_at(&self, wpos: Vec2<i32>) -> Option<i32> {
+        self.authored_water_at(wpos).map(|w| w.depth_blocks())
     }
 
     pub fn get_downhill(&self, wpos: Vec2<i32>) -> Vec2<i32> {

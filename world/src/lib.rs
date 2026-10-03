@@ -10,6 +10,7 @@
 #![cfg_attr(feature = "simd", feature(portable_simd))]
 
 mod all;
+pub mod authored_raster;
 mod biome_profile;
 mod block;
 pub mod canvas;
@@ -93,6 +94,54 @@ lazy_static! {
 #[cfg(feature = "use-dyn-lib")]
 pub fn init() { lazy_static::initialize(&LIB); }
 
+#[cfg(test)]
+thread_local! {
+    /// Seed for the next `generate_chunk` calls' dynamic RNG on this thread,
+    /// so tests can compare whole chunks exactly (see
+    /// [`with_deterministic_dynamic_rng`]).
+    static TEST_DYNAMIC_RNG_SEED: std::cell::Cell<Option<[u8; 32]>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with chunk generation's dynamic RNG (chests, entities and the
+/// cave decorations that draw from it) seeded with `seed` on this thread.
+#[cfg(test)]
+pub(crate) fn with_deterministic_dynamic_rng<R>(seed: [u8; 32], f: impl FnOnce() -> R) -> R {
+    TEST_DYNAMIC_RNG_SEED.with(|s| s.set(Some(seed)));
+    let r = f();
+    TEST_DYNAMIC_RNG_SEED.with(|s| s.set(None));
+    r
+}
+
+/// The RNG of a structure's weighted block choice (`StructureBlock::Choice`
+/// in `block.rs`): the thread RNG in the game; in tests inside
+/// [`with_deterministic_dynamic_rng`], seeded from that seed and `pos`.
+#[cfg(not(test))]
+pub(crate) fn choice_rng(_pos: Vec3<i32>) -> rand::rngs::ThreadRng { rand::rng() }
+
+#[cfg(test)]
+pub(crate) fn choice_rng(pos: Vec3<i32>) -> ChaCha8Rng {
+    match TEST_DYNAMIC_RNG_SEED.with(|s| s.get()) {
+        Some(mut seed) => {
+            seed[8..12].copy_from_slice(&pos.x.to_le_bytes());
+            seed[12..16].copy_from_slice(&pos.y.to_le_bytes());
+            seed[16..20].copy_from_slice(&pos.z.to_le_bytes());
+            ChaCha8Rng::from_seed(seed)
+        },
+        None => ChaCha8Rng::from_seed(rand::rng().random()),
+    }
+}
+
+/// The seed of `generate_chunk`'s dynamic RNG: fresh entropy in the game;
+/// a fixed seed inside [`with_deterministic_dynamic_rng`] in tests.
+fn dynamic_rng_seed() -> [u8; 32] {
+    #[cfg(test)]
+    if let Some(seed) = TEST_DYNAMIC_RNG_SEED.with(|s| s.get()) {
+        return seed;
+    }
+    rand::rng().random()
+}
+
 #[derive(Debug)]
 pub enum Error {
     Other(String),
@@ -158,6 +207,12 @@ impl World {
                 civ::Civs::generate(seed, &mut sim, &mut index, calendar.as_ref(), &|stage| {
                     report_stage(WorldGenerateStage::WorldCivGenerate(stage))
                 });
+
+            // XINDELER: an authored settlement on authored water is a data
+            // error (see `authored_raster::queries`).
+            if let Err(err) = authored_raster::queries::check_authored_sites(&sim, &civs) {
+                panic!("{err}");
+            }
 
             report_stage(WorldGenerateStage::EconomySimulation);
             sim2::simulate(&mut index, &mut sim);
@@ -467,7 +522,25 @@ impl World {
             .and_then(|base_z| self.sim.get(chunk_pos).map(|sim_chunk| (base_z, sim_chunk))) */
             .get_base_z(chunk_pos)
         {
-            Some(base_z) => (base_z as i32, self.sim.get(chunk_pos).unwrap()),
+            // XINDELER: an authored bed or bank can lie far below every sim
+            // chunk's own base (a slot canyon cut into a plateau); blocks below
+            // `base_z` default to stone, so the base must reach below it or
+            // the air over the authored water would stay solid rock. Only the
+            // chunk's *own* authored cells count: a chunk writes only its own
+            // columns, so no neighbour apron is needed and every chunk without
+            // authored cells (all of them outside a region) keeps its floor.
+            Some(base_z) => (
+                match self
+                    .sim
+                    .authored_rasters
+                    .as_ref()
+                    .and_then(|rasters| rasters.floor_block(chunk_pos))
+                {
+                    Some(floor) => (base_z as i32).min(floor),
+                    None => base_z as i32,
+                },
+                self.sim.get(chunk_pos).unwrap(),
+            ),
             // Some((base_z, sim_chunk)) => (base_z as i32, sim_chunk),
             None => {
                 // NOTE: This is necessary in order to generate a handful of chunks at the edges
@@ -546,13 +619,16 @@ impl World {
         };
         let sim_chunk: &SimChunk = &sim_chunk;
 
+        let chunk_water = self.sim.chunk_water(chunk_pos);
         let meta = TerrainChunkMeta::new(
             sim_chunk.get_location_name(&index.sites, &self.civs.pois, chunk_center_wpos2d),
             sim_chunk.get_biome(),
             sim_chunk.alt,
             sim_chunk.tree_density,
-            sim_chunk.river.is_river(),
-            sim_chunk.river.near_water(),
+            // XINDELER: authored-aware (authored water regions); clients use
+            // these for ambience and weather.
+            chunk_water.map_or(sim_chunk.river.is_river(), |w| w.river),
+            chunk_water.map_or(sim_chunk.river.near_water(), |w| w.near_water),
             sim_chunk.river.velocity,
             sim_chunk.temp,
             sim_chunk.humidity,
@@ -618,7 +694,7 @@ impl World {
         };
 
         // Only use for rng affecting dynamic elements like chests and entities!
-        let mut dynamic_rng = ChaCha8Rng::from_seed(rand::rng().random());
+        let mut dynamic_rng = ChaCha8Rng::from_seed(dynamic_rng_seed());
 
         // Apply layers (paths, caves, etc.)
         let mut canvas = Canvas {

@@ -8,7 +8,10 @@ use rand::{
     RngExt, rng,
     seq::{IndexedRandom, IteratorRandom},
 };
-use world::{CONFIG, IndexRef, World, sim::SimChunk, site::SiteKind};
+use vek::Vec2;
+use world::{
+    CONFIG, IndexRef, World, authored_raster::queries::ChunkWater, sim::SimChunk, site::SiteKind,
+};
 
 use crate::{
     Data, EventCtx, OnTick, RtState,
@@ -286,6 +289,41 @@ fn role_personality(rng: &mut impl RngExt, role: &Role) -> Personality {
     }
 }
 
+/// Whether a body lives in water (`Some(true)`), on land (`Some(false)`) or
+/// does not care (`None`: flyers, objects, vehicles).
+fn body_aquatic(body: &Body) -> Option<bool> {
+    match body {
+        Body::Crustacean(_) | Body::FishSmall(_) | Body::FishMedium(_) => Some(true),
+        Body::Dragon(_)
+        | Body::BirdLarge(_)
+        | Body::BirdMedium(_)
+        | Body::Object(_)
+        | Body::Ship(_)
+        | Body::Item(_)
+        | Body::Plugin(_) => None,
+        _ => Some(false),
+    }
+}
+
+/// The spawn position is the chunk's centre column, and this checks that
+/// exact column (not a chunk average). Inside an authored water region it
+/// must match the body: a
+/// water body in authored water, a land body on dry ground at least 2 m from
+/// it (a bank lip next to a deep channel is a cliff edge, not a spawn).
+/// Always true outside every region.
+fn authored_spawn_ok(world: &World, wpos: Vec2<i32>, aquatic: Option<bool>) -> bool {
+    match (world.sim().authored_column_at(wpos), aquatic) {
+        (None, _) | (_, None) => true,
+        // The natural map (an unauthored column of a partial chunk): the
+        // chunk filter decides, as outside regions.
+        (Some(col), _) if col.natural && col.cell == world::authored_raster::AuthoredCell::None => {
+            true
+        },
+        (Some(col), Some(true)) => col.cell.is_wet(),
+        (Some(col), Some(false)) => !col.cell.is_wet() && col.water_dist.is_none_or(|d| d >= 2.0),
+    }
+}
+
 fn spawn_anywhere(
     data: &mut Data,
     world: &World,
@@ -303,11 +341,16 @@ fn spawn_anywhere(
 
         // TODO: If we had access to `ChunkStates` here we could make sure
         // these aren't getting respawned in loaded chunks.
-        if let Some(chunk) = world.sim().get(cpos)
-            && (!check || !chunk.is_underwater())
+        let center = cpos.cpos_to_wpos_center();
+        // Authored-aware: authored water and its banks count, and z comes
+        // from the authored surface (see `world::authored_raster::queries`).
+        if world
+            .sim()
+            .chunk_water(cpos)
+            .is_some_and(|w| !check || !w.underwater)
+            && (!check || authored_spawn_ok(world, center, body_aquatic(&body)))
         {
-            let wpos = cpos.cpos_to_wpos_center();
-            let wpos = wpos.as_().with_z(world.sim().get_surface_alt_approx(wpos));
+            let wpos = center.as_().with_z(world.sim().surface_alt_at(center));
 
             data.spawn_actor(
                 Actor::new_npc(rng.random(), wpos, body, death.role.clone())
@@ -515,25 +558,25 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                 }
             },
             Role::Monster => {
-                let chunk_filter: fn(&SimChunk) -> bool = match body {
+                let chunk_filter: fn(&SimChunk, &ChunkWater) -> bool = match body {
                     Body::BipedLarge(body) => match body.species {
                         comp::biped_large::Species::Tursus
                         | comp::biped_large::Species::Gigasfrost
                         | comp::biped_large::Species::Wendigo => {
-                            |chunk| !chunk.is_underwater() && chunk.temp < CONFIG.snow_temp
+                            |chunk, w| !w.underwater && chunk.temp < CONFIG.snow_temp
                         },
-                        comp::biped_large::Species::Gigasfire => |chunk| {
-                            !chunk.is_underwater()
+                        comp::biped_large::Species::Gigasfire => |chunk, w| {
+                            !w.underwater
                                 && chunk.temp > CONFIG.desert_temp
                                 && chunk.humidity < CONFIG.desert_hum
                         },
                         comp::biped_large::Species::Mountaintroll => {
-                            |chunk| !chunk.is_underwater() && chunk.alt > 500.0
+                            |chunk, w| !w.underwater && chunk.alt > 500.0
                         },
                         comp::biped_large::Species::Swamptroll => {
-                            |chunk| !chunk.is_underwater() && chunk.humidity > CONFIG.jungle_hum
+                            |chunk, w| !w.underwater && chunk.humidity > CONFIG.jungle_hum
                         },
-                        _ => |chunk| !chunk.is_underwater(),
+                        _ => |_, w| !w.underwater,
                     },
                     Body::Arthropod(_)
                     | Body::Humanoid(_)
@@ -542,12 +585,14 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                     | Body::QuadrupedMedium(_)
                     | Body::Golem(_)
                     | Body::Theropod(_)
-                    | Body::QuadrupedLow(_) => |chunk| !chunk.is_underwater(),
-                    Body::Dragon(_) | Body::BirdLarge(_) | Body::BirdMedium(_) => |_| true,
+                    | Body::QuadrupedLow(_) => |_, w| !w.underwater,
+                    Body::Dragon(_) | Body::BirdLarge(_) | Body::BirdMedium(_) => |_, _| true,
                     Body::Crustacean(_) | Body::FishSmall(_) | Body::FishMedium(_) => {
-                        |chunk| chunk.is_underwater()
+                        |_, w| w.underwater
                     },
-                    Body::Object(_) | Body::Ship(_) | Body::Item(_) | Body::Plugin(_) => |_| true,
+                    Body::Object(_) | Body::Ship(_) | Body::Item(_) | Body::Plugin(_) => {
+                        |_, _| true
+                    },
                 };
 
                 for _ in 0..RESPAWN_ATTEMPTS {
@@ -559,11 +604,16 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
 
                     // TODO: If we had access to `ChunkStates` here we could make sure
                     // these aren't getting respawned in loaded chunks.
-                    if let Some(chunk) = world.sim().get(cpos)
-                        && chunk_filter(chunk)
+                    let center = cpos.cpos_to_wpos_center();
+                    // Authored-aware, as in `spawn_anywhere`.
+                    if world
+                        .sim()
+                        .get(cpos)
+                        .zip(world.sim().chunk_water(cpos))
+                        .is_some_and(|(chunk, w)| chunk_filter(chunk, &w))
+                        && authored_spawn_ok(world, center, body_aquatic(&body))
                     {
-                        let wpos = cpos.cpos_to_wpos_center();
-                        let wpos = wpos.as_().with_z(world.sim().get_surface_alt_approx(wpos));
+                        let wpos = center.as_().with_z(world.sim().surface_alt_at(center));
 
                         data.spawn_actor(
                             Actor::new_npc(rng.random(), wpos, body, death.role.clone())

@@ -30,6 +30,11 @@ cli = ["clap", "signal-hook", "indicatif"]
 # See file world/src/civ/airship_travel.rs for map generation details.
 airship_maps = ["dep:tiny-skia"]
 
+# The authored raster tile writer (`authored_raster::writer`) and encoder,
+# for tools that produce test tiles (`terrain-probe aw-write`). The game
+# only reads tiles.
+tools = []
+
 default = ["simd"]
 
 [dependencies]
@@ -64,6 +69,9 @@ fixed = "1"
 strum = { workspace = true }
 delaunator = "1.0.2"
 tiny-skia = { version = "0.12", optional = true }
+# Authored raster tiles (zstd payload, sha256 checked against the manifest).
+zstd = { workspace = true }
+sha2 = { workspace = true }
 
 # compression benchmarks
 lz-fear = { version = "0.2", optional = true }

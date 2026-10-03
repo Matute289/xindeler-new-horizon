@@ -365,11 +365,14 @@ impl SpotGenerate for Spot {
             .ceil() as u64
         {
             let pos = world_size.map(|e| (world.rng.random_range(0..e) & !0b11) as i32);
-            if let Some((_, chunk)) = world
+            // XINDELER: the predicates see the chunk through the authored
+            // water (`WorldSim::chunk_view`); outside every region it is the
+            // chunk itself.
+            let is_valid = world
                 .get_gradient_approx(pos)
-                .zip(world.get_mut(pos))
-                .filter(|(grad, chunk)| valid(*grad, chunk))
-            {
+                .zip(world.chunk_view(pos))
+                .is_some_and(|(grad, view)| valid(grad, &view));
+            if let Some(chunk) = world.get_mut(pos).filter(|_| is_valid) {
                 chunk.spot = Some(spot);
                 // `spawn: false` zeroes `tree_density`/`spawn_rate` outright,
                 // assuming they are seed-derived values nothing else cares

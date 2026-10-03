@@ -104,20 +104,20 @@ fn harvest_chunk(
 
 /// Fixed-rate client ticking plus the last few chat lines (admin command
 /// errors show up there).
-struct Driver {
+pub(crate) struct Driver {
     clock: Clock,
     chat: Vec<String>,
 }
 
 impl Driver {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             clock: Clock::new(Duration::from_secs_f32(1.0 / 30.0)),
             chat: Vec::new(),
         }
     }
 
-    fn tick(&mut self, c: &mut Client) -> Res<()> {
+    pub(crate) fn tick(&mut self, c: &mut Client) -> Res<()> {
         self.clock.tick();
         let evs = c
             .tick(comp::ControllerInputs::default(), self.clock.real_dt())
@@ -135,7 +135,7 @@ impl Driver {
 }
 
 /// Connect, create a character, return a client in the world.
-fn connect_bot(
+pub(crate) fn connect_bot(
     runtime: &Arc<Runtime>,
     port: u16,
     view_distance: u32,

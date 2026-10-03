@@ -230,9 +230,15 @@ impl NavalPort {
         // (not the mean) is taken deliberately: a deck has to clear the
         // *highest* local water reading along its own footprint, not an
         // average that some of it would sit under.
+        //
+        // An authored wet column (see `crate::authored_raster`) answers with
+        // its exact surface instead: `surface_block + 1`, the altitude of the
+        // top of the top water block, which is what `water_alt` means for the
+        // sim's own water (sea level 140 over top water block 139).
         let sample_water_alt = |wpos: Vec2<i32>| {
-            land.get_chunk_wpos(wpos)
-                .map(|chunk| chunk.water_alt as i32)
+            land.authored_water_at(wpos)
+                .map(|water| water.surface_alt() as i32)
+                .or_else(|| land.chunk_water_wpos(wpos).map(|w| w.water_alt as i32))
         };
         let water_alt = [
             deck.min,
@@ -1523,9 +1529,14 @@ impl NavalPort {
     /// placement against, so a berth's recorded depth and the placement
     /// that put the deck there can never silently disagree about which
     /// field "depth" means.
+    ///
+    /// An authored wet column answers with its exact number of water blocks
+    /// (`surface_block - bed_block`).
     fn sample_depth(&self, land: &Land, wpos: Vec2<i32>) -> Option<i32> {
-        land.get_chunk_wpos(wpos)
-            .map(|chunk| (chunk.water_alt - chunk.alt) as i32)
+        if let Some(depth) = land.authored_depth_at(wpos) {
+            return Some(depth);
+        }
+        land.chunk_water_wpos(wpos).map(|w| w.depth() as i32)
     }
 
     /// Whether every sampled point of the straight segment `from -> to`
@@ -1536,8 +1547,7 @@ impl NavalPort {
     fn segment_is_over_water(&self, land: &Land, from: Vec2<i32>, to: Vec2<i32>) -> bool {
         (0..=WATER_SEGMENT_SAMPLES).all(|i| {
             let p = from + (to - from) * i / WATER_SEGMENT_SAMPLES;
-            land.get_chunk_wpos(p)
-                .is_some_and(|chunk| chunk.river.near_water())
+            land.near_water_at(p).is_some_and(|near| near)
         })
     }
 

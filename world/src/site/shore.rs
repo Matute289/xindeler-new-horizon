@@ -1063,9 +1063,15 @@ impl Site {
         let mut deep = 0;
         let mut max_depth = 0.0f32;
         for step in 0..reach {
-            if let Some(chunk) = land.get_chunk_wpos(self.tile_center_wpos(start + outward * step))
-            {
-                let depth = chunk.water_alt - chunk.alt;
+            let wpos = self.tile_center_wpos(start + outward * step);
+            // An authored wet column (see `crate::authored_raster`) has an
+            // exact depth in blocks; the same measure the naval port's berth
+            // sampling uses, so placement and berths agree.
+            let depth = match land.authored_depth_at(wpos) {
+                Some(depth) => Some(depth as f32),
+                None => land.chunk_water_wpos(wpos).map(|w| w.depth()),
+            };
+            if let Some(depth) = depth {
                 max_depth = max_depth.max(depth);
                 if depth >= SHORE_MIN_BERTH_DEPTH {
                     deep += 1;

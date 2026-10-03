@@ -245,6 +245,38 @@ fn ec_d34_segment_crossing_the_box_is_reported() {
     assert!(!found.is_empty(), "segment through the box not reported");
 }
 
+/// Authored raster regions (the engine's authored water layer) are authored
+/// areas: a box inside a region, crossing its edge or within the margin is
+/// not empty, a box farther away is.
+#[test]
+fn authored_raster_regions_are_seen_by_the_emptiness_guard() {
+    let dir = std::env::temp_dir().join(format!("tprobe-ar-assets-{}", std::process::id()));
+    let map = dir.join("world/map");
+    std::fs::create_dir_all(&map).unwrap();
+    std::fs::write(
+        map.join("cromatolis_v0_authored_rasters.ron"),
+        "(schema: 1, regions: [(id: \"reach\", min: (22752, 24576), max: (23936, 25600), \
+         feather_m: 32, tile_size_m: 256, cell_size_m: 1, layers: [Water], tiles: [])])",
+    )
+    .unwrap();
+    let size = Vec2::broadcast(32768);
+    let at = |x0, y0, x1, y1| authored_points(&dir, size, Box2 { x0, y0, x1, y1 }, 50);
+    let inside = at(23200, 25000, 23300, 25100);
+    let crossing = at(23900, 25000, 24100, 25100);
+    let within_margin = at(24000, 25000, 24100, 25100);
+    let far = at(25000, 25000, 25100, 25100);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        inside
+            .iter()
+            .any(|r| r.id.as_deref() == Some("reach") && r.wx == 23250 && r.wy == 25050),
+        "{inside:?}"
+    );
+    assert!(!crossing.is_empty());
+    assert!(!within_margin.is_empty(), "64 m snap slack + 50 m margin");
+    assert!(far.is_empty(), "{far:?}");
+}
+
 /// EC-D34b (BUG-P7, the measured case): wilderness chunk (653, 998) is NOT
 /// empty at a 600 m margin, because a committed route polyline passes about
 /// 312 m from it although its vertices are kilometres away. The committed RON

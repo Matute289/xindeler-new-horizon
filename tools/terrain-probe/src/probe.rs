@@ -915,6 +915,10 @@ pub struct AuthoredFeature {
     pub pts: Vec<(f64, f64)>,
     /// Extent around the vertices (only the aerial citadel has one).
     pub radius: Option<f32>,
+    /// An authored area `(x0, y0, x1, y1)` in world metres (authored raster
+    /// regions): near a box when the two rectangles come within reach, not
+    /// only its outline.
+    pub area: Option<(f64, f64, f64, f64)>,
 }
 
 /// How a file's `x`/`y` fields map to world metres.
@@ -989,6 +993,26 @@ pub fn authored_features(root: &Path, size: Vec2<i32>) -> Result<Vec<AuthoredFea
     for e in files {
         let name = e.file_name().to_string_lossy().into_owned();
         let text = std::fs::read_to_string(e.path()).map_err(|e| format!("{name}: {e}"))?;
+        // Authored raster regions (the engine's authored water layer) are
+        // authored areas in wpos: every region box is a feature.
+        if name == "cromatolis_v0_authored_rasters.ron" {
+            let m: world::authored_raster::Manifest =
+                ron::from_str(&text).map_err(|err| format!("{name}: does not parse: {err}"))?;
+            for r in m.regions {
+                let (x0, y0) = (f64::from(r.min.0), f64::from(r.min.1));
+                let (x1, y1) = (f64::from(r.max.0), f64::from(r.max.1));
+                out.push(AuthoredFeature {
+                    source: name.clone(),
+                    id: Some(r.id),
+                    name: None,
+                    kind: Some("authored_raster_region".into()),
+                    pts: vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)],
+                    radius: None,
+                    area: Some((x0, y0, x1, y1)),
+                });
+            }
+            continue;
+        }
         let v = match ron::from_str::<ron::Value>(&text) {
             Ok(v) => v,
             Err(err)
@@ -1061,6 +1085,7 @@ fn citadel_feature(top: &ron::Map, file: &str) -> Option<AuthoredFeature> {
         kind: Some("aerial_citadel".into()),
         pts: vec![(num(x)?, num(y)?)],
         radius: field(top, "max_radius_m").and_then(num).map(|r| r as f32),
+        area: None,
     })
 }
 
@@ -1105,6 +1130,7 @@ fn collect_features(
                 kind,
                 pts,
                 radius: None,
+                area: None,
             };
             let world = |p: (f64, f64)| space.to_world(p.0, p.1, size);
             // A polyline: `points: [(x:, y:), ...]` (routes, maritime routes).
@@ -1176,7 +1202,14 @@ pub fn authored_near(
         let reach = margin
             .saturating_add(ENGINE_SNAP_SLACK_M)
             .saturating_add(f.radius.map_or(0, |r| r.ceil().clamp(0.0, 1.0e6) as i32));
-        let best = if let [p] = f.pts[..] {
+        let best = if let Some((x0, y0, x1, y1)) = f.area {
+            let m = f64::from(reach);
+            let hit = x0 <= f64::from(b.x1) + m
+                && x1 >= f64::from(b.x0) - m
+                && y0 <= f64::from(b.y1) + m
+                && y1 >= f64::from(b.y0) - m;
+            hit.then(|| (centre.0.clamp(x0, x1), centre.1.clamp(y0, y1)))
+        } else if let [p] = f.pts[..] {
             let (x, y) = (p.0.round() as i32, p.1.round() as i32);
             near_box(x, y, b, reach).then_some(p)
         } else {

@@ -1220,21 +1220,20 @@ fn captain<S: State>() -> impl Action<S> {
         if let Some(chunk) = NEIGHBORS
             .into_iter()
             .map(|neighbor| chunk + neighbor)
-            .filter(|neighbor| {
-                ctx.world
-                    .sim()
-                    .get(*neighbor)
-                    .is_some_and(|c| c.river.river_kind.is_some())
-            })
+            // Authored-aware (authored water regions): wet chunks and the
+            // authored surface.
+            .filter(|neighbor| ctx.world.sim().chunk_is_wet(*neighbor).unwrap_or(false))
             .choose(&mut ctx.rng)
         {
             let wpos = TerrainChunkSize::center_wpos(chunk);
-            let wpos = wpos.as_().with_z(
-                ctx.world
+            let surface = match ctx.world.sim().authored_chunk_wet(chunk) {
+                Some(_) => ctx.world.sim().chunk_water_alt(chunk),
+                None => ctx
+                    .world
                     .sim()
-                    .get_interpolated(wpos, |chunk| chunk.water_alt)
-                    .unwrap_or(0.0),
-            );
+                    .get_interpolated(wpos, |chunk| chunk.water_alt),
+            };
+            let wpos = wpos.as_().with_z(surface.unwrap_or(0.0));
             goto(wpos, 0.7, 5.0).boxed()
         } else {
             idle().boxed()
@@ -1581,8 +1580,9 @@ fn bird_large() -> impl Action<DefaultState> {
                 || ctx
                 .world
                 .sim()
-                .get(pos.as_().wpos_to_cpos()).is_none_or(|c| {
-                    c.alt - c.water_alt < -120.0 && (c.river.is_ocean() || c.river.is_lake())
+                // Authored-aware (authored water regions).
+                .chunk_water(pos.as_().wpos_to_cpos()).is_none_or(|w| {
+                    w.alt - w.water_alt < -120.0 && (w.ocean || w.lake)
                 });
         if is_deep_water {
             *bearing *= -1.0;
@@ -1735,10 +1735,9 @@ fn monster() -> impl Action<DefaultState> {
             let is_deep_water = ctx
                 .world
                 .sim()
-                .get(pos.as_().wpos_to_cpos())
-                .is_none_or(|c| {
-                    c.alt - c.water_alt < -10.0 && (c.river.is_ocean() || c.river.is_lake())
-                });
+                // Authored-aware (authored water regions).
+                .chunk_water(pos.as_().wpos_to_cpos())
+                .is_none_or(|w| w.alt - w.water_alt < -10.0 && (w.ocean || w.lake));
             if !is_deep_water {
             goto_2d(pos, 0.7, 8.0)
         } else {

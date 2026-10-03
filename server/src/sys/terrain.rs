@@ -110,6 +110,10 @@ event_emitters! {
     }
 }
 
+/// How far (blocks) login repositioning looks sideways for dry ground when
+/// the saved position is now over authored water.
+const DRY_GROUND_SEARCH_RADIUS: i32 = 48;
+
 #[derive(SystemData)]
 pub struct Data<'a> {
     events: Events<'a>,
@@ -339,6 +343,10 @@ impl<'a> System<'a> for Sys {
 
         // TODO: Consider putting this in another system since this forces us to take
         // positions by write rather than read access.
+        #[cfg(feature = "worldgen")]
+        let avoid_liquid = data.world.sim().authored_rasters().is_some();
+        #[cfg(not(feature = "worldgen"))]
+        let avoid_liquid = false;
         let repositioned = (&data.entities, &mut data.positions, (&mut data.forced_updates).maybe(), &data.reposition_entities)
             // TODO: Consider using par_bridge() because Rayon has very poor work splitting for
             // sparse joins.
@@ -352,7 +360,15 @@ impl<'a> System<'a> for Sys {
                 let chunk_pos = TerrainGrid::chunk_key(entity_pos);
                 let chunk = data.terrain.get_key(chunk_pos)?;
                 let new_pos = if reposition.needs_ground {
-                    data.terrain.try_find_ground(entity_pos)
+                    // XINDELER: on a world with authored water, a position
+                    // saved on old land can now be inside an authored
+                    // channel; stand on the nearest dry ground instead of
+                    // the bed. Other worlds keep the plain search.
+                    if avoid_liquid {
+                        data.terrain.try_find_dry_ground(entity_pos, DRY_GROUND_SEARCH_RADIUS)
+                    } else {
+                        data.terrain.try_find_ground(entity_pos)
+                    }
                 } else {
                     data.terrain.try_find_space(entity_pos)
                 }.map(|x| x.as_::<f32>()).unwrap_or_else(|| chunk.find_accessible_pos(entity_pos.xy(), false));

@@ -10,7 +10,7 @@ use common::{
     comp::{self, Body, agent::FlightMode},
     mounting::{Volume, VolumePos},
     rtsim::{NpcAction, NpcActivity},
-    terrain::{CoordinateConversions, TerrainChunkSize},
+    terrain::TerrainChunkSize,
     vol::RectVolSize,
 };
 use slotmap::SecondaryMap;
@@ -162,11 +162,10 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                             Body::Ship(comp::ship::Body::SailBoat | comp::ship::Body::Galleon)
                             | Body::FishMedium(_)
                             | Body::FishSmall(_) => {
-                                let chunk_pos = new_wpos.xy().as_().wpos_to_cpos();
+                                // Authored-aware (authored water regions).
                                 ctx.world
-                                    .sim()
-                                    .get(chunk_pos)
-                                    .is_none_or(|f| f.river.river_kind.is_some())
+                                    .is_wet_at(new_wpos.xy().as_())
+                                    .is_none_or(|wet| wet)
                             },
                             Body::Ship(comp::ship::Body::DefaultAirship) => false,
                             _ => true,
@@ -233,9 +232,7 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                                 // or at the ground level and risk getting stuck.
                                 let base_height =
                                     if mode == FlightMode::FlyThrough || height.is_some() {
-                                        ctx.world
-                                            .sim()
-                                            .get_surface_alt_approx(actor.wpos.xy().as_())
+                                        ctx.world.sim().surface_alt_at(actor.wpos.xy().as_())
                                     } else {
                                         0.0
                                     };
@@ -263,11 +260,10 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                                     )
                                     | Body::FishMedium(_)
                                     | Body::FishSmall(_) => {
-                                        let chunk_pos = new_wpos.xy().as_().wpos_to_cpos();
+                                        // Authored-aware (authored water regions).
                                         ctx.world
-                                            .sim()
-                                            .get(chunk_pos)
-                                            .is_none_or(|f| f.river.river_kind.is_some())
+                                            .is_wet_at(new_wpos.xy().as_())
+                                            .is_none_or(|wet| wet)
                                     },
                                     _ => true,
                                 };
@@ -312,13 +308,13 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                     actor.wpos = clamped_wpos.with_z(
                         ctx.world
                             .sim()
-                            .get_surface_alt_approx(clamped_wpos.as_())
+                            .surface_alt_at(clamped_wpos.as_())
                             .max(actor.wpos.z),
                     );
                 },
                 _ => {
                     actor.wpos = clamped_wpos.with_z(
-                        ctx.world.sim().get_surface_alt_approx(clamped_wpos.as_())
+                        ctx.world.sim().surface_alt_at(clamped_wpos.as_())
                             + actor.body.flying_height(),
                     );
                 },

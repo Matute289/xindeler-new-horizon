@@ -58,7 +58,7 @@ impl CliffTownAirshipDock {
         for dx in -3..=3 {
             for dy in -3..=3 {
                 let pos = center + Vec2::new(dx * 24, dy * 24);
-                let surface_alt = land.get_surface_alt_approx(pos) as i32;
+                let surface_alt = land.surface_alt_at(pos) as i32;
                 if surface_alt > max_surface_alt {
                     max_surface_alt = surface_alt;
                 }
@@ -71,7 +71,7 @@ impl CliffTownAirshipDock {
         for dx in -2..=2 {
             for dy in -2..=2 {
                 let pos = center + Vec2::new(dx * 15, dy * 15);
-                let alt = land.get_surface_alt_approx(pos) as i32;
+                let alt = land.surface_alt_at(pos) as i32;
                 if alt < min_foundation_alt {
                     min_foundation_alt = alt;
                 }

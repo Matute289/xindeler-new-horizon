@@ -11447,6 +11447,7 @@ dependencies = [
  "rstar",
  "rusqlite",
  "serde",
+ "sha2 0.11.0",
  "signal-hook 0.4.4",
  "strum",
  "svg_fmt",
@@ -11459,6 +11460,7 @@ dependencies = [
  "xindeler-common-dynlib",
  "xindeler-common-frontend",
  "xindeler-common-net",
+ "zstd",
 ]
 
 [[package]]
