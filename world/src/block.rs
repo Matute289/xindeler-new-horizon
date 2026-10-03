@@ -476,7 +476,7 @@ pub fn block_from_structure<'a>(
             }
         },
         StructureBlock::Choice(block_table) => block_table
-            .choose_weighted(&mut rand::rng(), |(w, _)| *w)
+            .choose_weighted(&mut crate::choice_rng(pos), |(w, _)| *w)
             .map(|(_, item)| {
                 block_from_structure(
                     index,

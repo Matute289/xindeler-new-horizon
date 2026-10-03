@@ -1,4 +1,4 @@
-//! Binary tile codec of the authored raster layers (format v1).
+//! Binary tile codec of the authored raster layers (tile format version 1).
 //!
 //! One tile is 256 x 256 cells of 1 m, one cell per block column, rows from
 //! south to north, `x` fastest. Layout (little-endian):
@@ -7,20 +7,30 @@
 //! |---:|---|---|
 //! | 0 | magic | `b"XART"` |
 //! | 4 | version | `u16` = 1 |
-//! | 6 | layer | `u8` (1 = water) |
+//! | 6 | layer code | `u8` (see [`LayerKind::code`]) |
 //! | 7 | flags | `u8` = 0 |
 //! | 8 | tile size | `u16` = 256 |
 //! | 10 | reserved | `u16` = 0 |
 //! | 12 | origin | `i32` x, `i32` y (wpos of cell 0,0) |
 //! | 20 | base | `i32` centimetres |
 //! | 24 | payload length | `u32` |
-//! | 28 | payload | zstd of `surface[u16; N]` then `bed[u16; N]` |
+//! | 28 | payload | zstd of the layer's planes, each `[u16; 65536]` |
+//!
+//! The payload layout is a function of the layer code alone
+//! ([`LayerKind::planes`]): the water layer has two planes, surface then bed.
+//! **Adding a layer** (the Stage 2 ground layer, a lava layer) means a new
+//! `LayerKind` variant with a new layer code and its own plane list, under the
+//! *same* tile format version: an older engine meets the new variant first in
+//! the manifest (an unknown enum variant is a parse error) and, should a tile
+//! reach it anyway, rejects the unknown layer code with an explicit error --
+//! never a silent misreading. The tile `version` only moves if this header or
+//! the value encoding changes.
 //!
 //! A stored value of [`NONE`] means "not authored"; any other value `v`
 //! means the altitude `base + v` centimetres in the engine's block-z frame.
 //!
 //! Decoding never trusts a length it read: the payload length must equal the
-//! rest of the file and the decompressed size is fixed by the format, so a
+//! rest of the file and the decompressed size is fixed by the layer, so a
 //! corrupt tile is an error, never an oversized allocation.
 
 use std::io::Read;
@@ -38,10 +48,11 @@ pub const MAX_OFFSET_CM: i32 = NONE as i32 - 1;
 const MAGIC: &[u8; 4] = b"XART";
 const VERSION: u16 = 1;
 const HEADER_LEN: usize = 28;
-/// zstd level the writer always uses, so equal rasters give equal bytes.
-const ZSTD_LEVEL: i32 = 19;
+/// The first bytes of a Git LFS pointer file: what a checkout without the
+/// LFS objects holds where a tile should be.
+const LFS_POINTER_PREFIX: &[u8] = b"version https://git-lfs";
 
-/// The raster layers format v1 knows.
+/// The raster layers this engine knows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub enum LayerKind {
     /// Stage 1: water surface + bed (or bank ground).
@@ -49,9 +60,26 @@ pub enum LayerKind {
 }
 
 impl LayerKind {
-    fn code(self) -> u8 {
+    /// The layer code stored in the tile header.
+    pub fn code(self) -> u8 {
         match self {
             LayerKind::Water => 1,
+        }
+    }
+
+    /// The layer with this header code, if this engine knows it.
+    pub fn from_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(LayerKind::Water),
+            _ => None,
+        }
+    }
+
+    /// How many `u16` planes this layer's payload holds, in order.
+    pub fn planes(self) -> usize {
+        match self {
+            // surface, bed
+            LayerKind::Water => 2,
         }
     }
 
@@ -63,7 +91,7 @@ impl LayerKind {
     }
 }
 
-/// A decoded water tile: two layers of stored values plus the tile's base.
+/// A decoded water tile: two planes of stored values plus the tile's base.
 pub struct RawTile {
     pub origin: Vec2<i32>,
     pub base_cm: i32,
@@ -86,15 +114,22 @@ impl RawTile {
     /// Authored bed / bank ground (cm) at stored index `k`.
     #[inline(always)]
     pub fn bed_cm(&self, k: usize) -> Option<i32> { self.value(self.bed[k]) }
+
+    /// Whether stored index `k` is a wet cell (surface and bed present).
+    #[inline(always)]
+    pub fn is_wet(&self, k: usize) -> bool { self.surface[k] != NONE && self.bed[k] != NONE }
 }
 
 /// Encode a water tile. `surface_cm` / `bed_cm` hold absolute centimetres
 /// (`None` = not authored), `TILE_CELLS` each, rows from the south.
+#[cfg(any(test, feature = "tools"))]
 pub fn encode_water(
     origin: Vec2<i32>,
     surface_cm: &[Option<i32>],
     bed_cm: &[Option<i32>],
 ) -> Result<Vec<u8>, String> {
+    /// zstd level the writer always uses, so equal rasters give equal bytes.
+    const ZSTD_LEVEL: i32 = 19;
     if surface_cm.len() != TILE_CELLS || bed_cm.len() != TILE_CELLS {
         return Err(format!(
             "a tile has {TILE_CELLS} cells, got {} surface and {} bed values",
@@ -107,12 +142,12 @@ pub fn encode_water(
     let top = present().max().unwrap_or(0);
     if (top as i64) - (base_cm as i64) > MAX_OFFSET_CM as i64 {
         return Err(format!(
-            "tile at {origin:?} spans {} cm of altitude; format v1 holds at most {MAX_OFFSET_CM} \
-             cm per tile",
+            "tile at {origin:?} spans {} cm of altitude; tile format 1 holds at most \
+             {MAX_OFFSET_CM} cm per tile",
             top as i64 - base_cm as i64
         ));
     }
-    let mut payload = Vec::with_capacity(TILE_CELLS * 4);
+    let mut payload = Vec::with_capacity(TILE_CELLS * 2 * LayerKind::Water.planes());
     for layer in [surface_cm, bed_cm] {
         for v in layer {
             let stored = match v {
@@ -139,9 +174,16 @@ pub fn encode_water(
     Ok(out)
 }
 
-/// Decode and structurally validate a water tile whose header must say
-/// `expected_origin`.
+/// Decode and structurally validate a water tile whose
+/// header must say `expected_origin`.
 pub fn decode_water(bytes: &[u8], expected_origin: Vec2<i32>) -> Result<RawTile, String> {
+    if bytes.starts_with(LFS_POINTER_PREFIX) {
+        return Err(
+            "the file is a Git LFS pointer, not the tile: fetch the LFS objects of this asset \
+             root (`git lfs pull`)"
+                .into(),
+        );
+    }
     if bytes.len() < HEADER_LEN {
         return Err(format!("{} bytes is shorter than the header", bytes.len()));
     }
@@ -154,20 +196,24 @@ pub fn decode_water(bytes: &[u8], expected_origin: Vec2<i32>) -> Result<RawTile,
     let version = u16_at(4);
     if version != VERSION {
         return Err(format!(
-            "unsupported tile version {version} (this engine reads {VERSION})"
+            "unsupported tile format version {version} (this engine reads {VERSION})"
         ));
     }
-    if bytes[6] != LayerKind::Water.code() {
-        return Err(format!("layer code {} is not water", bytes[6]));
+    let layer = LayerKind::from_code(bytes[6]).ok_or_else(|| {
+        format!(
+            "unknown layer code {} (this engine knows: 1 = water); the tile was written by a \
+             newer exporter",
+            bytes[6]
+        )
+    })?;
+    if layer != LayerKind::Water {
+        return Err(format!("layer {layer:?} where a water tile was expected"));
     }
     if bytes[7] != 0 || u16_at(10) != 0 {
         return Err("reserved header bits are set".into());
     }
     if u16_at(8) as i32 != TILE_SIZE {
-        return Err(format!(
-            "tile size {} (format v1 is {TILE_SIZE})",
-            u16_at(8)
-        ));
+        return Err(format!("tile size {} (format 1 is {TILE_SIZE})", u16_at(8)));
     }
     let origin = Vec2::new(i32_at(12), i32_at(16));
     if origin != expected_origin {
@@ -183,7 +229,7 @@ pub fn decode_water(bytes: &[u8], expected_origin: Vec2<i32>) -> Result<RawTile,
             bytes.len() - HEADER_LEN
         ));
     }
-    let want = TILE_CELLS * 4;
+    let want = TILE_CELLS * 2 * layer.planes();
     let mut raw = Vec::with_capacity(want);
     // `take(want + 1)` bounds the decompressed size whatever the frame says.
     zstd::stream::read::Decoder::new(&bytes[HEADER_LEN..])
@@ -288,10 +334,22 @@ mod tests {
         bad[mid] ^= 0xFF;
         // A flipped payload byte either fails zstd's checks or changes the
         // data; the manifest sha256 is what catches the second case.
-        if let Ok(t) = decode_water(&bad, o) {
+        if decode_water(&bad, o).is_ok() {
             assert_ne!(sha256_hex(&bad), sha256_hex(&good));
-            let _ = t;
         }
+    }
+
+    #[test]
+    fn unknown_layer_codes_and_lfs_pointers_have_clear_errors() {
+        let (s, b) = sample();
+        let o = Vec2::new(0, 0);
+        let mut t = encode_water(o, &s, &b).unwrap();
+        t[6] = 2;
+        let e = decode_water(&t, o).err().unwrap();
+        assert!(e.contains("unknown layer code 2"), "{e}");
+        let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 1\n";
+        let e = decode_water(pointer, o).err().unwrap();
+        assert!(e.contains("Git LFS pointer"), "{e}");
     }
 
     #[test]

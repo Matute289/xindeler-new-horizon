@@ -673,7 +673,15 @@ fn cromatolis_aquatic_profile_density(
     id: AquaticEcologyProfileId,
 ) -> f32 {
     f32::from(c.authored_region_id == Some(CROMATOLIS_V0_REGION_ID))
-        * f32::from(c.aquatic_ecology_profile == Some(id))
+        // XINDELER: authored water whose chunk carries no profile (the
+        // exporter leaves the masks untouched in authored regions) uses its
+        // region's profile.
+        * f32::from(
+            col.authored
+                .and_then(|a| a.wet_aquatic_profile())
+                .or(c.aquatic_ecology_profile)
+                == Some(id),
+        )
         * if col.water_dist.map(|d| d < 1.0).unwrap_or(false) {
             crate::sim::aquatic_ecology_profile_density(id)
         } else {

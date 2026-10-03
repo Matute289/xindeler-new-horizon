@@ -1067,8 +1067,8 @@ impl Site {
             // An authored wet column (see `crate::authored_raster`) has an
             // exact depth in blocks; the same measure the naval port's berth
             // sampling uses, so placement and berths agree.
-            let depth = match land.authored_water_at(wpos) {
-                Some((surface_block, bed_block)) => Some((surface_block - bed_block) as f32),
+            let depth = match land.authored_depth_at(wpos) {
+                Some(depth) => Some(depth as f32),
                 None => land
                     .get_chunk_wpos(wpos)
                     .map(|chunk| chunk.water_alt - chunk.alt),

@@ -1,6 +1,9 @@
 //! The one site that knows *which* authored layers a world has, and registers
 //! their geometry with the engine-general protection index.
 //!
+//! (About authored *voids*. The authored terrain-surface rasters -- exact
+//! water and banks -- are a separate module, [`crate::authored_raster`].)
+//!
 //! [`crate::layer::authored_voids`] deliberately imports no authored layer:
 //! it owns the shapes, the policy, the query and the margin, and nothing about
 //! which regions exist. The authored layers themselves expose their resolved

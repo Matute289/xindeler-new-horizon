@@ -1224,6 +1224,11 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
     ];
 
     canvas.foreach_col(|canvas, wpos2d, col| {
+        // XINDELER: no procedural sprite rooted in (or, per region, near)
+        // authored water.
+        if col.authored_procedural_suppressed() {
+            return;
+        }
         let underwater = col.water_level.floor() > col.alt;
 
         let kind = scatter.iter().enumerate().find_map(

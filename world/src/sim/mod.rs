@@ -1074,11 +1074,11 @@ struct AuthoredRegion {
     /// Fauna/flora-by-water-body-and-salinity profile table, see
     /// [`AuthoredAquaticEcology`].
     aquatic_ecology_profile: &'static str,
-    /// Whether this region may ship an authored raster manifest
-    /// (`<map_asset>_authored_rasters`, see `crate::authored_raster`). The
-    /// manifest itself is optional: when it does not exist the region has no
-    /// authored water.
-    authored_rasters: bool,
+    /// Whether this region *must* ship an authored raster manifest
+    /// (`<map_asset>_authored_rasters`, see `crate::authored_raster`). Every
+    /// authored region may ship one; when it is not required, a missing
+    /// manifest means the region has no authored water.
+    require_authored_rasters: bool,
 }
 
 /// Threshold above which an authored water/elevated-lake/river-channel mask
@@ -1117,7 +1117,7 @@ const AUTHORED_REGIONS: &[AuthoredRegion] = &[AuthoredRegion {
     tree_candidate_policy: "world.map.cromatolis_v0_tree_candidate_policy",
     alpine_policy: Some("world.map.cromatolis_v0_alpine"),
     aquatic_ecology_profile: "world.map.cromatolis_v0_aquatic_ecology",
-    authored_rasters: true,
+    require_authored_rasters: false,
 }];
 
 /// One regional alpine policy, loaded once per authored world. All heights
@@ -2574,8 +2574,8 @@ impl WorldSim {
         // Never apply an authored terrain policy to the procedural fallback
         // produced when its binary map cannot load.
         let authored_rasters_map_asset = authored_region
-            .filter(|region| region.authored_rasters && parsed_world_file.is_some())
-            .map(|region| region.map_asset);
+            .filter(|_| parsed_world_file.is_some())
+            .map(|region| (region.map_asset, region.require_authored_rasters));
         let authored_alpine_policy = authored_region
             .filter(|_| parsed_world_file.is_some())
             .and_then(|region| region.alpine_policy.map(|specifier| (region.id, specifier)))
@@ -3890,12 +3890,24 @@ impl WorldSim {
         // that exists but is wrong stops world generation here: rendering the
         // unauthored terrain instead would hide the failure behind a
         // plausible-looking world.
-        if let Some(map_asset) = authored_rasters_map_asset {
+        //
+        // This runs on the world-generation thread itself (inside
+        // `World::generate`'s `threadpool.install`, not in a parallel task),
+        // so the panic stops generation and `prewarm` can use the pool.
+        if let Some((map_asset, required)) = authored_rasters_map_asset {
             let size_blocks = map_size_lg.chunks().map(|e| e as i32)
                 * TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
-            match crate::authored_raster::AuthoredRasters::load_for_map(map_asset, size_blocks) {
+            let source = crate::authored_raster::manifest_specifier(map_asset);
+            match crate::authored_raster::AuthoredRasters::load_for_map(
+                map_asset,
+                size_blocks,
+                required,
+            ) {
                 Ok(Some(rasters)) => {
-                    rasters.report_consistency(&this);
+                    if let Err(err) = rasters.check_consistency_with_sim(&source, &this) {
+                        panic!("{err}");
+                    }
+                    rasters.prewarm();
                     this.authored_rasters = Some(rasters);
                 },
                 Ok(None) => {},

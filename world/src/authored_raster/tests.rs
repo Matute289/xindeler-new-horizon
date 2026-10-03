@@ -25,7 +25,7 @@ fn load(regions: &[writer::BuiltRegion]) -> Result<AuthoredRasters, LoadError> {
             .cloned()
             .ok_or_else(|| format!("missing tile {id} {tx} {ty}"))
     };
-    AuthoredRasters::from_manifest(manifest(regions), MAP, &fetch)
+    AuthoredRasters::from_manifest(manifest(regions), MAP, "test", &fetch)
 }
 
 fn region(
@@ -35,13 +35,7 @@ fn region(
     feather_m: i32,
     ops: Vec<PaintOp>,
 ) -> RegionSpec {
-    RegionSpec {
-        id: id.into(),
-        min,
-        max,
-        feather_m,
-        ops,
-    }
+    RegionSpec::new(id, min, max, feather_m, ops)
 }
 
 /// A 20 m river along x at y = 1100..1120, water top block 238 over bed
@@ -100,7 +94,13 @@ fn cells_quantise_with_integer_arithmetic() {
     // exact along an axis.
     assert_eq!(none.water_dist, Some(31.0));
     assert_eq!(ar.column(Vec2::new(1300, 1200)).unwrap().water_dist, None);
-    assert_eq!(ar.water_at(Vec2::new(1300, 1110)), Some((238, 232)));
+    assert_eq!(
+        ar.water_at(Vec2::new(1300, 1110)),
+        Some(AuthoredWater {
+            surface_block: 238,
+            bed_block: 232,
+        })
+    );
     assert_eq!(ar.water_at(Vec2::new(1300, 1120)), None);
 }
 
@@ -140,6 +140,12 @@ fn feather_weight_runs_from_the_edge_to_the_core() {
     }
 }
 
+const SETTINGS: RegionSettings = RegionSettings {
+    suppress_procedural_in_water: true,
+    exclude_procedural_margin_m: 0.0,
+    aquatic_profile: None,
+};
+
 fn engine() -> EngineColumn {
     EngineColumn {
         alt: 244.3,
@@ -165,6 +171,7 @@ fn dry() -> DryTerrain {
 fn resolve_wet_and_bank_are_exact_at_any_weight() {
     for weight in [0.001, 0.5, 1.0] {
         let wet = AuthoredColumn {
+            settings: SETTINGS,
             weight,
             cell: AuthoredCell::Wet {
                 surface_block: 238,
@@ -182,6 +189,7 @@ fn resolve_wet_and_bank_are_exact_at_any_weight() {
         // Water fills z < water_level: 238 is water, 239 is not.
         assert!(238.0 < wet.water_level && 239.0 >= wet.water_level);
         let bank = AuthoredColumn {
+            settings: SETTINGS,
             weight,
             cell: AuthoredCell::Bank { bed_block: 239 },
             water_dist: Some(1.0),
@@ -196,6 +204,7 @@ fn resolve_wet_and_bank_are_exact_at_any_weight() {
 #[test]
 fn resolve_none_blends_engine_into_dry_terrain() {
     let col = |weight, water_dist| AuthoredColumn {
+        settings: SETTINGS,
         weight,
         cell: AuthoredCell::None,
         water_dist,
@@ -406,7 +415,7 @@ fn manifest_schema_and_layers_are_strict() {
     m.schema = 2;
     let fetch = |_: &str, _: LayerKind, _: i32, _: i32| Err::<Vec<u8>, _>("unused".to_string());
     assert!(
-        AuthoredRasters::from_manifest(m, MAP, &fetch)
+        AuthoredRasters::from_manifest(m, MAP, "test", &fetch)
             .unwrap_err()
             .0
             .contains("schema")
@@ -485,4 +494,222 @@ fn concurrent_first_use_decodes_once_and_agrees() {
             });
         }
     });
+}
+
+#[test]
+fn constants_agree_with_the_engine() {
+    // The column sampler's ocean: `z < sea_level - 1 + 0.01` is water.
+    assert_eq!(SEA_TOP_BLOCK, 139);
+    assert!((SEA_TOP_BLOCK as f32) < crate::CONFIG.sea_level - 1.0 + 0.01);
+    assert!(((SEA_TOP_BLOCK + 1) as f32) >= crate::CONFIG.sea_level - 1.0 + 0.01);
+    assert_eq!(DIST_CAP_M as f32, crate::column::WATER_WARP_FADE_M);
+}
+
+#[test]
+fn apply_reapplies_the_flood_on_top_of_authored_water_only() {
+    let wet = AuthoredColumn {
+        settings: SETTINGS,
+        weight: 1.0,
+        cell: AuthoredCell::Wet {
+            surface_block: 238,
+            bed_block: 232,
+        },
+        water_dist: Some(0.0),
+    };
+    let flood = |l: f32| l.max(240.0);
+    assert_eq!(apply(Some(wet), engine(), dry(), flood).water_level, 240.0);
+    assert_eq!(
+        apply(None, engine(), dry(), flood),
+        engine(),
+        "no region: untouched"
+    );
+}
+
+#[test]
+fn procedural_suppression_follows_the_region_settings() {
+    let col = |cell, d, suppress, margin| AuthoredColumn {
+        settings: RegionSettings {
+            suppress_procedural_in_water: suppress,
+            exclude_procedural_margin_m: margin,
+            aquatic_profile: None,
+        },
+        weight: 1.0,
+        cell,
+        water_dist: d,
+    };
+    let wet = AuthoredCell::Wet {
+        surface_block: 238,
+        bed_block: 232,
+    };
+    let bank = AuthoredCell::Bank { bed_block: 240 };
+    assert!(col(wet, Some(0.0), true, 0.0).procedural_suppressed());
+    assert!(!col(wet, Some(0.0), false, 0.0).procedural_suppressed());
+    assert!(!col(bank, Some(1.0), true, 0.0).procedural_suppressed());
+    assert!(col(bank, Some(3.0), true, 4.0).procedural_suppressed());
+    assert!(!col(bank, Some(5.0), true, 4.0).procedural_suppressed());
+    assert!(!col(AuthoredCell::None, None, true, 4.0).procedural_suppressed());
+}
+
+#[test]
+fn cell_at_matches_column_and_skips_the_distance_field() {
+    let ar = load(&[build_region(&river_spec()).unwrap()]).unwrap();
+    for x in (1024..1536).step_by(7) {
+        for y in (1024..1216).step_by(3) {
+            let p = Vec2::new(x, y);
+            assert_eq!(ar.cell_at(p), ar.column(p).map(|c| c.cell));
+        }
+    }
+    assert_eq!(ar.cell_at(Vec2::new(0, 0)), None);
+}
+
+#[test]
+fn consistency_is_checked_both_ways_against_a_budget() {
+    let ar = load(&[build_region(&river_spec()).unwrap()]).unwrap();
+    // Region (1024..1536) x (1024..1216) = chunks 32..48 x 32..38; water in
+    // chunk rows 34 (y 1100..1119 -> chunk 34) and banks around it.
+    let table_all_dry = |_: Vec2<i32>| Some(false);
+    let r = ar.check_consistency("t", table_all_dry).unwrap();
+    assert_eq!(
+        r[0].authored_wet_table_dry.len(),
+        16,
+        "default budget: allowed"
+    );
+    assert!(r[0].authored_dry_table_wet.is_empty());
+    // A sim lake in the unauthored north row.
+    let table_lake_north = |c: Vec2<i32>| Some(c.y == 37);
+    let e = ar.check_consistency("t", table_lake_north).unwrap_err();
+    assert!(
+        e.0.contains("16 chunk(s) the sim table calls water"),
+        "{}",
+        e.0
+    );
+    // The sim also calls the river row water (masks painted): that row is
+    // only partly authored (a 20 m river in a 32 m chunk row), so the sim's
+    // sunk terrain shows there too.
+    let table_river = |c: Vec2<i32>| Some(c.y == 34);
+    let e = ar.check_consistency("t", table_river).unwrap_err();
+    assert!(
+        e.0.contains("16 chunk(s) the sim table calls water"),
+        "{}",
+        e.0
+    );
+    let mut spec = river_spec();
+    spec.consistency.max_authored_dry_table_wet_chunks = 32;
+    spec.consistency.max_authored_wet_table_dry_chunks = Some(0);
+    let ar = load(&[build_region(&spec).unwrap()]).unwrap();
+    let e = ar.check_consistency("t", table_all_dry).unwrap_err();
+    assert!(e.0.contains("dry in the sim table"), "{}", e.0);
+    assert!(
+        ar.check_consistency("t", |c: Vec2<i32>| Some(c.y == 34 || c.y == 37))
+            .is_ok()
+    );
+    // A fully authored chunk may be water in the table.
+    let full = region("full", (1024, 1024), (1056, 1056), 0, vec![
+        PaintOp::Water {
+            shape: Shape::Rect {
+                x0: 1024.0,
+                y0: 1024.0,
+                x1: 1056.0,
+                y1: 1056.0,
+            },
+            surface_cm: 20_050,
+            bed_cm: 19_050,
+        },
+    ]);
+    let ar = load(&[build_region(&full).unwrap()]).unwrap();
+    assert!(ar.check_consistency("t", |_| Some(true)).is_ok());
+}
+
+#[test]
+fn the_memory_budget_is_checked_before_any_tile_is_read() {
+    let tiles_needed = RESIDENT_BUDGET_BYTES / (TILE_CELLS * 4) + 1;
+    let side = (tiles_needed as f64).sqrt().ceil() as i32 * TILE_SIZE;
+    let mut built = build_region(&region(
+        "huge",
+        (1024, 1024),
+        (1024 + side, 1024 + side),
+        0,
+        vec![],
+    ))
+    .unwrap();
+    built.manifest.tiles = (0..tiles_needed as i32)
+        .map(|k| TileManifest {
+            layer: LayerKind::Water,
+            tx: k % (side / TILE_SIZE),
+            ty: k / (side / TILE_SIZE),
+            sha256: "00".repeat(32),
+        })
+        .collect();
+    let fetch = |_: &str, _: LayerKind, _: i32, _: i32| -> Result<Vec<u8>, String> {
+        panic!("a tile was read before the budget check")
+    };
+    let e = AuthoredRasters::from_manifest(manifest(&[built]), MAP, "test", &fetch).unwrap_err();
+    assert!(e.0.contains("engine's limit"), "{}", e.0);
+    assert!(e.0.starts_with("authored rasters [test]"), "{}", e.0);
+}
+
+#[test]
+fn unknown_aquatic_profiles_and_bad_margins_are_refused() {
+    let mut spec = river_spec();
+    spec.aquatic_ecology_profile = Some("no_such_profile".into());
+    expect_error(
+        vec![build_region(&spec).unwrap()],
+        "aquatic_ecology_profile",
+    );
+    let mut spec = river_spec();
+    spec.aquatic_ecology_profile = Some("mountain_river".into());
+    assert!(load(&[build_region(&spec).unwrap()]).is_ok());
+    let mut spec = river_spec();
+    spec.exclude_procedural_margin_m = 65;
+    expect_error(
+        vec![build_region(&spec).unwrap()],
+        "exclude_procedural_margin_m",
+    );
+}
+
+/// Cost of the per-column lookups (`cargo test --release ... -- --ignored
+/// --nocapture column_lookup_cost`): outside every region (the hot path of
+/// every world), inside a region without tiles, on wet and on dry cells.
+#[test]
+#[ignore]
+fn column_lookup_cost() {
+    let river = load(&[build_region(&river_spec()).unwrap()]).unwrap();
+    let empty =
+        load(&[build_region(&region("empty", (1024, 1024), (1536, 1216), 32, vec![])).unwrap()])
+            .unwrap();
+    river.prewarm();
+    let time = |name: &str, ar: &AuthoredRasters, pts: &[Vec2<i32>], cell_only: bool| {
+        let n = 20;
+        let t = std::time::Instant::now();
+        let mut acc = 0u32;
+        for _ in 0..n {
+            for p in pts {
+                if cell_only {
+                    acc += ar.cell_at(*p).is_some() as u32;
+                } else {
+                    acc += ar.column(std::hint::black_box(*p)).is_some() as u32;
+                }
+            }
+        }
+        let ns = t.elapsed().as_nanos() as f64 / (n * pts.len()) as f64;
+        println!("{name}: {ns:.1} ns per lookup ({acc})");
+    };
+    let outside: Vec<_> = (0..100_000)
+        .map(|k| Vec2::new(5000 + k % 300, 5000 + k / 300))
+        .collect();
+    let inside: Vec<_> = (0..100_000)
+        .map(|k| Vec2::new(1100 + k % 400, 1030 + (k / 400) % 180))
+        .collect();
+    let wet: Vec<_> = (0..100_000)
+        .map(|k| Vec2::new(1030 + k % 500, 1100 + (k / 500) % 20))
+        .collect();
+    time("outside every region", &river, &outside, false);
+    time("inside a region with no tiles", &empty, &inside, false);
+    time("inside the river region (mixed)", &river, &inside, false);
+    time("wet cells", &river, &wet, false);
+    time("cell_at (mixed)", &river, &inside, true);
+    let t = std::time::Instant::now();
+    let fresh = load(&[build_region(&river_spec()).unwrap()]).unwrap();
+    fresh.prewarm();
+    println!("load + prewarm of the river region: {:?}", t.elapsed());
 }

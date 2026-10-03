@@ -42,6 +42,8 @@ pub fn tree_valid_at(
     seed: u32,
 ) -> bool {
     if col.alt < col.water_level
+        // XINDELER: no tree rooted in (or, per region, near) authored water.
+        || col.authored_procedural_suppressed()
         || col.spawn_rate < 0.9
         || col.water_dist.map(|d| d < 8.0).unwrap_or(false)
         || col.path.map(|(d, _, _, _)| d < 12.0).unwrap_or(false)

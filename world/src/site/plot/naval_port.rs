@@ -237,7 +237,7 @@ impl NavalPort {
         // sim's own water (sea level 140 over top water block 139).
         let sample_water_alt = |wpos: Vec2<i32>| {
             land.authored_water_at(wpos)
-                .map(|(surface_block, _)| surface_block + 1)
+                .map(|water| water.surface_alt() as i32)
                 .or_else(|| {
                     land.get_chunk_wpos(wpos)
                         .map(|chunk| chunk.water_alt as i32)
@@ -1536,8 +1536,8 @@ impl NavalPort {
     /// An authored wet column answers with its exact number of water blocks
     /// (`surface_block - bed_block`).
     fn sample_depth(&self, land: &Land, wpos: Vec2<i32>) -> Option<i32> {
-        if let Some((surface_block, bed_block)) = land.authored_water_at(wpos) {
-            return Some(surface_block - bed_block);
+        if let Some(depth) = land.authored_depth_at(wpos) {
+            return Some(depth);
         }
         land.get_chunk_wpos(wpos)
             .map(|chunk| (chunk.water_alt - chunk.alt) as i32)

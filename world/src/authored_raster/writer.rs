@@ -1,4 +1,5 @@
-//! Writer for authored raster manifests and tiles.
+//! Writer for authored raster manifests and tiles (test builds and the
+//! `tools` feature only: the game never writes tiles).
 //!
 //! The production writer is the open-world exporter; this one exists so the
 //! engine side can be tested end to end without it: tests and the
@@ -10,7 +11,7 @@
 //! when its centre `(x + 0.5, y + 0.5)` does.
 
 use super::{
-    Manifest, RegionManifest, TileManifest,
+    ConsistencyBudget, Manifest, RegionManifest, TileManifest,
     format::{self, LayerKind, TILE_CELLS, TILE_SIZE},
 };
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,42 @@ pub struct RegionSpec {
     pub feather_m: i32,
     #[serde(default)]
     pub ops: Vec<PaintOp>,
+    /// Passed through to [`RegionManifest::suppress_procedural_in_water`].
+    #[serde(default = "super::yes")]
+    pub suppress_procedural_in_water: bool,
+    /// Passed through to [`RegionManifest::exclude_procedural_margin_m`].
+    #[serde(default)]
+    pub exclude_procedural_margin_m: i32,
+    /// Passed through to [`RegionManifest::aquatic_ecology_profile`].
+    #[serde(default)]
+    pub aquatic_ecology_profile: Option<String>,
+    /// Passed through to [`RegionManifest::consistency`].
+    #[serde(default)]
+    pub consistency: ConsistencyBudget,
+}
+
+impl RegionSpec {
+    /// A region with the default settings (procedural decorations suppressed
+    /// in water, no margin, no aquatic profile, default consistency budget).
+    pub fn new(
+        id: impl Into<String>,
+        min: (i32, i32),
+        max: (i32, i32),
+        feather_m: i32,
+        ops: Vec<PaintOp>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            min,
+            max,
+            feather_m,
+            ops,
+            suppress_procedural_in_water: true,
+            exclude_procedural_margin_m: 0,
+            aquatic_ecology_profile: None,
+            consistency: ConsistencyBudget::default(),
+        }
+    }
 }
 
 /// A shape in wpos metres.
@@ -291,6 +328,10 @@ impl RegionRaster {
                 cell_size_m: 1,
                 layers: vec![LayerKind::Water],
                 tiles: entries,
+                suppress_procedural_in_water: self.spec.suppress_procedural_in_water,
+                exclude_procedural_margin_m: self.spec.exclude_procedural_margin_m,
+                aquatic_ecology_profile: self.spec.aquatic_ecology_profile.clone(),
+                consistency: self.spec.consistency,
             },
             tiles: out,
         })

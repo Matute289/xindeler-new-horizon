@@ -46,58 +46,52 @@ pub fn arena_spec() -> RegionSpec {
         surface_cm: surface_block * 100 + 50,
         bed_cm: bed_block * 100 + 50,
     };
-    RegionSpec {
-        id: "arena_stage1".into(),
-        min: REGION_MIN,
-        max: REGION_MAX,
-        feather_m: 32,
-        ops: vec![
-            // River, 20 m x 400 m, top water block 238, bed 232.
-            water(rect(22850.0, 25400.0, 23250.0, 25420.0), 238, 232),
-            // Strip, 4 m x 400 m.
-            water(rect(22850.0, 25200.0, 23250.0, 25204.0), 238, 232),
-            // Slot canyon floor + water, 100 m x 400 m: water top 156, bed 150.
-            water(rect(23350.0, 24700.0, 23750.0, 24800.0), 156, 150),
-            // Lake 128 x 200 m.
-            water(
-                Shape::Ellipse {
-                    cx: 23500.0,
-                    cy: 25300.0,
-                    rx: 64.0,
-                    ry: 100.0,
-                },
-                238,
-                232,
-            ),
-            // Strait ring r 50..80 around an island.
-            water(
-                Shape::Annulus {
-                    cx: 23050.0,
-                    cy: 24850.0,
-                    r_in: 50.0,
-                    r_out: 80.0,
-                },
-                238,
-                232,
-            ),
-            // Island crest 4 m above the plateau.
-            PaintOp::Bank {
-                shape: Shape::Ellipse {
-                    cx: 23050.0,
-                    cy: 24850.0,
-                    rx: 50.0,
-                    ry: 50.0,
-                },
-                bed_cm: PLATEAU_CM + 400,
+    RegionSpec::new("arena_stage1", REGION_MIN, REGION_MAX, 32, vec![
+        // River, 20 m x 400 m, top water block 238, bed 232.
+        water(rect(22850.0, 25400.0, 23250.0, 25420.0), 238, 232),
+        // Strip, 4 m x 400 m.
+        water(rect(22850.0, 25200.0, 23250.0, 25204.0), 238, 232),
+        // Slot canyon floor + water, 100 m x 400 m: water top 156, bed 150.
+        water(rect(23350.0, 24700.0, 23750.0, 24800.0), 156, 150),
+        // Lake 128 x 200 m.
+        water(
+            Shape::Ellipse {
+                cx: 23500.0,
+                cy: 25300.0,
+                rx: 64.0,
+                ry: 100.0,
             },
-            // Banks: a 2 m ring at block 240 (about the plateau) around every
-            // body; around the canyon that ring is a vertical 84 m wall.
-            PaintOp::BankRing {
-                width_m: 2,
-                bed_cm: Some(PLATEAU_CM + 100),
+            238,
+            232,
+        ),
+        // Strait ring r 50..80 around an island.
+        water(
+            Shape::Annulus {
+                cx: 23050.0,
+                cy: 24850.0,
+                r_in: 50.0,
+                r_out: 80.0,
             },
-        ],
-    }
+            238,
+            232,
+        ),
+        // Island crest 4 m above the plateau.
+        PaintOp::Bank {
+            shape: Shape::Ellipse {
+                cx: 23050.0,
+                cy: 24850.0,
+                rx: 50.0,
+                ry: 50.0,
+            },
+            bed_cm: PLATEAU_CM + 400,
+        },
+        // Banks: a 2 m ring at block 240 (about the plateau) around every
+        // body; around the canyon that ring is a vertical 84 m wall.
+        PaintOp::BankRing {
+            width_m: 2,
+            bed_cm: Some(PLATEAU_CM + 100),
+        },
+    ])
 }
 
 pub fn generate_world() -> (World, crate::IndexOwned) {
@@ -123,7 +117,8 @@ pub fn load_spec(spec: &RegionSpec) -> AuthoredRasters {
             .cloned()
             .ok_or_else(|| "missing".to_string())
     };
-    AuthoredRasters::from_manifest(manifest(&built), Vec2::broadcast(32768), &fetch).unwrap()
+    AuthoredRasters::from_manifest(manifest(&built), Vec2::broadcast(32768), "test", &fetch)
+        .unwrap()
 }
 
 /// Every numeric/colour output of a column, as bits.
@@ -157,17 +152,28 @@ fn column_bits(world: &World, index: crate::IndexRef, wpos: Vec2<i32>) -> Option
     Some(v)
 }
 
-/// Digest of a generated chunk as block classes (air, natural ground,
-/// liquid kind, other solid), the classes the terrain probe compares. Sprites
-/// and the exact kind/colour of structure blocks are left out: chunk
-/// generation rolls some of them from a fresh RNG every time.
+/// Digest of a generated chunk, block by block, as [`block_class`]es: air,
+/// natural ground, each liquid kind, and "decoration" (any other solid block
+/// or any sprite). Chunk generation's dynamic RNG and structures' weighted
+/// block choices are seeded from the chunk position
+/// (`crate::with_deterministic_dynamic_rng`, `crate::choice_rng`). Which
+/// decoration kind/colour a tree or structure block gets still partly comes
+/// from unseeded RNGs, so decoration is compared by presence, not kind:
+/// terrain, water, ground and where every structure/sprite stands are compared
+/// exactly, and two region-free runs agree (asserted).
 fn chunk_digest(world: &World, index: crate::IndexRef, cpos: Vec2<i32>) -> u64 {
     use std::hash::{Hash, Hasher};
-    let (chunk, _) = world
-        .generate_chunk(index, cpos, None, || false, None, None)
-        .unwrap();
+    let mut seed = [0u8; 32];
+    seed[..4].copy_from_slice(&cpos.x.to_le_bytes());
+    seed[4..8].copy_from_slice(&cpos.y.to_le_bytes());
+    let (chunk, _) = crate::with_deterministic_dynamic_rng(seed, || {
+        world
+            .generate_chunk(index, cpos, None, || false, None, None)
+            .unwrap()
+    });
     let mut h = std::collections::hash_map::DefaultHasher::new();
     let sz = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+    chunk.get_min_z().hash(&mut h);
     for z in chunk.get_min_z()..chunk.get_max_z() {
         for y in 0..sz.y {
             for x in 0..sz.x {
@@ -175,25 +181,17 @@ fn chunk_digest(world: &World, index: crate::IndexRef, cpos: Vec2<i32>) -> u64 {
                     .get(Vec3::new(x, y, z))
                     .copied()
                     .unwrap_or_else(|_| Block::empty());
-                let v = if b.is_liquid() || b.kind() == BlockKind::Lava {
-                    0x100 + b.kind() as u32
-                } else if b.is_filled() && is_natural_ground(&b) {
-                    1
-                } else if b.is_filled() {
-                    2
-                } else {
-                    0
-                };
-                v.hash(&mut h);
+                block_class(&b).hash(&mut h);
             }
         }
     }
-    chunk.get_min_z().hash(&mut h);
     h.finish()
 }
 
 /// Columns and chunks outside the region are bit-identical with and without
-/// it, on the same generated world.
+/// it, on the same generated world: every `ColumnSample` field of 10 000
+/// random columns plus the whole ring around the box, and every block of
+/// 10 000 random chunks plus every chunk 1..=3 chunks outside the box.
 #[test]
 #[ignore]
 fn columns_and_chunks_outside_the_region_are_bit_identical() {
@@ -204,8 +202,6 @@ fn columns_and_chunks_outside_the_region_are_bit_identical() {
     let rmin = Vec2::from(REGION_MIN);
     let rmax = Vec2::from(REGION_MAX);
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(161);
-    // 10 000 random columns over the whole map, outside the region, plus a
-    // ring of columns hugging its border from outside.
     let mut cols: Vec<Vec2<i32>> = Vec::new();
     while cols.len() < 10_000 {
         let p = Vec2::new(rng.random_range(0..map.x), rng.random_range(0..map.y));
@@ -221,8 +217,6 @@ fn columns_and_chunks_outside_the_region_are_bit_identical() {
         cols.push(Vec2::new(rmin.x - 1, y));
         cols.push(Vec2::new(rmax.x, y));
     }
-    // Chunks: 10 000 random ones plus every chunk 2..=3 chunks outside the
-    // box.
     let cmin = rmin / 32;
     let cmax = rmax / 32;
     let mut chunks: Vec<Vec2<i32>> = Vec::new();
@@ -232,109 +226,207 @@ fn columns_and_chunks_outside_the_region_are_bit_identical() {
             chunks.push(c);
         }
     }
-    let mut ring1: Vec<Vec2<i32>> = Vec::new();
+    let mut rings: [Vec<Vec2<i32>>; 3] = Default::default();
     for cy in cmin.y - 3..cmax.y + 3 {
         for cx in cmin.x - 3..cmax.x + 3 {
             let d = (cmin.x - cx)
                 .max(cx - (cmax.x - 1))
                 .max(cmin.y - cy)
                 .max(cy - (cmax.y - 1));
-            match d {
-                2 | 3 => chunks.push(Vec2::new(cx, cy)),
-                1 => ring1.push(Vec2::new(cx, cy)),
-                _ => {},
+            if (1..=3).contains(&d) {
+                rings[(d - 1) as usize].push(Vec2::new(cx, cy));
             }
         }
     }
-
-    let sample = |world: &World| -> (Vec<Option<Vec<u32>>>, Vec<u64>, Vec<u64>) {
+    // Site plots draw some of their decoration from the thread RNG directly
+    // (a giant tree's ironwood sprites, camps, ruins: `rand::rng()` in
+    // `site/plot/*`), which no test seed reaches; chunks a site's bounds
+    // touch are left out of the block comparison (the column comparison above
+    // still covers them). Everything else is generated with seeded RNGs and
+    // compared exactly.
+    let site_chunks: std::collections::HashSet<Vec2<i32>> = index
+        .sites
+        .values()
+        .flat_map(|site| {
+            let b = site.bounds();
+            let (c0, c1) = (
+                b.min.map(|e| e.div_euclid(32)) - 1,
+                b.max.map(|e| e.div_euclid(32)) + 1,
+            );
+            (c0.y..=c1.y).flat_map(move |y| (c0.x..=c1.x).map(move |x| Vec2::new(x, y)))
+        })
+        .collect();
+    chunks.retain(|c| !site_chunks.contains(c));
+    let all: Vec<Vec2<i32>> = chunks
+        .iter()
+        .chain(rings.iter().flatten())
+        .copied()
+        .collect();
+    let sample = |world: &World| -> (Vec<Option<Vec<u32>>>, Vec<u64>) {
         (
             cols.par_iter()
                 .map(|p| column_bits(world, index_ref, *p))
                 .collect(),
-            chunks
-                .par_iter()
-                .map(|c| chunk_digest(world, index_ref, *c))
-                .collect(),
-            ring1
-                .par_iter()
+            all.par_iter()
                 .map(|c| chunk_digest(world, index_ref, *c))
                 .collect(),
         )
     };
-    // Chunk generation itself is not fully deterministic even at class level
-    // (cave decorations roll ores/plants from a fresh RNG and can replace a
-    // wood block with an ore sprite; about 0.5 % of chunks), so the chunk
-    // gate only uses chunks whose class digest agreed over three runs without
-    // the region, and explains any remaining difference below.
-    let (cols_a, chunks_a, ring_a) = sample(&world);
-    let (_, chunks_a2, ring_a2) = sample(&world);
-    let (_, chunks_a3, ring_a3) = sample(&world);
-    let stable = |a: &[u64], b: &[u64], c: &[u64]| -> Vec<bool> {
-        (0..a.len()).map(|i| a[i] == b[i] && a[i] == c[i]).collect()
-    };
-    let chunk_stable = stable(&chunks_a, &chunks_a2, &chunks_a3);
-    let ring_stable = stable(&ring_a, &ring_a2, &ring_a3);
+    let (cols_a, chunks_a) = sample(&world);
+    // The seeded generation really is deterministic: a second run agrees.
+    let (_, chunks_a2) = sample(&world);
+    assert_eq!(
+        chunks_a, chunks_a2,
+        "seeded chunk generation is not deterministic"
+    );
     world.sim.set_authored_rasters_for_test(Some(rasters));
-    let (cols_b, chunks_b, ring_b) = sample(&world);
+    let (cols_b, chunks_b) = sample(&world);
     let col_diff = cols_a.iter().zip(&cols_b).filter(|(a, b)| a != b).count();
-    let differing = |a: &[u64], b: &[u64], stable: &[bool], pos: &[Vec2<i32>]| -> Vec<Vec2<i32>> {
-        (0..a.len())
-            .filter(|i| stable[*i] && a[*i] != b[*i])
-            .map(|i| pos[i])
-            .collect()
-    };
-    let chunk_diff = differing(&chunks_a, &chunks_b, &chunk_stable, &chunks);
-    let ring_diff = differing(&ring_a, &ring_b, &ring_stable, &ring1);
-    // A chunk that differs with the region may still be one whose generation
-    // is merely rarely unstable: regenerate it without the region (up to 32
-    // times) and accept it only if one of those runs reproduces the digest
-    // seen with the region.
-    let rasters = world.sim.authored_rasters.take();
-    let explain = |diff: &[Vec2<i32>], with: &dyn Fn(Vec2<i32>) -> u64| -> Vec<Vec2<i32>> {
-        diff.iter()
-            .copied()
-            .filter(|c| {
-                let target = with(*c);
-                !(0..32).any(|_| chunk_digest(&world, index_ref, *c) == target)
-            })
-            .collect()
-    };
-    let digest_with = |c: Vec2<i32>| -> u64 {
-        let i = chunks
-            .iter()
-            .position(|p| *p == c)
-            .map(|i| chunks_b[i])
-            .or_else(|| ring1.iter().position(|p| *p == c).map(|i| ring_b[i]));
-        i.expect("a compared chunk")
-    };
-    let chunk_unexplained = explain(&chunk_diff, &digest_with);
-    let ring_unexplained = explain(&ring_diff, &digest_with);
-    world.sim.set_authored_rasters_for_test(rasters);
-    let n_stable = chunk_stable.iter().filter(|s| **s).count();
-    let n_ring_stable = ring_stable.iter().filter(|s| **s).count();
+    let differing: Vec<Vec2<i32>> = all
+        .iter()
+        .zip(chunks_a.iter().zip(&chunks_b))
+        .filter(|(_, (a, b))| a != b)
+        .map(|(c, _)| *c)
+        .collect();
     println!(
-        "columns compared {}, differing {col_diff}; chunks compared {n_stable} stable of {} \
-         (random + the 2..3-chunk ring), differing {chunk_diff:?} of which not reproduced by a \
-         region-free run {chunk_unexplained:?}; 1-chunk ring {n_ring_stable} stable of {}, \
-         differing {ring_diff:?}, not reproduced {ring_unexplained:?} (informational: layers \
-         there read columns inside the region)",
+        "columns compared {}, differing {col_diff}; chunks compared {} ({} random chunks off \
+         sites + rings of {} / {} / {} chunks at distance 1 / 2 / 3), differing {differing:?}",
         cols.len(),
+        all.len(),
         chunks.len(),
-        ring1.len()
+        rings[0].len(),
+        rings[1].len(),
+        rings[2].len()
     );
     assert_eq!(col_diff, 0);
-    assert!(chunk_unexplained.is_empty());
-    assert!(
-        n_stable * 10 >= chunks.len() * 9,
-        "too few stable chunks to judge"
-    );
+    assert!(differing.is_empty());
     // The region really changed something inside, or this test proves nothing.
     let inside = Vec2::new(23300, 25410);
     assert_ne!(
         world.sim.authored_rasters.as_ref().unwrap().column(inside),
         None
     );
+}
+
+/// The synthetic arena manifest passes the load-time consistency check
+/// against the real sim table (the arena holds no sim water, and the exporter
+/// rule "masks untouched" leaves every authored-wet chunk table-dry, which the
+/// default budget allows), and a zero budget for that direction is enforced.
+#[test]
+#[ignore]
+fn arena_manifest_passes_the_consistency_check() {
+    let (world, _index) = generate_world();
+    let rasters = load_spec(&arena_spec());
+    let report = rasters
+        .check_consistency_with_sim("test", &world.sim)
+        .expect("consistent");
+    assert_eq!(report.len(), 1);
+    assert!(report[0].authored_dry_table_wet.is_empty());
+    assert!(!report[0].authored_wet_table_dry.is_empty());
+    let mut strict = arena_spec();
+    strict.consistency.max_authored_wet_table_dry_chunks = Some(0);
+    let err = load_spec(&strict)
+        .check_consistency_with_sim("test", &world.sim)
+        .unwrap_err();
+    assert!(err.0.contains("dry in the sim table"), "{err}");
+    // A sim-wet chunk under authored dry ground: any real lake chunk, with a
+    // region boxed around it and no authored water, fails the default budget.
+    let lake = (100..900)
+        .flat_map(|y| (100..900).map(move |x| Vec2::new(x, y)))
+        .find(|c: &Vec2<i32>| world.sim.get(*c).is_some_and(|c| c.river.is_lake()))
+        .expect("the map has lakes");
+    let min = (lake * 32 - 64).into_tuple();
+    let max = (lake * 32 + 96).into_tuple();
+    let dry = RegionSpec::new("dry_over_lake", min, max, 0, vec![PaintOp::Bank {
+        shape: rect(
+            (lake.x * 32 - 64) as f32,
+            (lake.y * 32 - 64) as f32,
+            (lake.x * 32 - 63) as f32,
+            (lake.y * 32 - 63) as f32,
+        ),
+        bed_cm: 30_000,
+    }]);
+    let err = load_spec(&dry)
+        .check_consistency_with_sim("test", &world.sim)
+        .unwrap_err();
+    assert!(err.0.contains("the sim table calls water"), "{err}");
+}
+
+/// Regional overrides apply on top of authored terrain: a `Damage` crater on
+/// an authored river lowers the authored bed by the crater depth and the
+/// authored surface stays put, so the crater sits under the water.
+#[test]
+#[ignore]
+fn damage_crater_on_authored_water_sits_under_the_surface() {
+    use common::terrain::regional_override::{
+        DamageOverride, DamageShape, OverrideRegion, RegionalTerrainOverride, TerrainOverrideId,
+        TerrainOverridePayload, TerrainOverrides,
+    };
+    let (mut world, index) = generate_world();
+    let index_ref = index.as_index_ref();
+    world
+        .sim
+        .set_authored_rasters_for_test(Some(load_spec(&arena_spec())));
+    let center = Vec2::new(23050, 25410);
+    let overrides = TerrainOverrides {
+        version: 1,
+        active: vec![RegionalTerrainOverride {
+            id: TerrainOverrideId(1),
+            region: OverrideRegion::Circle {
+                center,
+                radius: 12.0,
+                edge: 4.0,
+            },
+            payload: TerrainOverridePayload::Damage(DamageOverride {
+                shapes: vec![DamageShape::Crater {
+                    max_depth: 3.0,
+                    rim_height: 0.0,
+                }],
+                scorch: 0.0,
+                vegetation_mul: 1.0,
+                heal_progress: 0.0,
+                heal_stages: 1,
+                heal_interval: 1.0,
+                next_heal_at: 0.0,
+            }),
+            priority: 0,
+            activated_at: 0.0,
+            wipe_player_edits: false,
+            ephemeral: true,
+            transition: Default::default(),
+        }],
+    };
+    let plain = crate::column::ColumnGen::new(&world.sim)
+        .get((center, index_ref, None))
+        .unwrap();
+    let cratered = crate::column::ColumnGen::with_overrides(&world.sim, &overrides)
+        .get((center, index_ref, None))
+        .unwrap();
+    assert_eq!(plain.alt, 232.5, "authored bed");
+    assert_eq!(plain.water_level, 238.5, "authored surface");
+    assert!(
+        (cratered.alt - (232.5 - 3.0)).abs() < 1e-3,
+        "crater lowers the authored bed: {}",
+        cratered.alt
+    );
+    assert_eq!(cratered.water_level, 238.5, "the authored surface stays");
+}
+
+/// Air 0, natural ground 1, decoration 2 (any other solid block, or a
+/// sprite), liquids by kind.
+fn block_class(b: &Block) -> u32 {
+    if b.is_liquid() || b.kind() == BlockKind::Lava {
+        0x100 + b.kind() as u32
+    } else if is_natural_ground(b) {
+        1
+    } else if b.is_filled()
+        || b.get_sprite()
+            .is_some_and(|s| s != common::terrain::SpriteKind::Empty)
+    {
+        2
+    } else {
+        0
+    }
 }
 
 fn is_natural_ground(b: &Block) -> bool {

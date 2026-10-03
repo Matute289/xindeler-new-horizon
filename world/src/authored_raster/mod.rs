@@ -1,36 +1,76 @@
 //! XINDELER: authored raster layers -- the authored water layer.
 //!
+//! Not to be confused with [`crate::layer::authored_regions`], which indexes
+//! the authored *voids* (caves, interiors) of a map for the procedural cave
+//! guard. This module is about the terrain surface: exact water and banks.
+//!
+//! # What it does
+//!
 //! Inside a declared, chunk-aligned *authored region*, the column sampler
 //! stops deriving water from the 32 m sim chunks (River discs, Lake/Ocean
 //! chunk sets, chunk `alt` as the water level, bank pull) and reads a 1 m
-//! raster instead: per block column either "water with this surface over
-//! this bed" ([`AuthoredCell::Wet`]), "dry ground at this height"
+//! raster instead: per block column either "water with this surface over this
+//! bed" ([`AuthoredCell::Wet`]), "dry ground at this height"
 //! ([`AuthoredCell::Bank`]) or nothing ([`AuthoredCell::None`]). Outside every
-//! region nothing here runs, so every other column is bit-identical to an
+//! region nothing here runs, so every column there is bit-identical to an
 //! engine without this module.
 //!
-//! The full contract (formats, quantisation, containment rules, sim
-//! integration, gates) is
-//! `references/precision-tooling/stage1-authored-water-design.md` in the
-//! private design repo. In short:
+//! # Contract
 //!
-//! * the manifest `<map>_authored_rasters.ron` is optional: *missing* means "no
-//!   authored water" (the old path, bit-identical); *present but wrong in any
-//!   way* stops world generation with a message naming the problem;
-//! * altitudes are integer centimetres in the block-z frame and become blocks
-//!   with integer arithmetic: the top water block is `floor(surface / 1 m)`,
-//!   the top ground block `floor(bed / 1 m)`, never a float rounding;
-//! * the raster is defined in column space (cell = block column), so the -16 m
-//!   chunk-spline registration of the heightmap does not apply to it;
-//! * the sim chunk table (kinds, `water_alt`, downhill graph) is *not* mutated:
-//!   those keep coming from the masks the exporter keeps consistent, because
+//! * **Manifest** `<map>_authored_rasters.ron` ([`Manifest`], schema
+//!   [`MANIFEST_SCHEMA`], unknown fields/layers are errors). It is optional:
+//!   *missing* means "no authored water" (the old path, bit-identical) unless
+//!   the map's registry entry requires it; *present but wrong in any way* stops
+//!   world generation with a message naming the manifest, region, tile or cell.
+//! * **Tiles** `<map>_ar_<region>_<layer>_<tx>_<ty>.bin`, 256 x 256 cells of 1
+//!   m in *column space* (cell = block column, rows from the south), zstd,
+//!   sha256-checked against the manifest; layout in [`format`]. Being in column
+//!   space, the raster never sees the -16 m registration of the chunk-spline
+//!   heightmap.
+//! * **Quantisation** is integer: centimetres in the block-z frame (sea level
+//!   140 m = 14 000 cm); top water block = `floor(surface / 100)`, top ground
+//!   block = `floor(bed / 100)`. Water meeting the ocean uses surface block
+//!   [`SEA_TOP_BLOCK`].
+//! * **Containment** (checked at load): water only next to water or a bank at
+//!   least as high; nothing below the ocean's top block; chunk-aligned,
+//!   non-overlapping boxes at least [`RIM_MARGIN_M`] from the rim; the whole
+//!   manifest within [`RESIDENT_BUDGET_BYTES`] resident.
+//! * **Column sampler** ([`AuthoredColumn::resolve`]): wet and bank columns are
+//!   exact at any feather weight; unauthored columns blend from the engine's
+//!   terrain to the engine's *dry* terrain over the feather; no water above sea
+//!   level in a region except authored water. Regional terrain overrides
+//!   (crater, flood) apply on top.
+//! * **Sim chunk table** (kinds, `water_alt`, downhill graph) is *not* mutated:
 //!   any change there would leak up to three chunks outside the region
-//!   (`local_cells` radius) and into civ generation.
+//!   (`local_cells` radius) and into civ generation. Consumers that must agree
+//!   with the rendered water (rtsim boats and spawns, civ placement, ports,
+//!   wildlife) ask the authored-aware queries in [`queries`] instead. The
+//!   exporter must leave the water/elevated masks *untouched* inside regions: a
+//!   mask pixel without the elevated mark sinks the chunk to sea level and the
+//!   unauthored columns around the exact water inherit that pit.
+//!   [`AuthoredRasters::check_consistency`] enforces it with a per-region
+//!   budget ([`ConsistencyBudget`]).
+//! * **Decorations** rooted inside a region (boulders, trees) can change blocks
+//!   a few metres outside its box (<= 8 m measured): size regions at least
+//!   [`RECOMMENDED_REGION_MARGIN_M`] beyond the last authored change (the
+//!   loader warns otherwise). Procedural rocks, trees and sprites rooted in
+//!   authored water are suppressed per region
+//!   ([`RegionManifest::suppress_procedural_in_water`]).
+//! * **Not supported:** hot reload (generated chunks would keep the old water
+//!   while new ones get the new; restart the server), and changing a manifest
+//!   under a live world without a reset (persisted chunk edits and rtsim NPCs
+//!   inside the region: see `rtsim::rule::authored_water` and
+//!   `TerrainPersistence::check_authored_rasters_digest`).
 
 pub mod format;
+pub mod queries;
+#[cfg(any(test, feature = "tools"))]
 pub mod writer;
 
-use crate::sim::{RiverKind, WorldSim};
+use crate::{
+    CONFIG,
+    sim::{AquaticEcologyProfileId, WorldSim},
+};
 use common::{
     assets::{self, AssetExt, BoxedError, FileAsset, load_ron},
     terrain::TerrainChunkSize,
@@ -43,25 +83,39 @@ use std::{borrow::Cow, sync::OnceLock};
 use tracing::{info, warn};
 use vek::*;
 
-/// Schema version of the manifest this engine reads.
+/// Schema version of the manifest this engine reads. New *layers* (the
+/// Stage 2 ground layer) are new [`LayerKind`] variants under this same
+/// schema: an older engine rejects the unknown variant when it parses the
+/// manifest. The schema only moves if the manifest's structure changes.
 pub const MANIFEST_SCHEMA: u32 = 1;
-/// Distances to authored water are tracked up to this many metres, which is
-/// also where the engine's warp fade (`water_dist / 64`) saturates.
-pub const DIST_CAP_M: i32 = 64;
-/// The whole manifest must fit this many bytes when every tile is resident.
+/// Distances to authored water are tracked up to this many metres: the
+/// distance at which the column sampler's warp fade (`water_dist / 64`)
+/// saturates, so the two can never disagree.
+pub const DIST_CAP_M: i32 = crate::column::WATER_WARP_FADE_M as i32;
+/// Engine limit on the decoded tiles plus distance fields of a whole
+/// manifest. Over it, loading fails: split or shrink regions, or list fewer
+/// tiles (a tile without authored cells need not be listed).
 pub const RESIDENT_BUDGET_BYTES: usize = 256 << 20;
 /// Regions must keep this far from the map rim, where the column sampler has
 /// no spline knots.
 pub const RIM_MARGIN_M: i32 = 64;
 /// Largest feather the manifest may ask for.
 pub const MAX_FEATHER_M: i32 = 128;
-/// Top block of the engine's ocean (`CONFIG.sea_level - 1 + 0.01`, filled
-/// `z < level`): authored water and banks may not go below it.
-pub const SEA_TOP_BLOCK: i32 = 139;
+/// Top block of the engine's ocean: the column sampler fills `z <
+/// sea_level - 1 + 0.01`. Authored water and banks may not go below it.
+pub const SEA_TOP_BLOCK: i32 = (CONFIG.sea_level - 1.0 + 0.01) as i32;
+/// How far below the lowest authored ground block a chunk's stone floor
+/// (`base_z`) must reach; the same margin `SimChunk::get_base_z` keeps below
+/// a chunk's own altitude.
+pub const FLOOR_MARGIN_BLOCKS: i32 = 16;
+/// Decorations rooted inside a region can reach this far outside its box;
+/// the loader warns when authored cells come closer to the box edge.
+pub const RECOMMENDED_REGION_MARGIN_M: i32 = 16;
 
-const BYTES_PER_RAW_TILE: usize = TILE_CELLS * 4;
+const BYTES_PER_RAW_TILE: usize = TILE_CELLS * 2 * 2;
 const BYTES_PER_DIST_TILE: usize = TILE_CELLS;
 const NO_DIST: u8 = u8::MAX;
+const CHUNK: i32 = TerrainChunkSize::RECT_SIZE.x as i32;
 
 // --------------------------------------------------------------------------
 // Manifest
@@ -74,6 +128,8 @@ pub struct Manifest {
     pub schema: u32,
     pub regions: Vec<RegionManifest>,
 }
+
+fn yes() -> bool { true }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -88,6 +144,40 @@ pub struct RegionManifest {
     pub cell_size_m: i32,
     pub layers: Vec<LayerKind>,
     pub tiles: Vec<TileManifest>,
+    /// No procedural boulders, trees or sprites rooted in authored wet
+    /// columns (the engine otherwise places river rocks and lets canopies
+    /// hang into the water). Default on.
+    #[serde(default = "yes")]
+    pub suppress_procedural_in_water: bool,
+    /// Also suppress them on dry columns closer than this to authored water
+    /// (keeps bank-rooted canopies out of it). Default 0.
+    #[serde(default)]
+    pub exclude_procedural_margin_m: i32,
+    /// Aquatic fauna/flora profile id (`cromatolis_v0_aquatic_ecology.ron`)
+    /// for authored water whose chunk carries none.
+    #[serde(default)]
+    pub aquatic_ecology_profile: Option<String>,
+    #[serde(default)]
+    pub consistency: ConsistencyBudget,
+}
+
+/// How far a region's authored water may disagree with the sim's chunk
+/// table (the water and elevated masks), counted in chunks.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ConsistencyBudget {
+    /// Chunks the table calls wet (river, lake, ocean or underwater) that are
+    /// not fully authored (some column has no authored cell). Default **0**:
+    /// the sim lowers such a chunk's terrain, and the unauthored columns in
+    /// it render that pit next to the exact authored water (the masks were
+    /// painted inside the region).
+    #[serde(default)]
+    pub max_authored_dry_table_wet_chunks: u32,
+    /// Chunks with authored wet columns that the table calls dry. Default
+    /// unlimited: that is the normal state when the exporter leaves the masks
+    /// untouched (the consumers ask the authored-aware queries).
+    #[serde(default)]
+    pub max_authored_wet_table_dry_chunks: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -123,7 +213,7 @@ pub fn tile_specifier(map_asset: &str, region: &str, layer: LayerKind, tx: i32, 
 }
 
 // --------------------------------------------------------------------------
-// Loaded rasters
+// Cells and columns
 // --------------------------------------------------------------------------
 
 /// One authored column, as the column sampler sees it.
@@ -139,6 +229,37 @@ pub enum AuthoredCell {
     None,
 }
 
+impl AuthoredCell {
+    pub fn is_wet(&self) -> bool { matches!(self, AuthoredCell::Wet { .. }) }
+}
+
+/// Authored water at one column (the wet case of [`AuthoredCell`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuthoredWater {
+    /// Top water block.
+    pub surface_block: i32,
+    /// Top ground block under the water.
+    pub bed_block: i32,
+}
+
+impl AuthoredWater {
+    /// Number of water blocks.
+    pub fn depth_blocks(&self) -> i32 { self.surface_block - self.bed_block }
+
+    /// Altitude of the top of the water (the top face of the top water
+    /// block), the quantity `SimChunk::water_alt` means for the sim's own
+    /// water (sea level 140 over top water block 139).
+    pub fn surface_alt(&self) -> f32 { (self.surface_block + 1) as f32 }
+}
+
+/// Per-region settings every column of the region carries.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RegionSettings {
+    pub suppress_procedural_in_water: bool,
+    pub exclude_procedural_margin_m: f32,
+    pub(crate) aquatic_profile: Option<AquaticEcologyProfileId>,
+}
+
 /// What the column sampler needs to know about one column inside a region.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AuthoredColumn {
@@ -148,8 +269,10 @@ pub struct AuthoredColumn {
     pub weight: f32,
     pub cell: AuthoredCell,
     /// Distance from the column centre to the nearest authored wet column
-    /// centre, metres (chamfer 3-4), `None` beyond [`DIST_CAP_M`].
+    /// centre, metres (chamfer 3-4), `None` beyond [`DIST_CAP_M`]. Not
+    /// computed (`Some(0.0)`) for wet columns.
     pub water_dist: Option<f32>,
+    pub settings: RegionSettings,
 }
 
 /// The engine's own per-column results that an authored column replaces.
@@ -178,10 +301,31 @@ pub struct DryTerrain {
     pub base_sea_level: f32,
 }
 
+/// The column sampler's hook: replace `engine` by the authored result when
+/// the column is authored, and re-apply the regional flood (`flood`) on top
+/// of the authored water level. `None` returns `engine` untouched.
+#[inline]
+pub fn apply(
+    authored: Option<AuthoredColumn>,
+    engine: EngineColumn,
+    dry: DryTerrain,
+    flood: impl FnOnce(f32) -> f32,
+) -> EngineColumn {
+    match authored {
+        None => engine,
+        Some(authored) => {
+            let mut r = authored.resolve(engine, dry);
+            r.water_level = flood(r.water_level);
+            r
+        },
+    }
+}
+
 impl AuthoredColumn {
     /// Replace the engine's results for this column:
     ///
-    /// * wet: bed and surface exact, no warp/cliff carving;
+    /// * wet: bed and surface exact, no warp/cliff carving; `riverless_alt` is
+    ///   the bed (paths and trees reading it see the authored ground);
     /// * bank: ground exact, no water above sea level;
     /// * none: no water above sea level; terrain blended by the feather weight
     ///   from the engine's (with the sim water's carving) to the engine's *dry*
@@ -198,7 +342,7 @@ impl AuthoredColumn {
                 water_dist: Some(-1.0),
                 warp_factor: 0.0,
                 cliff_offset: 0.0,
-                riverless_alt: engine.riverless_alt,
+                riverless_alt: bed_block as f32 + 0.5,
             },
             AuthoredCell::Bank { bed_block } => EngineColumn {
                 alt: bed_block as f32 + 0.5,
@@ -236,22 +380,69 @@ impl AuthoredColumn {
             },
         }
     }
+
+    /// Whether procedural boulders, trees and sprites must not be rooted in
+    /// this column ([`RegionManifest::suppress_procedural_in_water`],
+    /// [`RegionManifest::exclude_procedural_margin_m`]).
+    pub fn procedural_suppressed(&self) -> bool {
+        self.settings.suppress_procedural_in_water
+            && match self.cell {
+                AuthoredCell::Wet { .. } => true,
+                _ => self
+                    .water_dist
+                    .is_some_and(|d| d < self.settings.exclude_procedural_margin_m),
+            }
+    }
+
+    /// The region's aquatic ecology profile, for a wet column.
+    pub(crate) fn wet_aquatic_profile(&self) -> Option<AquaticEcologyProfileId> {
+        self.cell
+            .is_wet()
+            .then_some(self.settings.aquatic_profile)
+            .flatten()
+    }
 }
 
-/// Per-chunk summary of the authored water, computed once at load.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// Per-chunk summary of the authored cells, computed once at load.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChunkWaterSummary {
     pub wet_columns: u32,
     pub authored_columns: u32,
+    /// `i32::MAX` / `i32::MIN` when the chunk has no wet column.
     pub min_surface_block: i32,
     pub max_surface_block: i32,
+    /// Lowest authored ground (bed or bank) block.
     pub min_bed_block: i32,
 }
 
-struct ListedTile {
-    bytes: Box<[u8]>,
-    raw: OnceLock<RawTile>,
+impl Default for ChunkWaterSummary {
+    fn default() -> Self {
+        Self {
+            wet_columns: 0,
+            authored_columns: 0,
+            min_surface_block: i32::MAX,
+            max_surface_block: i32::MIN,
+            min_bed_block: i32::MAX,
+        }
+    }
 }
+
+impl ChunkWaterSummary {
+    fn merge(&mut self, o: &Self) {
+        self.wet_columns += o.wet_columns;
+        self.authored_columns += o.authored_columns;
+        self.min_surface_block = self.min_surface_block.min(o.min_surface_block);
+        self.max_surface_block = self.max_surface_block.max(o.max_surface_block);
+        self.min_bed_block = self.min_bed_block.min(o.min_bed_block);
+    }
+
+    /// At least half of the chunk's columns are authored water.
+    pub fn wet_majority(&self) -> bool { self.wet_columns * 2 >= (CHUNK * CHUNK) as u32 }
+}
+
+// --------------------------------------------------------------------------
+// Regions
+// --------------------------------------------------------------------------
 
 struct Region {
     id: String,
@@ -259,9 +450,12 @@ struct Region {
     max: Vec2<i32>,
     feather: i32,
     tiles: Vec2<i32>,
-    /// One slot per tile of the region grid; `None` = unlisted (no data).
-    water: Vec<Option<ListedTile>>,
-    /// Distance-to-water fields, one per tile of the grid, built lazily.
+    settings: RegionSettings,
+    budget: ConsistencyBudget,
+    /// One slot per tile of the region grid, decoded once at load; `None` =
+    /// unlisted (no authored cell).
+    water: Vec<Option<RawTile>>,
+    /// Distance-to-water fields, one per tile of the grid.
     dist: Vec<OnceLock<Option<Box<[u8]>>>>,
 }
 
@@ -279,17 +473,11 @@ impl Region {
 
     fn origin(&self, t: Vec2<i32>) -> Vec2<i32> { self.min + t * TILE_SIZE }
 
-    fn raw(&self, idx: usize) -> Option<&RawTile> {
-        let listed = self.water[idx].as_ref()?;
-        let t = Vec2::new(idx as i32 % self.tiles.x, idx as i32 / self.tiles.x);
-        Some(listed.raw.get_or_init(|| {
-            // Validated byte-for-byte at load; decoding is deterministic.
-            format::decode_water(&listed.bytes, self.origin(t))
-                .expect("authored raster tile decoded at load and cannot fail now")
-        }))
-    }
+    #[inline(always)]
+    fn raw(&self, idx: usize) -> Option<&RawTile> { self.water[idx].as_ref() }
 
     /// Cell state at `wpos` (must be inside the region).
+    #[inline]
     fn cell(&self, wpos: Vec2<i32>) -> AuthoredCell {
         let local = wpos - self.min;
         let t = local.map(|e| e.div_euclid(TILE_SIZE));
@@ -379,11 +567,7 @@ fn build_dist_field(region: &Region, t: Vec2<i32>) -> Option<Box<[u8]>> {
                 }
                 for i in 0..TILE_SIZE {
                     let wx = o.x + i - origin.x;
-                    if !(0..n).contains(&wx) {
-                        continue;
-                    }
-                    let k = RawTile::idx(i, j);
-                    if raw.surface[k] != format::NONE && raw.bed[k] != format::NONE {
+                    if (0..n).contains(&wx) && raw.is_wet(RawTile::idx(i, j)) {
                         d[(wy * n + wx) as usize] = 0;
                     }
                 }
@@ -428,6 +612,10 @@ fn build_dist_field(region: &Region, t: Vec2<i32>) -> Option<Box<[u8]>> {
     Some(out.into_boxed_slice())
 }
 
+// --------------------------------------------------------------------------
+// Loaded rasters
+// --------------------------------------------------------------------------
+
 /// All authored rasters of one world. `None` on `WorldSim` when the map has
 /// no manifest.
 pub struct AuthoredRasters {
@@ -436,6 +624,8 @@ pub struct AuthoredRasters {
     /// first so every column outside all regions costs four comparisons.
     bounds: Aabr<i32>,
     chunk_summary: HashMap<Vec2<i32>, ChunkWaterSummary>,
+    /// sha256 of the canonical manifest (it pins every tile by sha256).
+    digest: String,
 }
 
 impl std::fmt::Debug for AuthoredRasters {
@@ -446,6 +636,7 @@ impl std::fmt::Debug for AuthoredRasters {
                 &self.regions.iter().map(|r| &r.id).collect::<Vec<_>>(),
             )
             .field("bounds", &self.bounds)
+            .field("digest", &self.digest)
             .finish()
     }
 }
@@ -458,25 +649,51 @@ impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
 }
 
+/// Counts of [`AuthoredRasters::check_consistency`] for one region.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RegionConsistency {
+    pub region: String,
+    pub authored_wet_table_dry: Vec<Vec2<i32>>,
+    pub authored_dry_table_wet: Vec<Vec2<i32>>,
+}
+
 impl AuthoredRasters {
     /// Load `<map_asset>_authored_rasters` through the asset system.
     ///
-    /// `Ok(None)`: the manifest does not exist (the map has no authored
-    /// water; the old path). `Err`: it exists but is wrong in any way -- the
-    /// caller must stop world generation.
+    /// `Ok(None)`: the manifest does not exist and `required` is false (the
+    /// map has no authored water; the old path). `Err`: it exists but is
+    /// wrong in any way, or is required and missing -- the caller must stop
+    /// world generation.
     pub fn load_for_map(
         map_asset: &str,
         map_size_blocks: Vec2<i32>,
+        required: bool,
     ) -> Result<Option<Self>, LoadError> {
         let specifier = manifest_specifier(map_asset);
         let manifest = match Manifest::load_owned(&specifier) {
             Ok(manifest) => manifest,
-            Err(err) if is_not_found(&err) => return Ok(None),
-            Err(err) => {
-                return Err(LoadError(format!(
-                    "authored raster manifest '{specifier}' exists but cannot be read: {:?}",
-                    err.reason()
-                )));
+            Err(err) => match io_error_kind(&err) {
+                Some(std::io::ErrorKind::NotFound) if !required => return Ok(None),
+                Some(std::io::ErrorKind::NotFound) => {
+                    return Err(LoadError(format!(
+                        "authored rasters [{specifier}]: the map requires an authored raster \
+                         manifest and none was found"
+                    )));
+                },
+                Some(kind) => {
+                    return Err(LoadError(format!(
+                        "authored rasters [{specifier}]: I/O error reading the manifest \
+                         ({kind:?}): {:?}",
+                        err.reason()
+                    )));
+                },
+                None => {
+                    return Err(LoadError(format!(
+                        "authored rasters [{specifier}]: the manifest does not parse (schema \
+                         {MANIFEST_SCHEMA}; unknown fields and layers are errors): {:?}",
+                        err.reason()
+                    )));
+                },
             },
         };
         let fetch = |region: &str, layer: LayerKind, tx: i32, ty: i32| {
@@ -485,17 +702,19 @@ impl AuthoredRasters {
                 .map(|t| t.0)
                 .map_err(|e| format!("tile '{spec}' cannot be loaded: {:?}", e.reason()))
         };
-        Self::from_manifest(manifest, map_size_blocks, &fetch).map(Some)
+        Self::from_manifest(manifest, map_size_blocks, &specifier, &fetch).map(Some)
     }
 
     /// Validate `manifest` and every tile `fetch` returns, and build the
-    /// sampler. Asset-free, so tests can feed tiles from memory.
+    /// sampler. Asset-free, so tests can feed tiles from memory. `source`
+    /// prefixes every error (normally the manifest's asset specifier).
     pub fn from_manifest(
         manifest: Manifest,
         map_size_blocks: Vec2<i32>,
+        source: &str,
         fetch: &dyn Fn(&str, LayerKind, i32, i32) -> Result<Vec<u8>, String>,
     ) -> Result<Self, LoadError> {
-        let err = |msg: String| LoadError(format!("authored rasters: {msg}"));
+        let err = |msg: String| LoadError(format!("authored rasters [{source}]: {msg}"));
         if manifest.schema != MANIFEST_SCHEMA {
             return Err(err(format!(
                 "manifest schema {} (this engine reads {MANIFEST_SCHEMA})",
@@ -505,9 +724,30 @@ impl AuthoredRasters {
         if manifest.regions.is_empty() {
             return Err(err("manifest lists no region".into()));
         }
-        let chunk = TerrainChunkSize::RECT_SIZE.x as i32;
-        let mut regions: Vec<Region> = Vec::new();
+        let digest = format::sha256_hex(
+            ron::ser::to_string(&manifest)
+                .map_err(|e| err(format!("manifest does not serialise: {e}")))?
+                .as_bytes(),
+        );
+        // The memory budget comes from the manifest's counts alone, before a
+        // single tile is read.
         let mut resident = 0usize;
+        for rm in &manifest.regions {
+            let size = Vec2::<i32>::from(rm.max) - Vec2::<i32>::from(rm.min);
+            let grid = size.map(|e| (e.max(0) + TILE_SIZE - 1) / TILE_SIZE);
+            resident += rm.tiles.len() * BYTES_PER_RAW_TILE
+                + (grid.x.max(0) * grid.y.max(0)) as usize * BYTES_PER_DIST_TILE;
+        }
+        if resident > RESIDENT_BUDGET_BYTES {
+            return Err(err(format!(
+                "the manifest needs {} MiB resident (decoded tiles + distance fields), over this \
+                 engine's limit of {} MiB: split or shrink the regions, or list only tiles that \
+                 hold authored cells",
+                resident >> 20,
+                RESIDENT_BUDGET_BYTES >> 20
+            )));
+        }
+        let mut regions: Vec<Region> = Vec::new();
         let mut chunk_summary: HashMap<Vec2<i32>, ChunkWaterSummary> = HashMap::new();
         for rm in manifest.regions {
             let id = rm.id.clone();
@@ -525,7 +765,7 @@ impl AuthoredRasters {
             }
             if rm.tile_size_m != TILE_SIZE || rm.cell_size_m != 1 {
                 return Err(rerr(format!(
-                    "tile_size_m {} / cell_size_m {} (format v1 is {TILE_SIZE} / 1)",
+                    "tile_size_m {} / cell_size_m {} (tile format 1 is {TILE_SIZE} / 1)",
                     rm.tile_size_m, rm.cell_size_m
                 )));
             }
@@ -537,10 +777,10 @@ impl AuthoredRasters {
             }
             let min: Vec2<i32> = Vec2::from(rm.min);
             let max: Vec2<i32> = Vec2::from(rm.max);
-            if min.x % chunk != 0 || min.y % chunk != 0 || max.x % chunk != 0 || max.y % chunk != 0
+            if min.x % CHUNK != 0 || min.y % CHUNK != 0 || max.x % CHUNK != 0 || max.y % CHUNK != 0
             {
                 return Err(rerr(format!(
-                    "box {min:?}..{max:?} is not aligned to {chunk} m chunks"
+                    "box {min:?}..{max:?} is not aligned to {CHUNK} m chunks"
                 )));
             }
             if max.x <= min.x || max.y <= min.y {
@@ -564,17 +804,29 @@ impl AuthoredRasters {
                     rm.feather_m
                 )));
             }
+            if !(0..=DIST_CAP_M).contains(&rm.exclude_procedural_margin_m) {
+                return Err(rerr(format!(
+                    "exclude_procedural_margin_m {} must be 0..={DIST_CAP_M}",
+                    rm.exclude_procedural_margin_m
+                )));
+            }
+            let aquatic_profile = match &rm.aquatic_ecology_profile {
+                None => None,
+                Some(name) => Some(AquaticEcologyProfileId::from_id(name).ok_or_else(|| {
+                    rerr(format!(
+                        "aquatic_ecology_profile '{name}' is not a profile this engine knows"
+                    ))
+                })?),
+            };
             if let Some(other) = regions
                 .iter()
                 .find(|r| min.x < r.max.x && r.min.x < max.x && min.y < r.max.y && r.min.y < max.y)
             {
                 return Err(rerr(format!("overlaps region '{}'", other.id)));
             }
-            let size = max - min;
-            let tiles = size.map(|e| (e + TILE_SIZE - 1) / TILE_SIZE);
+            let tiles = (max - min).map(|e| (e + TILE_SIZE - 1) / TILE_SIZE);
             let n_tiles = (tiles.x * tiles.y) as usize;
-            let mut water: Vec<Option<ListedTile>> = (0..n_tiles).map(|_| None).collect();
-            let mut decoded: HashMap<Vec2<i32>, RawTile> = HashMap::new();
+            let mut water: Vec<Option<RawTile>> = (0..n_tiles).map(|_| None).collect();
             for tm in &rm.tiles {
                 let t = Vec2::new(tm.tx, tm.ty);
                 if t.x < 0 || t.y < 0 || t.x >= tiles.x || t.y >= tiles.y {
@@ -589,34 +841,52 @@ impl AuthoredRasters {
                 let bytes = fetch(&id, tm.layer, t.x, t.y).map_err(&rerr)?;
                 let sha = format::sha256_hex(&bytes);
                 if !sha.eq_ignore_ascii_case(&tm.sha256) {
+                    let hint = if bytes.starts_with(b"version https://git-lfs") {
+                        " (the file is a Git LFS pointer: fetch the LFS objects of this asset root)"
+                    } else {
+                        ""
+                    };
                     return Err(rerr(format!(
-                        "tile {t:?} sha256 {sha} does not match the manifest ({})",
+                        "tile {t:?} sha256 {sha} does not match the manifest ({}){hint}",
                         tm.sha256
                     )));
                 }
+                // Decoded once, here; the compressed bytes are dropped.
                 let raw = format::decode_water(&bytes, min + t * TILE_SIZE)
                     .map_err(|e| rerr(format!("tile {t:?}: {e}")))?;
-                decoded.insert(t, raw);
-                water[idx] = Some(ListedTile {
-                    bytes: bytes.into_boxed_slice(),
-                    raw: OnceLock::new(),
-                });
+                water[idx] = Some(raw);
             }
-            resident += rm.tiles.len() * BYTES_PER_RAW_TILE + n_tiles * BYTES_PER_DIST_TILE;
-            if resident > RESIDENT_BUDGET_BYTES {
-                return Err(rerr(format!(
-                    "the manifest needs {} MiB resident, over the {} MiB budget",
-                    resident >> 20,
-                    RESIDENT_BUDGET_BYTES >> 20
-                )));
+            let authored_bounds =
+                validate_region(min, max, tiles, &water, &mut chunk_summary).map_err(&rerr)?;
+            if let Some(b) = authored_bounds {
+                let margin = (b.min.x - min.x)
+                    .min(b.min.y - min.y)
+                    .min(max.x - b.max.x)
+                    .min(max.y - b.max.y);
+                if margin < RECOMMENDED_REGION_MARGIN_M {
+                    warn!(
+                        source,
+                        region = id,
+                        margin_m = margin,
+                        recommended_m = RECOMMENDED_REGION_MARGIN_M,
+                        "Authored cells come within {margin} m of the region box: decorations \
+                         rooted inside the region (boulders, trees) can change blocks up to ~8 m \
+                         outside it, and terrain at the box edge is only feathered"
+                    );
+                }
             }
-            validate_region(&id, min, max, &decoded, &mut chunk_summary).map_err(&rerr)?;
             regions.push(Region {
                 id: id.clone(),
                 min,
                 max,
                 feather: rm.feather_m,
                 tiles,
+                settings: RegionSettings {
+                    suppress_procedural_in_water: rm.suppress_procedural_in_water,
+                    exclude_procedural_margin_m: rm.exclude_procedural_margin_m as f32,
+                    aquatic_profile,
+                },
+                budget: rm.consistency,
                 water,
                 dist: (0..n_tiles).map(|_| OnceLock::new()).collect(),
             });
@@ -633,13 +903,12 @@ impl AuthoredRasters {
             regions,
             bounds,
             chunk_summary,
+            digest,
         })
     }
 
-    /// The authored column at `wpos`, or `None` outside every region (the
-    /// engine path, untouched).
-    #[inline]
-    pub fn column(&self, wpos: Vec2<i32>) -> Option<AuthoredColumn> {
+    #[inline(always)]
+    fn region_at(&self, wpos: Vec2<i32>) -> Option<&Region> {
         if wpos.x < self.bounds.min.x
             || wpos.y < self.bounds.min.y
             || wpos.x >= self.bounds.max.x
@@ -647,25 +916,59 @@ impl AuthoredRasters {
         {
             return None;
         }
-        let region = self.regions.iter().find(|r| r.contains(wpos))?;
+        self.regions.iter().find(|r| r.contains(wpos))
+    }
+
+    /// The authored column at `wpos` for the column sampler, or `None`
+    /// outside every region (the engine path, untouched).
+    #[inline]
+    pub fn column(&self, wpos: Vec2<i32>) -> Option<AuthoredColumn> {
+        let region = self.region_at(wpos)?;
+        let cell = region.cell(wpos);
         Some(AuthoredColumn {
             weight: region.weight(wpos),
-            cell: region.cell(wpos),
-            water_dist: region.water_dist(wpos),
+            cell,
+            // A wet column's distance to water is zero; only dry columns pay
+            // for the distance field.
+            water_dist: if cell.is_wet() {
+                Some(0.0)
+            } else {
+                region.water_dist(wpos)
+            },
+            settings: region.settings,
         })
     }
 
-    /// The authored water at `wpos`, as `(surface_block, bed_block)`, if
-    /// `wpos` is an authored wet column of any region.
-    pub fn water_at(&self, wpos: Vec2<i32>) -> Option<(i32, i32)> {
-        match self.column(wpos)?.cell {
+    /// The authored cell at `wpos` (no distance field, no feather), or
+    /// `None` outside every region.
+    #[inline]
+    pub fn cell_at(&self, wpos: Vec2<i32>) -> Option<AuthoredCell> {
+        Some(self.region_at(wpos)?.cell(wpos))
+    }
+
+    /// The authored water at `wpos`, if `wpos` is an authored wet column of
+    /// any region.
+    pub fn water_at(&self, wpos: Vec2<i32>) -> Option<AuthoredWater> {
+        match self.cell_at(wpos)? {
             AuthoredCell::Wet {
                 surface_block,
                 bed_block,
-            } => Some((surface_block, bed_block)),
+            } => Some(AuthoredWater {
+                surface_block,
+                bed_block,
+            }),
             _ => None,
         }
     }
+
+    /// Whether chunk `chunk_pos` lies inside a region.
+    pub fn contains_chunk(&self, chunk_pos: Vec2<i32>) -> bool {
+        self.region_at(chunk_pos * CHUNK).is_some()
+    }
+
+    /// sha256 of the canonical manifest: changes whenever any region or tile
+    /// changes.
+    pub fn digest(&self) -> &str { &self.digest }
 
     /// Region ids and boxes, for logs and tools.
     pub fn regions(&self) -> impl Iterator<Item = (&str, Aabr<i32>)> {
@@ -677,89 +980,135 @@ impl AuthoredRasters {
         })
     }
 
-    /// Lowest authored ground block (bed or bank) in `chunk_pos` and its eight
-    /// neighbours, if any of them holds an authored cell. Chunk generation
-    /// lowers its stone floor below it.
-    pub fn min_authored_block_near(&self, chunk_pos: Vec2<i32>) -> Option<i32> {
-        let mut min: Option<i32> = None;
-        for dy in -1..=1 {
-            for dx in -1..=1 {
-                if let Some(s) = self.chunk_summary.get(&(chunk_pos + Vec2::new(dx, dy))) {
-                    min = Some(min.map_or(s.min_bed_block, |m| m.min(s.min_bed_block)));
-                }
-            }
-        }
-        min
-    }
-
-    /// Per-chunk summaries of the authored water (chunks with any authored
-    /// cell only).
+    /// Per-chunk summary (chunks with any authored cell only).
     pub fn chunk_summary(&self, chunk_pos: Vec2<i32>) -> Option<&ChunkWaterSummary> {
         self.chunk_summary.get(&chunk_pos)
     }
 
-    /// Compare the authored water with the sim's chunk kinds and log the
-    /// result. A mismatch is an exporter defect, reported, not fatal: the
-    /// columns follow the raster either way.
-    pub(crate) fn report_consistency(&self, sim: &WorldSim) -> (usize, usize) {
-        let chunk = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
-        let mut dry_in_sim = Vec::new();
-        let mut wet_in_sim = Vec::new();
-        for region in &self.regions {
-            let c0 = region.min / chunk;
-            let c1 = region.max / chunk;
-            for cy in c0.y..c1.y {
-                for cx in c0.x..c1.x {
+    /// The stone floor a chunk needs under its own authored ground:
+    /// [`FLOOR_MARGIN_BLOCKS`] below its lowest authored bed or bank block.
+    /// `None` for a chunk without authored cells (outside every region in
+    /// particular), whose floor stays the sim's.
+    pub fn floor_block(&self, chunk_pos: Vec2<i32>) -> Option<i32> {
+        self.chunk_summary
+            .get(&chunk_pos)
+            .map(|s| s.min_bed_block - FLOOR_MARGIN_BLOCKS)
+    }
+
+    /// Build every distance field now (in parallel on the current rayon
+    /// pool) so no chunk-generation worker stalls on one later.
+    pub fn prewarm(&self) {
+        use rayon::prelude::*;
+        self.regions.par_iter().for_each(|r| {
+            (0..r.dist.len()).into_par_iter().for_each(|i| {
+                r.dist_field(i);
+            });
+        });
+    }
+
+    /// Compare every region's chunks with the sim's chunk table
+    /// (`table_wet(chunk)`: river, lake, ocean or underwater) in both
+    /// directions. Over a region's [`ConsistencyBudget`] this is an error.
+    pub fn check_consistency(
+        &self,
+        source: &str,
+        table_wet: impl Fn(Vec2<i32>) -> Option<bool>,
+    ) -> Result<Vec<RegionConsistency>, LoadError> {
+        let mut out = Vec::new();
+        let mut errors = Vec::new();
+        for r in &self.regions {
+            let mut c = RegionConsistency {
+                region: r.id.clone(),
+                ..Default::default()
+            };
+            for cy in r.min.y / CHUNK..r.max.y / CHUNK {
+                for cx in r.min.x / CHUNK..r.max.x / CHUNK {
                     let cpos = Vec2::new(cx, cy);
-                    let Some(sim_chunk) = sim.get(cpos) else {
+                    let Some(table) = table_wet(cpos) else {
                         continue;
                     };
-                    let kind = sim_chunk.river.river_kind;
-                    let wet = self.chunk_summary.get(&cpos).map_or(0, |s| s.wet_columns);
-                    let area = (chunk.x * chunk.y) as u32;
-                    if wet * 2 >= area && kind.is_none() {
-                        dry_in_sim.push(cpos);
+                    let summary = self.chunk_summary.get(&cpos);
+                    let authored_wet = summary.is_some_and(|s| s.wet_columns > 0);
+                    let fully_authored =
+                        summary.is_some_and(|s| s.authored_columns == (CHUNK * CHUNK) as u32);
+                    if authored_wet && !table {
+                        c.authored_wet_table_dry.push(cpos);
                     }
-                    if wet == 0
-                        && matches!(kind, Some(RiverKind::River { .. } | RiverKind::Lake { .. }))
-                    {
-                        wet_in_sim.push(cpos);
+                    // The sim lowers the terrain of a chunk it calls water;
+                    // only a chunk whose every column is authored hides that.
+                    if table && !fully_authored {
+                        c.authored_dry_table_wet.push(cpos);
                     }
                 }
             }
-        }
-        info!(
-            regions = ?self.regions.iter().map(|r| &r.id).collect::<Vec<_>>(),
-            chunks = self.chunk_summary.len(),
-            "Loaded authored water rasters"
-        );
-        if !dry_in_sim.is_empty() || !wet_in_sim.is_empty() {
-            warn!(
-                authored_wet_but_sim_dry = dry_in_sim.len(),
-                sim_water_but_authored_dry = wet_in_sim.len(),
-                examples_authored_wet_sim_dry = ?&dry_in_sim[..dry_in_sim.len().min(5)],
-                examples_sim_water_authored_dry = ?&wet_in_sim[..wet_in_sim.len().min(5)],
-                "Authored water and the sim's water masks disagree (the exporter should keep the \
-                 masks consistent with the raster; columns follow the raster regardless)"
+            let dry_wet = c.authored_dry_table_wet.len();
+            let wet_dry = c.authored_wet_table_dry.len();
+            if dry_wet as u32 > r.budget.max_authored_dry_table_wet_chunks {
+                errors.push(format!(
+                    "region '{}': {dry_wet} chunk(s) the sim table calls water have unauthored \
+                     columns (budget {}), e.g. {:?}: the sim sinks those chunks and the \
+                     unauthored terrain there with them; leave the water/elevated masks untouched \
+                     inside regions, or author every column of those chunks",
+                    r.id,
+                    r.budget.max_authored_dry_table_wet_chunks,
+                    &c.authored_dry_table_wet[..dry_wet.min(5)]
+                ));
+            }
+            if let Some(max) = r.budget.max_authored_wet_table_dry_chunks
+                && wet_dry as u32 > max
+            {
+                errors.push(format!(
+                    "region '{}': {wet_dry} chunk(s) with authored water are dry in the sim table \
+                     (budget {max}), e.g. {:?}",
+                    r.id,
+                    &c.authored_wet_table_dry[..wet_dry.min(5)]
+                ));
+            }
+            info!(
+                source,
+                region = r.id,
+                authored_wet_table_dry = wet_dry,
+                authored_dry_table_wet = dry_wet,
+                "Authored water vs the sim chunk table"
             );
+            out.push(c);
         }
-        (dry_in_sim.len(), wet_in_sim.len())
+        if errors.is_empty() {
+            Ok(out)
+        } else {
+            Err(LoadError(format!(
+                "authored rasters [{source}]: {}",
+                errors.join("; ")
+            )))
+        }
+    }
+
+    /// [`Self::check_consistency`] against a generated sim.
+    pub(crate) fn check_consistency_with_sim(
+        &self,
+        source: &str,
+        sim: &WorldSim,
+    ) -> Result<Vec<RegionConsistency>, LoadError> {
+        self.check_consistency(source, |cpos| {
+            sim.get(cpos)
+                .map(|c| c.river.river_kind.is_some() || c.is_underwater())
+        })
     }
 }
 
-fn is_not_found(err: &assets::Error) -> bool {
+fn io_error_kind(err: &assets::Error) -> Option<std::io::ErrorKind> {
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err.reason());
     while let Some(e) = source {
         if let Some(io) = e.downcast_ref::<std::io::Error>() {
-            return io.kind() == std::io::ErrorKind::NotFound;
+            return Some(io.kind());
         }
         source = e.source();
     }
-    false
+    None
 }
 
 /// The containment rules over one region's decoded tiles, plus the
-/// per-chunk summaries:
+/// per-chunk summaries; returns the bounding box of the authored cells:
 ///
 /// * wet: bed block below surface block, surface not below the ocean's top;
 /// * bank: ground not below the ocean's top (it would flood);
@@ -767,16 +1116,19 @@ fn is_not_found(err: &assets::Error) -> bool {
 ///   least as high as the water (otherwise the water stands as a wall);
 /// * no authored cell beyond the region box; no surface without a bed.
 fn validate_region(
-    id: &str,
     min: Vec2<i32>,
     max: Vec2<i32>,
-    decoded: &HashMap<Vec2<i32>, RawTile>,
+    tiles: Vec2<i32>,
+    water: &[Option<RawTile>],
     summary: &mut HashMap<Vec2<i32>, ChunkWaterSummary>,
-) -> Result<(), String> {
-    let cell = |wpos: Vec2<i32>| -> AuthoredCell {
+) -> Result<Option<Aabr<i32>>, String> {
+    let cross_tile_cell = |wpos: Vec2<i32>| -> AuthoredCell {
         let local = wpos - min;
         let t = local.map(|e| e.div_euclid(TILE_SIZE));
-        match decoded.get(&t) {
+        if t.x < 0 || t.y < 0 || t.x >= tiles.x || t.y >= tiles.y {
+            return AuthoredCell::None;
+        }
+        match &water[(t.y * tiles.x + t.x) as usize] {
             Some(raw) => {
                 let c = local - t * TILE_SIZE;
                 cell_of(raw, RawTile::idx(c.x, c.y))
@@ -793,103 +1145,124 @@ fn validate_region(
             problems.push(msg);
         }
     };
-    let chunk = TerrainChunkSize::RECT_SIZE.x as i32;
-    // Deterministic order (the hash map's is not).
-    let mut keys: Vec<_> = decoded.keys().copied().collect();
-    keys.sort_by_key(|t| (t.y, t.x));
-    for t in keys {
-        let raw = &decoded[&t];
-        let origin = min + t * TILE_SIZE;
-        for j in 0..TILE_SIZE {
-            for i in 0..TILE_SIZE {
-                let k = RawTile::idx(i, j);
-                let wpos = origin + Vec2::new(i, j);
-                let (s, b) = (raw.surface_cm(k), raw.bed_cm(k));
-                if s.is_none() && b.is_none() {
-                    continue;
-                }
-                if !inside(wpos) {
-                    report(format!("{wpos:?}: authored cell outside the region box"));
-                    continue;
-                }
-                let c = cell_of(raw, k);
-                let entry =
-                    summary
-                        .entry(wpos.map(|e| e.div_euclid(chunk)))
-                        .or_insert(ChunkWaterSummary {
-                            min_surface_block: i32::MAX,
-                            max_surface_block: i32::MIN,
-                            min_bed_block: i32::MAX,
-                            ..Default::default()
-                        });
-                entry.authored_columns += 1;
-                match c {
-                    AuthoredCell::Wet {
-                        surface_block,
-                        bed_block,
-                    } => {
-                        entry.wet_columns += 1;
-                        entry.min_surface_block = entry.min_surface_block.min(surface_block);
-                        entry.max_surface_block = entry.max_surface_block.max(surface_block);
-                        entry.min_bed_block = entry.min_bed_block.min(bed_block);
-                        if bed_block >= surface_block {
-                            report(format!(
-                                "{wpos:?}: bed block {bed_block} is not below surface block \
-                                 {surface_block}"
-                            ));
-                        }
-                        if surface_block < SEA_TOP_BLOCK {
-                            report(format!(
-                                "{wpos:?}: surface block {surface_block} is below the ocean's top \
-                                 block {SEA_TOP_BLOCK}"
-                            ));
-                        }
-                        for d in [
-                            Vec2::new(1, 0),
-                            Vec2::new(-1, 0),
-                            Vec2::new(0, 1),
-                            Vec2::new(0, -1),
-                        ] {
-                            let n = wpos + d;
-                            if !inside(n) {
-                                continue;
+    let mut bounds: Option<Aabr<i32>> = None;
+    const CHUNKS_PER_TILE: i32 = TILE_SIZE / CHUNK;
+    for ty in 0..tiles.y {
+        for tx in 0..tiles.x {
+            let Some(raw) = &water[(ty * tiles.x + tx) as usize] else {
+                continue;
+            };
+            let origin = min + Vec2::new(tx, ty) * TILE_SIZE;
+            let mut local =
+                [ChunkWaterSummary::default(); (CHUNKS_PER_TILE * CHUNKS_PER_TILE) as usize];
+            for j in 0..TILE_SIZE {
+                for i in 0..TILE_SIZE {
+                    let k = RawTile::idx(i, j);
+                    if raw.surface[k] == format::NONE && raw.bed[k] == format::NONE {
+                        continue;
+                    }
+                    let wpos = origin + Vec2::new(i, j);
+                    if !inside(wpos) {
+                        report(format!("{wpos:?}: authored cell outside the region box"));
+                        continue;
+                    }
+                    bounds = Some(match bounds {
+                        None => Aabr {
+                            min: wpos,
+                            max: wpos + 1,
+                        },
+                        Some(b) => Aabr {
+                            min: Vec2::partial_min(b.min, wpos),
+                            max: Vec2::partial_max(b.max, wpos + 1),
+                        },
+                    });
+                    let entry = &mut local[((j / CHUNK) * CHUNKS_PER_TILE + i / CHUNK) as usize];
+                    entry.authored_columns += 1;
+                    match cell_of(raw, k) {
+                        AuthoredCell::Wet {
+                            surface_block,
+                            bed_block,
+                        } => {
+                            entry.wet_columns += 1;
+                            entry.min_surface_block = entry.min_surface_block.min(surface_block);
+                            entry.max_surface_block = entry.max_surface_block.max(surface_block);
+                            entry.min_bed_block = entry.min_bed_block.min(bed_block);
+                            if bed_block >= surface_block {
+                                report(format!(
+                                    "{wpos:?}: bed block {bed_block} is not below surface block \
+                                     {surface_block}"
+                                ));
                             }
-                            match cell(n) {
-                                AuthoredCell::Wet { .. } => {},
-                                AuthoredCell::Bank { bed_block: nb } if nb >= surface_block => {},
-                                AuthoredCell::Bank { bed_block: nb } => report(format!(
-                                    "{wpos:?}: water (top block {surface_block}) next to bank \
-                                     {n:?} whose ground top {nb} is lower: the water would stand \
-                                     as a wall"
-                                )),
-                                AuthoredCell::None => report(format!(
-                                    "{wpos:?}: water next to unauthored column {n:?} inside the \
-                                     region; write a bank cell there"
-                                )),
+                            if surface_block < SEA_TOP_BLOCK {
+                                report(format!(
+                                    "{wpos:?}: surface block {surface_block} is below the ocean's \
+                                     top block {SEA_TOP_BLOCK}"
+                                ));
                             }
-                        }
-                    },
-                    AuthoredCell::Bank { bed_block } => {
-                        entry.min_bed_block = entry.min_bed_block.min(bed_block);
-                        if bed_block < SEA_TOP_BLOCK {
-                            report(format!(
-                                "{wpos:?}: bank ground block {bed_block} is below the ocean's top \
-                                 block {SEA_TOP_BLOCK} and would flood"
-                            ));
-                        }
-                    },
-                    AuthoredCell::None => {
-                        report(format!("{wpos:?}: surface without a bed"));
-                    },
+                            for d in [
+                                Vec2::new(1, 0),
+                                Vec2::new(-1, 0),
+                                Vec2::new(0, 1),
+                                Vec2::new(0, -1),
+                            ] {
+                                let n = wpos + d;
+                                if !inside(n) {
+                                    continue;
+                                }
+                                let (ni, nj) = (i + d.x, j + d.y);
+                                // Same tile: index directly; else look it up.
+                                let ncell = if (0..TILE_SIZE).contains(&ni)
+                                    && (0..TILE_SIZE).contains(&nj)
+                                {
+                                    cell_of(raw, RawTile::idx(ni, nj))
+                                } else {
+                                    cross_tile_cell(n)
+                                };
+                                match ncell {
+                                    AuthoredCell::Wet { .. } => {},
+                                    AuthoredCell::Bank { bed_block: nb } if nb >= surface_block => {
+                                    },
+                                    AuthoredCell::Bank { bed_block: nb } => report(format!(
+                                        "{wpos:?}: water (top block {surface_block}) next to bank \
+                                         {n:?} whose ground top {nb} is lower: the water would \
+                                         stand as a wall"
+                                    )),
+                                    AuthoredCell::None => report(format!(
+                                        "{wpos:?}: water next to unauthored column {n:?} inside \
+                                         the region; write a bank cell there"
+                                    )),
+                                }
+                            }
+                        },
+                        AuthoredCell::Bank { bed_block } => {
+                            entry.min_bed_block = entry.min_bed_block.min(bed_block);
+                            if bed_block < SEA_TOP_BLOCK {
+                                report(format!(
+                                    "{wpos:?}: bank ground block {bed_block} is below the ocean's \
+                                     top block {SEA_TOP_BLOCK} and would flood"
+                                ));
+                            }
+                        },
+                        AuthoredCell::None => {
+                            report(format!("{wpos:?}: surface without a bed"));
+                        },
+                    }
+                }
+            }
+            for (n, s) in local.iter().enumerate() {
+                if s.authored_columns > 0 {
+                    let c = (origin / CHUNK)
+                        + Vec2::new(n as i32 % CHUNKS_PER_TILE, n as i32 / CHUNKS_PER_TILE);
+                    summary.entry(c).or_default().merge(s);
                 }
             }
         }
     }
     if count == 0 {
-        Ok(())
+        Ok(bounds)
     } else {
         Err(format!(
-            "{count} invalid cell(s) in region '{id}', first: {}",
+            "{count} invalid cell(s), first: {}",
             problems.join("; ")
         ))
     }

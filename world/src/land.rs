@@ -1,6 +1,7 @@
 use crate::{
     ColumnSample, IndexRef,
     all::ForestKind,
+    authored_raster::AuthoredWater,
     column::ColumnGen,
     sim::{self, SimChunk},
     util::Sampler,
@@ -43,14 +44,17 @@ impl<'a> Land<'a> {
             .unwrap_or(0.0)
     }
 
-    /// XINDELER: the authored water at `wpos` as `(surface_block,
-    /// bed_block)`, if `wpos` is an authored wet column (see
-    /// `crate::authored_raster`). `None` everywhere for a world without
-    /// authored rasters.
-    pub fn authored_water_at(&self, wpos: Vec2<i32>) -> Option<(i32, i32)> {
-        self.sim
-            .and_then(|sim| sim.authored_rasters.as_ref())
-            .and_then(|rasters| rasters.water_at(wpos))
+    /// XINDELER: the authored water at `wpos`, if `wpos` is an authored wet
+    /// column (see `crate::authored_raster`). `None` everywhere for a world
+    /// without authored rasters.
+    pub fn authored_water_at(&self, wpos: Vec2<i32>) -> Option<AuthoredWater> {
+        self.sim.and_then(|sim| sim.authored_water_at(wpos))
+    }
+
+    /// XINDELER: the number of water blocks of an authored wet column at
+    /// `wpos` (see [`Self::authored_water_at`]).
+    pub fn authored_depth_at(&self, wpos: Vec2<i32>) -> Option<i32> {
+        self.authored_water_at(wpos).map(|w| w.depth_blocks())
     }
 
     pub fn get_downhill(&self, wpos: Vec2<i32>) -> Vec2<i32> {
