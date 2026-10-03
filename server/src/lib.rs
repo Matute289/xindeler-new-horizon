@@ -567,6 +567,15 @@ impl Server {
                 #[cfg(feature = "worldgen")]
                 terrain_persistence.check_authored_rasters_digest(
                     world.sim().authored_rasters().map(|r| r.digest()),
+                    &world
+                        .sim()
+                        .authored_rasters()
+                        .map(|r| {
+                            r.regions()
+                                .map(|(_, b)| (b.min / 32, b.max / 32))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
                 );
                 state.ecs_mut().insert(terrain_persistence);
             }

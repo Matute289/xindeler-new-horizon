@@ -95,26 +95,74 @@ impl TerrainPersistence {
         // reliable strategy should be implemented here.
     }
 
-    /// XINDELER: record the digest of the world's authored water rasters
-    /// (`world::authored_raster`) next to the persisted chunks and warn
-    /// loudly when it changed: persisted player edits are re-applied over
-    /// regenerated terrain, so edits inside a changed authored region can end
-    /// up floating or buried. Changing a manifest under a live world needs
-    /// those chunks' edits cleared (and an rtsim/site reset if sites moved).
-    pub fn check_authored_rasters_digest(&self, digest: Option<&str>) {
+    /// XINDELER: guard persisted edits against a changed authored water
+    /// manifest (`world::authored_raster`). Persisted player edits are
+    /// re-applied over regenerated terrain, so edits inside a changed authored
+    /// region can end up floating or buried.
+    ///
+    /// The digest of the world's manifest is recorded next to the persisted
+    /// chunks. When it differs from the recorded one -- or none is recorded
+    /// but persisted chunks exist (a manifest applied for the first time to an
+    /// old save) -- and any persisted chunk lies inside an authored region
+    /// (`region_chunks`: the regions' boxes in chunk coordinates), the server
+    /// refuses to start: clear those chunk files (or move them aside) first,
+    /// or set `XINDELER_ALLOW_STALE_AUTHORED_EDITS=1` to keep them on purpose.
+    /// Edits outside every region are unaffected and never block. Without the
+    /// `persistent_world` feature nothing is persisted, so there is nothing to
+    /// guard.
+    pub fn check_authored_rasters_digest(
+        &self,
+        digest: Option<&str>,
+        region_chunks: &[(Vec2<i32>, Vec2<i32>)],
+    ) {
         let path = self.path.join("authored_rasters.digest");
         let current = digest.unwrap_or("none");
-        match std::fs::read_to_string(&path) {
-            Ok(previous) if previous.trim() == current => return,
-            Ok(previous) => error!(
-                previous = previous.trim(),
+        let previous = std::fs::read_to_string(&path).ok();
+        if previous.as_deref().map(str::trim) == Some(current) {
+            return;
+        }
+        let stale: Vec<Vec2<i32>> = std::fs::read_dir(&self.path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let rest = name.strip_prefix("chunk_")?.strip_suffix(".dat")?;
+                let (x, y) = rest.split_once('_')?;
+                Some(Vec2::new(x.parse().ok()?, y.parse().ok()?))
+            })
+            .filter(|c| {
+                region_chunks
+                    .iter()
+                    .any(|(min, max)| c.x >= min.x && c.y >= min.y && c.x < max.x && c.y < max.y)
+            })
+            .collect();
+        if !stale.is_empty() {
+            let allow =
+                std::env::var("XINDELER_ALLOW_STALE_AUTHORED_EDITS").is_ok_and(|v| v == "1");
+            error!(
+                previous = previous.as_deref().map(str::trim).unwrap_or("not recorded"),
                 current,
-                "The world's authored water rasters changed since the persisted terrain edits \
-                 were made: edits inside the changed authored regions are re-applied over new \
-                 terrain and may float or be buried. Clear the persisted chunks of those regions \
-                 (see the authored water release checklist)."
-            ),
-            Err(_) => info!(current, "Recording the authored water raster digest"),
+                persisted_chunks_in_regions = stale.len(),
+                examples = ?&stale[..stale.len().min(5)],
+                allowed = allow,
+                "The world's authored water rasters changed (or were applied for the first \
+                 time) under persisted terrain edits inside authored regions: those edits would \
+                 be re-applied over new terrain and may float or be buried."
+            );
+            if !allow {
+                panic!(
+                    "Refusing to start: {} persisted chunk(s) inside authored regions were saved \
+                     under a different authored water manifest (e.g. {:?}). Clear or move aside \
+                     those chunk_<x>_<y>.dat files in {:?}, or set \
+                     XINDELER_ALLOW_STALE_AUTHORED_EDITS=1 to keep them.",
+                    stale.len(),
+                    &stale[..stale.len().min(5)],
+                    self.path
+                );
+            }
+        } else {
+            info!(current, "Recording the authored water raster digest");
         }
         if let Err(e) = std::fs::write(&path, current) {
             warn!(?e, "Could not record the authored water raster digest");
@@ -500,5 +548,40 @@ mod version {
                     None
                 },
             })
+    }
+}
+
+#[cfg(test)]
+mod authored_digest_tests {
+    use super::*;
+
+    fn persistence(tag: &str) -> TerrainPersistence {
+        let dir = std::env::temp_dir().join(format!(
+            "xindeler-authored-digest-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        TerrainPersistence::new(dir)
+    }
+
+    #[test]
+    fn edits_outside_every_region_never_block_and_the_digest_is_recorded() {
+        let p = persistence("outside");
+        std::fs::write(p.path.join("chunk_5_5.dat"), b"x").unwrap();
+        p.check_authored_rasters_digest(Some("abc"), &[(Vec2::new(10, 10), Vec2::new(20, 20))]);
+        assert_eq!(
+            std::fs::read_to_string(p.path.join("authored_rasters.digest")).unwrap(),
+            "abc"
+        );
+        // Same digest again: nothing to do.
+        p.check_authored_rasters_digest(Some("abc"), &[(Vec2::new(0, 0), Vec2::new(20, 20))]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Refusing to start")]
+    fn edits_inside_a_region_under_a_new_manifest_refuse_to_start() {
+        let p = persistence("inside");
+        std::fs::write(p.path.join("chunk_12_15.dat"), b"x").unwrap();
+        p.check_authored_rasters_digest(Some("abc"), &[(Vec2::new(10, 10), Vec2::new(20, 20))]);
     }
 }
