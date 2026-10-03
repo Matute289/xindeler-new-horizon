@@ -37,6 +37,8 @@ pub struct ClientDumpOpts {
     pub server_bin: PathBuf,
     pub server_ready_timeout: Duration,
     pub keep_server_log: Option<PathBuf>,
+    /// Skip the pre-flight memory check.
+    pub force: bool,
 }
 
 pub struct ClientDumpResult {
@@ -54,31 +56,30 @@ struct Col {
 
 fn env_err<T: std::fmt::Debug>(what: &str, e: T) -> String { format!("{what}: {e:?}") }
 
-/// Harvest the in-box columns of `chunk` (None = never streamed).
+/// Harvest the in-box columns of `chunk` (None = never streamed). `floats` is
+/// the in-process sampler's output for the same columns
+/// ([`probe::sample_chunk_floats`]); only its altitude is used, to tell natural
+/// terrain from structures exactly as the fast path does.
 fn harvest_chunk(
     chunk: Option<&TerrainChunk>,
     b: Box2,
     key: Vec2<i32>,
-    zmin: i32,
-    zmax: i32,
+    zrange: (i32, i32),
+    floats: &[[f32; 4]],
     out: &mut [Option<Col>],
 ) {
+    let (zmin, zmax) = zrange;
     let base = key * CHUNK;
     let nx = b.nx();
-    let (lx0, lx1) = (
-        (b.x0 - base.x).clamp(0, CHUNK),
-        (b.x1 - base.x).clamp(0, CHUNK),
-    );
-    let (ly0, ly1) = (
-        (b.y0 - base.y).clamp(0, CHUNK),
-        (b.y1 - base.y).clamp(0, CHUNK),
-    );
+    let (lx0, lx1, ly0, ly1) = probe::chunk_local_range(b, key);
+    let mut fl = floats.iter();
     for ly in ly0..ly1 {
         for lx in lx0..lx1 {
             let rel = Vec2::new(lx, ly);
             let w = base + rel;
+            let alt = fl.next().map_or(f32::NAN, |f| f[0]);
             let runs = match chunk {
-                Some(ch) => probe::column_runs(ch, rel, zmin, zmax, false),
+                Some(ch) => probe::column_runs(ch, rel, zmin, zmax, false, probe::surface_cap(alt)),
                 None => vec![(class::UNLOADED, (zmax - zmin) as u16)],
             };
             let sum = format::summarize(zmin, &runs);
@@ -240,11 +241,13 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
     if b.x0 < 0 || b.y0 < 0 || b.x1 > size.x || b.y1 > size.y {
         return Err(format!("box outside the world (0,0)..({},{})", size.x, size.y).into());
     }
-    let (auto_lo, auto_hi) = probe::auto_z_range(p.world.sim(), b);
-    let (zmin, zmax) = (o.zmin.unwrap_or(auto_lo), o.zmax.unwrap_or(auto_hi));
-    if zmax <= zmin || zmax - zmin > i32::from(i16::MAX) {
-        return Err(format!("bad z range {zmin}..{zmax} (height must be 1..=32767)").into());
-    }
+    let (zmin, zmax) =
+        probe::resolve_z_range(o.zmin, o.zmax, probe::auto_z_range(p.world.sim(), b))?;
+    probe::check_memory(
+        (b.nx() * b.ny()) as u64,
+        probe::CLIENT_BYTES_PER_COLUMN,
+        o.force,
+    )?;
     let (c0, c1) = b.chunk_range();
     let all = ChunkRect {
         cx0: c0.x,
@@ -382,7 +385,8 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
                 } else {
                     missing.push([cx, cy]);
                 }
-                harvest_chunk(ch, b, key, zmin, zmax, &mut cols);
+                let floats = probe::sample_chunk_floats(p, b, key);
+                harvest_chunk(ch, b, key, (zmin, zmax), &floats, &mut cols);
             }
         }
         streamed_total += got;
@@ -407,7 +411,7 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
     drop(server);
 
     // Flatten into the dump's column arrays.
-    let height = (zmax - zmin) as u16;
+    let height = (zmax - zmin) as u16; // <= MAX_HEIGHT, checked above
     let mut d = Dump {
         header: Header {
             format: format::FORMAT_NAME.into(),
@@ -450,6 +454,7 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
         sites: Vec::new(),
     };
     let mut clipped = 0u64;
+    let mut above = 0u64;
     for c in cols {
         let c = c.unwrap_or_else(|| {
             let runs = vec![(class::UNLOADED, height)];
@@ -462,6 +467,7 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
         d.top_kind.push(c.top_kind);
         d.flags.push(c.sum.flags);
         clipped += u64::from(c.sum.flags & flag::CLIPPED_TOP != 0);
+        above += u64::from(c.sum.flags & flag::STRUCTURE_ABOVE_GROUND != 0);
         d.ground_top.push(c.sum.ground_top);
         d.water_top.push(c.sum.water_top);
         d.liquid_depth.push(c.sum.liquid_depth);
@@ -484,6 +490,7 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
         ("columns", n as u64),
         ("chunks", all.count() as u64),
         ("clipped_top_columns", clipped),
+        ("structure_above_ground_columns", above),
         ("sprites_kept", 0),
         ("sites", d.sites.len() as u64),
         ("floats_present", 0),
@@ -543,6 +550,7 @@ mod tests {
             server_bin,
             server_ready_timeout: Duration::from_secs(600),
             keep_server_log: None,
+            force: false,
         })
         .expect("client dump");
         let ci = res.dump.header.client.as_ref().unwrap();
@@ -557,6 +565,7 @@ mod tests {
                 zmax: Some(300),
                 site_margin: 600,
                 keep_sprites: false,
+                force: false,
             },
             &|_, _| {},
         )

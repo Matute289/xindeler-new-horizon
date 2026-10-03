@@ -86,23 +86,56 @@ pub fn classify(b: &Block, keep_sprites: bool) -> u8 {
             class::AIR
         }
     } else if b.is_solid() {
-        if matches!(
-            b.kind(),
-            BlockKind::Rock
-                | BlockKind::WeakRock
-                | BlockKind::GlowingRock
-                | BlockKind::Grass
-                | BlockKind::Snow
-                | BlockKind::Earth
-                | BlockKind::Sand
-                | BlockKind::Ice
-        ) {
+        if is_natural_kind(b.kind()) {
             class::GROUND
         } else {
             class::STRUCTURE
         }
     } else {
         class::AIR
+    }
+}
+
+/// Whether `kind` is one of the natural terrain kinds (class 1 candidates).
+fn is_natural_kind(k: BlockKind) -> bool {
+    matches!(
+        k,
+        BlockKind::Rock
+            | BlockKind::WeakRock
+            | BlockKind::GlowingRock
+            | BlockKind::Grass
+            | BlockKind::Snow
+            | BlockKind::Earth
+            | BlockKind::Sand
+            | BlockKind::Ice
+    )
+}
+
+/// The highest z at which the column sampler itself places terrain: the
+/// engine fills `z <= alt as i32` (see `world/src/block.rs`). `None` when the
+/// sampler returned nothing (NaN altitude).
+pub fn surface_cap(alt: f32) -> Option<i32> { alt.is_finite().then_some(alt as i32) }
+
+/// [`classify`] plus the natural-vs-structure decision for natural block
+/// kinds.
+///
+/// A `BlockKind` alone cannot tell terrain from a structure: `Block` carries
+/// only a kind and a colour, and site/structure code places plain Rock, Earth
+/// and Sand blocks. What does separate them is the column sampler: every block
+/// of terrain it generates lies at or below `alt as i32` (the one exception is
+/// Ice, frozen water at `water_level`, which sits above `alt` by design). A
+/// natural-kind block above that `cap` was therefore placed by something
+/// else (stone walls, keeps, wells, bridge decks, boulders, debris, authored
+/// floating islands) and is recorded as [`class::STRUCTURE`]. Without a `cap`
+/// the kind alone decides (client dumps use the in-process sampler, so they
+/// always have one).
+pub fn classify_at(b: &Block, z: i32, cap: Option<i32>, keep_sprites: bool) -> u8 {
+    let c = classify(b, keep_sprites);
+    match cap {
+        Some(cap) if c == class::GROUND && z > cap && b.kind() != BlockKind::Ice => {
+            class::STRUCTURE
+        },
+        _ => c,
     }
 }
 
@@ -155,6 +188,9 @@ impl Box2 {
         if x1 <= x0 || y1 <= y0 {
             return Err(format!("empty box {s:?} (need x1>x0 and y1>y0)").into());
         }
+        if x1.checked_sub(x0).is_none() || y1.checked_sub(y0).is_none() {
+            return Err(format!("box {s:?} is too large").into());
+        }
         Ok(Self { x0, y0, x1, y1 })
     }
 
@@ -186,57 +222,67 @@ pub fn auto_z_range(sim: &WorldSim, b: Box2) -> (i32, i32) {
             }
         }
     }
-    ((lo.floor() as i32 - 16).max(-4096), hi.ceil() as i32 + 96)
+    (
+        (lo.floor() as i32).saturating_sub(16).max(-4096),
+        (hi.ceil() as i32).saturating_add(96),
+    )
 }
 
-/// Bottom-to-top run builder.
+/// Bottom-to-top run builder. Run lengths never exceed the column height
+/// (at most `MAX_HEIGHT` = 32767, checked when the z range is resolved), so
+/// they always fit a `u16` and merging two runs cannot overflow.
 struct Runs(Vec<(u8, u16)>);
 
 impl Runs {
     fn push(&mut self, c: u8, n: i32) {
-        let mut n = n;
-        while n > 0 {
-            let take = n.min(i32::from(u16::MAX)) as u16;
-            match self.0.last_mut() {
-                Some((lc, ln))
-                    if *lc == c && u32::from(*ln) + u32::from(take) <= u32::from(u16::MAX) =>
-                {
-                    *ln += take
-                },
-                _ => self.0.push((c, take)),
-            }
-            n -= i32::from(take);
+        debug_assert!((1..=format::MAX_HEIGHT).contains(&n), "run length {n}");
+        let n = n as u16;
+        match self.0.last_mut() {
+            Some((lc, ln)) if *lc == c => *ln += n,
+            _ => self.0.push((c, n)),
         }
     }
 }
 
 /// Classes of the column at chunk-local `rel` for `z in [zmin, zmax)`, as runs.
 /// Blocks below/above the chunk's stored range are constant, so they are
-/// emitted as one run each instead of being queried one by one.
+/// emitted as one run each (two where the surface `cap` falls inside) instead
+/// of being queried one by one. `cap` is [`surface_cap`] of the column.
 pub(crate) fn column_runs(
     ch: &TerrainChunk,
     rel: Vec2<i32>,
     zmin: i32,
     zmax: i32,
     keep_sprites: bool,
+    cap: Option<i32>,
 ) -> Vec<(u8, u16)> {
     let class_at = |z: i32| {
         ch.get(rel.with_z(z))
-            .map_or(class::UNLOADED, |b| classify(b, keep_sprites))
+            .map_or(class::UNLOADED, |b| classify_at(b, z, cap, keep_sprites))
+    };
+    // A constant stretch `[a, b)`: classify its first block, and the part
+    // above the cap separately when the cap splits it.
+    let constant = |r: &mut Runs, a: i32, b: i32| {
+        if b <= a {
+            return;
+        }
+        match cap {
+            Some(c) if a <= c && c < b - 1 => {
+                r.push(class_at(a), c + 1 - a);
+                r.push(class_at(c + 1), b - c - 1);
+            },
+            _ => r.push(class_at(a), b - a),
+        }
     };
     let (cmin, cmax) = (ch.get_min_z(), ch.get_max_z());
     let mut r = Runs(Vec::with_capacity(8));
     let lo_end = cmin.clamp(zmin, zmax);
-    if lo_end > zmin {
-        r.push(class_at(zmin), lo_end - zmin);
-    }
+    constant(&mut r, zmin, lo_end);
     let hi_start = cmax.clamp(zmin, zmax).max(lo_end);
     for z in lo_end..hi_start {
         r.push(class_at(z), 1);
     }
-    if zmax > hi_start {
-        r.push(class_at(hi_start), zmax - hi_start);
-    }
+    constant(&mut r, hi_start, zmax);
     r.0
 }
 
@@ -251,37 +297,80 @@ struct ColOut {
     runs: Vec<(u8, u16)>,
 }
 
+/// Local `[lx0, lx1) x [ly0, ly1)` of the box inside chunk `key`.
+pub(crate) fn chunk_local_range(b: Box2, key: Vec2<i32>) -> (i32, i32, i32, i32) {
+    let base = key * CHUNK;
+    (
+        (b.x0 - base.x).clamp(0, CHUNK),
+        (b.x1 - base.x).clamp(0, CHUNK),
+        (b.y0 - base.y).clamp(0, CHUNK),
+        (b.y1 - base.y).clamp(0, CHUNK),
+    )
+}
+
+/// The column sampler's `[alt, riverless_alt, water_level, warp_factor]` for
+/// every in-box column of chunk `key`, row-major (NaN where it returned
+/// nothing).
+///
+/// `World::generate_chunk` samples these same columns internally and does not
+/// hand them back (it returns only the chunk and its supplement), so this is a
+/// second sampling pass; `ChunkTimes::sample_ns` measures its cost. The client
+/// path calls it too: the client never receives the sampler's output, but the
+/// probe's in-process world gives the surface that `classify_at` needs.
+pub(crate) fn sample_chunk_floats(p: &Probe, b: Box2, key: Vec2<i32>) -> Vec<[f32; 4]> {
+    let ir = p.index.as_index_ref();
+    let cg = p.world.sample_columns();
+    let base = key * CHUNK;
+    let (lx0, lx1, ly0, ly1) = chunk_local_range(b, key);
+    let mut out = Vec::with_capacity(((lx1 - lx0) * (ly1 - ly0)).max(0) as usize);
+    for ly in ly0..ly1 {
+        for lx in lx0..lx1 {
+            let w = base + Vec2::new(lx, ly);
+            out.push(cg.get((w, ir, None)).map_or([f32::NAN; 4], |s| {
+                [s.alt, s.riverless_alt, s.water_level, s.warp_factor]
+            }));
+        }
+    }
+    out
+}
+
+/// Per-chunk timings, in nanoseconds of one worker thread.
+#[derive(Clone, Copy, Default)]
+struct ChunkTimes {
+    gen_ns: u64,
+    sample_ns: u64,
+    runs_ns: u64,
+}
+
 fn chunk_columns(
     p: &Probe,
     b: Box2,
     key: Vec2<i32>,
     zrange: (i32, i32),
     keep_sprites: bool,
-) -> Res<Vec<ColOut>> {
+) -> Res<(Vec<ColOut>, ChunkTimes)> {
     let (zmin, zmax) = zrange;
     let ir = p.index.as_index_ref();
+    let t = std::time::Instant::now();
     let ch = p
         .world
         .generate_chunk(ir, key, None, || false, None, None)
         .map_err(|()| format!("generate_chunk failed at {key}"))?
         .0;
-    let cg = p.world.sample_columns();
-    let base = key * CHUNK;
-    let (lx0, lx1) = (
-        (b.x0 - base.x).clamp(0, CHUNK),
-        (b.x1 - base.x).clamp(0, CHUNK),
-    );
-    let (ly0, ly1) = (
-        (b.y0 - base.y).clamp(0, CHUNK),
-        (b.y1 - base.y).clamp(0, CHUNK),
-    );
+    let gen_ns = t.elapsed().as_nanos() as u64;
+    let t = std::time::Instant::now();
+    let floats = sample_chunk_floats(p, b, key);
+    let sample_ns = t.elapsed().as_nanos() as u64;
+    let t = std::time::Instant::now();
+    let (lx0, lx1, ly0, ly1) = chunk_local_range(b, key);
     // Row-major (y, then x) over the in-box part of the chunk.
-    let mut out = Vec::with_capacity(((lx1 - lx0) * (ly1 - ly0)) as usize);
+    let mut out = Vec::with_capacity(floats.len());
+    let mut fl = floats.into_iter();
     for ly in ly0..ly1 {
         for lx in lx0..lx1 {
             let rel = Vec2::new(lx, ly);
-            let w = base + rel;
-            let runs = column_runs(&ch, rel, zmin, zmax, keep_sprites);
+            let [alt, riverless_alt, water_level, warp_factor] = fl.next().unwrap_or([f32::NAN; 4]);
+            let runs = column_runs(&ch, rel, zmin, zmax, keep_sprites, surface_cap(alt));
             let sum = format::summarize(zmin, &runs);
             let top_kind = if sum.ground_top == format::NO_Z {
                 255
@@ -289,11 +378,6 @@ fn chunk_columns(
                 ch.get(rel.with_z(i32::from(sum.ground_top)))
                     .map_or(255, |bl| bl.kind() as u8)
             };
-            let (alt, riverless_alt, water_level, warp_factor) = cg
-                .get((w, ir, None))
-                .map_or((f32::NAN, f32::NAN, f32::NAN, f32::NAN), |s| {
-                    (s.alt, s.riverless_alt, s.water_level, s.warp_factor)
-                });
             out.push(ColOut {
                 alt,
                 riverless_alt,
@@ -305,7 +389,12 @@ fn chunk_columns(
             });
         }
     }
-    Ok(out)
+    let runs_ns = t.elapsed().as_nanos() as u64;
+    Ok((out, ChunkTimes {
+        gen_ns,
+        sample_ns,
+        runs_ns,
+    }))
 }
 
 pub struct DumpOpts {
@@ -315,12 +404,59 @@ pub struct DumpOpts {
     pub site_margin: i32,
     /// Record sprite blocks as `SPRITE` instead of air (not reproducible).
     pub keep_sprites: bool,
+    /// Skip the pre-flight memory check ([`check_memory`]).
+    pub force: bool,
 }
 
 pub struct DumpStats {
     pub chunks: usize,
     pub columns: usize,
     pub gen_secs: f32,
+    /// Summed worker-thread seconds spent in `World::generate_chunk`.
+    pub cpu_gen_secs: f32,
+    /// ... in the second column-sampler pass ([`sample_chunk_floats`]).
+    pub cpu_sample_secs: f32,
+    /// ... classifying blocks into runs.
+    pub cpu_runs_secs: f32,
+}
+
+/// Resolve `--zmin/--zmax` (falling back to the automatic range) and validate
+/// them against what a dump can hold: z is stored as `i16`, `-32768` is the
+/// "none" sentinel, and a column is at most `MAX_HEIGHT` blocks.
+pub fn resolve_z_range(zmin: Option<i32>, zmax: Option<i32>, auto: (i32, i32)) -> Res<(i32, i32)> {
+    let zmin = zmin.unwrap_or_else(|| auto.0.max(format::Z_MIN_ALLOWED));
+    let zmax = zmax.unwrap_or_else(|| auto.1.min(format::Z_MAX_ALLOWED));
+    format::check_z_range(zmin, zmax)?;
+    Ok((zmin, zmax))
+}
+
+/// Peak memory (bytes) the fast path needs for `columns` columns: the dump's
+/// column arrays plus run storage and the write path's compressed sections.
+/// Calibrated against a measured peak RSS of 2.43 GB for 25 M columns over a
+/// 1609 block z range (97 bytes per column; boxes with a tight z range need
+/// far less, so this errs on the safe side).
+pub const FAST_BYTES_PER_COLUMN: u64 = 100;
+/// Same for `client-dump`, which keeps a `Vec` of runs per column until the
+/// stream finishes (not measured; derived from the fast path plus the
+/// per-column allocations).
+pub const CLIENT_BYTES_PER_COLUMN: u64 = 160;
+/// Refuse boxes estimated above this unless `--force` is given.
+pub const MEM_LIMIT_BYTES: u64 = 8 << 30;
+
+/// Pre-flight check: refuse a box whose estimated peak memory exceeds
+/// [`MEM_LIMIT_BYTES`] unless `force`.
+pub fn check_memory(columns: u64, bytes_per_column: u64, force: bool) -> Res<()> {
+    let est = columns.saturating_mul(bytes_per_column);
+    if est > MEM_LIMIT_BYTES && !force {
+        return Err(format!(
+            "{columns} columns need an estimated {:.1} GB of memory (limit {:.0} GB); shrink the \
+             box, or pass --force to try anyway",
+            est as f64 / 1e9,
+            MEM_LIMIT_BYTES as f64 / 1e9
+        )
+        .into());
+    }
+    Ok(())
 }
 
 /// Fast path: generate every chunk of the box with `World::generate_chunk` and
@@ -340,15 +476,12 @@ pub fn dump(
         )
         .into());
     }
-    let (auto_lo, auto_hi) = auto_z_range(p.world.sim(), b);
-    let (zmin, zmax) = (o.zmin.unwrap_or(auto_lo), o.zmax.unwrap_or(auto_hi));
-    if zmax <= zmin || zmax - zmin > i32::from(i16::MAX) {
-        return Err(format!("bad z range {zmin}..{zmax} (height must be 1..=32767)").into());
-    }
+    let (zmin, zmax) = resolve_z_range(o.zmin, o.zmax, auto_z_range(p.world.sim(), b))?;
     let (c0, c1) = b.chunk_range();
     let ncx = (c1.x - c0.x + 1) as usize;
     let ncy = (c1.y - c0.y + 1) as usize;
     let n = b.nx() * b.ny();
+    check_memory(n as u64, FAST_BYTES_PER_COLUMN, o.force)?;
 
     let mut alt = Vec::with_capacity(n);
     let mut riverless_alt = Vec::with_capacity(n);
@@ -363,6 +496,8 @@ pub fn dump(
     let mut run_class = Vec::new();
     let mut run_len = Vec::new();
     let mut clipped = 0u64;
+    let mut above = 0u64;
+    let mut times = (0u64, 0u64, 0u64);
 
     // Process the box in bands of chunk rows so memory stays bounded while the
     // pool still has plenty of independent chunks to chew on.
@@ -375,14 +510,18 @@ pub fn dump(
             .flat_map(|r| (0..ncx).map(move |cx| (r, cx)))
             .map(|(r, cx)| Vec2::new(c0.x + cx as i32, c0.y + (row + r) as i32))
             .collect();
-        let results: Vec<Res<Vec<ColOut>>> = p.pool.install(|| {
+        let results: Vec<Res<(Vec<ColOut>, ChunkTimes)>> = p.pool.install(|| {
             keys.par_iter()
                 .map(|&k| chunk_columns(p, b, k, (zmin, zmax), o.keep_sprites))
                 .collect()
         });
         let mut cols: Vec<Vec<ColOut>> = Vec::with_capacity(results.len());
         for r in results {
-            cols.push(r?);
+            let (c, t) = r?;
+            times.0 += t.gen_ns;
+            times.1 += t.sample_ns;
+            times.2 += t.runs_ns;
+            cols.push(c);
         }
         // Assemble the box rows covered by each chunk row of this band.
         for r in 0..rows {
@@ -408,6 +547,7 @@ pub fn dump(
                         top_kind.push(c.top_kind);
                         flags.push(c.sum.flags);
                         clipped += u64::from(c.sum.flags & flag::CLIPPED_TOP != 0);
+                        above += u64::from(c.sum.flags & flag::STRUCTURE_ABOVE_GROUND != 0);
                         ground_top.push(c.sum.ground_top);
                         water_top.push(c.sum.water_top);
                         liquid_depth.push(c.sum.liquid_depth);
@@ -454,6 +594,7 @@ pub fn dump(
             ("columns".to_string(), n as u64),
             ("chunks".to_string(), (ncx * ncy) as u64),
             ("clipped_top_columns".to_string(), clipped),
+            ("structure_above_ground_columns".to_string(), above),
             ("sprites_kept".to_string(), u64::from(o.keep_sprites)),
             ("sites".to_string(), sites.len() as u64),
         ]
@@ -484,6 +625,9 @@ pub fn dump(
             chunks: ncx * ncy,
             columns: n,
             gen_secs,
+            cpu_gen_secs: times.0 as f32 / 1e9,
+            cpu_sample_secs: times.1 as f32 / 1e9,
+            cpu_runs_secs: times.2 as f32 / 1e9,
         },
     ))
 }
@@ -728,6 +872,115 @@ mod tests {
         assert!(Box2::parse("1,2,3").is_err());
     }
 
+    /// `cross_section` reads the engine's `Debug` output of `RiverKind`, so a
+    /// format change would silently turn every river's width/depth into NaN.
+    /// Returns the number of river rows checked.
+    fn assert_no_nan_cross_sections(csv: &str) -> usize {
+        let mut lines = csv.lines();
+        let header: Vec<&str> = lines.next().unwrap().split(';').collect();
+        let col = |n: &str| header.iter().position(|h| *h == n).unwrap();
+        let (kind, w, h) = (col("river_kind"), col("cross_w"), col("cross_h"));
+        let mut rivers = 0;
+        for line in lines {
+            let f: Vec<&str> = line.split(';').collect();
+            assert!(
+                !f[w].contains("NaN") && !f[h].contains("NaN"),
+                "NaN cross-section: {line}"
+            );
+            if f[kind] == "river" {
+                rivers += 1;
+                let (cw, ch): (f32, f32) = (f[w].parse().unwrap(), f[h].parse().unwrap());
+                assert!(
+                    cw > 0.0 && ch > 0.0,
+                    "non-positive river cross-section: {line}"
+                );
+            }
+        }
+        rivers
+    }
+
+    /// Whole-world sim table: every river chunk has a finite, positive
+    /// cross-section (the `Debug` parse of `RiverKind` still works).
+    ///
+    /// `VELOREN_ASSETS=/path/to/assets cargo test -p xindeler-terrain-probe
+    /// -- --ignored real_sim_table`
+    #[test]
+    #[ignore = "needs VELOREN_ASSETS pointing at the Cromatolis assets"]
+    fn real_sim_table_has_no_nan_river_cross_sections() {
+        let p = load(0, None).expect("world generation");
+        let size = p.world.sim().get_size().map(|e| e as i32);
+        let csv = sim_table(&p, Vec2::zero(), size - Vec2::one());
+        let rivers = assert_no_nan_cross_sections(&csv);
+        assert!(rivers > 0, "no river chunks at all: wrong asset root?");
+    }
+
+    /// Real structures made of natural block kinds must not raise the ground:
+    /// dump 400 x 400 m around the authored settlement "Falsepost" (a
+    /// non-Kalthis/Duren/Portland site, read-only) and check that the surface
+    /// the dump reports is the terrain. Before the sampler-based
+    /// classification, 4 425 of those 160 000 columns reported a `ground_top`
+    /// up to 22 m above the terrain and 2 598 were flagged `VOID` (building
+    /// interiors).
+    ///
+    /// `VELOREN_ASSETS=/path/to/assets cargo test -p xindeler-terrain-probe
+    /// -- --ignored real_site`
+    #[test]
+    #[ignore = "needs VELOREN_ASSETS pointing at the Cromatolis assets (Falsepost)"]
+    fn real_site_structures_do_not_raise_the_ground() {
+        let p = load(0, None).expect("world generation");
+        let size = world_size(p.world.sim());
+        let world = Box2 {
+            x0: 0,
+            y0: 0,
+            x1: size.x,
+            y1: size.y,
+        };
+        let ir = p.index.as_index_ref();
+        let site = world_sites(&ir, world, 0)
+            .into_iter()
+            .find(|s| s.name.as_deref() == Some("Falsepost"))
+            .expect("Falsepost is not in this asset root");
+        let bx = Box2 {
+            x0: site.wx - 200,
+            y0: site.wy - 200,
+            x1: site.wx + 200,
+            y1: site.wy + 200,
+        };
+        let opts = DumpOpts {
+            bx,
+            zmin: None,
+            zmax: None,
+            site_margin: 0,
+            keep_sprites: false,
+            force: false,
+        };
+        let (d, _) = dump(&p, &opts, &|_, _| {}).unwrap();
+        let ice = d.header.block_kinds["Ice"];
+        let mut raised = 0;
+        for i in 0..d.alt.len() {
+            if d.alt[i].is_finite()
+                && d.top_kind[i] != ice
+                && i32::from(d.ground_top[i]) > d.alt[i] as i32
+            {
+                raised += 1;
+            }
+        }
+        assert_eq!(
+            raised, 0,
+            "columns whose ground_top is above the terrain surface"
+        );
+        let above = d.header.stats["structure_above_ground_columns"];
+        assert!(
+            above > 100,
+            "only {above} columns have structure above ground"
+        );
+        let voids = d.flags.iter().filter(|&&f| f & flag::VOID != 0).count();
+        assert!(
+            voids * 100 < d.alt.len(),
+            "{voids} void columns: building interiors are being read as caves"
+        );
+    }
+
     /// Needs a real asset root: `VELOREN_ASSETS=/path/to/assets cargo test -p
     /// xindeler-terrain-probe --release -- --ignored`.
     #[test]
@@ -745,6 +998,7 @@ mod tests {
             zmax: None,
             site_margin: 600,
             keep_sprites: false,
+            force: false,
         };
         let (a, stats) = dump(&p, &opts, &|_, _| {}).unwrap();
         assert_eq!(stats.chunks, 16);
@@ -770,17 +1024,202 @@ mod tests {
             "{agree}/{dry} dry columns match trunc(alt)"
         );
         assert_eq!(a.header.stats["clipped_top_columns"], 0);
+        assert_no_nan_cross_sections(&a.sim_csv);
+    }
+
+    // ------------------------------------------- natural vs structure blocks
+
+    use common::{terrain::TerrainChunkMeta, vol::WriteVol};
+    use vek::{Rgb, Vec3};
+
+    fn blk(k: BlockKind) -> Block { Block::new(k, Rgb::new(90, 80, 70)) }
+
+    /// Synthetic chunk (rock below z=0, air above) with column `(x, 0)` built
+    /// by `fill(&mut set)`.
+    fn synth(cols: &[(i32, &[(i32, i32, BlockKind)])]) -> TerrainChunk {
+        let mut ch = TerrainChunk::new(
+            0,
+            blk(BlockKind::Rock),
+            Block::air(SpriteKind::Empty),
+            TerrainChunkMeta::void(),
+        );
+        for &(x, spans) in cols {
+            for &(z0, z1, k) in spans {
+                for z in z0..=z1 {
+                    ch.set(Vec3::new(x, 0, z), blk(k)).unwrap();
+                }
+            }
+        }
+        ch
+    }
+
+    fn runs_of(ch: &TerrainChunk, x: i32, alt: f32) -> (Vec<(u8, u16)>, format::ColSummary) {
+        let runs = column_runs(ch, Vec2::new(x, 0), -5, 30, false, surface_cap(alt));
+        let sum = format::summarize(-5, &runs);
+        (runs, sum)
+    }
+
+    /// Stone walls, keeps and roofs made of plain Rock above the sampler's
+    /// surface are structure, not ground: they must not raise `ground_top`,
+    /// create a void or change `top_kind`.
+    #[test]
+    fn natural_kind_blocks_above_the_surface_are_structure() {
+        use BlockKind::*;
+        let ch = synth(&[
+            // Terrain to z=10 (grass on top), then a 5 m Rock wall.
+            (0, &[(0, 9, Earth), (10, 10, Grass), (11, 15, Rock)]),
+            // Terrain, a hollow stone keep: wall, gap, roof.
+            (1, &[
+                (0, 9, Earth),
+                (10, 10, Grass),
+                (11, 12, Rock),
+                (14, 14, Rock),
+            ]),
+            // Frozen water above the surface is natural.
+            (2, &[(0, 9, Earth), (10, 10, Grass), (11, 11, Ice)]),
+            // Wood is structure whatever the altitude.
+            (4, &[(0, 9, Earth), (10, 10, Grass), (11, 14, Wood)]),
+            // A cave inside the terrain stays a void.
+            (5, &[(0, 3, Rock), (5, 9, Earth), (10, 10, Grass)]),
+        ]);
+        let alt = 10.4;
+
+        let (runs, s) = runs_of(&ch, 0, alt);
+        assert_eq!(runs, vec![
+            (class::GROUND, 16),
+            (class::STRUCTURE, 5),
+            (class::AIR, 14)
+        ]);
+        assert_eq!(s.ground_top, 10, "the wall must not raise ground_top");
+        assert_eq!(
+            ch.get(Vec3::new(0, 0, i32::from(s.ground_top)))
+                .unwrap()
+                .kind(),
+            Grass,
+            "top_kind is the natural surface block"
+        );
+        assert_ne!(s.flags & flag::STRUCTURE_ABOVE_GROUND, 0);
+        assert_ne!(s.flags & flag::STRUCTURE, 0);
+        assert_eq!(s.flags & flag::VOID, 0);
+
+        // The keep: structure / air gap / structure, no void.
+        let (runs, s) = runs_of(&ch, 1, alt);
+        assert_eq!(runs, vec![
+            (class::GROUND, 16),
+            (class::STRUCTURE, 2),
+            (class::AIR, 1),
+            (class::STRUCTURE, 1),
+            (class::AIR, 15)
+        ]);
+        assert_eq!(s.ground_top, 10);
+        assert_eq!(s.flags & flag::VOID, 0, "a keep's interior is not a cave");
+        assert_ne!(s.flags & flag::STRUCTURE_ABOVE_GROUND, 0);
+
+        // Ice stays ground.
+        let (_, s) = runs_of(&ch, 2, alt);
+        assert_eq!(s.ground_top, 11);
+        assert_eq!(s.flags & flag::STRUCTURE_ABOVE_GROUND, 0);
+
+        // Without a sampler altitude the kind alone decides (the old rule).
+        let (_, s) = runs_of(&ch, 0, f32::NAN);
+        assert_eq!(s.ground_top, 15);
+        assert_eq!(s.flags & flag::STRUCTURE_ABOVE_GROUND, 0);
+
+        // Wood.
+        let (_, s) = runs_of(&ch, 4, alt);
+        assert_eq!(s.ground_top, 10);
+        assert_ne!(s.flags & flag::STRUCTURE_ABOVE_GROUND, 0);
+
+        // A real cave below the surface is still a void, with no structure.
+        let (_, s) = runs_of(&ch, 5, alt);
+        assert_eq!(s.ground_top, 10);
+        assert_ne!(s.flags & flag::VOID, 0);
+        assert_eq!(s.flags & flag::STRUCTURE_ABOVE_GROUND, 0);
+
+        // A plain column has none of it.
+        let (_, s) = runs_of(&ch, 7, 0.5);
+        assert_eq!(
+            s.flags & (flag::STRUCTURE | flag::STRUCTURE_ABOVE_GROUND),
+            0
+        );
+    }
+
+    /// The constant stretches below/above the chunk's stored range must be
+    /// split where the surface falls inside them.
+    #[test]
+    fn surface_inside_a_constant_stretch_splits_the_run() {
+        let ch = TerrainChunk::new(
+            0,
+            blk(BlockKind::Rock),
+            blk(BlockKind::Rock),
+            TerrainChunkMeta::void(),
+        );
+        let runs = column_runs(&ch, Vec2::new(3, 3), -5, 100, false, Some(40));
+        assert_eq!(runs, vec![(class::GROUND, 46), (class::STRUCTURE, 59)]);
+        // Cap above the whole range, below it, and absent.
+        assert_eq!(
+            column_runs(&ch, Vec2::new(3, 3), -5, 100, false, Some(500)),
+            vec![(class::GROUND, 105)]
+        );
+        assert_eq!(
+            column_runs(&ch, Vec2::new(3, 3), -5, 100, false, Some(-9)),
+            vec![(class::STRUCTURE, 105)]
+        );
+        assert_eq!(
+            column_runs(&ch, Vec2::new(3, 3), -5, 100, false, None),
+            vec![(class::GROUND, 105)]
+        );
     }
 
     #[test]
-    fn runs_builder_merges_and_splits() {
+    fn z_range_is_validated_against_the_i16_format() {
+        let auto = (-20, 300);
+        assert_eq!(resolve_z_range(None, None, auto).unwrap(), (-20, 300));
+        assert_eq!(resolve_z_range(Some(5), Some(9), auto).unwrap(), (5, 9));
+        for (lo, hi) in [
+            (Some(i32::MIN), Some(0)),
+            (Some(0), Some(i32::MAX)),
+            (Some(-32768), Some(0)),
+            (Some(0), Some(32769)),
+            (Some(9), Some(9)),
+            (Some(10), Some(2)),
+            (Some(-32767), Some(32768)),
+            (Some(0), Some(40_000)),
+        ] {
+            assert!(resolve_z_range(lo, hi, auto).is_err(), "{lo:?}..{hi:?}");
+        }
+        // Edges that are legal.
+        assert!(resolve_z_range(Some(-32767), Some(0), auto).is_ok());
+        assert!(resolve_z_range(Some(1), Some(32768), auto).is_ok());
+        // The automatic range is clamped into the legal window.
+        assert!(resolve_z_range(None, None, (-99_999, 99_999)).is_err());
+        assert!(
+            resolve_z_range(None, None, (-40_000, -39_000)).is_err(),
+            "an entirely out-of-range auto window is an error, not a wrap"
+        );
+        // Extreme box values do not overflow.
+        assert!(Box2::parse("-2147483648,0,2147483647,5").is_err());
+    }
+
+    #[test]
+    fn memory_preflight_refuses_huge_boxes_unless_forced() {
+        assert!(check_memory(25_000_000, FAST_BYTES_PER_COLUMN, false).is_ok());
+        let whole_world = 32768u64 * 24576;
+        let e = check_memory(whole_world, FAST_BYTES_PER_COLUMN, false).unwrap_err();
+        assert!(e.to_string().contains("--force"), "{e}");
+        assert!(check_memory(whole_world, FAST_BYTES_PER_COLUMN, true).is_ok());
+    }
+
+    #[test]
+    fn runs_builder_merges_adjacent_classes() {
         let mut r = Runs(Vec::new());
         r.push(1, 3);
         r.push(1, 2);
         r.push(0, 1);
         assert_eq!(r.0, vec![(1, 5), (0, 1)]);
+        // The tallest legal column still fits one u16 run.
         let mut r = Runs(Vec::new());
-        r.push(1, 70_000);
-        assert_eq!(r.0.iter().map(|&(_, n)| u32::from(n)).sum::<u32>(), 70_000);
+        r.push(1, format::MAX_HEIGHT);
+        assert_eq!(r.0, vec![(1, 32767)]);
     }
 }

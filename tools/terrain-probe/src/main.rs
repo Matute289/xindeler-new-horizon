@@ -8,6 +8,7 @@ mod format;
 mod legacy;
 mod probe;
 mod scratch_server;
+#[cfg(test)] mod test_alloc;
 mod tiles;
 
 use std::{
@@ -23,6 +24,10 @@ use crate::{
     format::{Dump, SiteRec, flag},
     probe::{Box2, DumpOpts, Res},
 };
+
+#[cfg(test)]
+#[global_allocator]
+static ALLOC: test_alloc::Tracking = test_alloc::Tracking;
 
 #[derive(Parser)]
 #[command(
@@ -67,6 +72,9 @@ enum Cmd {
         /// sprites with a dynamic RNG, so such a dump is NOT byte-reproducible.
         #[arg(long)]
         keep_sprites: bool,
+        /// Skip the pre-flight memory estimate that refuses very large boxes.
+        #[arg(long)]
+        force: bool,
     },
     /// Print a transect: every column along a line, from a dump.
     Cols {
@@ -158,6 +166,9 @@ enum Cmd {
         /// Seconds to wait for the server to finish world generation.
         #[arg(long, default_value_t = 900)]
         server_timeout: u64,
+        /// Skip the pre-flight memory estimate that refuses very large boxes.
+        #[arg(long)]
+        force: bool,
         /// `xindeler-server-cli` binary (default: next to this executable, or
         /// $TPROBE_SERVER_BIN).
         #[arg(long)]
@@ -271,6 +282,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             zmax,
             margin,
             keep_sprites,
+            force,
         } => {
             let bx = Box2::parse(bx)?;
             let p = load_probe(cli)?;
@@ -280,6 +292,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 zmax: *zmax,
                 site_margin: *margin,
                 keep_sprites: *keep_sprites,
+                force: *force,
             };
             let last = std::sync::atomic::AtomicUsize::new(0);
             let (dump, stats) = probe::dump(&p, &opts, &|done, total| {
@@ -306,6 +319,11 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 dump.header.zmax,
                 dump.header.stats["clipped_top_columns"],
             );
+            eprintln!(
+                "cpu seconds over all workers: generate_chunk {:.1}, column re-sampling {:.1}, \
+                 block classification {:.1}",
+                stats.cpu_gen_secs, stats.cpu_sample_secs, stats.cpu_runs_secs
+            );
             Ok(ExitCode::SUCCESS)
         },
         Cmd::ClientDump {
@@ -318,6 +336,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             timeout,
             stall_secs,
             server_timeout,
+            force,
             server_bin,
             keep_server_log,
             compare_fast,
@@ -340,6 +359,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                     .clone()
                     .unwrap_or_else(scratch_server::default_server_bin),
                 server_ready_timeout: std::time::Duration::from_secs(*server_timeout),
+                force: *force,
                 keep_server_log: keep_server_log.then(|| {
                     let mut s = out.clone().into_os_string();
                     s.push(".server.log");
@@ -387,6 +407,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                     zmax: Some(dump.header.zmax),
                     site_margin: *margin,
                     keep_sprites: false,
+                    force: true,
                 };
                 let (fast, st) = probe::dump(&p, &fopts, &|_, _| {})?;
                 eprintln!("fast path: {} chunks in {:.1}s", st.chunks, st.gen_secs);
@@ -576,6 +597,7 @@ fn flag_letters(f: u8) -> String {
         (flag::VOID, 'V'),
         (flag::LIQUID, 'W'),
         (flag::CLIPPED_TOP, 'C'),
+        (flag::STRUCTURE_ABOVE_GROUND, 'A'),
     ]
     .iter()
     .map(|&(b, c)| if f & b != 0 { c } else { '.' })
@@ -604,7 +626,7 @@ fn print_cols(d: &Dump, line: &str, step: f32, runs: bool) -> Res<()> {
     let n = (len / step).floor() as usize + 1;
     println!(
         "i\tx\ty\talt\triverless_alt\twater_level\tground_top\ttop_kind\twater_top\tliquid_depth\\
-         tflags(SpVWC)\truns"
+         tflags(SpVWCA)\truns"
     );
     let mut last = None;
     for i in 0..n {
@@ -676,12 +698,14 @@ fn print_info(d: &Dump) {
     let n = d.alt.len();
     let count = |f: u8| d.flags.iter().filter(|&&x| x & f != 0).count();
     println!(
-        "columns     {n}; with water {}, structures {}, sprites {}, voids {}, clipped {}",
+        "columns     {n}; with water {}, structures {}, sprites {}, voids {}, clipped {}, \
+         structure above ground {}",
         count(flag::LIQUID),
         count(flag::STRUCTURE),
         count(flag::SPRITE),
         count(flag::VOID),
-        count(flag::CLIPPED_TOP)
+        count(flag::CLIPPED_TOP),
+        count(flag::STRUCTURE_ABOVE_GROUND)
     );
     let tops: Vec<i16> = d
         .ground_top

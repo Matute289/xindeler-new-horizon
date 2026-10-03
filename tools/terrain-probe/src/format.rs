@@ -21,8 +21,13 @@
 //! always produces identical bytes.
 
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     io::{self, Read, Write},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use serde::{Deserialize, Serialize};
@@ -35,14 +40,19 @@ pub const ZSTD_LEVEL: i32 = 3;
 pub mod class {
     /// Air (non-solid, non-liquid, no sprite).
     pub const AIR: u8 = 0;
-    /// Natural ground: Rock, WeakRock, GlowingRock, Grass, Snow, Earth, Sand,
-    /// Ice.
+    /// Natural terrain: a Rock, WeakRock, GlowingRock, Grass, Snow, Earth, Sand
+    /// or Ice block that is not above the column sampler's surface
+    /// (`z <= trunc(alt)`; Ice is exempt, frozen water sits above `alt`).
+    /// Natural-kind blocks above the surface are class 4.
     pub const GROUND: u8 = 1;
     /// Liquid (water, lava).
     pub const LIQUID: u8 = 2;
     /// Not loaded / not generated (client path only).
     pub const UNLOADED: u8 = 3;
-    /// Any other solid, non-sprite block: structures, wood, leaves.
+    /// Any solid, non-sprite block that is not natural terrain: structures,
+    /// wood, leaves, and Rock/Earth/Sand/... blocks standing above the
+    /// sampler's surface (stone walls and keeps, bridge decks, boulders,
+    /// debris, authored floating islands).
     pub const STRUCTURE: u8 = 4;
     /// A sprite block, solid or not (flowers, tufts, torches, chests...).
     /// Sprite placement uses the engine's dynamic RNG, so it is the one
@@ -61,6 +71,10 @@ pub mod flag {
     /// The topmost block of the sampled z range is not air: `zmax` clipped the
     /// column, raise `--zmax`.
     pub const CLIPPED_TOP: u8 = 16;
+    /// A [`class::STRUCTURE`] block lies above `ground_top` (a wall, keep,
+    /// tree, bridge deck, boulder... standing on the surface), or the
+    /// column has structure blocks and no natural ground at all.
+    pub const STRUCTURE_ABOVE_GROUND: u8 = 32;
 }
 
 pub const NO_Z: i16 = i16::MIN;
@@ -156,7 +170,56 @@ impl Header {
 
     pub fn columns(&self) -> usize { self.nx as usize * self.ny as usize }
 
-    pub fn height(&self) -> usize { (self.zmax - self.zmin) as usize }
+    /// Blocks per column (0 for an inverted range; [`Self::check_dims`]
+    /// rejects those, and no `i32` overflow is possible here).
+    pub fn height(&self) -> usize {
+        (i64::from(self.zmax) - i64::from(self.zmin)).clamp(0, i64::from(i32::MAX)) as usize
+    }
+
+    /// Reject headers no writer of this tool produces: an inconsistent box,
+    /// too many columns, or a z range outside [`Z_MIN_ALLOWED`]..=
+    /// [`Z_MAX_ALLOWED`] / taller than [`MAX_HEIGHT`].
+    pub fn check_dims(&self) -> io::Result<()> {
+        let [x0, y0, x1, y1] = self.box_xy;
+        let (w, h) = (i64::from(x1) - i64::from(x0), i64::from(y1) - i64::from(y0));
+        if w <= 0 || h <= 0 || w != i64::from(self.nx) || h != i64::from(self.ny) {
+            return Err(bad_data(format!(
+                "box {:?} does not match {}x{} columns",
+                self.box_xy, self.nx, self.ny
+            )));
+        }
+        if u64::from(self.nx) * u64::from(self.ny) > MAX_COLUMNS {
+            return Err(bad_data(format!(
+                "{}x{} columns exceeds the {MAX_COLUMNS} column limit",
+                self.nx, self.ny
+            )));
+        }
+        check_z_range(self.zmin, self.zmax).map_err(bad_data)
+    }
+}
+
+/// Lowest `zmin` a dump can hold (`-32768` is the "no z" sentinel).
+pub const Z_MIN_ALLOWED: i32 = -32767;
+/// Highest `zmax` (half-open) a dump can hold: the top block is `zmax - 1`,
+/// which must fit an `i16`.
+pub const Z_MAX_ALLOWED: i32 = 32768;
+/// Most blocks per column.
+pub const MAX_HEIGHT: i32 = 32767;
+
+/// Validate a half-open sampled z range against what a dump can represent.
+pub fn check_z_range(zmin: i32, zmax: i32) -> Result<(), String> {
+    if zmin < Z_MIN_ALLOWED || zmax > Z_MAX_ALLOWED {
+        return Err(format!(
+            "z range {zmin}..{zmax} outside {Z_MIN_ALLOWED}..={Z_MAX_ALLOWED}: z values are \
+             stored as i16 and -32768 is the \"none\" sentinel"
+        ));
+    }
+    if zmax <= zmin || zmax - zmin > MAX_HEIGHT {
+        return Err(format!(
+            "bad z range {zmin}..{zmax} (height must be 1..={MAX_HEIGHT})"
+        ));
+    }
+    Ok(())
 }
 
 /// A site / landmark / authored point near the box.
@@ -227,25 +290,36 @@ pub fn rle(classes: impl IntoIterator<Item = u8>) -> Vec<(u8, u16)> {
 }
 
 /// Derive ground/water tops, liquid depth and flags from a column's runs.
+///
+/// "Ground" means [`class::GROUND`]: natural-kind blocks that the classifier
+/// accepted as terrain (see `probe::classify_at`). Natural-kind blocks that
+/// stand above the sampler's surface arrive here already as
+/// [`class::STRUCTURE`], so they neither raise `ground_top` nor create
+/// [`flag::VOID`]; they raise [`flag::STRUCTURE_ABOVE_GROUND`] instead.
 pub fn summarize(zmin: i32, runs: &[(u8, u16)]) -> ColSummary {
-    let mut z = zmin;
-    let mut ground_top = i32::MIN;
-    let mut water_top = i32::MIN;
+    // i64 throughout: `zmin` may come from a corrupt header.
+    let mut z = i64::from(zmin);
+    let mut ground_top = i64::MIN;
+    let mut water_top = i64::MIN;
+    let mut struct_top = i64::MIN;
     let mut flags = 0u8;
     // Pass 1: tops and the plain flags.
     for &(c, n) in runs {
-        let top = z + i32::from(n) - 1;
+        let top = z + i64::from(n) - 1;
         match c {
             class::GROUND => ground_top = top,
             class::LIQUID => {
                 water_top = top;
                 flags |= flag::LIQUID;
             },
-            class::STRUCTURE => flags |= flag::STRUCTURE,
+            class::STRUCTURE => {
+                struct_top = top;
+                flags |= flag::STRUCTURE;
+            },
             class::SPRITE => flags |= flag::SPRITE,
             _ => {},
         }
-        z += i32::from(n);
+        z += i64::from(n);
     }
     if let Some(&(c, _)) = runs.last()
         && c != class::AIR
@@ -254,34 +328,30 @@ pub fn summarize(zmin: i32, runs: &[(u8, u16)]) -> ColSummary {
     {
         flags |= flag::CLIPPED_TOP;
     }
+    if struct_top != i64::MIN && struct_top > ground_top {
+        flags |= flag::STRUCTURE_ABOVE_GROUND;
+    }
     // Pass 2: voids and liquid depth, relative to the ground top.
-    let mut liquid_depth = 0u32;
-    let mut z = zmin;
+    let mut liquid_depth = 0u64;
+    let mut z = i64::from(zmin);
     for &(c, n) in runs {
-        let top = z + i32::from(n) - 1;
+        let top = z + i64::from(n) - 1;
         let non_solid = matches!(c, class::AIR | class::LIQUID | class::SPRITE);
-        if ground_top != i32::MIN {
+        if ground_top != i64::MIN {
             if non_solid && top < ground_top {
                 flags |= flag::VOID;
             }
             if c == class::LIQUID && z > ground_top {
-                liquid_depth += u32::from(n);
+                liquid_depth += u64::from(n);
             }
         }
-        z += i32::from(n);
+        z += i64::from(n);
     }
+    let as_z = |v: i64| i16::try_from(v).ok().filter(|&t| t != NO_Z).unwrap_or(NO_Z);
     ColSummary {
-        ground_top: if ground_top == i32::MIN {
-            NO_Z
-        } else {
-            ground_top as i16
-        },
-        water_top: if water_top == i32::MIN {
-            NO_Z
-        } else {
-            water_top as i16
-        },
-        liquid_depth: liquid_depth.min(u32::from(u16::MAX)) as u16,
+        ground_top: as_z(ground_top),
+        water_top: as_z(water_top),
+        liquid_depth: liquid_depth.min(u64::from(u16::MAX)) as u16,
         flags,
     }
 }
@@ -333,6 +403,7 @@ impl Dump {
 
     /// Check internal consistency (lengths, run sums).
     pub fn validate(&self) -> io::Result<()> {
+        self.header.check_dims()?;
         let n = self.header.columns();
         let bad = |m: String| Err(bad_data(m));
         for (name, len) in [
@@ -376,70 +447,59 @@ impl Dump {
 
 // ---------------------------------------------------------------- encoding
 
-fn shuffle(bytes: &[u8], width: usize) -> Vec<u8> {
-    if width == 1 {
-        return bytes.to_vec();
-    }
-    let n = bytes.len() / width;
-    let mut out = vec![0u8; bytes.len()];
-    for (i, chunk) in bytes.chunks_exact(width).enumerate() {
-        for (b, &v) in chunk.iter().enumerate() {
-            out[b * n + i] = v;
+/// Largest header JSON the reader accepts (real headers are a few KB; a
+/// 5 km client dump with thousands of missing chunks is well under 1 MB).
+pub const MAX_HEADER_LEN: u32 = 16 << 20;
+/// Largest `sim_csv` / `sites_json` section the reader accepts (the whole
+/// Cromatolis world's sim table is about 120 MB).
+const MAX_TEXT_SECTION: u64 = 512 << 20;
+/// Most columns a header may declare (2^31, i.e. 46 340 x 46 340 m).
+pub const MAX_COLUMNS: u64 = 1 << 31;
+/// zstd cannot expand a frame by more than about 32 768x (a 128 KiB RLE block
+/// costs 4 bytes); a section declaring more than this is lying.
+const MAX_RATIO: u64 = 40_000;
+/// Worker threads compressing sections at once. Each holds one raw section
+/// (up to ~6 bytes per run) plus its compressed output while it runs, so this
+/// bounds the write-path memory: 2 workers cost +0.28 GB over the in-memory
+/// dump on a 25 M column box (4 cost +0.49 GB and the old writer +0.91 GB).
+const COMPRESS_WORKERS: usize = 2;
+
+/// Lane-shuffle `v` straight into the output: all byte-0s, then all byte-1s,
+/// ... One allocation, no intermediate little-endian copy.
+fn pack_lanes<const N: usize, T: Copy>(v: &[T], to_le: fn(T) -> [u8; N]) -> Vec<u8> {
+    let n = v.len();
+    let mut out = vec![0u8; n * N];
+    for (i, &x) in v.iter().enumerate() {
+        for (k, b) in to_le(x).into_iter().enumerate() {
+            out[k * n + i] = b;
         }
     }
     out
 }
 
-fn unshuffle(bytes: &[u8], width: usize) -> Vec<u8> {
-    if width == 1 {
-        return bytes.to_vec();
+/// Inverse of [`pack_lanes`]. `raw.len()` must be a multiple of `N`.
+fn unpack_lanes<const N: usize, T>(raw: &[u8], from_le: fn([u8; N]) -> T) -> io::Result<Vec<T>> {
+    if !raw.len().is_multiple_of(N) {
+        return Err(bad_data(format!(
+            "section length {} is not a multiple of {N}",
+            raw.len()
+        )));
     }
-    let n = bytes.len() / width;
-    let mut out = vec![0u8; bytes.len()];
-    for i in 0..n {
-        for b in 0..width {
-            out[i * width + b] = bytes[b * n + i];
-        }
-    }
-    out
-}
-
-fn pack_f32(v: &[f32]) -> Vec<u8> {
-    let raw: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
-    shuffle(&raw, 4)
-}
-
-fn pack_i16(v: &[i16]) -> Vec<u8> {
-    let raw: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
-    shuffle(&raw, 2)
-}
-
-fn pack_u16(v: &[u16]) -> Vec<u8> {
-    let raw: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
-    shuffle(&raw, 2)
+    let n = raw.len() / N;
+    Ok((0..n)
+        .map(|i| {
+            let mut a = [0u8; N];
+            for (k, b) in a.iter_mut().enumerate() {
+                *b = raw[k * n + i];
+            }
+            from_le(a)
+        })
+        .collect())
 }
 
 fn bad_data(m: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, m.into())
 }
-
-fn unpack<const N: usize, T>(b: &[u8], from: fn([u8; N]) -> T) -> io::Result<Vec<T>> {
-    if !b.len().is_multiple_of(N) {
-        return Err(bad_data(format!(
-            "section length {} is not a multiple of {N}",
-            b.len()
-        )));
-    }
-    let raw = unshuffle(b, N);
-    let (items, _) = raw.as_chunks::<N>();
-    Ok(items.iter().map(|c| from(*c)).collect())
-}
-
-fn unpack_f32(b: &[u8]) -> io::Result<Vec<f32>> { unpack(b, f32::from_le_bytes) }
-
-fn unpack_i16(b: &[u8]) -> io::Result<Vec<i16>> { unpack(b, i16::from_le_bytes) }
-
-fn unpack_u16(b: &[u8]) -> io::Result<Vec<u16>> { unpack(b, u16::from_le_bytes) }
 
 /// Section names, in file order.
 const SECTION_NAMES: [&str; 14] = [
@@ -459,51 +519,171 @@ const SECTION_NAMES: [&str; 14] = [
     "sites_json",
 ];
 
+/// Read exactly `n` bytes without trusting `n` for the allocation: the buffer
+/// grows only as bytes arrive, so a lying length on a short file costs the
+/// file size, not `n`.
+fn read_exact_vec<R: Read>(r: &mut R, n: u64) -> io::Result<Vec<u8>> {
+    let mut v = Vec::new();
+    r.by_ref().take(n).read_to_end(&mut v)?;
+    if v.len() as u64 != n {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!("file ends after {} of {n} declared bytes", v.len()),
+        ));
+    }
+    Ok(v)
+}
+
+/// Read and decompress one section. `expect` is the exact raw length the
+/// header implies (`None` for the text sections, capped at
+/// [`MAX_TEXT_SECTION`]).
+fn read_section<R: Read>(
+    r: &mut R,
+    dec: &mut zstd::bulk::Decompressor<'_>,
+    info: &SectionInfo,
+    expect: Option<u64>,
+) -> io::Result<Vec<u8>> {
+    let name = &info.name;
+    match expect {
+        Some(e) if e != info.raw_len => {
+            return Err(bad_data(format!(
+                "section {name}: declares {} raw bytes, the header implies {e}",
+                info.raw_len
+            )));
+        },
+        None if info.raw_len > MAX_TEXT_SECTION => {
+            return Err(bad_data(format!(
+                "section {name}: {} raw bytes exceeds the {MAX_TEXT_SECTION} limit",
+                info.raw_len
+            )));
+        },
+        _ => {},
+    }
+    if info.raw_len > info.comp_len.saturating_mul(MAX_RATIO).saturating_add(1024) {
+        return Err(bad_data(format!(
+            "section {name}: {} raw bytes from {} compressed is beyond zstd's maximum ratio",
+            info.raw_len, info.comp_len
+        )));
+    }
+    let comp = read_exact_vec(r, info.comp_len)?;
+    let cap = usize::try_from(info.raw_len)
+        .map_err(|_| bad_data(format!("section {name}: raw length does not fit in memory")))?;
+    let mut out: Vec<u8> = Vec::new();
+    out.try_reserve_exact(cap)
+        .map_err(|e| bad_data(format!("section {name}: cannot reserve {cap} bytes: {e}")))?;
+    let got = dec.decompress_to_buffer(&comp[..], &mut out)?;
+    if got != cap || out.len() != cap {
+        return Err(bad_data(format!("section {name}: wrong decompressed size")));
+    }
+    Ok(out)
+}
+
 impl Dump {
+    /// Raw (shuffled, little-endian) bytes of section `i`. Byte sections are
+    /// borrowed, typed ones are packed into a single fresh buffer.
+    fn section_raw<'a>(&'a self, i: usize, sites_json: &'a [u8]) -> Cow<'a, [u8]> {
+        let f32s = |v: &[f32]| Cow::Owned(pack_lanes(v, f32::to_le_bytes));
+        let i16s = |v: &[i16]| Cow::Owned(pack_lanes(v, i16::to_le_bytes));
+        let u16s = |v: &[u16]| Cow::Owned(pack_lanes(v, u16::to_le_bytes));
+        match i {
+            0 => f32s(&self.alt),
+            1 => f32s(&self.riverless_alt),
+            2 => f32s(&self.water_level),
+            3 => f32s(&self.warp_factor),
+            4 => Cow::Borrowed(&self.top_kind),
+            5 => Cow::Borrowed(&self.flags),
+            6 => i16s(&self.ground_top),
+            7 => i16s(&self.water_top),
+            8 => u16s(&self.liquid_depth),
+            9 => u16s(&self.run_counts),
+            10 => Cow::Borrowed(&self.run_class),
+            11 => u16s(&self.run_len),
+            12 => Cow::Borrowed(self.sim_csv.as_bytes()),
+            _ => Cow::Borrowed(sites_json),
+        }
+    }
+
+    /// Build, compress and drop every section, [`COMPRESS_WORKERS`] at a time.
+    /// Each section is one zstd frame, so the bytes do not depend on the
+    /// number of workers; results are placed by section index.
+    fn compress_sections(&self, sites_json: &[u8]) -> io::Result<Vec<(u64, Vec<u8>)>> {
+        // Biggest sections first so the workers finish together.
+        let mut order: Vec<usize> = (0..SECTION_NAMES.len()).collect();
+        let weight = |i: usize| match i {
+            11 => self.run_len.len() * 2,
+            10 => self.run_class.len(),
+            0..=3 => self.alt.len() * 4,
+            12 => self.sim_csv.len(),
+            13 => sites_json.len(),
+            _ => self.alt.len() * 2,
+        };
+        order.sort_by_key(|&i| std::cmp::Reverse(weight(i)));
+        let next = AtomicUsize::new(0);
+        let slots: Vec<Mutex<Option<io::Result<(u64, Vec<u8>)>>>> =
+            order.iter().map(|_| Mutex::new(None)).collect();
+        let workers = COMPRESS_WORKERS.min(order.len());
+        std::thread::scope(|sc| {
+            for _ in 0..workers {
+                sc.spawn(|| {
+                    loop {
+                        let k = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(&sec) = order.get(k) else { break };
+                        let res = (|| {
+                            let raw = self.section_raw(sec, sites_json);
+                            let mut c = zstd::bulk::Compressor::new(ZSTD_LEVEL)?.compress(&raw)?;
+                            c.shrink_to_fit();
+                            Ok((raw.len() as u64, c))
+                        })();
+                        *slots[sec].lock().unwrap() = Some(res);
+                    }
+                });
+            }
+        });
+        // `slots` is indexed by section number, so placement is fixed.
+        slots
+            .into_iter()
+            .map(|m| {
+                m.into_inner()
+                    .unwrap()
+                    .unwrap_or_else(|| Err(io::Error::other("section was not compressed")))
+            })
+            .collect()
+    }
+
     /// Serialise to `w`. `self.header.sections` is rebuilt; everything else in
     /// the header is written as given.
     pub fn write_to<W: Write>(&self, mut w: W) -> io::Result<()> {
         self.validate()?;
         let sites_json = serde_json::to_vec(&self.sites).map_err(io::Error::other)?;
-        let raw: [Vec<u8>; 14] = [
-            pack_f32(&self.alt),
-            pack_f32(&self.riverless_alt),
-            pack_f32(&self.water_level),
-            pack_f32(&self.warp_factor),
-            self.top_kind.clone(),
-            self.flags.clone(),
-            pack_i16(&self.ground_top),
-            pack_i16(&self.water_top),
-            pack_u16(&self.liquid_depth),
-            pack_u16(&self.run_counts),
-            self.run_class.clone(),
-            pack_u16(&self.run_len),
-            self.sim_csv.clone().into_bytes(),
-            sites_json,
-        ];
-        let mut comp = Vec::with_capacity(raw.len());
-        let mut sections = Vec::with_capacity(raw.len());
-        for (name, r) in SECTION_NAMES.iter().zip(raw.iter()) {
-            let c = zstd::bulk::compress(r, ZSTD_LEVEL)?;
-            sections.push(SectionInfo {
-                name: (*name).to_string(),
-                raw_len: r.len() as u64,
-                comp_len: c.len() as u64,
-            });
-            comp.push(c);
-        }
+        let comp = self.compress_sections(&sites_json)?;
         let mut header = self.header.clone();
-        header.sections = sections;
+        header.sections = SECTION_NAMES
+            .iter()
+            .zip(&comp)
+            .map(|(name, (raw_len, c))| SectionInfo {
+                name: (*name).to_string(),
+                raw_len: *raw_len,
+                comp_len: c.len() as u64,
+            })
+            .collect();
         let hjson = serde_json::to_vec(&header).map_err(io::Error::other)?;
+        let hlen = u32::try_from(hjson.len())
+            .ok()
+            .filter(|&n| n <= MAX_HEADER_LEN)
+            .ok_or_else(|| bad_data("header JSON too large"))?;
         w.write_all(MAGIC)?;
-        w.write_all(&(hjson.len() as u32).to_le_bytes())?;
+        w.write_all(&hlen.to_le_bytes())?;
         w.write_all(&hjson)?;
-        for c in &comp {
+        for (_, c) in &comp {
             w.write_all(c)?;
         }
         w.flush()
     }
 
+    /// Read a dump. Never aborts on malformed input: every length the file
+    /// declares is checked against what the header implies and against the
+    /// bytes that actually arrive before memory is reserved, so a corrupt or
+    /// truncated file yields `Err`, not an allocation of the declared size.
     pub fn read_from<R: Read>(mut r: R) -> io::Result<Self> {
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
@@ -512,48 +692,58 @@ impl Dump {
         }
         let mut len = [0u8; 4];
         r.read_exact(&mut len)?;
-        let mut hjson = vec![0u8; u32::from_le_bytes(len) as usize];
-        r.read_exact(&mut hjson)?;
+        let hlen = u32::from_le_bytes(len);
+        if hlen > MAX_HEADER_LEN {
+            return Err(bad_data(format!(
+                "header length {hlen} exceeds the {MAX_HEADER_LEN} byte limit"
+            )));
+        }
+        let hjson = read_exact_vec(&mut r, u64::from(hlen))?;
         let header: Header = serde_json::from_slice(&hjson).map_err(|e| bad_data(e.to_string()))?;
+        drop(hjson);
         if header.format != FORMAT_NAME {
             return Err(bad_data(format!("unsupported format {:?}", header.format)));
         }
         if header.sections.len() != SECTION_NAMES.len() {
             return Err(bad_data("unexpected section table"));
         }
-        let mut secs: Vec<Vec<u8>> = Vec::with_capacity(SECTION_NAMES.len());
-        for (info, name) in header.sections.iter().zip(SECTION_NAMES) {
-            if info.name != name {
+        header.check_dims()?;
+        let n = header.columns() as u64;
+        let height = header.height() as u64;
+        let mut dec = zstd::bulk::Decompressor::new()?;
+        // Sections are decoded one at a time; each raw buffer is dropped as
+        // soon as its typed array exists.
+        let mut sec = |idx: usize, expect: Option<u64>| -> io::Result<Vec<u8>> {
+            let info = &header.sections[idx];
+            if info.name != SECTION_NAMES[idx] {
                 return Err(bad_data(format!(
-                    "section {:?}, expected {name:?}",
-                    info.name
+                    "section {:?}, expected {:?}",
+                    info.name, SECTION_NAMES[idx]
                 )));
             }
-            let mut comp = vec![0u8; info.comp_len as usize];
-            r.read_exact(&mut comp)?;
-            let raw = zstd::bulk::decompress(&comp, info.raw_len as usize)?;
-            if raw.len() as u64 != info.raw_len {
-                return Err(bad_data(format!("section {name}: wrong decompressed size")));
-            }
-            secs.push(raw);
+            read_section(&mut r, &mut dec, info, expect)
+        };
+        let alt = unpack_lanes(&sec(0, Some(n * 4))?, f32::from_le_bytes)?;
+        let riverless_alt = unpack_lanes(&sec(1, Some(n * 4))?, f32::from_le_bytes)?;
+        let water_level = unpack_lanes(&sec(2, Some(n * 4))?, f32::from_le_bytes)?;
+        let warp_factor = unpack_lanes(&sec(3, Some(n * 4))?, f32::from_le_bytes)?;
+        let top_kind = sec(4, Some(n))?;
+        let flags = sec(5, Some(n))?;
+        let ground_top = unpack_lanes(&sec(6, Some(n * 2))?, i16::from_le_bytes)?;
+        let water_top = unpack_lanes(&sec(7, Some(n * 2))?, i16::from_le_bytes)?;
+        let liquid_depth = unpack_lanes(&sec(8, Some(n * 2))?, u16::from_le_bytes)?;
+        let run_counts = unpack_lanes(&sec(9, Some(n * 2))?, u16::from_le_bytes)?;
+        let total_runs: u64 = run_counts.iter().map(|&c| u64::from(c)).sum();
+        if total_runs > n * height {
+            return Err(bad_data(format!(
+                "run_counts sum to {total_runs}, more than {n} columns x {height} blocks"
+            )));
         }
-        let mut it = secs.into_iter();
-        let mut next = || it.next().ok_or_else(|| bad_data("missing section"));
-        let alt = unpack_f32(&next()?)?;
-        let riverless_alt = unpack_f32(&next()?)?;
-        let water_level = unpack_f32(&next()?)?;
-        let warp_factor = unpack_f32(&next()?)?;
-        let top_kind = next()?;
-        let flags = next()?;
-        let ground_top = unpack_i16(&next()?)?;
-        let water_top = unpack_i16(&next()?)?;
-        let liquid_depth = unpack_u16(&next()?)?;
-        let run_counts = unpack_u16(&next()?)?;
-        let run_class = next()?;
-        let run_len = unpack_u16(&next()?)?;
-        let sim_csv = String::from_utf8(next()?).map_err(|e| bad_data(e.to_string()))?;
+        let run_class = sec(10, Some(total_runs))?;
+        let run_len = unpack_lanes(&sec(11, Some(total_runs * 2))?, u16::from_le_bytes)?;
+        let sim_csv = String::from_utf8(sec(12, None)?).map_err(|e| bad_data(e.to_string()))?;
         let sites: Vec<SiteRec> =
-            serde_json::from_slice(&next()?).map_err(|e| bad_data(e.to_string()))?;
+            serde_json::from_slice(&sec(13, None)?).map_err(|e| bad_data(e.to_string()))?;
         let d = Self {
             header,
             alt,
@@ -818,10 +1008,447 @@ mod tests {
     }
 
     #[test]
-    fn shuffle_round_trips() {
-        let b: Vec<u8> = (0..24).collect();
-        for w in [1, 2, 4, 8] {
-            assert_eq!(unshuffle(&shuffle(&b, w), w), b);
+    fn lane_packing_round_trips() {
+        let v: Vec<u32> = (0..7).map(|i| 0x0102_0304u32.wrapping_mul(i + 1)).collect();
+        let packed = pack_lanes(&v, u32::to_le_bytes);
+        // All byte-0s first: lane 0 of element 0 is the low byte.
+        assert_eq!(packed[0], v[0].to_le_bytes()[0]);
+        assert_eq!(packed[v.len()], v[0].to_le_bytes()[1]);
+        assert_eq!(unpack_lanes(&packed, u32::from_le_bytes).unwrap(), v);
+        assert!(unpack_lanes::<4, u32>(&packed[1..], u32::from_le_bytes).is_err());
+    }
+
+    // ---------------------------------------------------------- write path
+
+    /// The pre-optimisation writer, kept verbatim as the reference for the
+    /// byte-identity tests: every raw buffer built at once, `shuffle` into a
+    /// second buffer, sequential `zstd::bulk::compress`.
+    fn legacy_write<W: Write>(d: &Dump, mut out: W) {
+        fn shuffle(bytes: &[u8], width: usize) -> Vec<u8> {
+            if width == 1 {
+                return bytes.to_vec();
+            }
+            let n = bytes.len() / width;
+            let mut out = vec![0u8; bytes.len()];
+            for (i, chunk) in bytes.chunks_exact(width).enumerate() {
+                for (b, &v) in chunk.iter().enumerate() {
+                    out[b * n + i] = v;
+                }
+            }
+            out
         }
+        let f32s = |v: &[f32]| {
+            shuffle(
+                &v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<_>>(),
+                4,
+            )
+        };
+        let i16s = |v: &[i16]| {
+            shuffle(
+                &v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<_>>(),
+                2,
+            )
+        };
+        let u16s = |v: &[u16]| {
+            shuffle(
+                &v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<_>>(),
+                2,
+            )
+        };
+        let sites_json = serde_json::to_vec(&d.sites).unwrap();
+        let raw: [Vec<u8>; 14] = [
+            f32s(&d.alt),
+            f32s(&d.riverless_alt),
+            f32s(&d.water_level),
+            f32s(&d.warp_factor),
+            d.top_kind.clone(),
+            d.flags.clone(),
+            i16s(&d.ground_top),
+            i16s(&d.water_top),
+            u16s(&d.liquid_depth),
+            u16s(&d.run_counts),
+            d.run_class.clone(),
+            u16s(&d.run_len),
+            d.sim_csv.clone().into_bytes(),
+            sites_json,
+        ];
+        let mut comp = Vec::new();
+        let mut sections = Vec::new();
+        for (name, r) in SECTION_NAMES.iter().zip(raw.iter()) {
+            let c = zstd::bulk::compress(r, ZSTD_LEVEL).unwrap();
+            sections.push(SectionInfo {
+                name: (*name).to_string(),
+                raw_len: r.len() as u64,
+                comp_len: c.len() as u64,
+            });
+            comp.push(c);
+        }
+        let mut header = d.header.clone();
+        header.sections = sections;
+        let hjson = serde_json::to_vec(&header).unwrap();
+        out.write_all(MAGIC).unwrap();
+        out.write_all(&(hjson.len() as u32).to_le_bytes()).unwrap();
+        out.write_all(&hjson).unwrap();
+        for c in &comp {
+            out.write_all(c).unwrap();
+        }
+    }
+
+    fn legacy_bytes(d: &Dump) -> Vec<u8> {
+        let mut v = Vec::new();
+        legacy_write(d, &mut v);
+        v
+    }
+
+    /// Counts what is written to it without keeping it.
+    struct Sink(u64);
+
+    impl Write for Sink {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.0 += b.len() as u64;
+            Ok(b.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    }
+
+    /// Manual write-path benchmark. Run each variant in its own process under
+    /// `/usr/bin/time -l` to compare peak RSS (the read is shared):
+    /// `TPROBE_BENCH_IN=big.tprobe terrain-probe-test bench_repack_new
+    /// --ignored --nocapture --exact` vs `bench_repack_legacy`.
+    fn bench_repack(legacy: bool) {
+        let path = std::env::var("TPROBE_BENCH_IN").expect("set TPROBE_BENCH_IN");
+        let t = std::time::Instant::now();
+        let d = Dump::read_file(std::path::Path::new(&path)).unwrap();
+        eprintln!("read: {:.2}s", t.elapsed().as_secs_f32());
+        let t = std::time::Instant::now();
+        let mut sink = Sink(0);
+        if legacy {
+            legacy_write(&d, &mut sink);
+        } else {
+            d.write_to(&mut sink).unwrap();
+        }
+        eprintln!(
+            "write ({}): {:.2}s, {} bytes",
+            if legacy { "legacy" } else { "new" },
+            t.elapsed().as_secs_f32(),
+            sink.0
+        );
+    }
+
+    #[test]
+    #[ignore = "manual benchmark, needs TPROBE_BENCH_IN"]
+    fn bench_repack_new() { bench_repack(false) }
+
+    #[test]
+    #[ignore = "manual benchmark, needs TPROBE_BENCH_IN"]
+    fn bench_repack_legacy() { bench_repack(true) }
+
+    #[test]
+    #[ignore = "manual benchmark, needs TPROBE_BENCH_IN"]
+    fn bench_read_only() {
+        let path = std::env::var("TPROBE_BENCH_IN").expect("set TPROBE_BENCH_IN");
+        let d = Dump::read_file(std::path::Path::new(&path)).unwrap();
+        eprintln!("columns {}", d.alt.len());
+    }
+
+    /// Small deterministic xorshift64* generator for the seeded tests.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn below(&mut self, n: u64) -> u64 { self.next() % n }
+    }
+
+    /// A seeded pseudo-random dump of `nx x ny` columns and `h` blocks, with
+    /// every class, NaN floats and non-trivial sections.
+    fn random_dump(seed: u64, nx: usize, ny: usize, h: usize) -> Dump {
+        let mut rng = Rng(seed | 1);
+        let n = nx * ny;
+        let zmin = rng.below(200) as i32 - 100;
+        let (mut run_counts, mut run_class, mut run_len) = (vec![], vec![], vec![]);
+        let (mut flags, mut gt, mut wt, mut ld, mut tk) = (vec![], vec![], vec![], vec![], vec![]);
+        for _ in 0..n {
+            let mut cls = Vec::with_capacity(h);
+            let mut c = class::GROUND;
+            for _ in 0..h {
+                if rng.below(12) == 0 {
+                    c = rng.below(6) as u8;
+                }
+                cls.push(c);
+            }
+            let runs = rle(cls);
+            let s = summarize(zmin, &runs);
+            run_counts.push(runs.len() as u16);
+            for (c, l) in runs {
+                run_class.push(c);
+                run_len.push(l);
+            }
+            flags.push(s.flags);
+            gt.push(s.ground_top);
+            wt.push(s.water_top);
+            ld.push(s.liquid_depth);
+            tk.push(rng.below(256) as u8);
+        }
+        let fl = |rng: &mut Rng| {
+            (0..n)
+                .map(|_| match rng.below(9) {
+                    0 => f32::NAN,
+                    _ => (rng.below(100_000) as f32) / 37.0 - 500.0,
+                })
+                .collect::<Vec<f32>>()
+        };
+        let mut d = sample();
+        d.header.box_xy = [10, 20, 10 + nx as i32, 20 + ny as i32];
+        d.header.nx = nx as u32;
+        d.header.ny = ny as u32;
+        d.header.zmin = zmin;
+        d.header.zmax = zmin + h as i32;
+        d.header.stats = [("columns".to_string(), n as u64)].into_iter().collect();
+        d.alt = fl(&mut rng);
+        d.riverless_alt = fl(&mut rng);
+        d.water_level = fl(&mut rng);
+        d.warp_factor = fl(&mut rng);
+        d.top_kind = tk;
+        d.flags = flags;
+        d.ground_top = gt;
+        d.water_top = wt;
+        d.liquid_depth = ld;
+        d.run_counts = run_counts;
+        d.run_class = run_class;
+        d.run_len = run_len;
+        d.sim_csv = (0..40)
+            .map(|i| format!("{i};{};{}\n", rng.next(), rng.below(9)))
+            .collect();
+        d.validate().unwrap();
+        d
+    }
+
+    fn sha256_hex(b: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(b)
+            .iter()
+            .map(|x| format!("{x:02x}"))
+            .collect()
+    }
+
+    /// Pinned output of the pre-optimisation writer for [`sample`] (its flags
+    /// fixed to the values the writer was pinned with, so later changes to
+    /// `summarize` cannot move the golden).
+    #[test]
+    fn golden_hash_of_the_v1_bytes_is_stable() {
+        let mut d = sample();
+        d.flags = vec![24, 24, 24, 24, 28, 24];
+        let b = bytes(&d);
+        assert_eq!(b.len(), 1394);
+        assert_eq!(
+            sha256_hex(&b),
+            "7b70d14dd08c0eaae3cf49278d4bbebf3ccbe5f222fca4285a9c8465b0511406"
+        );
+    }
+
+    #[test]
+    fn new_writer_is_byte_identical_to_the_legacy_writer() {
+        let mut dumps = vec![sample()];
+        for (seed, nx, ny, h) in [
+            (1, 1, 1, 1),
+            (2, 37, 29, 64),
+            (3, 100, 3, 300),
+            (4, 5, 211, 17),
+        ] {
+            dumps.push(random_dump(seed, nx, ny, h));
+        }
+        for (i, d) in dumps.iter().enumerate() {
+            assert!(
+                bytes(d) == legacy_bytes(d),
+                "dump {i}: bytes differ from the legacy writer"
+            );
+            // And the reader gets back exactly what was written.
+            let r = Dump::read_from(&bytes(d)[..]).unwrap();
+            assert_eq!(r.run_len, d.run_len, "dump {i}");
+            assert_eq!(r.sim_csv, d.sim_csv, "dump {i}");
+        }
+    }
+
+    // ----------------------------------------------------- malformed input
+
+    /// Re-serialise the header of `file` after `edit`, keeping the body.
+    fn with_header(file: &[u8], edit: impl FnOnce(&mut Header)) -> Vec<u8> {
+        let hl = u32::from_le_bytes(file[8..12].try_into().unwrap()) as usize;
+        let mut h: Header = serde_json::from_slice(&file[12..12 + hl]).unwrap();
+        edit(&mut h);
+        let hj = serde_json::to_vec(&h).unwrap();
+        let mut out = file[..8].to_vec();
+        out.extend_from_slice(&(hj.len() as u32).to_le_bytes());
+        out.extend_from_slice(&hj);
+        out.extend_from_slice(&file[12 + hl..]);
+        out
+    }
+
+    /// Largest single allocation any malformed-input read may make. The file
+    /// under test is a few KB, so anything near this means the reader trusted a
+    /// declared length.
+    const BOUND: usize = 4 << 20;
+
+    fn read_bounded(data: &[u8]) -> (io::Result<Dump>, crate::test_alloc::Usage) {
+        crate::test_alloc::measure(|| Dump::read_from(data))
+    }
+
+    #[test]
+    fn huge_declared_lengths_are_errors_not_allocations() {
+        let good = bytes(&random_dump(9, 30, 20, 40));
+        let tweaks: Vec<(&str, Vec<u8>)> = vec![
+            ("header_len u32::MAX", {
+                let mut b = good.clone();
+                b[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+                b
+            }),
+            ("header_len just over the cap", {
+                let mut b = good.clone();
+                b[8..12].copy_from_slice(&(MAX_HEADER_LEN + 1).to_le_bytes());
+                b
+            }),
+            ("header_len at the cap on a short file", {
+                let mut b = good.clone();
+                b[8..12].copy_from_slice(&MAX_HEADER_LEN.to_le_bytes());
+                b
+            }),
+            (
+                "comp_len u64::MAX",
+                with_header(&good, |h| h.sections[0].comp_len = u64::MAX),
+            ),
+            (
+                "raw_len u64::MAX",
+                with_header(&good, |h| h.sections[0].raw_len = u64::MAX),
+            ),
+            (
+                "raw_len 4 GB on a text section",
+                with_header(&good, |h| {
+                    h.sections[12].raw_len = 4 << 30;
+                }),
+            ),
+            (
+                "raw_len 4 GB on run_len",
+                with_header(&good, |h| {
+                    h.sections[11].raw_len = 4 << 30;
+                }),
+            ),
+            (
+                "comp_len 4 GB",
+                with_header(&good, |h| h.sections[5].comp_len = 4 << 30),
+            ),
+            (
+                "nx = ny = i32::MAX columns",
+                with_header(&good, |h| {
+                    h.box_xy = [0, 0, i32::MAX, i32::MAX];
+                    h.nx = i32::MAX as u32;
+                    h.ny = i32::MAX as u32;
+                }),
+            ),
+            (
+                "20000 x 20000 box on a tiny file",
+                with_header(&good, |h| {
+                    h.box_xy = [0, 0, 20_000, 20_000];
+                    h.nx = 20_000;
+                    h.ny = 20_000;
+                }),
+            ),
+            (
+                "nx not matching the box",
+                with_header(&good, |h| h.nx = u32::MAX),
+            ),
+            (
+                "z range overflowing i32",
+                with_header(&good, |h| {
+                    h.zmin = i32::MIN;
+                    h.zmax = i32::MAX;
+                }),
+            ),
+            (
+                "inverted z range",
+                with_header(&good, |h| std::mem::swap(&mut h.zmin, &mut h.zmax)),
+            ),
+            (
+                "z range beyond i16",
+                with_header(&good, |h| h.zmax = 40_000),
+            ),
+        ];
+        for (what, data) in tweaks {
+            let (res, u) = read_bounded(&data);
+            assert!(res.is_err(), "{what}: expected an error");
+            assert!(
+                u.biggest < BOUND && u.peak < 8 * BOUND,
+                "{what}: allocated {u:?} while rejecting a {} byte file",
+                data.len()
+            );
+        }
+    }
+
+    #[test]
+    fn seeded_corruption_and_truncation_never_panic_or_balloon() {
+        let good = bytes(&random_dump(11, 40, 30, 50));
+        let mut rng = Rng(0x5eed_1234_abcd_0001);
+        let (mut errs, mut oks) = (0, 0);
+        for round in 0..600 {
+            let mut data = good.clone();
+            match round % 4 {
+                // Random byte flips anywhere.
+                0 => {
+                    for _ in 0..=rng.below(5) {
+                        let i = rng.below(data.len() as u64) as usize;
+                        data[i] ^= 1 << rng.below(8);
+                    }
+                },
+                // Truncation at a random point.
+                1 => data.truncate(rng.below(data.len() as u64) as usize),
+                // A window of 0xFF / 0x00 (declared-length style damage), in
+                // the first 400 bytes (length prefix + header JSON) half the
+                // time.
+                2 => {
+                    let span = if rng.below(2) == 0 {
+                        400.min(data.len())
+                    } else {
+                        data.len()
+                    };
+                    let i = rng.below(span as u64) as usize;
+                    let fill = if rng.below(2) == 0 { 0xFF } else { 0x00 };
+                    for b in data.iter_mut().skip(i).take(1 + rng.below(8) as usize) {
+                        *b = fill;
+                    }
+                },
+                // Flips and then a truncation.
+                _ => {
+                    for _ in 0..3 {
+                        let i = rng.below(data.len() as u64) as usize;
+                        data[i] = rng.below(256) as u8;
+                    }
+                    data.truncate(1 + rng.below(data.len() as u64 - 1) as usize);
+                },
+            }
+            let (res, u) = read_bounded(&data);
+            assert!(
+                u.biggest < BOUND && u.peak < 8 * BOUND,
+                "round {round}: allocated {u:?} reading a {} byte corrupt file",
+                data.len()
+            );
+            match res {
+                Ok(d) => {
+                    d.validate()
+                        .expect("an accepted dump is internally consistent");
+                    oks += 1;
+                },
+                Err(_) => errs += 1,
+            }
+        }
+        assert!(
+            errs > 400,
+            "only {errs} of 600 corrupt files were rejected ({oks} accepted)"
+        );
     }
 }

@@ -24,7 +24,7 @@ export VELOREN_ASSETS=$PWD/assets          # or pass --assets DIR
 
 | Command | What |
 |---|---|
-| `dump --box x0,y0,x1,y1 --out F` | Fast path. `generate_chunk` for every chunk of the box (rayon), every 1 m column sampled, writes a `tprobe v1` file. `--zmin/--zmax` set the z range (default: automatic from the sim table, `lowest basement - 16` to `highest alt/water + 96`); `--margin` is the site report margin (default 600 m); `--seed` (default 0); `--keep-sprites` (see Reproducibility). |
+| `dump --box x0,y0,x1,y1 --out F` | Fast path. `generate_chunk` for every chunk of the box (rayon), every 1 m column sampled, writes a `tprobe v1` file. `--zmin/--zmax` set the z range (default: automatic from the sim table, `lowest basement - 16` to `highest alt/water + 96`); `--margin` is the site report margin (default 600 m); `--seed` (default 0); `--keep-sprites` (see Reproducibility); `--force` skips the memory pre-flight. z must lie in `-32767..=32768` (z is stored as i16, -32768 means "none") and be at most 32767 blocks tall, otherwise the command errors. Before sampling, the estimated peak memory (about 100 bytes per column, 160 for `client-dump`) is checked against 8 GB and bigger boxes are refused unless `--force`. |
 | `cols --in F --line x0,y0,x1,y1 [--step 1] [--runs]` | Print the columns along a line (transect): alt, riverless alt, water level, ground top, top block kind, water top, liquid depth, flags, number of runs (or the full run list with `--runs`). |
 | `sim (--in F \| --box ...)` | Per-chunk sim table: alt, water_alt, basement, chaos, river kind, cross-section, velocity, rockiness, cliff height, path, humidity, temp, tree density, flux, underwater. From a dump, or live (about 3 s of world generation, no chunk generation) with `--box` and `--pad` chunks of context. |
 | `sites-near (--center x,y \| --box ...) --radius R` | Authored sites in the generated world **and** every authored point (settlements, landmarks, caves, bridges, interiors...) from `cromatolis_v0_*.ron`, with distance. `--require-empty` exits 1 if anything is found (use it to guarantee a test arena is empty); `--no-world` skips world generation and lists only the `.ron` points; `--json`. |
@@ -127,9 +127,9 @@ Columns are row-major: `idx = (y - y0) * nx + (x - x0)` (row 0 = southernmost,
 | Section | Type | Meaning |
 |---|---|---|
 | `alt`, `riverless_alt`, `water_level`, `warp_factor` | f32 x columns | the column sampler's float fields (NaN when the sampler returned none) |
-| `top_kind` | u8 | `BlockKind` code of the topmost natural ground block (255 = none) |
-| `flags` | u8 | 1 structure, 2 sprite, 4 void (non-solid run below the ground top: cave/shaft/authored void), 8 liquid, 16 clipped top (raise `--zmax`) |
-| `ground_top` | i16 | z of the topmost natural ground block (-32768 = none) |
+| `top_kind` | u8 | `BlockKind` code of the topmost natural ground block, i.e. the top class-1 block (255 = none) |
+| `flags` | u8 | 1 structure, 2 sprite, 4 void (non-solid run below the ground top: cave/shaft/authored void), 8 liquid, 16 clipped top (raise `--zmax`), 32 structure above ground (a class-4 block above `ground_top`: wall, keep, tree, bridge deck, boulder; or structure blocks in a column with no ground). Bit 32 was added within v1 (older readers ignore unknown bits; older files simply never have it); `cols` prints it as `A`. |
+| `ground_top` | i16 | z of the topmost natural ground block (class 1; -32768 = none). Natural-kind blocks above the sampler's surface are class 4 and do not count (see Natural terrain vs structures) |
 | `water_top` | i16 | z of the topmost liquid block; the water surface is `water_top + 1` |
 | `liquid_depth` | u16 | liquid blocks above `ground_top` |
 | `run_counts` | u16 x columns | runs per column |
@@ -137,14 +137,55 @@ Columns are row-major: `idx = (y - y0) * nx + (x - x0)` (row 0 = southernmost,
 | `sim_csv` | text | the `sim` table for the box plus 2 chunks of margin (`;`-separated, header row) |
 | `sites_json` | JSON | sites and authored points within `--margin` of the box |
 
-Block classes: `0` air, `1` natural ground (Rock, WeakRock, GlowingRock, Grass,
-Snow, Earth, Sand, Ice), `2` liquid (water and lava), `3` unloaded (client path
-only), `4` other solid, non-sprite block (structures, wood, leaves), `5`
+Block classes: `0` air, `1` natural terrain (a Rock, WeakRock, GlowingRock, Grass,
+Snow, Earth, Sand or Ice block that is not above the column sampler's surface), `2` liquid (water and lava), `3` unloaded (client path
+only), `4` any other solid, non-sprite block (structures, wood, leaves, and natural-kind blocks standing above the sampler's surface), `5`
 sprite (only with `--keep-sprites`; otherwise sprites are recorded as air). Voids and air gaps are simply the air/liquid runs below the
 ground top.
 
 The file has no timestamp or host data and the writer uses a fixed zstd level; see
 Reproducibility for what the engine itself makes non-deterministic.
+
+Reading is hardened against corrupt files: the header is capped at 16 MB, the
+header must be self-consistent (box vs `nx`/`ny`, at most 2^31 columns, z range
+as above), every fixed-size section must declare exactly the length the header
+implies, no section may claim more than zstd's maximum expansion (40 000x) of its
+compressed size, and buffers grow only as bytes actually arrive. A bad file
+returns an error; it cannot allocate the size it declares. The writer compresses
+2 sections at a time (each section is one zstd frame, so the bytes do not depend
+on that) and drops every raw buffer right after compressing it.
+
+### Natural terrain vs structures
+
+A `BlockKind` alone cannot tell terrain from a structure: `Block` carries only a
+kind, a colour and sprite data, and site/structure code places plain Rock, Earth
+and Sand. So the classifier uses the column sampler, which is exactly what the
+engine fills terrain from (`world/src/block.rs`: solid iff `z <= alt as i32`;
+the one natural exception is Ice, frozen water at the water level, which sits
+above `alt`). A block of a natural kind (Rock, WeakRock, GlowingRock, Grass,
+Snow, Earth, Sand) with `z > trunc(alt)` is therefore **not terrain** and is
+recorded as class 4. Consequences:
+
+- `ground_top` / `top_kind` / `liquid_depth` / the `void` flag describe the
+  terrain surface; a stone keep, wall, well, bridge deck or roof no longer raises
+  `ground_top`, changes `top_kind`, or turns a building interior into a "void".
+- Flag 32 (`structure above ground`) marks columns where such blocks, trees or
+  other class-4 blocks stand on the surface. It includes trees and also
+  procedural boulders/debris and authored floating features (aerial citadel
+  pieces), all of which are "not sampler terrain". Use the runs for the exact
+  geometry.
+- Natural-kind blocks *below* `trunc(alt)` that a structure placed (foundations,
+  cellars' walls) stay class 1; they cannot be told apart and do not affect the
+  surface fields.
+- If the sampler returned nothing for a column (NaN `alt`) the kind alone
+  decides, as before. `client-dump` evaluates the in-process sampler for the
+  surface only (its float columns stay NaN), so fast and client dumps classify
+  identically.
+- Measured on the research arena map: around the authored settlement Falsepost
+  (400 x 400 m) 4 425 of 160 000 columns reported a `ground_top` up to 22 m above
+  the terrain and 2 598 were flagged void; now 0 and 4. On a 5 x 5 km box
+  245 213 of 25 M columns (aerial citadel pieces and boulders, up to 189 m above
+  the terrain) no longer raise `ground_top`.
 
 ## Reading a dump from Python
 
@@ -198,6 +239,21 @@ any difference, and it reports surface columns (ground/water top, depth, top kin
   bit-identical over 3.09 M columns), but it passes no regional terrain overrides
   and no calendar, so sprites can differ from a live server. Always cover the
   whole declared box: sparse transects are what hid the original water bugs.
+- Duplicate sampling: `World::generate_chunk` samples every column internally but
+  returns only the chunk, so the probe samples each column a second time for the
+  float fields (and now for the surface used by the classifier). Measured on the
+  5 x 5 km box (CPU seconds summed over workers, printed by `dump`):
+  generate_chunk 307 s, second sampling pass 60 s (15.5 % of CPU), block
+  classification 20 s. It cannot be removed without changing the shipped `world`
+  crate, which this tool does not do.
+- Memory (5 x 5 km, z -154..1455, 25 M columns, peak RSS): dump 2.89 GB before
+  the write-path/reader rework, 2.43 GB after; `info` (read) 1.89 GB before, 1.47
+  GB after; the write step alone adds 0.28 GB over the in-memory dump (it was
+  0.91 GB) and takes 0.48 s instead of 1.12 s.
+- The engine commit in a dump header is `<sha>` for a clean tree and
+  `<sha>+dirty` when tracked files differ from `HEAD` at the last build-script run
+  (works in git worktrees; edits under `common`, `world`, `client` and this crate
+  re-run it).
 - Speed (18-core Mac, dev profile): 1326 chunks (1.2 x 1.06 km) in 1.2 s; 24 649 chunks
   (5 x 5 km, 25 M columns) in about 37 s, roughly 40 000 chunks/min, plus ~3 s of world
   generation. Peak RAM for that 5 x 5 km box (z range -442..1126) was about 3.4 GB; a
