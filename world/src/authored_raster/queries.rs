@@ -5,7 +5,9 @@
 //! Inside an authored region these answer from the raster (the water the
 //! player sees); everywhere else they return exactly what the chunk table
 //! said before authored rasters existed, so every caller outside a region --
-//! and every world without a manifest -- behaves bit-identically.
+//! and every world without a manifest -- behaves bit-identically. Unauthored
+//! columns of a partial chunk are the natural map, so there too the table
+//! answers.
 
 use super::{AuthoredCell, AuthoredColumn, AuthoredWater, SEA_TOP_BLOCK};
 use crate::{World, sim::WorldSim};
@@ -54,7 +56,10 @@ impl WorldSim {
     /// chunk table (`river_kind.is_some()`, `water_alt`, `alt`). `None`
     /// outside the map.
     pub fn water_at(&self, wpos: Vec2<i32>) -> Option<WaterAt> {
-        if let Some(cell) = self.authored_cell_at(wpos) {
+        if let Some(cell) = self
+            .authored_cell_at(wpos)
+            .filter(|c| !self.natural_unauthored(*c, wpos))
+        {
             return Some(match cell {
                 AuthoredCell::Wet {
                     surface_block,
@@ -91,7 +96,10 @@ impl WorldSim {
     /// authored water surface, the authored bank top, or the land (no sim
     /// water there); elsewhere unchanged.
     pub fn surface_alt_at(&self, wpos: Vec2<i32>) -> f32 {
-        match self.authored_cell_at(wpos) {
+        match self
+            .authored_cell_at(wpos)
+            .filter(|c| !self.natural_unauthored(*c, wpos))
+        {
             Some(AuthoredCell::Wet { surface_block, .. }) => (surface_block + 1) as f32,
             Some(AuthoredCell::Bank { bed_block }) => (bed_block + 1) as f32,
             Some(AuthoredCell::None) => self
@@ -102,13 +110,25 @@ impl WorldSim {
         }
     }
 
+    /// An unauthored column of a partial chunk: the natural map.
+    fn natural_unauthored(&self, cell: AuthoredCell, wpos: Vec2<i32>) -> bool {
+        cell == AuthoredCell::None
+            && self
+                .authored_rasters
+                .as_ref()
+                .is_some_and(|r| r.natural_at(wpos))
+    }
+
     /// The water facts of a chunk, authored-aware: inside a region from the
     /// raster's per-chunk summary (a chunk is water when at least half its
-    /// columns are authored water; it keeps the table's kind when the table
-    /// also calls it lake or river, else it is ocean when its surface is at
-    /// the ocean's top block and lake otherwise; it is near water when it
-    /// or any of its 8 neighbours holds authored water); outside every
-    /// region exactly the table's values. `None` outside the map.
+    /// columns are water -- authored water, plus, in a partial chunk the
+    /// table calls water, its unauthored natural columns; it keeps the
+    /// table's kind when the table also calls it lake or river, else it is
+    /// ocean when its surface is at the ocean's top block and lake
+    /// otherwise; it is near water when it or any of its 8 neighbours holds
+    /// authored water, or, for a partial chunk, when the table says so);
+    /// outside every region, and for a partial chunk without authored cells,
+    /// exactly the table's values. `None` outside the map.
     pub fn chunk_water(&self, chunk_pos: Vec2<i32>) -> Option<ChunkWater> {
         let c = self.get(chunk_pos)?;
         let table = ChunkWater {
@@ -128,14 +148,26 @@ impl WorldSim {
             return Some(table);
         };
         let summary = rasters.chunk_summary(chunk_pos);
-        let wet = summary.is_some_and(|s| s.wet_majority());
-        let near_water = (-1..=1).any(|dy| {
-            (-1..=1).any(|dx| {
-                rasters
-                    .chunk_summary(chunk_pos + Vec2::new(dx, dy))
-                    .is_some_and(|s| s.wet_columns > 0)
-            })
-        });
+        let natural = rasters.natural_at(chunk_pos * super::CHUNK);
+        if natural && summary.is_none() {
+            return Some(table);
+        }
+        let all = (super::CHUNK * super::CHUNK) as u32;
+        // Unauthored columns that keep the natural water.
+        let natural_wet = if natural && table.wet() {
+            all - summary.map_or(0, |s| s.authored_columns)
+        } else {
+            0
+        };
+        let wet = (summary.map_or(0, |s| s.wet_columns) + natural_wet) * 2 >= all;
+        let near_water = (natural && table.near_water)
+            || (-1..=1).any(|dy| {
+                (-1..=1).any(|dx| {
+                    rasters
+                        .chunk_summary(chunk_pos + Vec2::new(dx, dy))
+                        .is_some_and(|s| s.wet_columns > 0)
+                })
+            });
         let (river, lake, ocean) = match (wet, c.river.river_kind) {
             (false, _) => (false, false, false),
             (true, Some(crate::sim::RiverKind::River { .. })) => (true, false, false),
@@ -146,9 +178,13 @@ impl WorldSim {
                 (false, !sea, sea)
             },
         };
-        let water_alt = match summary.filter(|_| wet) {
-            Some(s) => ((s.max_surface_block + 1) as f32).max(c.alt + 1.0),
-            None => crate::CONFIG.sea_level.min(c.alt),
+        let authored_alt = summary
+            .filter(|s| s.wet_columns > 0)
+            .map(|s| ((s.max_surface_block + 1) as f32).max(c.alt + 1.0));
+        let water_alt = match (wet, natural_wet > 0, authored_alt) {
+            (false, ..) => crate::CONFIG.sea_level.min(c.alt),
+            (true, true, a) => a.map_or(c.water_alt, |a| a.max(c.water_alt)),
+            (true, false, a) => a.unwrap_or(c.water_alt),
         };
         Some(ChunkWater {
             river,
@@ -200,14 +236,26 @@ impl WorldSim {
     /// elsewhere the table's value. `None` outside the map.
     pub fn chunk_water_depth(&self, chunk_pos: Vec2<i32>) -> Option<f32> {
         let chunk = self.get(chunk_pos)?;
-        Some(match self.authored_chunk_wet(chunk_pos) {
-            Some(true) => self
-                .authored_rasters
-                .as_ref()
-                .and_then(|r| r.chunk_summary(chunk_pos))
-                .map_or(0.0, |s| (s.max_surface_block - s.min_bed_block) as f32),
-            Some(false) => -8.0,
-            None => chunk.water_alt - chunk.alt,
+        let Some(rasters) = self
+            .authored_rasters
+            .as_ref()
+            .filter(|r| r.contains_chunk(chunk_pos))
+        else {
+            return Some(chunk.water_alt - chunk.alt);
+        };
+        let summary = rasters.chunk_summary(chunk_pos);
+        let natural = rasters.natural_at(chunk_pos * super::CHUNK);
+        if natural && summary.is_none() {
+            return Some(chunk.water_alt - chunk.alt);
+        }
+        let w = self.chunk_water(chunk_pos)?;
+        Some(if !w.wet() {
+            -8.0
+        } else if natural && chunk.river.river_kind.is_some() {
+            // The natural water is (part of) this chunk's water.
+            w.water_alt - chunk.alt
+        } else {
+            summary.map_or(0.0, |s| (s.max_surface_block - s.min_bed_block) as f32)
         })
     }
 
@@ -221,7 +269,10 @@ impl WorldSim {
         chunk_pos: Vec2<i32>,
     ) -> Option<std::borrow::Cow<'_, crate::sim::SimChunk>> {
         let chunk = self.get(chunk_pos)?;
-        if self.authored_chunk_wet(chunk_pos).is_none() {
+        let natural_untouched = self.authored_rasters.as_ref().is_some_and(|r| {
+            r.natural_at(chunk_pos * super::CHUNK) && r.chunk_summary(chunk_pos).is_none()
+        });
+        if self.authored_chunk_wet(chunk_pos).is_none() || natural_untouched {
             return Some(std::borrow::Cow::Borrowed(chunk));
         }
         let w = self.chunk_water(chunk_pos)?;
@@ -237,8 +288,15 @@ impl WorldSim {
         } else {
             None
         };
-        c.river.neighbor_rivers.clear();
-        if w.near_water && !w.wet() {
+        let natural = self
+            .authored_rasters
+            .as_ref()
+            .is_some_and(|r| r.natural_at(chunk_pos * super::CHUNK));
+        if !natural {
+            // Inside an owned box only authored water exists.
+            c.river.neighbor_rivers.clear();
+        }
+        if w.near_water && !w.wet() && c.river.neighbor_rivers.is_empty() {
             // A neighbour holds authored water: `near_river()` must say so.
             c.river.neighbor_rivers.push(0);
         }

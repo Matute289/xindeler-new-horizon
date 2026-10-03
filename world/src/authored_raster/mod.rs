@@ -50,12 +50,21 @@
 //!   unauthored columns around the exact water inherit that pit.
 //!   [`AuthoredRasters::check_consistency`] enforces it with a per-region
 //!   budget ([`ConsistencyBudget`]).
-//! * **Decorations** rooted inside a region (boulders, trees) can change blocks
-//!   a few metres outside its box (<= 8 m measured): size regions at least
-//!   [`RECOMMENDED_REGION_MARGIN_M`] beyond the last authored change (the
-//!   loader warns otherwise). Procedural rocks, trees and sprites rooted in
-//!   authored water are suppressed per region
-//!   ([`RegionManifest::suppress_procedural_in_water`]).
+//! * **Box margin.** Decorations rooted inside a region (boulders, trees) can
+//!   change blocks a few metres outside its box (<= 10 m measured), so every
+//!   authored cell must lie at least [`REGION_MARGIN_M`] inside the box; a
+//!   closer one is a load error that names the box to use instead.
+//! * **Decorations stay natural by default.** Procedural rocks, trees and
+//!   sprites beside and in authored water are the natural map's and are kept; a
+//!   region may opt out ([`RegionManifest::suppress_procedural_in_water`],
+//!   [`RegionManifest::exclude_procedural_margin_m`]).
+//! * **Unauthored columns.** By default a region owns its box: unauthored
+//!   columns keep the engine's terrain but not the sim's water (only authored
+//!   water exists inside). Chunks listed in
+//!   [`RegionManifest::allow_partial_chunks`] (or every chunk, with
+//!   [`RegionManifest::allow_partial`]) keep the *natural* map in their
+//!   unauthored columns instead -- terrain and water exactly as without the
+//!   region -- so a handful of authored cells can edit an existing river.
 //! * **Not supported:** hot reload (generated chunks would keep the old water
 //!   while new ones get the new; restart the server), and changing a manifest
 //!   under a live world without a reset (persisted chunk edits and rtsim NPCs
@@ -80,7 +89,7 @@ use format::{LayerKind, RawTile, TILE_CELLS, TILE_SIZE};
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, sync::OnceLock};
-use tracing::{info, warn};
+use tracing::info;
 use vek::*;
 
 /// Schema version of the manifest this engine reads. New *layers* (the
@@ -129,9 +138,10 @@ pub const SEA_TOP_BLOCK: i32 = (CONFIG.sea_level - 1.0 + 0.01) as i32;
 /// (`base_z`) must reach; the same margin `SimChunk::get_base_z` keeps below
 /// a chunk's own altitude.
 pub const FLOOR_MARGIN_BLOCKS: i32 = 16;
-/// Decorations rooted inside a region can reach this far outside its box;
-/// the loader warns when authored cells come closer to the box edge.
-pub const RECOMMENDED_REGION_MARGIN_M: i32 = 16;
+/// Decorations rooted inside a region can reach this far outside its box:
+/// every authored cell must lie at least this far inside the box edge (a
+/// load error otherwise).
+pub const REGION_MARGIN_M: i32 = 16;
 
 const BYTES_PER_RAW_TILE: usize = TILE_CELLS * 2 * 2;
 const BYTES_PER_DIST_TILE: usize = TILE_CELLS;
@@ -150,8 +160,6 @@ pub struct Manifest {
     pub regions: Vec<RegionManifest>,
 }
 
-fn yes() -> bool { true }
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RegionManifest {
@@ -165,15 +173,27 @@ pub struct RegionManifest {
     pub cell_size_m: i32,
     pub layers: Vec<LayerKind>,
     pub tiles: Vec<TileManifest>,
-    /// No procedural boulders, trees or sprites rooted in authored wet
-    /// columns (the engine otherwise places river rocks and lets canopies
-    /// hang into the water). Default on.
-    #[serde(default = "yes")]
+    /// Opt-in: no procedural boulders, trees or sprites rooted in authored
+    /// wet columns. Default **off**: the natural map's river rocks, bank
+    /// trees and bushes stay (edits start from the natural map).
+    #[serde(default)]
     pub suppress_procedural_in_water: bool,
-    /// Also suppress them on dry columns closer than this to authored water
-    /// (keeps bank-rooted canopies out of it). Default 0.
+    /// With [`Self::suppress_procedural_in_water`]: also suppress them on dry
+    /// columns closer than this to authored water. Default 0.
     #[serde(default)]
     pub exclude_procedural_margin_m: i32,
+    /// Every chunk of the region keeps the natural map in its unauthored
+    /// columns (see [`Self::allow_partial_chunks`]).
+    #[serde(default)]
+    pub allow_partial: bool,
+    /// Chunks (chunk coordinates, inside the box) whose unauthored columns
+    /// keep the natural map -- engine terrain *and* the sim's water, exactly
+    /// as without the region -- so a few authored cells can edit an existing
+    /// river or lake. They are exempt from
+    /// [`ConsistencyBudget::max_authored_dry_table_wet_chunks`]: their table
+    /// water is the natural water those columns render.
+    #[serde(default)]
+    pub allow_partial_chunks: Vec<(i32, i32)>,
     /// Aquatic fauna/flora profile id (`cromatolis_v0_aquatic_ecology.ron`)
     /// for authored water whose chunk carries none.
     #[serde(default)]
@@ -193,9 +213,9 @@ pub struct ConsistencyBudget {
     /// columns in it render that pit next to the exact authored water (the
     /// masks were painted inside the region). A chunk counts as authored when
     /// every column is a wet or bank cell: write bank cells for the ground the
-    /// author intends around a channel. Exempt: chunks on the region's outer
-    /// chunk ring whose authored water reaches the box edge (a river or the
-    /// sea continuing across the border); they are reported, not counted.
+    /// author intends around a channel. Exempt: partial chunks
+    /// ([`RegionManifest::allow_partial_chunks`],
+    /// [`RegionManifest::allow_partial`]), reported, not counted.
     #[serde(default)]
     pub max_authored_dry_table_wet_chunks: u32,
     /// Chunks with authored wet columns that the table calls dry. Default
@@ -250,7 +270,8 @@ pub enum AuthoredCell {
     /// Authored dry ground whose top block is `bed_block`.
     Bank { bed_block: i32 },
     /// Inside a region, but not authored: engine terrain without the
-    /// region's suppressed sim water.
+    /// region's suppressed sim water, or the natural map unchanged in a
+    /// partial chunk ([`AuthoredColumn::natural`]).
     None,
 }
 
@@ -298,6 +319,10 @@ pub struct AuthoredColumn {
     /// computed (`Some(0.0)`) for wet columns.
     pub water_dist: Option<f32>,
     pub settings: RegionSettings,
+    /// The column's chunk is partial
+    /// ([`RegionManifest::allow_partial_chunks`]): an unauthored column there
+    /// is the natural engine column, untouched.
+    pub natural: bool,
 }
 
 /// The engine's own per-column results that an authored column replaces.
@@ -328,7 +353,8 @@ pub struct DryTerrain {
 
 /// The column sampler's hook: replace `engine` by the authored result when
 /// the column is authored, and re-apply the regional flood (`flood`) on top
-/// of the authored water level. `None` returns `engine` untouched.
+/// of the authored water level. `None`, and an unauthored column of a
+/// partial chunk, return `engine` untouched.
 #[inline]
 pub fn apply(
     authored: Option<AuthoredColumn>,
@@ -338,6 +364,12 @@ pub fn apply(
 ) -> EngineColumn {
     match authored {
         None => engine,
+        // The natural map in a partial chunk: the engine column exactly.
+        Some(AuthoredColumn {
+            cell: AuthoredCell::None,
+            natural: true,
+            ..
+        }) => engine,
         Some(authored) => {
             let mut r = authored.resolve(engine, dry);
             r.water_level = flood(r.water_level);
@@ -385,6 +417,7 @@ impl AuthoredColumn {
                 cliff_offset: 0.0,
                 riverless_alt: bed_block as f32 + 0.5,
             },
+            AuthoredCell::None if self.natural => engine,
             AuthoredCell::None => {
                 let w = self.weight;
                 let dry_wf = self
@@ -485,6 +518,9 @@ struct Region {
     tiles: Vec2<i32>,
     settings: RegionSettings,
     budget: ConsistencyBudget,
+    /// One flag per chunk of the box (row-major from the south-west):
+    /// unauthored columns keep the natural map.
+    partial: Vec<bool>,
     /// One slot per tile of the region grid, decoded once at load; `None` =
     /// unlisted (no authored cell).
     water: Vec<Option<RawTile>>,
@@ -505,6 +541,14 @@ impl Region {
     }
 
     fn origin(&self, t: Vec2<i32>) -> Vec2<i32> { self.min + t * TILE_SIZE }
+
+    /// Whether the chunk holding `wpos` (inside the region) is partial.
+    #[inline(always)]
+    fn partial_at(&self, wpos: Vec2<i32>) -> bool {
+        let c = (wpos - self.min).map(|e| e.div_euclid(CHUNK));
+        let w = (self.max.x - self.min.x) / CHUNK;
+        self.partial[(c.y * w + c.x) as usize]
+    }
 
     #[inline(always)]
     fn raw(&self, idx: usize) -> Option<&RawTile> { self.water[idx].as_ref() }
@@ -725,10 +769,10 @@ pub struct RegionConsistency {
     pub region: String,
     pub authored_wet_table_dry: Vec<Vec2<i32>>,
     pub authored_dry_table_wet: Vec<Vec2<i32>>,
-    /// Table-wet, not fully authored chunks on the region's outer chunk ring
-    /// whose authored water reaches the box edge: water continuing across
-    /// the border (a river, the open sea). Exempt from the budget; reported.
-    pub border_crossings: Vec<Vec2<i32>>,
+    /// Table-wet, not fully authored chunks the region declares partial:
+    /// their unauthored columns render the natural water. Exempt from the
+    /// budget; reported.
+    pub partial_table_wet: Vec<Vec2<i32>>,
 }
 
 impl AuthoredRasters {
@@ -933,23 +977,59 @@ impl AuthoredRasters {
                     .map_err(|e| rerr(format!("tile {t:?}: {e}")))?;
                 water[idx] = Some(raw);
             }
-            let authored_bounds =
-                validate_region(min, max, tiles, &water, &mut chunk_summary).map_err(&rerr)?;
+            let chunks = (max - min) / CHUNK;
+            let mut partial = vec![rm.allow_partial; (chunks.x * chunks.y) as usize];
+            for &(cx, cy) in &rm.allow_partial_chunks {
+                let c = Vec2::new(cx, cy) - min / CHUNK;
+                if c.x < 0 || c.y < 0 || c.x >= chunks.x || c.y >= chunks.y {
+                    return Err(rerr(format!(
+                        "allow_partial_chunks lists chunk ({cx}, {cy}), outside the box (chunks \
+                         {:?}..{:?})",
+                        min / CHUNK,
+                        max / CHUNK
+                    )));
+                }
+                partial[(c.y * chunks.x + c.x) as usize] = true;
+            }
+            let is_partial = |p: Vec2<i32>| {
+                let c = (p - min).map(|e| e.div_euclid(CHUNK));
+                partial[(c.y * chunks.x + c.x) as usize]
+            };
+            let (authored_bounds, natural_seams) =
+                validate_region(min, max, tiles, &water, &is_partial, &mut chunk_summary)
+                    .map_err(&rerr)?;
+            if natural_seams > 0 {
+                info!(
+                    source,
+                    region = id,
+                    natural_seams,
+                    "Authored water meets natural (unauthored) columns in partial chunks"
+                );
+            }
             if let Some(b) = authored_bounds {
                 let margin = (b.min.x - min.x)
                     .min(b.min.y - min.y)
                     .min(max.x - b.max.x)
                     .min(max.y - b.max.y);
-                if margin < RECOMMENDED_REGION_MARGIN_M {
-                    warn!(
-                        source,
-                        region = id,
-                        margin_m = margin,
-                        recommended_m = RECOMMENDED_REGION_MARGIN_M,
-                        "Authored cells come within {margin} m of the region box: decorations \
-                         rooted inside the region (boulders, trees) can change blocks up to ~8 m \
-                         outside it, and terrain at the box edge is only feathered"
+                if margin < REGION_MARGIN_M {
+                    let floor = |v: i32| v.div_euclid(CHUNK) * CHUNK;
+                    let ceil = |v: i32| (v + CHUNK - 1).div_euclid(CHUNK) * CHUNK;
+                    let need_min = Vec2::new(
+                        min.x.min(floor(b.min.x - REGION_MARGIN_M)),
+                        min.y.min(floor(b.min.y - REGION_MARGIN_M)),
                     );
+                    let need_max = Vec2::new(
+                        max.x.max(ceil(b.max.x + REGION_MARGIN_M)),
+                        max.y.max(ceil(b.max.y + REGION_MARGIN_M)),
+                    );
+                    return Err(rerr(format!(
+                        "authored cells (bounds {:?}..{:?}) come within {margin} m of the box \
+                         {min:?}..{max:?}; they must stay at least {REGION_MARGIN_M} m inside it \
+                         (decorations rooted on authored columns change blocks up to ~10 m \
+                         outside the box). Enlarge the box to at least min ({}, {}) max ({}, {}) \
+                         (chunk-aligned), or move the authored cells inward",
+                        b.min, b.max, need_min.x, need_min.y, need_max.x, need_max.y
+                    )));
                 }
             }
             regions.push(Region {
@@ -964,6 +1044,7 @@ impl AuthoredRasters {
                     aquatic_profile,
                 },
                 budget: rm.consistency,
+                partial,
                 water,
                 dist: (0..n_tiles).map(|_| OnceLock::new()).collect(),
             });
@@ -1014,6 +1095,7 @@ impl AuthoredRasters {
                 region.water_dist(wpos)
             },
             settings: region.settings,
+            natural: region.partial_at(wpos),
         })
     }
 
@@ -1037,6 +1119,12 @@ impl AuthoredRasters {
             }),
             _ => None,
         }
+    }
+
+    /// Whether `wpos` lies in a partial chunk of a region (its unauthored
+    /// columns keep the natural map); false outside every region.
+    pub fn natural_at(&self, wpos: Vec2<i32>) -> bool {
+        self.region_at(wpos).is_some_and(|r| r.partial_at(wpos))
     }
 
     /// Whether chunk `chunk_pos` lies inside a region.
@@ -1118,9 +1206,8 @@ impl AuthoredRasters {
                     // The sim lowers the terrain of a chunk it calls water;
                     // only a chunk whose every column is authored hides that.
                     if table && !fully_authored {
-                        let on_ring = cx == c0.x || cy == c0.y || cx == c1.x - 1 || cy == c1.y - 1;
-                        if on_ring && authored_wet && water_on_box_edge(r, cpos) {
-                            c.border_crossings.push(cpos);
+                        if r.partial_at(cpos * CHUNK) {
+                            c.partial_table_wet.push(cpos);
                         } else {
                             c.authored_dry_table_wet.push(cpos);
                         }
@@ -1134,10 +1221,12 @@ impl AuthoredRasters {
                     "region '{}': {dry_wet} chunk(s) the sim table calls water have unauthored \
                      columns (budget {}), e.g. {:?}: the sim sinks those chunks and the \
                      unauthored terrain there with them. Leave the water/elevated masks untouched \
-                     inside regions; where the table's water is real (open sea, a river or lake \
-                     the region only partly covers) author every column of those chunks (water, \
-                     and bank cells for the ground the author intends), or let the water run to \
-                     the box edge (border chunks whose authored water reaches the edge are exempt)",
+                     inside regions. Where the table's water is the natural river, lake or sea \
+                     and only some of its columns are edited, declare those chunks partial \
+                     (allow_partial_chunks, or allow_partial for the whole region): their \
+                     unauthored columns then keep the natural water. Otherwise author every \
+                     column of those chunks (water, and bank cells for the ground the author \
+                     intends)",
                     r.id,
                     r.budget.max_authored_dry_table_wet_chunks,
                     &c.authored_dry_table_wet[..dry_wet.min(5)]
@@ -1158,7 +1247,7 @@ impl AuthoredRasters {
                 region = r.id,
                 authored_wet_table_dry = wet_dry,
                 authored_dry_table_wet = dry_wet,
-                border_crossings = c.border_crossings.len(),
+                partial_table_wet = c.partial_table_wet.len(),
                 "Authored water vs the sim chunk table"
             );
             out.push(c);
@@ -1186,26 +1275,6 @@ impl AuthoredRasters {
     }
 }
 
-/// Whether any authored wet column of chunk `cpos` lies on the box edge of
-/// region `r` (water continuing across the border).
-fn water_on_box_edge(r: &Region, cpos: Vec2<i32>) -> bool {
-    let o = cpos * CHUNK;
-    (0..CHUNK).any(|k| {
-        [
-            Vec2::new(o.x + k, o.y),
-            Vec2::new(o.x + k, o.y + CHUNK - 1),
-            Vec2::new(o.x, o.y + k),
-            Vec2::new(o.x + CHUNK - 1, o.y + k),
-        ]
-        .into_iter()
-        .any(|p| {
-            r.contains(p)
-                && (p.x == r.min.x || p.y == r.min.y || p.x == r.max.x - 1 || p.y == r.max.y - 1)
-                && r.cell(p).is_wet()
-        })
-    })
-}
-
 fn io_error_kind(err: &assets::Error) -> Option<std::io::ErrorKind> {
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err.reason());
     while let Some(e) = source {
@@ -1230,8 +1299,9 @@ fn validate_region(
     max: Vec2<i32>,
     tiles: Vec2<i32>,
     water: &[Option<RawTile>],
+    partial: &dyn Fn(Vec2<i32>) -> bool,
     summary: &mut HashMap<Vec2<i32>, ChunkWaterSummary>,
-) -> Result<Option<Aabr<i32>>, String> {
+) -> Result<(Option<Aabr<i32>>, usize), String> {
     let cross_tile_cell = |wpos: Vec2<i32>| -> AuthoredCell {
         let local = wpos - min;
         let t = local.map(|e| e.div_euclid(TILE_SIZE));
@@ -1256,6 +1326,7 @@ fn validate_region(
         }
     };
     let mut bounds: Option<Aabr<i32>> = None;
+    let mut natural_seams = 0usize;
     const CHUNKS_PER_TILE: i32 = TILE_SIZE / CHUNK;
     for ty in 0..tiles.y {
         for tx in 0..tiles.x {
@@ -1337,9 +1408,15 @@ fn validate_region(
                                          {n:?} whose ground top {nb} is lower: the water would \
                                          stand as a wall"
                                     )),
+                                    // A partial chunk's unauthored column is
+                                    // the natural map: the author edits the
+                                    // natural water there, seam included.
+                                    AuthoredCell::None if partial(n) => natural_seams += 1,
                                     AuthoredCell::None => report(format!(
                                         "{wpos:?}: water next to unauthored column {n:?} inside \
-                                         the region; write a bank cell there"
+                                         the region; write a bank cell there, or declare its \
+                                         chunk partial (allow_partial_chunks) to meet the natural \
+                                         map"
                                     )),
                                 }
                             }
@@ -1369,7 +1446,7 @@ fn validate_region(
         }
     }
     if count == 0 {
-        Ok(bounds)
+        Ok((bounds, natural_seams))
     } else {
         Err(format!(
             "{count} invalid cell(s), first: {}",

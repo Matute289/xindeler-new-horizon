@@ -38,11 +38,17 @@ pub struct RegionSpec {
     #[serde(default)]
     pub ops: Vec<PaintOp>,
     /// Passed through to [`RegionManifest::suppress_procedural_in_water`].
-    #[serde(default = "super::yes")]
+    #[serde(default)]
     pub suppress_procedural_in_water: bool,
     /// Passed through to [`RegionManifest::exclude_procedural_margin_m`].
     #[serde(default)]
     pub exclude_procedural_margin_m: i32,
+    /// Passed through to [`RegionManifest::allow_partial`].
+    #[serde(default)]
+    pub allow_partial: bool,
+    /// Passed through to [`RegionManifest::allow_partial_chunks`].
+    #[serde(default)]
+    pub allow_partial_chunks: Vec<(i32, i32)>,
     /// Passed through to [`RegionManifest::aquatic_ecology_profile`].
     #[serde(default)]
     pub aquatic_ecology_profile: Option<String>,
@@ -52,8 +58,8 @@ pub struct RegionSpec {
 }
 
 impl RegionSpec {
-    /// A region with the default settings (procedural decorations suppressed
-    /// in water, no margin, no aquatic profile, default consistency budget).
+    /// A region with the default settings (natural decorations kept, no
+    /// partial chunks, no aquatic profile, default consistency budget).
     pub fn new(
         id: impl Into<String>,
         min: (i32, i32),
@@ -67,8 +73,10 @@ impl RegionSpec {
             max,
             feather_m,
             ops,
-            suppress_procedural_in_water: true,
+            suppress_procedural_in_water: false,
             exclude_procedural_margin_m: 0,
+            allow_partial: false,
+            allow_partial_chunks: Vec::new(),
             aquatic_ecology_profile: None,
             consistency: ConsistencyBudget::default(),
         }
@@ -330,6 +338,8 @@ impl RegionRaster {
                 tiles: entries,
                 suppress_procedural_in_water: self.spec.suppress_procedural_in_water,
                 exclude_procedural_margin_m: self.spec.exclude_procedural_margin_m,
+                allow_partial: self.spec.allow_partial,
+                allow_partial_chunks: self.spec.allow_partial_chunks.clone(),
                 aquatic_ecology_profile: self.spec.aquatic_ecology_profile.clone(),
                 consistency: self.spec.consistency,
             },

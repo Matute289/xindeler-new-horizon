@@ -314,6 +314,11 @@ fn body_aquatic(body: &Body) -> Option<bool> {
 fn authored_spawn_ok(world: &World, wpos: Vec2<i32>, aquatic: Option<bool>) -> bool {
     match (world.sim().authored_column_at(wpos), aquatic) {
         (None, _) | (_, None) => true,
+        // The natural map (an unauthored column of a partial chunk): the
+        // chunk filter decides, as outside regions.
+        (Some(col), _) if col.natural && col.cell == world::authored_raster::AuthoredCell::None => {
+            true
+        },
         (Some(col), Some(true)) => col.cell.is_wet(),
         (Some(col), Some(false)) => !col.cell.is_wet() && col.water_dist.is_none_or(|d| d >= 2.0),
     }

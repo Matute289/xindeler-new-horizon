@@ -38,15 +38,16 @@ fn region(
     RegionSpec::new(id, min, max, feather_m, ops)
 }
 
-/// A 20 m river along x at y = 1100..1120, water top block 238 over bed
+/// A 20 m river along x at y = 1100..1120 (x 1056..1504, a chunk inside
+/// the box at each end), water top block 238 over bed
 /// 232, a 2 m bank ring at 239 m.
 fn river_spec() -> RegionSpec {
     region("river", (1024, 1024), (1536, 1216), 32, vec![
         PaintOp::Water {
             shape: Shape::Rect {
-                x0: 1024.0,
+                x0: 1056.0,
                 y0: 1100.0,
-                x1: 1536.0,
+                x1: 1504.0,
                 y1: 1120.0,
             },
             surface_cm: 23_868,
@@ -178,6 +179,7 @@ fn resolve_wet_and_bank_are_exact_at_any_weight() {
                 bed_block: 232,
             },
             water_dist: Some(0.0),
+            natural: false,
         }
         .resolve(engine(), dry());
         assert_eq!(wet.alt, 232.5);
@@ -194,6 +196,7 @@ fn resolve_wet_and_bank_are_exact_at_any_weight() {
             weight,
             cell: AuthoredCell::Bank { bed_block: 239 },
             water_dist: Some(1.0),
+            natural: false,
         }
         .resolve(engine(), dry());
         assert_eq!(bank.alt, 239.5);
@@ -209,6 +212,7 @@ fn resolve_none_blends_engine_into_dry_terrain() {
         weight,
         cell: AuthoredCell::None,
         water_dist,
+        natural: false,
     };
     // Weight 0 is the engine's terrain, never its water.
     let r = col(0.0, None).resolve(engine(), dry());
@@ -344,9 +348,138 @@ fn a_dry_bed_is_refused() {
 }
 
 #[test]
-fn water_on_the_region_edge_is_the_seam_and_allowed() {
-    // A river crossing the whole region: its ends touch the box edge.
-    assert!(load(&[build_region(&river_spec()).unwrap()]).is_ok());
+fn authored_cells_must_keep_the_margin_from_the_box_edge() {
+    // The river running the box's whole length: its ends touch the edge.
+    let mut spec = river_spec();
+    spec.ops[0] = PaintOp::Water {
+        shape: Shape::Rect {
+            x0: 1024.0,
+            y0: 1100.0,
+            x1: 1536.0,
+            y1: 1120.0,
+        },
+        surface_cm: 23_868,
+        bed_cm: 23_268,
+    };
+    expect_error(
+        vec![build_region(&spec).unwrap()],
+        "come within 0 m of the box",
+    );
+    expect_error(
+        vec![build_region(&spec).unwrap()],
+        "Enlarge the box to at least min (992, 1024) max (1568, 1216)",
+    );
+    // Exactly the margin is fine; one metre less is not.
+    let pond = |x0: f32| {
+        region("pond", (1024, 1024), (1280, 1280), 0, vec![
+            PaintOp::Water {
+                shape: Shape::Rect {
+                    x0,
+                    y0: 1100.0,
+                    x1: x0 + 10.0,
+                    y1: 1110.0,
+                },
+                surface_cm: 23_868,
+                bed_cm: 23_268,
+            },
+            PaintOp::BankRing {
+                width_m: 2,
+                bed_cm: Some(23_918),
+            },
+        ])
+    };
+    assert!(load(&[build_region(&pond(1042.0)).unwrap()]).is_ok());
+    expect_error(
+        vec![build_region(&pond(1041.0)).unwrap()],
+        "come within 15 m of the box",
+    );
+}
+
+#[test]
+fn natural_decorations_are_kept_by_default() {
+    let m: RegionManifest = ron::from_str(
+        "(id: \"r\", min: (1024, 1024), max: (1280, 1280), feather_m: 0, tile_size_m: 256, \
+         cell_size_m: 1, layers: [Water], tiles: [])",
+    )
+    .unwrap();
+    assert!(!m.suppress_procedural_in_water);
+    assert_eq!(m.exclude_procedural_margin_m, 0);
+    assert!(!m.allow_partial && m.allow_partial_chunks.is_empty());
+    assert!(!river_spec().suppress_procedural_in_water);
+}
+
+/// Block-by-block editing from the natural map: a 3 x 3 pond edited into an
+/// existing (natural) river chunk, everything else in the region left alone.
+#[test]
+fn a_small_edit_inside_a_natural_river_chunk() {
+    let pond = |partial: Vec<(i32, i32)>, ring: bool| {
+        let mut ops = vec![PaintOp::Water {
+            shape: Shape::Rect {
+                x0: 1100.0,
+                y0: 1100.0,
+                x1: 1103.0,
+                y1: 1103.0,
+            },
+            surface_cm: 23_868,
+            bed_cm: 23_268,
+        }];
+        if ring {
+            ops.push(PaintOp::BankRing {
+                width_m: 1,
+                bed_cm: Some(23_918),
+            });
+        }
+        let mut spec = region("pond", (1024, 1024), (1184, 1184), 16, ops);
+        spec.allow_partial_chunks = partial;
+        spec
+    };
+    // The table's natural river runs through chunk (34, 34) (wpos
+    // 1088..1120), which holds the pond.
+    let table = |c: Vec2<i32>| Some(c == Vec2::new(34, 34));
+    // 1. Owned box (the default): the pond's water meets unauthored columns.
+    expect_error(
+        vec![build_region(&pond(vec![], false)).unwrap()],
+        "declare its chunk partial",
+    );
+    // 2. Owned box, pond walled by banks: loads, but the river chunk is table-wet
+    //    and not fully authored -> the hard budget refuses it.
+    let ar = load(&[build_region(&pond(vec![], true)).unwrap()]).unwrap();
+    let e = ar.check_consistency("t", table).unwrap_err();
+    assert!(
+        e.0.contains("1 chunk(s) the sim table calls water"),
+        "{}",
+        e.0
+    );
+    // 3. The chunk declared partial: loads (the pond meets the natural columns: 12
+    //    seam sides), passes the budget, and every other column of that chunk is
+    //    the natural engine column, untouched.
+    let ar = load(&[build_region(&pond(vec![(34, 34)], false)).unwrap()]).unwrap();
+    let r = ar.check_consistency("t", table).unwrap();
+    assert_eq!(r[0].partial_table_wet, vec![Vec2::new(34, 34)]);
+    assert!(r[0].authored_dry_table_wet.is_empty());
+    let natural = ar.column(Vec2::new(1095, 1101)).unwrap();
+    assert_eq!(natural.cell, AuthoredCell::None);
+    assert!(natural.natural);
+    assert_eq!(
+        apply(Some(natural), engine(), dry(), |l| l + 100.0),
+        engine()
+    );
+    assert_eq!(natural.resolve(engine(), dry()), engine());
+    let wet = ar.column(Vec2::new(1101, 1101)).unwrap();
+    assert_eq!(wet.cell, AuthoredCell::Wet {
+        surface_block: 238,
+        bed_block: 232
+    });
+    // Outside the partial chunk the box still owns its columns.
+    let owned = ar.column(Vec2::new(1130, 1101)).unwrap();
+    assert!(!owned.natural);
+    assert_eq!(owned.resolve(engine(), dry()).water_level, 139.01);
+    // The whole region partial: same, everywhere.
+    let mut spec = pond(vec![], false);
+    spec.allow_partial = true;
+    let ar = load(&[build_region(&spec).unwrap()]).unwrap();
+    assert!(ar.column(Vec2::new(1130, 1101)).unwrap().natural);
+    assert!(ar.check_consistency("t", |_| Some(true)).is_ok());
 }
 
 #[test]
@@ -518,6 +651,7 @@ fn apply_reapplies_the_flood_on_top_of_authored_water_only() {
             bed_block: 232,
         },
         water_dist: Some(0.0),
+        natural: false,
     };
     let flood = |l: f32| l.max(240.0);
     assert_eq!(apply(Some(wet), engine(), dry(), flood).water_level, 240.0);
@@ -539,6 +673,7 @@ fn procedural_suppression_follows_the_region_settings() {
         weight: 1.0,
         cell,
         water_dist: d,
+        natural: false,
     };
     let wet = AuthoredCell::Wet {
         surface_block: 238,
@@ -569,12 +704,13 @@ fn cell_at_matches_column_and_skips_the_distance_field() {
 fn consistency_is_checked_both_ways_against_a_budget() {
     let ar = load(&[build_region(&river_spec()).unwrap()]).unwrap();
     // Region (1024..1536) x (1024..1216) = chunks 32..48 x 32..38; water in
-    // chunk rows 34 (y 1100..1119 -> chunk 34) and banks around it.
+    // chunk row 34 (y 1100..1119), chunks 33..47 (x 1056..1504), and banks
+    // around it.
     let table_all_dry = |_: Vec2<i32>| Some(false);
     let r = ar.check_consistency("t", table_all_dry).unwrap();
     assert_eq!(
         r[0].authored_wet_table_dry.len(),
-        16,
+        14,
         "default budget: allowed"
     );
     assert!(r[0].authored_dry_table_wet.is_empty());
@@ -589,30 +725,36 @@ fn consistency_is_checked_both_ways_against_a_budget() {
     // The sim also calls the river row water (masks painted): that row is
     // only partly authored (a 20 m river in a 32 m chunk row), so the sim's
     // sunk terrain shows there too.
-    // The two end chunks of the river row are on the region's outer ring
-    // and the river runs to the box edge there: border crossings, exempt.
     let table_river = |c: Vec2<i32>| Some(c.y == 34);
     let e = ar.check_consistency("t", table_river).unwrap_err();
     assert!(
-        e.0.contains("14 chunk(s) the sim table calls water"),
+        e.0.contains("16 chunk(s) the sim table calls water"),
         "{}",
         e.0
     );
     assert!(
-        e.0.contains("run to the box edge"),
-        "the error explains the border case"
+        e.0.contains("allow_partial_chunks"),
+        "the error names the partial-authoring opt-in"
     );
+    // Declared partial (the table's river is the natural one being edited):
+    // exempt, reported.
     let mut spec = river_spec();
-    spec.consistency.max_authored_dry_table_wet_chunks = 14;
+    spec.allow_partial_chunks = (32..48).map(|x| (x, 34)).collect();
     let r = load(&[build_region(&spec).unwrap()])
         .unwrap()
         .check_consistency("t", table_river)
         .unwrap();
-    assert_eq!(r[0].border_crossings, vec![
-        Vec2::new(32, 34),
-        Vec2::new(47, 34)
-    ]);
-    assert_eq!(r[0].authored_dry_table_wet.len(), 14);
+    assert_eq!(r[0].partial_table_wet.len(), 16);
+    assert!(r[0].authored_dry_table_wet.is_empty());
+    let mut spec = river_spec();
+    spec.allow_partial = true;
+    let ar_all = load(&[build_region(&spec).unwrap()]).unwrap();
+    assert!(ar_all.check_consistency("t", table_river).is_ok());
+    assert!(ar_all.check_consistency("t", table_lake_north).is_ok());
+    // A partial chunk outside the box is refused.
+    let mut spec = river_spec();
+    spec.allow_partial_chunks = vec![(48, 34)];
+    expect_error(vec![build_region(&spec).unwrap()], "outside the box");
     let mut spec = river_spec();
     spec.consistency.max_authored_dry_table_wet_chunks = 32;
     spec.consistency.max_authored_wet_table_dry_chunks = Some(0);
@@ -624,7 +766,7 @@ fn consistency_is_checked_both_ways_against_a_budget() {
             .is_ok()
     );
     // A fully authored chunk may be water in the table.
-    let full = region("full", (1024, 1024), (1056, 1056), 0, vec![
+    let full = region("full", (992, 992), (1088, 1088), 0, vec![
         PaintOp::Water {
             shape: Shape::Rect {
                 x0: 1024.0,
@@ -635,9 +777,16 @@ fn consistency_is_checked_both_ways_against_a_budget() {
             surface_cm: 20_050,
             bed_cm: 19_050,
         },
+        PaintOp::BankRing {
+            width_m: 2,
+            bed_cm: Some(20_150),
+        },
     ]);
     let ar = load(&[build_region(&full).unwrap()]).unwrap();
-    assert!(ar.check_consistency("t", |_| Some(true)).is_ok());
+    assert!(
+        ar.check_consistency("t", |c| Some(c == Vec2::new(32, 32)))
+            .is_ok()
+    );
 }
 
 #[test]

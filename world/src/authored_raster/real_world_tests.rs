@@ -339,10 +339,10 @@ fn arena_manifest_passes_the_consistency_check() {
     let max = (lake * 32 + 96).into_tuple();
     let dry = RegionSpec::new("dry_over_lake", min, max, 0, vec![PaintOp::Bank {
         shape: rect(
-            (lake.x * 32 - 64) as f32,
-            (lake.y * 32 - 64) as f32,
-            (lake.x * 32 - 63) as f32,
-            (lake.y * 32 - 63) as f32,
+            (lake.x * 32 - 32) as f32,
+            (lake.y * 32 - 32) as f32,
+            (lake.x * 32 - 31) as f32,
+            (lake.y * 32 - 31) as f32,
         ),
         bed_cm: 30_000,
     }]);
@@ -799,7 +799,7 @@ fn identity_next_to_a_sim_river_and_a_sim_lake() {
             }
         }
         println!("{name}: ring-1 differences reach {halo} m outside the box");
-        assert!(halo <= super::RECOMMENDED_REGION_MARGIN_M, "{halo} m");
+        assert!(halo <= super::REGION_MARGIN_M, "{halo} m");
     }
 }
 
@@ -818,4 +818,149 @@ fn seeded_chunk(
             .unwrap()
             .0
     })
+}
+
+/// Block-by-block editing from the natural map: a 3 x 3 pond written into a
+/// real wilderness river chunk, the rest of the region left unauthored.
+/// With the box owned (the default) the sim's river chunk is refused by the
+/// consistency budget; declared partial, every column except the nine
+/// authored ones is bit-identical to the world without the region (the
+/// natural river included), and the seam between the pond and the natural
+/// water is reported.
+#[test]
+#[ignore]
+fn a_pond_edited_into_a_natural_river() {
+    let (mut world, index) = generate_world();
+    let index_ref = index.as_index_ref();
+    let far_from_sites = |c: Vec2<i32>| {
+        let w = c * 32;
+        index.sites.values().all(|site| {
+            let b = site.bounds();
+            let dx = (b.min.x - w.x).max(w.x - b.max.x).max(0);
+            let dy = (b.min.y - w.y).max(w.y - b.max.y).max(0);
+            dx.max(dy) > 1000
+        })
+    };
+    let river = (40..980)
+        .step_by(7)
+        .flat_map(|y| (40..980).step_by(7).map(move |x| Vec2::new(x, y)))
+        .find(|c| world.sim.get(*c).is_some_and(|c| c.river.is_river()) && far_from_sites(*c))
+        .expect("a wilderness river chunk");
+    let centre = river * 32 + 16;
+    let natural = world
+        .sample_columns()
+        .get((centre, index_ref, None))
+        .map(|c| (c.alt, c.water_level))
+        .unwrap();
+    let (natural_alt, natural_level) = natural;
+    assert!(
+        natural_level > natural_alt,
+        "the chunk centre holds natural water"
+    );
+    // The pond: the natural surface block, bed 2 blocks deeper than the
+    // natural ground.
+    let surface_block = (natural_level - 0.5).floor() as i32;
+    let bed_block = (natural_alt.floor() as i32 - 2).min(surface_block - 1);
+    let min = (river - 2) * 32;
+    let max = (river + 3) * 32;
+    let spec = |partial: bool| {
+        let mut s = RegionSpec::new(
+            "pond_in_river",
+            min.into_tuple(),
+            max.into_tuple(),
+            16,
+            vec![PaintOp::Water {
+                shape: rect(
+                    (centre.x - 1) as f32,
+                    (centre.y - 1) as f32,
+                    (centre.x + 2) as f32,
+                    (centre.y + 2) as f32,
+                ),
+                surface_cm: surface_block * 100 + 50,
+                bed_cm: bed_block * 100 + 50,
+            }],
+        );
+        s.allow_partial = partial;
+        s
+    };
+    // Owned box: the pond meets unauthored columns -- refused at load.
+    let built = vec![build_region(&spec(false)).unwrap()];
+    let files: HashMap<(i32, i32), Vec<u8>> = built[0].tiles.iter().cloned().collect();
+    let fetch = |_: &str, _: LayerKind, tx: i32, ty: i32| {
+        files
+            .get(&(tx, ty))
+            .cloned()
+            .ok_or_else(|| "missing".to_string())
+    };
+    let e = AuthoredRasters::from_manifest(manifest(&built), Vec2::broadcast(32768), "t", &fetch)
+        .unwrap_err();
+    println!("owned box: {}", &e.0[..e.0.len().min(220)]);
+    assert!(e.0.contains("declare its chunk partial"), "{}", e.0);
+
+    // Partial: loads and passes the hard budget against the real sim.
+    let rasters = load_spec(&spec(true));
+    let r = rasters.check_consistency_with_sim("t", &world.sim).unwrap();
+    println!(
+        "partial: {} table-wet partial chunk(s) exempt, {} counted",
+        r[0].partial_table_wet.len(),
+        r[0].authored_dry_table_wet.len()
+    );
+    assert!(r[0].partial_table_wet.contains(&river));
+    let cols: Vec<Vec2<i32>> = (min.y..max.y)
+        .flat_map(|y| (min.x..max.x).map(move |x| Vec2::new(x, y)))
+        .collect();
+    let sample = |world: &World| -> Vec<Option<Vec<u32>>> {
+        cols.par_iter()
+            .map(|p| column_bits(world, index_ref, *p))
+            .collect()
+    };
+    world.sim.set_authored_rasters_for_test(None);
+    let a = sample(&world);
+    let level = |world: &World, p: Vec2<i32>| {
+        world
+            .sample_columns()
+            .get((p, index_ref, None))
+            .map(|c| (c.alt, c.water_level))
+            .unwrap()
+    };
+    let ring: Vec<Vec2<i32>> = (-2i32..=2)
+        .flat_map(|dy| (-2i32..=2).map(move |dx| Vec2::new(dx, dy)))
+        .filter(|d| d.x.abs() == 2 || d.y.abs() == 2)
+        .map(|d| centre + d)
+        .collect();
+    let natural_ring: Vec<(f32, f32)> = ring.iter().map(|p| level(&world, *p)).collect();
+    world.sim.set_authored_rasters_for_test(Some(rasters));
+    let b = sample(&world);
+    let in_pond = |p: &Vec2<i32>| (p.x - centre.x).abs() <= 1 && (p.y - centre.y).abs() <= 1;
+    let mut differing = 0;
+    let mut pond_differing = 0;
+    for (p, (x, y)) in cols.iter().zip(a.iter().zip(&b)) {
+        if x != y {
+            if in_pond(p) {
+                pond_differing += 1;
+            } else {
+                differing += 1;
+            }
+        }
+    }
+    let pond_col = level(&world, centre);
+    let step = natural_ring
+        .iter()
+        .map(|(alt, wl)| {
+            let natural_top = if wl > alt { *wl } else { *alt };
+            (pond_col.1 - natural_top).abs()
+        })
+        .fold(0.0f32, f32::max);
+    println!(
+        "river chunk {river:?}, pond at {centre:?}: surface block {surface_block}, bed block \
+         {bed_block} (natural water level {:.2}, ground {:.2}); {} region columns, {differing} \
+         differ outside the pond, {pond_differing}/9 pond columns changed; largest step from the \
+         pond surface to the natural water/ground around it: {step:.2} m",
+        natural_level,
+        natural_alt,
+        cols.len()
+    );
+    assert_eq!(differing, 0, "only the authored columns change");
+    assert_eq!(pond_col.1, surface_block as f32 + 0.5);
+    assert_eq!(pond_col.0, bed_block as f32 + 0.5);
 }
