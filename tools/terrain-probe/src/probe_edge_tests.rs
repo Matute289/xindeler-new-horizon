@@ -221,6 +221,71 @@ fn ec_d35_normalised_point_mapping_at_the_border() {
     );
 }
 
+/// Every consecutive vertex pair of the `points: [...]` polylines in the
+/// normalised authored RON files, in world metres (test helper: a segment-aware
+/// emptiness check, see BUG-P7).
+fn authored_segments(root: &Path, size: Vec2<i32>) -> Vec<((f64, f64), (f64, f64))> {
+    fn walk(v: &ron::Value, size: Vec2<i32>, out: &mut Vec<((f64, f64), (f64, f64))>) {
+        match v {
+            ron::Value::Map(m) => {
+                if let Some(ron::Value::Seq(pts)) = field(m, "points") {
+                    let xy: Vec<(f64, f64)> = pts
+                        .iter()
+                        .filter_map(|p| match p {
+                            ron::Value::Map(pm) => Some((
+                                field(pm, "x").and_then(num)? * f64::from(size.x),
+                                (1.0 - field(pm, "y").and_then(num)?) * f64::from(size.y),
+                            )),
+                            _ => None,
+                        })
+                        .collect();
+                    out.extend(xy.windows(2).map(|w| (w[0], w[1])));
+                }
+                for (_, c) in m.iter() {
+                    walk(c, size, out);
+                }
+            },
+            ron::Value::Seq(items) => items.iter().for_each(|c| walk(c, size, out)),
+            ron::Value::Option(Some(c)) => walk(c, size, out),
+            _ => {},
+        }
+    }
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(root.join("world/map")) else {
+        return out;
+    };
+    for e in rd.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !(n.starts_with("cromatolis_v0_") && n.ends_with(".ron")) {
+            continue;
+        }
+        if let Some(v) = std::fs::read_to_string(e.path())
+            .ok()
+            .and_then(|t| ron::from_str::<ron::Value>(&t).ok())
+            && coordinate_space_is_normalized(&v)
+        {
+            walk(&v, size, &mut out);
+        }
+    }
+    out
+}
+
+/// Distance from segment `a`-`e` to the box (0 when they meet), sampled finely
+/// enough (1 m) for a 600 m clearance test.
+fn segment_box_distance(a: (f64, f64), e: (f64, f64), b: Box2) -> f64 {
+    let len = (e.0 - a.0).hypot(e.1 - a.1);
+    let n = (len.ceil() as usize).max(1);
+    (0..=n)
+        .map(|i| {
+            let t = i as f64 / n as f64;
+            let (x, y) = (a.0 + (e.0 - a.0) * t, a.1 + (e.1 - a.1) * t);
+            let dx = (f64::from(b.x0) - x).max(0.0).max(x - f64::from(b.x1));
+            let dy = (f64::from(b.y0) - y).max(0.0).max(y - f64::from(b.y1));
+            dx.hypot(dy)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 // ------------------------------------------------------------- heavy
 
 fn probe() -> &'static Probe {
@@ -470,12 +535,18 @@ fn ec_d48_auto_z_range_covers_the_surface() {
         }
     }
     cand.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let segments = authored_segments(&p.assets_root, world_size(sim));
+    assert!(!segments.is_empty(), "no authored polylines found");
     let mut tested = 0;
     for (step, c) in cand.into_iter().take(400) {
         let b = bx(c.x * 32, c.y * 32, c.x * 32 + 32, c.y * 32 + 32);
-        // Only wilderness: nothing authored or generated within 600 m.
+        // Only wilderness: nothing authored or generated within 600 m, and no
+        // authored polyline segment either (the vertex-only guard is BUG-P7).
         if !world_sites(&ir, b, 600).is_empty()
             || !authored_points(&p.assets_root, world_size(sim), b, 600).is_empty()
+            || segments
+                .iter()
+                .any(|&(a, e)| segment_box_distance(a, e, b) < 600.0)
         {
             continue;
         }
