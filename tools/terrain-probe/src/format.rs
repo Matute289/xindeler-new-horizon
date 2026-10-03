@@ -1452,3 +1452,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "format_edge_tests.rs"]
+pub(crate) mod edge_tests;

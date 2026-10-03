@@ -347,3 +347,7 @@ mod tests {
         assert!(!r.ok(&o));
     }
 }
+
+#[cfg(test)]
+#[path = "diff_edge_tests.rs"]
+mod edge_tests;

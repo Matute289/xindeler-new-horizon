@@ -1223,3 +1223,7 @@ mod tests {
         assert_eq!(r.0, vec![(1, 32767)]);
     }
 }
+
+#[cfg(test)]
+#[path = "probe_edge_tests.rs"]
+mod edge_tests;
