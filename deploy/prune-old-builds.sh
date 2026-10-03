@@ -173,12 +173,19 @@ sort_versions_desc() {
 report_usage() {
     log "--- disk usage ($1) ---"
     local d
-    for d in "$RELEASES_DIR" "$DL_PUBLIC" "$SERVER_ROOT/src/target"; do
+    for d in "$RELEASES_DIR" "$DL_PUBLIC" "$SERVER_ROOT/src/target" "$LFS_REPOS"; do
         [ -d "$d" ] && log "  $(printf '%-9s' "$(human "$(size_kb "$d")")") $d"
     done
     local l
     l="$(df -h / 2>/dev/null | awk 'NR==2 {print "filesystem /: " $3 " used, " $4 " free (" $5 " full)"}')"
     [ -z "$l" ] || log "  $l"
+    # Monthly LFS-store / upload-guard summary (read-only). The guard lives in the
+    # private MyServerVPS repo (git-lfs/guard/); skip quietly where it isn't installed.
+    local g="${PRUNE_LFS_GUARD_REPORT:-/srv/git-lfs/guard/lfs-guard-report.sh}"
+    if [ -x "$g" ]; then
+        l="$(timeout 60 "$g" 2>/dev/null | head -1)" || true
+        [ -z "$l" ] || log "  $l"
+    fi
 }
 
 # --- part: server tarballs --------------------------------------------------
