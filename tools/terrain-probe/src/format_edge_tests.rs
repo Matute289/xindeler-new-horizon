@@ -1,8 +1,8 @@
 //! Edge-case battery for the `tprobe v1` format (reader/writer and
 //! `summarize`). Pure: no engine, no assets. Ids `EC-D*` refer to the
-//! precision-tooling corner-case catalogue; tests that expose a bug in the
-//! current code are `#[ignore = "BUG-.."]` so the suite stays green while the
-//! bug is tracked (run them with `--ignored` to see them fail).
+//! precision-tooling corner-case catalogue. A test that exposes a bug carries
+//! the catalogue's `BUG-P*` id in its doc comment; all of them pass since
+//! the fixes landed (a still-open bug would be `#[ignore = "BUG-.."]`).
 
 use std::{
     collections::BTreeMap,
@@ -40,6 +40,7 @@ pub(crate) fn header(box_xy: [i32; 4], zmin: i32, zmax: i32) -> Header {
         seed: 0,
         path: "fast".into(),
         calendar: None,
+        client: None,
         engine_commit: "test".into(),
         assets: BTreeMap::new(),
         class_codes: Header::class_codes(),
@@ -205,12 +206,12 @@ fn ec_d21_one_column_one_block() {
     }
 }
 
-/// EC-D22: an empty box (0 columns) round-trips (writer must not panic).
+/// EC-D22: an empty box (0 columns) is rejected by the writer with an `Err`
+/// (the review round made `check_dims` require a non-empty box), never a panic.
 #[test]
-fn ec_d22_empty_box_round_trips() {
+fn ec_d22_empty_box_is_rejected() {
     let d = dump_from_columns([7, 7, 7, 7], 0, &[]);
-    let r = Dump::read_from(&bytes(&d)[..]).unwrap();
-    assert_eq!(r.header.columns(), 0);
+    assert!(d.write_to(Vec::new()).is_err());
 }
 
 /// EC-D23: a column taller than u16::MAX blocks splits into several runs of
@@ -227,28 +228,37 @@ fn ec_d23_runs_longer_than_u16_split() {
     assert_eq!(i32::from(s.ground_top), -40_000 + h as i32 - 2);
 }
 
-/// EC-D24: the NO_Z sentinel collides with a real z of -32768: a column whose
-/// only ground block sits at z = -32768 reports "no ground".
+/// EC-D24 (BUG-P3, fixed): the `NO_Z` sentinel (-32768) cannot be a real z:
+/// a z range reaching it is refused up front (the reader and the writer both
+/// call `check_z_range`), and `summarize` itself reports such a block as
+/// "none" instead of a colliding value.
 #[test]
-#[ignore = "BUG-P3: ground_top at z=-32768 is indistinguishable from NO_Z (sentinel collision)"]
 fn ec_d24_sentinel_collision_at_i16_min() {
+    assert!(check_z_range(-32768, -32700).is_err());
+    assert!(check_z_range(Z_MIN_ALLOWED, Z_MIN_ALLOWED + 10).is_ok());
     let s = summarize(-32768, &[(class::GROUND, 1), (class::AIR, 9)]);
-    assert_ne!(
-        s.ground_top, NO_Z,
-        "a real ground block at -32768 must not read as none"
-    );
+    assert_eq!(s.ground_top, NO_Z);
+    // A dump whose header claims such a range does not read back.
+    let b = bytes(&random_dump(&mut Rng::new(24), 2, 2, 6));
+    let c = with_header(&b, |h| {
+        h["zmin"] = serde_json::json!(-32768);
+        h["zmax"] = serde_json::json!(-32762);
+    });
+    assert_eq!(read_outcome(&c), Ok(false));
 }
 
-/// EC-D25: `summarize` silently wraps z outside the i16 range (the dump
-/// command only bounds zmax - zmin, not zmin/zmax themselves).
+/// EC-D25 (BUG-P3, fixed): z outside the i16 range never wraps: `summarize`
+/// reports "none", and every dump entry point refuses such a range.
 #[test]
-#[ignore = "BUG-P3: ground_top/water_top are cast to i16 without a range check (z beyond +-32767 \
-            wraps)"]
 fn ec_d25_z_outside_i16_wraps() {
     let s = summarize(-40_000, &[(class::GROUND, 1000), (class::AIR, 10)]);
-    assert_eq!(i32::from(s.ground_top), -39_001);
+    assert_eq!(s.ground_top, NO_Z, "no wrap to a bogus value");
     let s = summarize(40_000, &[(class::GROUND, 5), (class::AIR, 10)]);
-    assert_eq!(i32::from(s.ground_top), 40_004);
+    assert_eq!(s.ground_top, NO_Z);
+    assert!(check_z_range(-40_000, -39_000).is_err());
+    assert!(check_z_range(32_000, 40_000).is_err());
+    assert!(check_z_range(0, 32_769).is_err());
+    assert!(check_z_range(1, 32_768).is_ok());
 }
 
 /// EC-D26: semantic cases of `summarize` that verifiers rely on.
@@ -320,10 +330,10 @@ fn ec_d01_every_truncation_is_a_clean_error() {
     }
 }
 
-/// EC-D02: trailing bytes after the last section are accepted silently (a
-/// concatenated or partially overwritten file reads as valid).
+/// EC-D02 (BUG-P4, fixed): trailing bytes after the last section are an
+/// error (a concatenated or partially overwritten file must not read as
+/// valid).
 #[test]
-#[ignore = "BUG-P4: trailing garbage after the last section is ignored by Dump::read_from"]
 fn ec_d02_trailing_garbage_is_rejected() {
     let mut b = bytes(&random_dump(&mut Rng::new(2), 2, 2, 8));
     b.extend_from_slice(b"junk");
@@ -353,11 +363,9 @@ fn ec_d03_bit_flips_never_panic() {
     );
 }
 
-/// EC-D04: a huge `comp_len`/`raw_len` in the section table must be an error,
-/// not an allocation panic/abort.
+/// EC-D04 (BUG-P1, fixed): a huge `comp_len`/`raw_len` in the section table
+/// is an error, not an allocation panic/abort.
 #[test]
-#[ignore = "BUG-P1: comp_len/raw_len from the header are allocated before any bound check \
-            (capacity overflow panic)"]
 fn ec_d04_huge_section_lengths_are_errors() {
     let b = bytes(&random_dump(&mut Rng::new(4), 2, 2, 6));
     for field in ["comp_len", "raw_len"] {
@@ -368,11 +376,9 @@ fn ec_d04_huge_section_lengths_are_errors() {
     }
 }
 
-/// EC-D05: a header whose nx/ny disagree with box_xy (same column count) is
-/// accepted, and `col_index` then addresses the wrong column.
+/// EC-D05 (BUG-P2, fixed): a header whose nx/ny disagree with box_xy (same
+/// column count) is rejected, so `col_index` can never misaddress a column.
 #[test]
-#[ignore = "BUG-P2: Dump::validate does not check nx == x1-x0 and ny == y1-y0 (wrong columns / \
-            panic in runs_at)"]
 fn ec_d05_nx_ny_must_match_the_box() {
     let d = random_dump(&mut Rng::new(5), 4, 1, 6);
     let b = bytes(&d);
@@ -384,21 +390,21 @@ fn ec_d05_nx_ny_must_match_the_box() {
     assert_eq!(read_outcome(&c), Ok(false));
 }
 
-/// EC-D06: zmax < zmin with no columns passes validation (height() wraps).
+/// EC-D06 (BUG-P4, fixed): an inverted z range (zmax < zmin) is rejected.
 #[test]
-#[ignore = "BUG-P4: an inverted z range (zmax < zmin) is not rejected by the reader"]
 fn ec_d06_inverted_z_range_is_rejected() {
-    let d = dump_from_columns([0, 0, 0, 0], 10, &[]);
-    let b = with_header(&bytes(&d), |h| {
+    let b = bytes(&random_dump(&mut Rng::new(6), 2, 1, 4));
+    let c = with_header(&b, |h| {
         h["zmin"] = serde_json::json!(10);
         h["zmax"] = serde_json::json!(5);
     });
-    assert_eq!(read_outcome(&b), Ok(false));
+    assert_eq!(read_outcome(&c), Ok(false));
+    assert!(check_z_range(10, 5).is_err());
+    assert!(check_z_range(10, 10).is_err());
 }
 
-/// EC-D07: unknown class codes inside run_class are accepted.
+/// EC-D07 (BUG-P4, fixed): unknown class codes inside run_class are rejected.
 #[test]
-#[ignore = "BUG-P4: run_class values outside the declared class_codes are not rejected"]
 fn ec_d07_unknown_class_codes_are_rejected() {
     let mut d = random_dump(&mut Rng::new(7), 2, 1, 4);
     d.run_class[0] = 77;
@@ -435,12 +441,24 @@ fn ec_d09_zstd_payload_corruption_never_panics() {
     }
 }
 
-/// EC-D10: non-finite site radii do not survive a round trip (serde_json
-/// writes NaN/inf as null).
+/// EC-D10 (BUG-P4, fixed): a non-finite site radius cannot round-trip
+/// (serde_json writes NaN/inf as null), so the writer refuses it instead of
+/// silently turning it into "unknown".
 #[test]
-#[ignore = "BUG-P4: SiteRec.radius NaN/inf serialises as null and reads back as None (lossy round \
-            trip)"]
-fn ec_d10_site_radius_non_finite_round_trip() {
+fn ec_d10_site_radius_non_finite_is_refused() {
+    for radius in [f32::INFINITY, f32::NAN, f32::NEG_INFINITY] {
+        let mut d = random_dump(&mut Rng::new(10), 1, 1, 3);
+        d.sites.push(SiteRec {
+            source: "world_site".into(),
+            id: None,
+            name: None,
+            kind: None,
+            wx: 0,
+            wy: 0,
+            radius: Some(radius),
+        });
+        assert!(d.write_to(Vec::new()).is_err(), "{radius}");
+    }
     let mut d = random_dump(&mut Rng::new(10), 1, 1, 3);
     d.sites.push(SiteRec {
         source: "world_site".into(),
@@ -449,10 +467,10 @@ fn ec_d10_site_radius_non_finite_round_trip() {
         kind: None,
         wx: 0,
         wy: 0,
-        radius: Some(f32::INFINITY),
+        radius: Some(12.5),
     });
     let r = Dump::read_from(&bytes(&d)[..]).unwrap();
-    assert_eq!(r.sites[0].radius, Some(f32::INFINITY));
+    assert_eq!(r.sites[0].radius, Some(12.5));
 }
 
 /// EC-D11: f32 bit patterns (NaN payloads, -0.0, subnormals, inf) survive the
@@ -478,7 +496,12 @@ fn ec_d11_float_bit_patterns_survive() {
 /// regardless of the host (the shuffle puts all low bytes first).
 #[test]
 fn ec_d12_little_endian_on_disk() {
-    assert_eq!(pack_u16(&[258]), vec![0x02, 0x01]);
-    assert_eq!(pack_u16(&[258, 3]), vec![0x02, 0x03, 0x01, 0x00]);
-    assert_eq!(pack_f32(&[1.0]), 1.0f32.to_le_bytes().to_vec());
+    assert_eq!(pack_lanes(&[258u16], u16::to_le_bytes), vec![0x02, 0x01]);
+    assert_eq!(pack_lanes(&[258u16, 3], u16::to_le_bytes), vec![
+        0x02, 0x03, 0x01, 0x00
+    ]);
+    assert_eq!(
+        pack_lanes(&[1.0f32], f32::to_le_bytes),
+        1.0f32.to_le_bytes().to_vec()
+    );
 }

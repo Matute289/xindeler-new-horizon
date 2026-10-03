@@ -45,7 +45,7 @@ pub mod class {
     /// (`z <= trunc(alt)`; Ice is exempt, frozen water sits above `alt`).
     /// Natural-kind blocks above the surface are class 4.
     pub const GROUND: u8 = 1;
-    /// Liquid (water, lava).
+    /// Liquid (water or lava; [`flag::LAVA`] marks columns that hold lava).
     pub const LIQUID: u8 = 2;
     /// Not loaded / not generated (client path only).
     pub const UNLOADED: u8 = 3;
@@ -75,6 +75,16 @@ pub mod flag {
     /// tree, bridge deck, boulder... standing on the surface), or the
     /// column has structure blocks and no natural ground at all.
     pub const STRUCTURE_ABOVE_GROUND: u8 = 32;
+    /// At least one [`class::LIQUID`] block of the column is lava, not water
+    /// (set by the probe, which sees block kinds; [`super::summarize`] only
+    /// sees classes and never sets it). A column with this flag and
+    /// [`LIQUID`] holds lava; [`LIQUID`] without it holds water only.
+    pub const LAVA: u8 = 64;
+    /// The column sampler returned nothing for this column (NaN `alt`):
+    /// within 32 m of the map's W/S border and 64 m of its E/N border. The
+    /// generated column has no natural ground and reads as water to the
+    /// bottom, so verifiers must not treat it as terrain (set by the probe).
+    pub const RIM_NO_SAMPLE: u8 = 128;
 }
 
 pub const NO_Z: i16 = i16::MIN;
@@ -430,6 +440,22 @@ impl Dump {
                 self.run_len.len()
             ));
         }
+        if let Some(&c) = self.run_class.iter().find(|&&c| c > class::SPRITE) {
+            return bad(format!(
+                "run class {c} is not a known block class (0..={})",
+                class::SPRITE
+            ));
+        }
+        if let Some(r) = self
+            .sites
+            .iter()
+            .find(|r| r.radius.is_some_and(|v| !v.is_finite()))
+        {
+            return bad(format!(
+                "site {:?} has a non-finite radius (it would round-trip as null)",
+                r.id.as_deref().or(r.name.as_deref())
+            ));
+        }
         let h = self.header.height() as u64;
         let off = self.run_offsets();
         for i in 0..n {
@@ -744,6 +770,17 @@ impl Dump {
         let sim_csv = String::from_utf8(sec(12, None)?).map_err(|e| bad_data(e.to_string()))?;
         let sites: Vec<SiteRec> =
             serde_json::from_slice(&sec(13, None)?).map_err(|e| bad_data(e.to_string()))?;
+        // Nothing may follow the last section: a concatenated or partially
+        // overwritten file must not read as valid.
+        let mut extra = [0u8; 1];
+        loop {
+            match r.read(&mut extra) {
+                Ok(0) => break,
+                Ok(_) => return Err(bad_data("trailing bytes after the last section")),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {},
+                Err(e) => return Err(e),
+            }
+        }
         let d = Self {
             header,
             alt,

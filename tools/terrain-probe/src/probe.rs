@@ -77,7 +77,9 @@ pub fn world_size(sim: &WorldSim) -> Vec2<i32> { sim.get_size().map(|e| e as i32
 /// `keep_sprites` is set, every sprite block is therefore recorded as air,
 /// which keeps dumps byte-reproducible; with it, sprites are `SPRITE`.
 pub fn classify(b: &Block, keep_sprites: bool) -> u8 {
-    if b.is_liquid() {
+    // Lava is `BlockKind::Lava` (0x12): it is neither a fluid kind nor solid
+    // in the engine, so it has to be matched explicitly or it reads as air.
+    if b.is_liquid() || is_lava(b) {
         class::LIQUID
     } else if matches!(b.get_sprite(), Some(s) if s != SpriteKind::Empty) {
         if keep_sprites {
@@ -96,6 +98,10 @@ pub fn classify(b: &Block, keep_sprites: bool) -> u8 {
     }
 }
 
+/// Whether the block is lava (class [`class::LIQUID`], marked per column by
+/// [`flag::LAVA`] so verifiers can tell it from water).
+pub fn is_lava(b: &Block) -> bool { b.kind() == BlockKind::Lava }
+
 /// Whether `kind` is one of the natural terrain kinds (class 1 candidates).
 fn is_natural_kind(k: BlockKind) -> bool {
     matches!(
@@ -103,6 +109,7 @@ fn is_natural_kind(k: BlockKind) -> bool {
         BlockKind::Rock
             | BlockKind::WeakRock
             | BlockKind::GlowingRock
+            | BlockKind::GlowingWeakRock
             | BlockKind::Grass
             | BlockKind::Snow
             | BlockKind::Earth
@@ -209,13 +216,18 @@ impl Box2 {
     }
 }
 
-/// Default sampled z range for a box: from just under the lowest chunk
-/// basement/altitude to 96 m above the highest altitude/water level.
+/// Default sampled z range for a box, from the sim table only: just under
+/// the lowest chunk basement/altitude to 96 m above the highest
+/// altitude/water level, over the chunks the box touches **plus a one-chunk
+/// halo**: a column's altitude is a spline of the chunk knots `c-1..c+2`, so
+/// it is pulled towards the neighbouring chunks (next to a 500 m step, the
+/// chunks the box touches alone clipped 938 of 1024 columns, BUG-P8). Use
+/// [`auto_z_range_for`] to also fold in the sampler's actual column values.
 pub fn auto_z_range(sim: &WorldSim, b: Box2) -> (i32, i32) {
     let (c0, c1) = b.chunk_range();
     let (mut lo, mut hi) = (f32::MAX, f32::MIN);
-    for cy in c0.y..=c1.y {
-        for cx in c0.x..=c1.x {
+    for cy in c0.y - 1..=c1.y + 1 {
+        for cx in c0.x - 1..=c1.x + 1 {
             if let Some(c) = sim.get(Vec2::new(cx, cy)) {
                 lo = lo.min(c.alt.min(c.basement));
                 hi = hi.max(c.alt.max(c.water_alt));
@@ -226,6 +238,51 @@ pub fn auto_z_range(sim: &WorldSim, b: Box2) -> (i32, i32) {
         (lo.floor() as i32).saturating_sub(16).max(-4096),
         (hi.ceil() as i32).saturating_add(96),
     )
+}
+
+/// Column-sampler stride (m) of [`auto_z_range_for`].
+const AUTO_Z_STRIDE: i32 = 4;
+
+/// The automatic z range of a box: [`auto_z_range`] widened to the actual
+/// `alt` / `water_level` the column sampler returns on a 4 m grid over the
+/// box (its four corners are always included), so a surface the chunk knots
+/// do not predict (spline overshoot, rivers, cliffs) is still inside the
+/// range. The same 16 m below / 96 m above margins apply.
+pub fn auto_z_range_for(p: &Probe, b: Box2) -> (i32, i32) {
+    let (mut zmin, mut zmax) = auto_z_range(p.world.sim(), b);
+    let ir = p.index.as_index_ref();
+    let cg = p.world.sample_columns();
+    let ys: Vec<i32> = (b.y0..b.y1)
+        .step_by(AUTO_Z_STRIDE as usize)
+        .chain(std::iter::once(b.y1 - 1))
+        .collect();
+    let (lo, hi) = p.pool.install(|| {
+        ys.par_iter()
+            .map(|&y| {
+                let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+                for x in (b.x0..b.x1)
+                    .step_by(AUTO_Z_STRIDE as usize)
+                    .chain(std::iter::once(b.x1 - 1))
+                {
+                    if let Some(s) = cg.get((Vec2::new(x, y), ir, None)) {
+                        if s.alt.is_finite() {
+                            lo = lo.min(s.alt);
+                            hi = hi.max(s.alt);
+                        }
+                        if s.water_level.is_finite() {
+                            hi = hi.max(s.water_level);
+                        }
+                    }
+                }
+                (lo, hi)
+            })
+            .reduce(|| (f32::MAX, f32::MIN), |a, b| (a.0.min(b.0), a.1.max(b.1)))
+    });
+    if lo <= hi {
+        zmin = zmin.min((lo.floor() as i32).saturating_sub(16).max(-4096));
+        zmax = zmax.max((hi.ceil() as i32).saturating_add(96));
+    }
+    (zmin, zmax)
 }
 
 /// Bottom-to-top run builder. Run lengths never exceed the column height
@@ -248,6 +305,7 @@ impl Runs {
 /// Blocks below/above the chunk's stored range are constant, so they are
 /// emitted as one run each (two where the surface `cap` falls inside) instead
 /// of being queried one by one. `cap` is [`surface_cap`] of the column.
+#[cfg(test)]
 pub(crate) fn column_runs(
     ch: &TerrainChunk,
     rel: Vec2<i32>,
@@ -256,9 +314,29 @@ pub(crate) fn column_runs(
     keep_sprites: bool,
     cap: Option<i32>,
 ) -> Vec<(u8, u16)> {
+    column_runs_ex(ch, rel, zmin, zmax, keep_sprites, cap).0
+}
+
+/// [`column_runs`] plus the column flags only the probe can derive:
+/// [`flag::LAVA`] (a lava block was seen) and [`flag::RIM_NO_SAMPLE`] (`cap`
+/// is `None`: the column sampler returned nothing, see [`surface_cap`]).
+/// OR them into the column's [`format::summarize`] flags.
+pub(crate) fn column_runs_ex(
+    ch: &TerrainChunk,
+    rel: Vec2<i32>,
+    zmin: i32,
+    zmax: i32,
+    keep_sprites: bool,
+    cap: Option<i32>,
+) -> (Vec<(u8, u16)>, u8) {
+    let lava = std::cell::Cell::new(false);
     let class_at = |z: i32| {
-        ch.get(rel.with_z(z))
-            .map_or(class::UNLOADED, |b| classify_at(b, z, cap, keep_sprites))
+        ch.get(rel.with_z(z)).map_or(class::UNLOADED, |b| {
+            if is_lava(b) {
+                lava.set(true);
+            }
+            classify_at(b, z, cap, keep_sprites)
+        })
     };
     // A constant stretch `[a, b)`: classify its first block, and the part
     // above the cap separately when the cap splits it.
@@ -283,7 +361,14 @@ pub(crate) fn column_runs(
         r.push(class_at(z), 1);
     }
     constant(&mut r, hi_start, zmax);
-    r.0
+    let mut extra = 0;
+    if lava.get() {
+        extra |= flag::LAVA;
+    }
+    if cap.is_none() {
+        extra |= flag::RIM_NO_SAMPLE;
+    }
+    (r.0, extra)
 }
 
 /// Everything sampled for one in-box column of a chunk.
@@ -370,8 +455,10 @@ fn chunk_columns(
         for lx in lx0..lx1 {
             let rel = Vec2::new(lx, ly);
             let [alt, riverless_alt, water_level, warp_factor] = fl.next().unwrap_or([f32::NAN; 4]);
-            let runs = column_runs(&ch, rel, zmin, zmax, keep_sprites, surface_cap(alt));
-            let sum = format::summarize(zmin, &runs);
+            let (runs, extra) =
+                column_runs_ex(&ch, rel, zmin, zmax, keep_sprites, surface_cap(alt));
+            let mut sum = format::summarize(zmin, &runs);
+            sum.flags |= extra;
             let top_kind = if sum.ground_top == format::NO_Z {
                 255
             } else {
@@ -476,7 +563,7 @@ pub fn dump(
         )
         .into());
     }
-    let (zmin, zmax) = resolve_z_range(o.zmin, o.zmax, auto_z_range(p.world.sim(), b))?;
+    let (zmin, zmax) = resolve_z_range(o.zmin, o.zmax, auto_z_range_for(p, b))?;
     let (c0, c1) = b.chunk_range();
     let ncx = (c1.x - c0.x + 1) as usize;
     let ncy = (c1.y - c0.y + 1) as usize;
@@ -497,6 +584,7 @@ pub fn dump(
     let mut run_len = Vec::new();
     let mut clipped = 0u64;
     let mut above = 0u64;
+    let (mut lava, mut rim) = (0u64, 0u64);
     let mut times = (0u64, 0u64, 0u64);
 
     // Process the box in bands of chunk rows so memory stays bounded while the
@@ -548,6 +636,8 @@ pub fn dump(
                         flags.push(c.sum.flags);
                         clipped += u64::from(c.sum.flags & flag::CLIPPED_TOP != 0);
                         above += u64::from(c.sum.flags & flag::STRUCTURE_ABOVE_GROUND != 0);
+                        lava += u64::from(c.sum.flags & flag::LAVA != 0);
+                        rim += u64::from(c.sum.flags & flag::RIM_NO_SAMPLE != 0);
                         ground_top.push(c.sum.ground_top);
                         water_top.push(c.sum.water_top);
                         liquid_depth.push(c.sum.liquid_depth);
@@ -595,6 +685,8 @@ pub fn dump(
             ("chunks".to_string(), (ncx * ncy) as u64),
             ("clipped_top_columns".to_string(), clipped),
             ("structure_above_ground_columns".to_string(), above),
+            ("lava_columns".to_string(), lava),
+            ("rim_no_sample_columns".to_string(), rim),
             ("sprites_kept".to_string(), u64::from(o.keep_sprites)),
             ("sites".to_string(), sites.len() as u64),
         ]
@@ -706,17 +798,75 @@ pub fn sim_table(p: &Probe, c0: Vec2<i32>, c1: Vec2<i32>) -> String {
     s
 }
 
+/// Whether the point lies strictly inside the box grown by `margin` on every
+/// side (i64 arithmetic: boxes and margins near the i32 limits cannot wrap).
 fn near_box(x: i32, y: i32, b: Box2, margin: i32) -> bool {
-    x > b.x0 - margin && x < b.x1 + margin && y > b.y0 - margin && y < b.y1 + margin
+    let (x, y, m) = (i64::from(x), i64::from(y), i64::from(margin));
+    x > i64::from(b.x0) - m
+        && x < i64::from(b.x1) + m
+        && y > i64::from(b.y0) - m
+        && y < i64::from(b.y1) + m
 }
 
-/// Sites in the generated world index whose origin lies within `margin` of the
-/// box.
+/// Whether the segment `a`-`e` meets the box grown by `margin` (closed
+/// rectangle; Liang-Barsky clipping, exact, no sampling).
+fn segment_near_box(a: (f64, f64), e: (f64, f64), b: Box2, margin: i32) -> bool {
+    let m = f64::from(margin);
+    let (xmin, xmax) = (f64::from(b.x0) - m, f64::from(b.x1) + m);
+    let (ymin, ymax) = (f64::from(b.y0) - m, f64::from(b.y1) + m);
+    let (dx, dy) = (e.0 - a.0, e.1 - a.1);
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (p, q) in [
+        (-dx, a.0 - xmin),
+        (dx, xmax - a.0),
+        (-dy, a.1 - ymin),
+        (dy, ymax - a.1),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return false;
+            }
+        } else {
+            let r = q / p;
+            if p < 0.0 {
+                t0 = t0.max(r);
+            } else {
+                t1 = t1.min(r);
+            }
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Point of the segment `a`-`e` closest to `c`.
+fn closest_on_segment(a: (f64, f64), e: (f64, f64), c: (f64, f64)) -> (f64, f64) {
+    let (dx, dy) = (e.0 - a.0, e.1 - a.1);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 == 0.0 {
+        0.0
+    } else {
+        (((c.0 - a.0) * dx + (c.1 - a.1) * dy) / l2).clamp(0.0, 1.0)
+    };
+    (a.0 + dx * t, a.1 + dy * t)
+}
+
+/// Sites in the generated world index whose area comes within `margin` of the
+/// box: the origin is tested against the box grown by `margin` plus the
+/// site's own radius.
 pub fn world_sites(ir: &world::IndexRef, b: Box2, margin: i32) -> Vec<SiteRec> {
     let mut out = Vec::new();
     for (_, site) in ir.sites.iter() {
         let o = site.origin;
-        if near_box(o.x, o.y, b, margin) {
+        let radius = site.radius();
+        let reach = margin.saturating_add(if radius.is_finite() {
+            radius.ceil().clamp(0.0, 1.0e6) as i32
+        } else {
+            0
+        });
+        if near_box(o.x, o.y, b, reach) {
             out.push(SiteRec {
                 source: "world_site".into(),
                 id: None,
@@ -724,7 +874,7 @@ pub fn world_sites(ir: &world::IndexRef, b: Box2, margin: i32) -> Vec<SiteRec> {
                 kind: site.kind.as_ref().map(|k| format!("{k:?}")),
                 wx: o.x,
                 wy: o.y,
-                radius: Some(site.radius()),
+                radius: Some(radius),
             });
         }
     }
@@ -732,22 +882,56 @@ pub fn world_sites(ir: &world::IndexRef, b: Box2, margin: i32) -> Vec<SiteRec> {
     out
 }
 
-/// All authored points (settlements, landmarks, caves, bridges, interiors...)
-/// from the `cromatolis_v0_*.ron` files with normalised top-left coordinates,
-/// converted to world metres, that lie within `margin` of the box.
-pub fn authored_points(root: &Path, size: Vec2<i32>, b: Box2, margin: i32) -> Vec<SiteRec> {
-    let mut all = Vec::new();
-    all_authored_points(root, size, &mut all);
-    all.retain(|r| near_box(r.wx, r.wy, b, margin));
-    all.sort_by(|a, b| (&a.source, a.wx, a.wy, &a.id).cmp(&(&b.source, b.wx, b.wy, &b.id)));
-    all
+/// One authored feature in world metres: a point (one vertex), or a
+/// polyline / wall / bridge (several vertices; the segments between them are
+/// part of the feature, route vertices are kilometres apart).
+#[derive(Clone, Debug)]
+pub struct AuthoredFeature {
+    /// The `cromatolis_v0_*.ron` file it came from.
+    pub source: String,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub kind: Option<String>,
+    pub pts: Vec<(f64, f64)>,
+    /// Extent around the vertices (only the aerial citadel has one).
+    pub radius: Option<f32>,
 }
 
-/// Every normalised authored point, unfiltered.
-pub fn all_authored_points(root: &Path, size: Vec2<i32>, out: &mut Vec<SiteRec>) {
-    let Ok(rd) = std::fs::read_dir(root.join("world/map")) else {
-        return;
-    };
+/// How a file's `x`/`y` fields map to world metres.
+#[derive(Clone, Copy)]
+enum Space {
+    /// `normalized_map_xy_top_left*`: x, y in 0..=1, origin top-left.
+    Normalized,
+    /// `source_pixels_xy_top_left_origin`: pixels of a `w` x `h` source map,
+    /// normalised as `px / (w - 1)` exactly like the engine's fortification
+    /// loader (`normalize_point` in `world/src/civ/mod.rs`).
+    Pixels { w: f64, h: f64 },
+}
+
+impl Space {
+    /// World metres of the pair, or `None` when it is outside the map.
+    fn to_world(self, x: f64, y: f64, size: Vec2<i32>) -> Option<(f64, f64)> {
+        let (u, v) = match self {
+            Self::Normalized => (x, y),
+            Self::Pixels { w, h } => (x / (w - 1.0).max(1.0), y / (h - 1.0).max(1.0)),
+        };
+        ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v))
+            .then(|| (u * f64::from(size.x), (1.0 - v) * f64::from(size.y)))
+    }
+}
+
+/// Every authored feature of the `cromatolis_v0_*.ron` files, in world metres.
+///
+/// Handled coordinate spaces: `normalized_map_xy_top_left*`,
+/// `source_pixels_xy_top_left_origin` (walls and gates, converted through the
+/// file's own `source_map`), `citadel_relative_meters` (the aerial citadel's
+/// absolute `center` and `max_radius_m`) and `inherits_landmark_center` (no
+/// positions of its own). A file that declares any other coordinate space, or
+/// declares one and cannot be parsed, is an `Err`: a guard that silently
+/// skipped it could call a box empty while something authored stands there.
+pub fn authored_features(root: &Path, size: Vec2<i32>) -> Result<Vec<AuthoredFeature>, String> {
+    let rd = std::fs::read_dir(root.join("world/map"))
+        .map_err(|e| format!("cannot read {}/world/map: {e}", root.display()))?;
     let mut files: Vec<_> = rd
         .flatten()
         .filter(|e| {
@@ -756,18 +940,248 @@ pub fn all_authored_points(root: &Path, size: Vec2<i32>, out: &mut Vec<SiteRec>)
         })
         .collect();
     files.sort_by_key(|e| e.file_name());
+    let mut out = Vec::new();
     for e in files {
         let name = e.file_name().to_string_lossy().into_owned();
-        let Ok(text) = std::fs::read_to_string(e.path()) else {
-            continue;
+        let text = std::fs::read_to_string(e.path()).map_err(|e| format!("{name}: {e}"))?;
+        let v = match ron::from_str::<ron::Value>(&text) {
+            Ok(v) => v,
+            Err(err) if text.contains("coordinate_space") => {
+                return Err(format!(
+                    "{name}: declares a coordinate space but does not parse: {err}"
+                ));
+            },
+            Err(_) => continue,
         };
-        let Ok(v) = ron::from_str::<ron::Value>(&text) else {
-            continue;
+        let ron::Value::Map(top) = &v else { continue };
+        let Some(space) = field(top, "coordinate_space").and_then(str_of) else {
+            continue; // no positions (climate, ground cover, ...)
         };
-        if !coordinate_space_is_normalized(&v) {
-            continue;
+        let space = match space.as_str() {
+            s if s.starts_with("normalized_map_xy_top_left") => Space::Normalized,
+            "source_pixels_xy_top_left_origin" => {
+                let dims = field(top, "source_map").and_then(|m| match m {
+                    ron::Value::Map(m) => Some((
+                        field(m, "width_px").and_then(num)?,
+                        field(m, "height_px").and_then(num)?,
+                    )),
+                    _ => None,
+                });
+                let Some((w, h)) = dims else {
+                    return Err(format!(
+                        "{name}: source-pixel file without source_map dimensions"
+                    ));
+                };
+                Space::Pixels { w, h }
+            },
+            "citadel_relative_meters" => {
+                if let Some(f) = citadel_feature(top, &name) {
+                    out.push(f);
+                }
+                continue;
+            },
+            "inherits_landmark_center" => continue,
+            other => {
+                return Err(format!(
+                    "{name}: unhandled coordinate space {other:?}; teach authored_features() \
+                     about it before trusting an emptiness check"
+                ));
+            },
+        };
+        collect_features(&v, &name, space, size, &Ctx::default(), &mut out);
+    }
+    Ok(out)
+}
+
+/// The aerial citadel: `center: (x, y)` is absolute world metres, the rest
+/// is relative to it; `max_radius_m` bounds the whole structure.
+fn citadel_feature(top: &ron::Map, file: &str) -> Option<AuthoredFeature> {
+    let ron::Value::Seq(c) = field(top, "center")? else {
+        return None;
+    };
+    let [x, y] = &c[..] else { return None };
+    Some(AuthoredFeature {
+        source: file.to_string(),
+        id: Some("aerial_citadel".into()),
+        name: None,
+        kind: Some("aerial_citadel".into()),
+        pts: vec![(num(x)?, num(y)?)],
+        radius: field(top, "max_radius_m").and_then(num).map(|r| r as f32),
+    })
+}
+
+#[derive(Default, Clone)]
+struct Ctx {
+    id: Option<String>,
+    name: Option<String>,
+    kind: Option<String>,
+}
+
+fn xy(v: &ron::Value) -> Option<(f64, f64)> {
+    match v {
+        ron::Value::Map(m) => Some((field(m, "x").and_then(num)?, field(m, "y").and_then(num)?)),
+        _ => None,
+    }
+}
+
+fn collect_features(
+    v: &ron::Value,
+    file: &str,
+    space: Space,
+    size: Vec2<i32>,
+    ctx: &Ctx,
+    out: &mut Vec<AuthoredFeature>,
+) {
+    match v {
+        ron::Value::Map(m) => {
+            let pick = |k: &[&str], old: &Option<String>| {
+                k.iter()
+                    .find_map(|k| field(m, k).and_then(str_of))
+                    .or_else(|| old.clone())
+            };
+            let ctx = Ctx {
+                id: pick(&["id"], &ctx.id),
+                name: pick(&["name"], &ctx.name),
+                kind: pick(&["kind", "category"], &ctx.kind),
+            };
+            let feature = |pts: Vec<(f64, f64)>, kind: Option<String>| AuthoredFeature {
+                source: file.to_string(),
+                id: ctx.id.clone(),
+                name: ctx.name.clone(),
+                kind,
+                pts,
+                radius: None,
+            };
+            let world = |p: (f64, f64)| space.to_world(p.0, p.1, size);
+            // A polyline: `points: [(x:, y:), ...]` (routes, maritime routes).
+            if let Some(ron::Value::Seq(pts)) = field(m, "points") {
+                let pts: Vec<_> = pts.iter().filter_map(xy).filter_map(world).collect();
+                if !pts.is_empty() {
+                    let kind = ctx
+                        .kind
+                        .clone()
+                        .or_else(|| (pts.len() > 1).then(|| "polyline".into()));
+                    out.push(feature(pts, kind));
+                    return;
+                }
+            }
+            // A wall or bridge: `start` and `end` points, the span between
+            // them is the feature. Other children (gates) are visited too.
+            let span = match (field(m, "start").and_then(xy), field(m, "end").and_then(xy)) {
+                (Some(a), Some(e)) => world(a).zip(world(e)),
+                _ => None,
+            };
+            if let Some((a, e)) = span {
+                out.push(feature(
+                    vec![a, e],
+                    ctx.kind.clone().or_else(|| Some("span".into())),
+                ));
+                for (k, child) in m.iter() {
+                    if !matches!(k, ron::Value::String(s) if s == "start" || s == "end") {
+                        collect_features(child, file, space, size, &ctx, out);
+                    }
+                }
+                return;
+            }
+            if let Some(p) = xy(v).and_then(world) {
+                out.push(feature(vec![p], ctx.kind.clone()));
+                return;
+            }
+            for (_, child) in m.iter() {
+                collect_features(child, file, space, size, &ctx, out);
+            }
+        },
+        ron::Value::Seq(items) => {
+            for item in items {
+                collect_features(item, file, space, size, ctx, out);
+            }
+        },
+        ron::Value::Option(Some(inner)) => collect_features(inner, file, space, size, ctx, out),
+        _ => {},
+    }
+}
+
+/// Authored features within `margin` of the box (the box grown by `margin`
+/// on every side): points by position, polylines / walls / bridges by their
+/// **segments**, so a route whose vertices are kilometres away but whose
+/// span crosses the box is reported. Each feature yields one record, placed
+/// at the feature's point closest to the box centre. A point feature's
+/// `radius` extends the reach. Errors as [`authored_features`].
+pub fn authored_near(
+    root: &Path,
+    size: Vec2<i32>,
+    b: Box2,
+    margin: i32,
+) -> Result<Vec<SiteRec>, String> {
+    let centre = (
+        (f64::from(b.x0) + f64::from(b.x1)) / 2.0,
+        (f64::from(b.y0) + f64::from(b.y1)) / 2.0,
+    );
+    let mut out = Vec::new();
+    for f in authored_features(root, size)? {
+        let reach =
+            margin.saturating_add(f.radius.map_or(0, |r| r.ceil().clamp(0.0, 1.0e6) as i32));
+        let best = if let [p] = f.pts[..] {
+            let (x, y) = (p.0.round() as i32, p.1.round() as i32);
+            near_box(x, y, b, reach).then_some(p)
+        } else {
+            f.pts
+                .windows(2)
+                .filter(|w| segment_near_box(w[0], w[1], b, reach))
+                .map(|w| closest_on_segment(w[0], w[1], centre))
+                .min_by(|p, q| {
+                    let d = |p: &(f64, f64)| (p.0 - centre.0).hypot(p.1 - centre.1);
+                    d(p).total_cmp(&d(q))
+                })
+        };
+        if let Some((x, y)) = best {
+            out.push(SiteRec {
+                source: f.source,
+                id: f.id,
+                name: f.name,
+                kind: f.kind,
+                wx: x.round() as i32,
+                wy: y.round() as i32,
+                radius: f.radius,
+            });
         }
-        collect_points(&v, &name, size, None, None, None, out);
+    }
+    out.sort_by(|a, b| (&a.source, a.wx, a.wy, &a.id).cmp(&(&b.source, b.wx, b.wy, &b.id)));
+    Ok(out)
+}
+
+/// [`authored_near`] for the dump's site list: a file it cannot interpret is
+/// reported on stderr instead of failing the whole dump (use `sites-near`,
+/// which is strict, for emptiness checks).
+pub fn authored_points(root: &Path, size: Vec2<i32>, b: Box2, margin: i32) -> Vec<SiteRec> {
+    authored_near(root, size, b, margin).unwrap_or_else(|e| {
+        eprintln!("warning: authored points skipped: {e}");
+        Vec::new()
+    })
+}
+
+#[cfg(test)]
+/// Every authored feature as point records, unfiltered: one per point
+/// feature, one per vertex of a polyline / wall / bridge. (Lenient like
+/// [`authored_points`].)
+pub fn all_authored_points(root: &Path, size: Vec2<i32>, out: &mut Vec<SiteRec>) {
+    match authored_features(root, size) {
+        Ok(fs) => {
+            for f in fs {
+                for &(x, y) in &f.pts {
+                    out.push(SiteRec {
+                        source: f.source.clone(),
+                        id: f.id.clone(),
+                        name: f.name.clone(),
+                        kind: f.kind.clone(),
+                        wx: x.round() as i32,
+                        wy: y.round() as i32,
+                        radius: f.radius,
+                    });
+                }
+            }
+        },
+        Err(e) => eprintln!("warning: authored points skipped: {e}"),
     }
 }
 
@@ -784,6 +1198,7 @@ fn field<'a>(m: &'a ron::Map, key: &str) -> Option<&'a ron::Value> {
         .map(|(_, v)| v)
 }
 
+#[cfg(test)]
 fn coordinate_space_is_normalized(v: &ron::Value) -> bool {
     matches!(v, ron::Value::Map(m)
         if field(m, "coordinate_space")
@@ -795,59 +1210,6 @@ fn num(v: &ron::Value) -> Option<f64> {
     match v {
         ron::Value::Number(n) => Some(n.into_f64()),
         _ => None,
-    }
-}
-
-fn collect_points(
-    v: &ron::Value,
-    file: &str,
-    size: Vec2<i32>,
-    id: Option<&str>,
-    name: Option<&str>,
-    kind: Option<&str>,
-    out: &mut Vec<SiteRec>,
-) {
-    match v {
-        ron::Value::Map(m) => {
-            let id_s = field(m, "id").and_then(str_of);
-            let name_s = field(m, "name").and_then(str_of);
-            let kind_s = field(m, "kind")
-                .or_else(|| field(m, "category"))
-                .and_then(|k| match k {
-                    ron::Value::String(s) => Some(s.clone()),
-                    _ => None,
-                });
-            let (id, name, kind) = (
-                id_s.as_deref().or(id),
-                name_s.as_deref().or(name),
-                kind_s.as_deref().or(kind),
-            );
-            if let (Some(x), Some(y)) = (field(m, "x").and_then(num), field(m, "y").and_then(num))
-                && (0.0..=1.0).contains(&x)
-                && (0.0..=1.0).contains(&y)
-            {
-                out.push(SiteRec {
-                    source: file.to_string(),
-                    id: id.map(str::to_owned),
-                    name: name.map(str::to_owned),
-                    kind: kind.map(str::to_owned),
-                    wx: (x * f64::from(size.x)).round() as i32,
-                    wy: ((1.0 - y) * f64::from(size.y)).round() as i32,
-                    radius: None,
-                });
-                return;
-            }
-            for (_, child) in m.iter() {
-                collect_points(child, file, size, id, name, kind, out);
-            }
-        },
-        ron::Value::Seq(items) => {
-            for item in items {
-                collect_points(item, file, size, id, name, kind, out);
-            }
-        },
-        ron::Value::Option(Some(inner)) => collect_points(inner, file, size, id, name, kind, out),
-        _ => {},
     }
 }
 

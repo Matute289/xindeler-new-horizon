@@ -78,11 +78,14 @@ fn harvest_chunk(
             let rel = Vec2::new(lx, ly);
             let w = base + rel;
             let alt = fl.next().map_or(f32::NAN, |f| f[0]);
-            let runs = match chunk {
-                Some(ch) => probe::column_runs(ch, rel, zmin, zmax, false, probe::surface_cap(alt)),
-                None => vec![(class::UNLOADED, (zmax - zmin) as u16)],
+            let (runs, extra) = match chunk {
+                Some(ch) => {
+                    probe::column_runs_ex(ch, rel, zmin, zmax, false, probe::surface_cap(alt))
+                },
+                None => (vec![(class::UNLOADED, (zmax - zmin) as u16)], 0),
             };
-            let sum = format::summarize(zmin, &runs);
+            let mut sum = format::summarize(zmin, &runs);
+            sum.flags |= extra;
             let top_kind = match chunk {
                 Some(ch) if sum.ground_top != format::NO_Z => ch
                     .get(rel.with_z(i32::from(sum.ground_top)))
@@ -241,8 +244,7 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
     if b.x0 < 0 || b.y0 < 0 || b.x1 > size.x || b.y1 > size.y {
         return Err(format!("box outside the world (0,0)..({},{})", size.x, size.y).into());
     }
-    let (zmin, zmax) =
-        probe::resolve_z_range(o.zmin, o.zmax, probe::auto_z_range(p.world.sim(), b))?;
+    let (zmin, zmax) = probe::resolve_z_range(o.zmin, o.zmax, probe::auto_z_range_for(p, b))?;
     probe::check_memory(
         (b.nx() * b.ny()) as u64,
         probe::CLIENT_BYTES_PER_COLUMN,
@@ -455,6 +457,7 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
     };
     let mut clipped = 0u64;
     let mut above = 0u64;
+    let (mut lava, mut rim) = (0u64, 0u64);
     for c in cols {
         let c = c.unwrap_or_else(|| {
             let runs = vec![(class::UNLOADED, height)];
@@ -468,6 +471,8 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
         d.flags.push(c.sum.flags);
         clipped += u64::from(c.sum.flags & flag::CLIPPED_TOP != 0);
         above += u64::from(c.sum.flags & flag::STRUCTURE_ABOVE_GROUND != 0);
+        lava += u64::from(c.sum.flags & flag::LAVA != 0);
+        rim += u64::from(c.sum.flags & flag::RIM_NO_SAMPLE != 0);
         d.ground_top.push(c.sum.ground_top);
         d.water_top.push(c.sum.water_top);
         d.liquid_depth.push(c.sum.liquid_depth);
@@ -491,6 +496,8 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
         ("chunks", all.count() as u64),
         ("clipped_top_columns", clipped),
         ("structure_above_ground_columns", above),
+        ("lava_columns", lava),
+        ("rim_no_sample_columns", rim),
         ("sprites_kept", 0),
         ("sites", d.sites.len() as u64),
         ("floats_present", 0),

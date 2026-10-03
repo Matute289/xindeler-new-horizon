@@ -9,12 +9,17 @@
 //!   s of world generation per test). They only read synthetic/empty areas: the
 //!   research arena around (23264, 25312), map corners, and a wilderness box
 //!   that the test itself proves empty of sites and authored points.
-//! * Tests that expose a bug are `#[ignore = "BUG-.."]`.
+//! * A test that exposes a bug carries its catalogue id (`BUG-P*`) in its doc
+//!   comment; all of them pass since the fixes (a still-open bug would be
+//!   `#[ignore = "BUG-.."]`).
 
 use std::{path::PathBuf, sync::OnceLock};
 
-use common::terrain::{Block, BlockKind, SpriteKind};
-use vek::{Rgb, Vec2};
+use common::{
+    terrain::{Block, BlockKind, SpriteKind},
+    vol::WriteVol,
+};
+use vek::{Rgb, Vec2, Vec3};
 
 use super::*;
 use crate::format::{NO_Z, class, flag};
@@ -23,23 +28,62 @@ fn repo_assets() -> PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..
 
 // ------------------------------------------------------------- pure
 
-/// EC-D30: lava must be recorded as liquid (README: "2 liquid (water and
-/// lava)"). `BlockKind::Lava` is neither fluid nor solid in the engine, so
-/// `classify` falls through to AIR: lava channels/lakes read as holes.
+/// EC-D30 (BUG-P9, fixed): lava is recorded as liquid (README: "2 liquid
+/// (water and lava)"). `BlockKind::Lava` is neither fluid nor solid in the
+/// engine, so `classify` matches it explicitly; without that, lava channels
+/// and lakes would read as holes.
 #[test]
-#[ignore = "BUG-P9: classify() records BlockKind::Lava as AIR, not LIQUID"]
 fn ec_d30_lava_is_liquid() {
     let lava = Block::new(BlockKind::Lava, Rgb::new(255, 80, 0));
     assert_eq!(classify(&lava, false), class::LIQUID);
+    assert_eq!(classify(&lava, true), class::LIQUID);
+    assert!(is_lava(&lava));
+    assert!(!is_lava(&Block::water(SpriteKind::Empty)));
 }
 
-/// EC-D31: every natural rock/soil kind is GROUND. `GlowingWeakRock` (cave
-/// rock) is missing from the list and becomes STRUCTURE.
+/// EC-D30b: a column holding lava carries `flag::LAVA` (and `flag::LIQUID`),
+/// a water column carries only `LIQUID`, so verifiers can tell them apart
+/// without a layout change; a NaN-altitude column carries `RIM_NO_SAMPLE`.
 #[test]
-#[ignore = "BUG-P10: classify() records BlockKind::GlowingWeakRock (natural cave rock) as STRUCTURE"]
+fn ec_d30b_lava_and_rim_flags() {
+    use common::terrain::TerrainChunkMeta;
+    let mut ch = TerrainChunk::new(
+        10,
+        Block::new(BlockKind::Rock, Rgb::zero()),
+        Block::empty(),
+        TerrainChunkMeta::void(),
+    );
+    let lava = Block::new(BlockKind::Lava, Rgb::new(255, 80, 0));
+    for z in 11..14 {
+        ch.set(Vec3::new(1, 1, z), lava).unwrap();
+        ch.set(Vec3::new(2, 1, z), Block::water(SpriteKind::Empty))
+            .unwrap();
+    }
+    let flags_at = |x: i32, cap: Option<i32>| {
+        let (runs, extra) = column_runs_ex(&ch, Vec2::new(x, 1), 0, 30, false, cap);
+        format::summarize(0, &runs).flags | extra
+    };
+    let l = flags_at(1, Some(10));
+    assert_eq!(l & (flag::LAVA | flag::LIQUID), flag::LAVA | flag::LIQUID);
+    let w = flags_at(2, Some(10));
+    assert_eq!(w & (flag::LAVA | flag::LIQUID), flag::LIQUID);
+    assert_eq!(
+        flags_at(3, Some(10)) & (flag::LAVA | flag::RIM_NO_SAMPLE),
+        0
+    );
+    assert_ne!(flags_at(3, None) & flag::RIM_NO_SAMPLE, 0);
+}
+
+/// EC-D31 (BUG-P10, fixed): every natural rock/soil kind is GROUND, including
+/// `GlowingWeakRock` (cave rock), which used to become STRUCTURE. With a
+/// surface cap the same natural-vs-structure rule applies: above the cap it
+/// is STRUCTURE like any other natural kind.
+#[test]
 fn ec_d31_all_natural_rock_is_ground() {
     let b = Block::new(BlockKind::GlowingWeakRock, Rgb::new(10, 10, 10));
     assert_eq!(classify(&b, false), class::GROUND);
+    assert_eq!(classify_at(&b, 5, Some(10), false), class::GROUND);
+    assert_eq!(classify_at(&b, 11, Some(10), false), class::STRUCTURE);
 }
 
 /// EC-D32: classification table for the cases the verifiers depend on.
@@ -116,10 +160,9 @@ fn ec_a10_box_parse_edges() {
     );
 }
 
-/// EC-A11: `near_box` overflows for boxes near the i32 limits (debug builds
-/// panic; release wraps and silently mis-filters).
+/// EC-A11 (BUG-P6, fixed): `near_box` uses i64, so boxes and margins near the
+/// i32 limits neither panic (debug) nor wrap and mis-filter (release).
 #[test]
-#[ignore = "BUG-P6: near_box (and sites-near --center x+1) overflow i32 for extreme CLI inputs"]
 fn ec_a11_near_box_extreme_inputs() {
     let b = Box2 {
         x0: i32::MIN + 5,
@@ -127,18 +170,23 @@ fn ec_a11_near_box_extreme_inputs() {
         x1: i32::MIN + 10,
         y1: 10,
     };
-    let r = std::panic::catch_unwind(|| near_box(0, 0, b, 600));
-    assert!(r.is_ok(), "near_box panicked on an extreme box");
+    assert!(!near_box(0, 0, b, 600), "near_box on an extreme box");
+    assert!(near_box(i32::MIN + 8, 5, b, 600));
+    let top = Box2 {
+        x0: i32::MAX - 10,
+        y0: i32::MAX - 10,
+        x1: i32::MAX,
+        y1: i32::MAX,
+    };
+    assert!(near_box(i32::MAX, i32::MAX, top, i32::MAX));
+    assert!(!near_box(0, 0, top, 600));
 }
 
-/// EC-D33: `sites-near` / the dump site list only read authored points from
-/// RON files in the `normalized_map_xy_top_left*` space, and only point
-/// records. The committed fortifications file (walls, in 2048x1536 source
-/// pixels) is skipped entirely, so an arena-emptiness check can pass on a box
-/// crossed by an authored wall.
+/// EC-D33 (BUG-P7, fixed): the committed fortifications file (walls and gates
+/// in 2048x1536 source pixels) reaches the emptiness guard, converted through
+/// its own `source_map` like the engine does, so a box crossed by an authored
+/// wall is no longer called empty.
 #[test]
-#[ignore = "BUG-P7: authored_points() ignores fortifications (source-pixel space) and other \
-            non-normalised RON files"]
 fn ec_d33_fortifications_are_seen_by_the_emptiness_guard() {
     let mut all = Vec::new();
     all_authored_points(&repo_assets(), Vec2::broadcast(32768), &mut all);
@@ -151,13 +199,26 @@ fn ec_d33_fortifications_are_seen_by_the_emptiness_guard() {
             .any(|r| r.source == "cromatolis_v0_fortifications.ron"),
         "no fortification point/segment reached the guard"
     );
+    // The Northwall (start (956, 8), end (1141, 8) in source pixels):
+    // x = px / 2047 * 32768, y = (1 - py / 1535) * 32768.
+    let (x, y) = (956.0 / 2047.0 * 32768.0, (1.0 - 8.0 / 1535.0) * 32768.0);
+    let b = Box2 {
+        x0: x as i32 + 10,
+        y0: y as i32 - 10,
+        x1: x as i32 + 30,
+        y1: y as i32 + 10,
+    };
+    let near = authored_near(&repo_assets(), Vec2::broadcast(32768), b, 50).unwrap();
+    assert!(
+        near.iter()
+            .any(|r| r.id.as_deref() == Some("site.northwall_stone")),
+        "{near:?}"
+    );
 }
 
-/// EC-D34: a linear authored feature (route/wall) whose two vertices are far
-/// from the box but whose segment crosses it is not reported.
+/// EC-D34 (BUG-P7, fixed): a linear authored feature (route/wall/bridge) whose
+/// vertices are far from the box but whose segment crosses it is reported.
 #[test]
-#[ignore = "BUG-P7: authored_points() tests vertices only; a route/wall segment crossing the box \
-            is missed"]
 fn ec_d34_segment_crossing_the_box_is_reported() {
     let dir = std::env::temp_dir().join(format!("tprobe-edge-assets-{}", std::process::id()));
     let map = dir.join("world/map");
@@ -182,6 +243,92 @@ fn ec_d34_segment_crossing_the_box_is_reported() {
     let found = authored_points(&dir, Vec2::broadcast(32768), b, 50);
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!found.is_empty(), "segment through the box not reported");
+}
+
+/// EC-D34b (BUG-P7, the measured case): wilderness chunk (653, 998) is NOT
+/// empty at a 600 m margin, because a committed route polyline passes about
+/// 312 m from it although its vertices are kilometres away. The committed RON
+/// files are read directly (no world generation).
+#[test]
+fn ec_d34b_measured_chunk_is_not_empty() {
+    let b = Box2 {
+        x0: 653 * 32,
+        y0: 998 * 32,
+        x1: 654 * 32,
+        y1: 999 * 32,
+    };
+    let size = Vec2::broadcast(32768);
+    let near = authored_near(&repo_assets(), size, b, 600).unwrap();
+    assert!(
+        near.iter().any(|r| r.source == "cromatolis_v0_routes.ron"),
+        "route segment within 600 m not reported: {near:?}"
+    );
+    // The vertex-only test (what authored_points did before) finds nothing.
+    let mut verts = Vec::new();
+    all_authored_points(&repo_assets(), size, &mut verts);
+    assert!(
+        !verts.iter().any(|r| near_box(r.wx, r.wy, b, 600)),
+        "a vertex is near: the case no longer proves segment awareness"
+    );
+}
+
+/// EC-D34c: exact segment-vs-grown-box geometry (Liang-Barsky), including
+/// segments that only graze the margin, degenerate segments and axis-aligned
+/// ones.
+#[test]
+fn ec_d34c_segment_near_box_geometry() {
+    let b = Box2 {
+        x0: 100,
+        y0: 100,
+        x1: 200,
+        y1: 200,
+    };
+    // Crosses the box.
+    assert!(segment_near_box((0.0, 150.0), (1000.0, 150.0), b, 0));
+    // Parallel, 50 m below: only within a margin >= 50.
+    assert!(!segment_near_box((0.0, 50.0), (1000.0, 50.0), b, 40));
+    assert!(segment_near_box((0.0, 50.0), (1000.0, 50.0), b, 50));
+    // Diagonal x + y = 500: its closest point to the box is (250, 250), 50 m
+    // from the corner along each axis.
+    assert!(!segment_near_box((400.0, 100.0), (100.0, 400.0), b, 40));
+    assert!(segment_near_box((400.0, 100.0), (100.0, 400.0), b, 60));
+    // Degenerate (a point) and ending before the box.
+    assert!(segment_near_box((150.0, 150.0), (150.0, 150.0), b, 0));
+    assert!(!segment_near_box((0.0, 0.0), (50.0, 0.0), b, 10));
+    // closest_on_segment clamps to the ends.
+    assert_eq!(
+        closest_on_segment((0.0, 0.0), (10.0, 0.0), (20.0, 5.0)),
+        (10.0, 0.0)
+    );
+    assert_eq!(
+        closest_on_segment((0.0, 0.0), (10.0, 0.0), (4.0, 5.0)),
+        (4.0, 0.0)
+    );
+}
+
+/// EC-D34d: a RON file declaring a coordinate space the probe cannot convert
+/// is an error for the strict guard (and a stderr warning for the lenient
+/// dump), never a silent skip.
+#[test]
+fn ec_d34d_unknown_coordinate_space_is_refused() {
+    let dir = std::env::temp_dir().join(format!("tprobe-edge-assets3-{}", std::process::id()));
+    let map = dir.join("world/map");
+    std::fs::create_dir_all(&map).unwrap();
+    std::fs::write(
+        map.join("cromatolis_v0_future.ron"),
+        "(coordinate_space: \"brand_new_space\", things: [(id: \"a\", x: 0.5, y: 0.5)])",
+    )
+    .unwrap();
+    let b = Box2 {
+        x0: 0,
+        y0: 0,
+        x1: 10,
+        y1: 10,
+    };
+    let strict = authored_near(&dir, Vec2::broadcast(32768), b, 600);
+    let _ = std::fs::remove_dir_all(&dir);
+    let err = strict.expect_err("unknown space must not be skipped silently");
+    assert!(err.contains("brand_new_space"), "{err}");
 }
 
 /// EC-D35: normalised points on the map border map to the world border and
@@ -307,6 +454,7 @@ fn opts(b: Box2, zmin: Option<i32>, zmax: Option<i32>) -> DumpOpts {
         zmax,
         site_margin: 600,
         keep_sprites: false,
+        force: false,
     }
 }
 
@@ -473,7 +621,7 @@ fn ec_d45_z_range_cuts() {
 /// EC-D46: z ranges outside the i16 span are accepted by `dump` and then
 /// wrap in the i16 summary fields (see EC-D25).
 #[test]
-#[ignore = "BUG-P3: dump accepts zmin/zmax outside i16 and writes wrapped ground_top values"]
+#[ignore = "heavy: generates the real world"]
 fn ec_d46_z_range_outside_i16_is_refused() {
     let p = probe();
     let b = bx(ARENA.0, ARENA.1, ARENA.0 + 8, ARENA.1 + 8);
@@ -513,8 +661,7 @@ fn ec_d47_keep_sprites_only_changes_air() {
 /// neighbour chunk. Next to a steep neighbour the default range clips the
 /// surface (the README promises "highest alt/water + 96" covers it).
 #[test]
-#[ignore = "BUG-P8: auto_z_range ignores the +1 chunk halo the column spline reads (default range \
-            clips next to steep neighbours)"]
+#[ignore = "heavy: generates the real world"]
 fn ec_d48_auto_z_range_covers_the_surface() {
     let p = probe();
     let sim = p.world.sim();

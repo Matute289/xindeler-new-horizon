@@ -45,13 +45,14 @@ pub struct DiffReport {
 }
 
 impl DiffReport {
-    /// Strict mode: nothing may differ. Client mode: no terrain/water
-    /// difference outside the landing radius.
+    /// Strict mode: nothing may differ (blocks, column floats, and the
+    /// per-column surface summary including `top_kind`). Client mode: no
+    /// terrain/water difference outside the landing radius.
     pub fn ok(&self, opts: &DiffOpts) -> bool {
         if opts.client_compare {
             self.terrain_blocks_outside == 0
         } else {
-            self.blocks_with_diff == 0 && self.col_float_diff == 0
+            self.blocks_with_diff == 0 && self.col_float_diff == 0 && self.surface_diff == 0
         }
     }
 

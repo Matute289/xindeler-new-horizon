@@ -8,6 +8,15 @@ use crate::format::{
     edge_tests::{Rng, dump_from_columns, random_dump},
 };
 
+/// `true` when the dumps are identical under the strict comparison.
+fn compare(a: &Dump, b: &Dump, show: usize) -> Res<bool> {
+    let o = DiffOpts {
+        show,
+        ..DiffOpts::default()
+    };
+    Ok(compare_with(a, b, &o)?.ok(&o))
+}
+
 /// EC-D50: identical dumps compare equal; a single changed block is found.
 #[test]
 fn ec_d50_single_block_difference_is_found() {
@@ -46,12 +55,10 @@ fn ec_d52_different_boxes_are_refused() {
     assert!(compare(&a, &c, 0).is_err());
 }
 
-/// EC-D53: a difference only in the top block kind (Grass vs Sand at the
-/// same z, both class GROUND) is printed but the comparison still returns
-/// "identical", so `diff` exits 0 although the README promises exit 1 on any
-/// difference.
+/// EC-D53 (BUG-P5, fixed): a difference only in the top block kind (Grass vs
+/// Sand at the same z, both class GROUND) fails the strict comparison, so
+/// `diff` exits 1 on any difference as the README promises.
 #[test]
-#[ignore = "BUG-P5: diff returns identical (exit 0) when only top_kind / surface summaries differ"]
 fn ec_d53_top_kind_difference_fails_the_diff() {
     let a = random_dump(&mut Rng::new(53), 2, 2, 8);
     let mut b = a.clone();

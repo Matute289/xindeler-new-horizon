@@ -488,11 +488,15 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                     let [x, y] = v[..] else {
                         return Err("--center needs x,y".into());
                     };
+                    let (x1, y1) = x
+                        .checked_add(1)
+                        .zip(y.checked_add(1))
+                        .ok_or("--center is at the i32 limit")?;
                     Box2 {
                         x0: x,
                         y0: y,
-                        x1: x + 1,
-                        y1: y + 1,
+                        x1,
+                        y1,
                     }
                 },
                 (None, Some(b)) => Box2::parse(b)?,
@@ -506,25 +510,28 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                     .ok_or("--no-world needs --assets or $VELOREN_ASSETS")?;
                 check_assets_root(&root)?;
                 // The world is always square-sized in the shipped map.
-                found.extend(probe::authored_points(
+                found.extend(probe::authored_near(
                     &root,
                     Vec2::broadcast(32768),
                     b,
                     *radius,
-                ));
+                )?);
             } else {
                 let p = load_probe(cli)?;
                 found.extend(probe::world_sites(&p.index.as_index_ref(), b, *radius));
-                found.extend(probe::authored_points(
+                found.extend(probe::authored_near(
                     &p.assets_root,
                     probe::world_size(p.world.sim()),
                     b,
                     *radius,
-                ));
+                )?);
             }
-            let (cx, cy) = ((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2);
+            let (cx, cy) = (
+                (i64::from(b.x0) + i64::from(b.x1)) / 2,
+                (i64::from(b.y0) + i64::from(b.y1)) / 2,
+            );
             found.sort_by_key(|r| {
-                let (dx, dy) = (i64::from(r.wx - cx), i64::from(r.wy - cy));
+                let (dx, dy) = (i64::from(r.wx) - cx, i64::from(r.wy) - cy);
                 dx * dx + dy * dy
             });
             if *json {
@@ -532,7 +539,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             } else {
                 println!("source\tid\tname\tkind\twx\twy\tradius\tdist_to_centre");
                 for r in &found {
-                    let d = (f64::from(r.wx - cx).hypot(f64::from(r.wy - cy))).round();
+                    let d = ((r.wx as f64 - cx as f64).hypot(r.wy as f64 - cy as f64)).round();
                     println!(
                         "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{d}",
                         r.source,
@@ -598,6 +605,8 @@ fn flag_letters(f: u8) -> String {
         (flag::LIQUID, 'W'),
         (flag::CLIPPED_TOP, 'C'),
         (flag::STRUCTURE_ABOVE_GROUND, 'A'),
+        (flag::LAVA, 'L'),
+        (flag::RIM_NO_SAMPLE, 'R'),
     ]
     .iter()
     .map(|&(b, c)| if f & b != 0 { c } else { '.' })
@@ -626,7 +635,7 @@ fn print_cols(d: &Dump, line: &str, step: f32, runs: bool) -> Res<()> {
     let n = (len / step).floor() as usize + 1;
     println!(
         "i\tx\ty\talt\triverless_alt\twater_level\tground_top\ttop_kind\twater_top\tliquid_depth\\
-         tflags(SpVWCA)\truns"
+         tflags(SpVWCALR)\truns"
     );
     let mut last = None;
     for i in 0..n {
@@ -699,13 +708,15 @@ fn print_info(d: &Dump) {
     let count = |f: u8| d.flags.iter().filter(|&&x| x & f != 0).count();
     println!(
         "columns     {n}; with water {}, structures {}, sprites {}, voids {}, clipped {}, \
-         structure above ground {}",
+         structure above ground {}, lava {}, rim (no sample) {}",
         count(flag::LIQUID),
         count(flag::STRUCTURE),
         count(flag::SPRITE),
         count(flag::VOID),
         count(flag::CLIPPED_TOP),
-        count(flag::STRUCTURE_ABOVE_GROUND)
+        count(flag::STRUCTURE_ABOVE_GROUND),
+        count(flag::LAVA),
+        count(flag::RIM_NO_SAMPLE)
     );
     let tops: Vec<i16> = d
         .ground_top
