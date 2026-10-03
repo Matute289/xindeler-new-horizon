@@ -331,6 +331,154 @@ fn ec_d34d_unknown_coordinate_space_is_refused() {
     assert!(err.contains("brand_new_space"), "{err}");
 }
 
+/// EC-F01: the probe's pixel/normalised -> world mapping against the engine's
+/// own (`world::civ::cromatolis_source_pixel_to_wpos`, the same
+/// normalise-then-`to_chunk_pos` path every authored loader uses). The engine
+/// snaps to chunk centres on a `(chunks - 1)` grid, the probe maps linearly:
+/// they must stay within [`ENGINE_SNAP_SLACK_M`] on every committed
+/// fortification point and every route vertex, so the guard's slack is real.
+#[test]
+fn ec_f01_pixel_mapping_matches_the_engine_within_the_snap_slack() {
+    use common::terrain::MapSizeLg;
+    let size = Vec2::broadcast(32768);
+    let lg = MapSizeLg::new(Vec2::new(10, 10)).expect("1024 x 1024 chunks");
+    let (w, h) = (2048u32, 1536u32);
+    let engine = |px: f64, py: f64| {
+        world::civ::cromatolis_source_pixel_to_wpos(
+            Vec2::new(px as f32, py as f32),
+            Vec2::new(w, h),
+            lg,
+        )
+        .expect("pixel inside the canvas")
+    };
+    let probe_px = Space::Pixels {
+        w: f64::from(w),
+        h: f64::from(h),
+    };
+    let mut checked = 0;
+    let mut worst = 0.0f64;
+    let mut cmp = |px: f64, py: f64, got: (f64, f64)| {
+        let e = engine(px, py);
+        let d = (got.0 - f64::from(e.x))
+            .abs()
+            .max((got.1 - f64::from(e.y)).abs());
+        worst = worst.max(d);
+        assert!(
+            d <= f64::from(ENGINE_SNAP_SLACK_M),
+            "pixel ({px}, {py}): probe {got:?} vs engine {e:?} differ by {d:.1} m"
+        );
+        checked += 1;
+    };
+    // Fortifications: start / end / gate centre in source pixels.
+    let text =
+        std::fs::read_to_string(repo_assets().join("world/map/cromatolis_v0_fortifications.ron"))
+            .unwrap();
+    let v: ron::Value = ron::from_str(&text).unwrap();
+    fn pixel_points(v: &ron::Value, out: &mut Vec<(f64, f64)>) {
+        match v {
+            ron::Value::Map(m) => {
+                if let Some(p) = xy(v) {
+                    out.push(p);
+                    return;
+                }
+                m.iter().for_each(|(_, c)| pixel_points(c, out));
+            },
+            ron::Value::Seq(s) => s.iter().for_each(|c| pixel_points(c, out)),
+            _ => {},
+        }
+    }
+    let mut pts = Vec::new();
+    pixel_points(&v, &mut pts);
+    assert!(pts.len() >= 6, "fortification points found: {}", pts.len());
+    for (px, py) in pts {
+        let got = probe_px.to_world(px, py, size).expect("inside the map");
+        cmp(px, py, got);
+    }
+    // Route vertices: normalised (u, v) <-> pixel (u * (w - 1), v * (h - 1)).
+    let text =
+        std::fs::read_to_string(repo_assets().join("world/map/cromatolis_v0_routes.ron")).unwrap();
+    let v: ron::Value = ron::from_str(&text).unwrap();
+    let mut uv = Vec::new();
+    pixel_points(&v, &mut uv);
+    assert!(uv.len() > 20, "route vertices found: {}", uv.len());
+    for (u, vv) in uv {
+        let got = Space::Normalized.to_world(u, vv, size).expect("inside");
+        cmp(u * f64::from(w - 1), vv * f64::from(h - 1), got);
+    }
+    eprintln!("{checked} points, worst probe-vs-engine difference {worst:.1} m");
+}
+
+/// EC-F02: every `BlockKind` is classified on purpose. The expectation is an
+/// exhaustive `match`, so a new engine variant does not compile until it is
+/// decided here, and `classify` / `is_natural_kind` must agree with it.
+#[test]
+fn ec_f02_every_block_kind_is_classified() {
+    use strum::IntoEnumIterator;
+    fn expected(k: BlockKind) -> u8 {
+        match k {
+            BlockKind::Air => class::AIR,
+            BlockKind::Water | BlockKind::Lava => class::LIQUID,
+            BlockKind::Rock
+            | BlockKind::WeakRock
+            | BlockKind::GlowingRock
+            | BlockKind::GlowingWeakRock
+            | BlockKind::Grass
+            | BlockKind::Snow
+            | BlockKind::Earth
+            | BlockKind::Sand
+            | BlockKind::Ice => class::GROUND,
+            BlockKind::ArtSnow
+            | BlockKind::Wood
+            | BlockKind::Leaves
+            | BlockKind::GlowingMushroom
+            | BlockKind::ArtLeaves
+            | BlockKind::Misc => class::STRUCTURE,
+        }
+    }
+    let mut n = 0;
+    for k in BlockKind::iter() {
+        let b = Block::new(k, Rgb::new(9, 9, 9));
+        assert_eq!(classify(&b, false), expected(k), "{k:?}");
+        assert_eq!(
+            is_natural_kind(k),
+            expected(k) == class::GROUND,
+            "is_natural_kind({k:?})"
+        );
+        n += 1;
+    }
+    assert!(n >= 17, "iterated only {n} kinds");
+}
+
+/// EC-F03: every committed `cromatolis_v0_*.ron` is either parsed by
+/// `authored_features` or named in `NO_POSITION_FILES`, never silently
+/// skipped: the real directory loads, an unlisted file without a coordinate
+/// space is an error, and the allowlist has no stale names.
+#[test]
+fn ec_f03_every_ron_file_is_parsed_or_allowlisted() {
+    let size = Vec2::broadcast(32768);
+    let real = authored_features(&repo_assets(), size).expect("committed files must load");
+    assert!(real.len() > 50, "authored features: {}", real.len());
+    let names: Vec<String> = std::fs::read_dir(repo_assets().join("world/map"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("cromatolis_v0_") && n.ends_with(".ron"))
+        .collect();
+    for f in NO_POSITION_FILES {
+        assert!(names.iter().any(|n| n == f), "stale allowlist entry {f}");
+    }
+    let dir = std::env::temp_dir().join(format!("tprobe-edge-assets4-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("world/map")).unwrap();
+    std::fs::write(
+        dir.join("world/map/cromatolis_v0_new_thing.ron"),
+        "(things: [(id: \"a\", x: 0.5, y: 0.5)])",
+    )
+    .unwrap();
+    let r = authored_features(&dir, size);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(r.unwrap_err().contains("NO_POSITION_FILES"));
+}
+
 /// EC-D35: normalised points on the map border map to the world border and
 /// rounding is half away from zero (documented here so the Python side
 /// matches).
@@ -472,6 +620,21 @@ fn ec_d40_arena_is_empty() {
     let b = bx(ARENA.0 - 200, ARENA.1 - 200, ARENA.0 + 200, ARENA.1 + 200);
     assert!(world_sites(&p.index.as_index_ref(), b, 600).is_empty());
     assert!(authored_points(&p.assets_root, world_size(p.world.sim()), b, 600).is_empty());
+}
+
+/// The memory pre-flight runs before the automatic z range samples the box: a
+/// whole-world box is refused at once instead of after ~50 M samples.
+#[test]
+#[ignore = "heavy: generates the real world"]
+fn ec_d40b_whole_world_box_is_refused_before_sampling() {
+    let p = probe();
+    let s = world_size(p.world.sim());
+    let t = std::time::Instant::now();
+    let e = dump(p, &opts(bx(0, 0, s.x, s.y), None, None), &|_, _| {})
+        .err()
+        .expect("whole world must be refused");
+    assert!(e.to_string().contains("estimated"), "{e}");
+    assert!(t.elapsed().as_secs() < 5, "refusal took {:?}", t.elapsed());
 }
 
 /// EC-D41: boxes leaving the world or straddling its edge are refused; boxes

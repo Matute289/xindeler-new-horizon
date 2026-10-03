@@ -32,6 +32,8 @@ impl Rng {
 pub(crate) fn header(box_xy: [i32; 4], zmin: i32, zmax: i32) -> Header {
     Header {
         format: FORMAT_NAME.into(),
+        format_rev: FORMAT_REV,
+        flags_defined: FLAGS_DEFINED,
         box_xy,
         zmin,
         zmax,
@@ -504,4 +506,63 @@ fn ec_d12_little_endian_on_disk() {
         pack_lanes(&[1.0f32], f32::to_le_bytes),
         1.0f32.to_le_bytes().to_vec()
     );
+}
+
+/// Format evolution: a dump written before the revision field existed (no
+/// `format_rev` / `flags_defined` keys) still reads, with flags `1..=32`
+/// defined; a rev-0 dump using bit 64 or 128 is refused as mislabelled.
+#[test]
+fn ec_d60_rev0_dump_reads_with_a_newer_reader() {
+    let mut d = random_dump(&mut Rng::new(60), 3, 2, 6);
+    for f in &mut d.flags {
+        *f &= FLAGS_DEFINED_REV0;
+    }
+    let b = bytes(&d);
+    let old = with_header(&b, |h| {
+        let m = h.as_object_mut().unwrap();
+        m.remove("format_rev");
+        m.remove("flags_defined");
+    });
+    let r = Dump::read_from(&old[..]).unwrap();
+    assert_eq!(r.header.format_rev, 0);
+    assert_eq!(r.header.flags_defined, FLAGS_DEFINED_REV0);
+    assert_eq!(r.flags, d.flags);
+    // A current dump says what it is.
+    let cur = Dump::read_from(&b[..]).unwrap();
+    assert_eq!(
+        (cur.header.format_rev, cur.header.flags_defined),
+        (FORMAT_REV, FLAGS_DEFINED)
+    );
+    // Rev 0 with a flag bit it cannot define is refused.
+    let mut bad = d.clone();
+    bad.flags[0] |= flag::LAVA;
+    let b = bytes(&bad); // written as rev 1: fine
+    assert!(Dump::read_from(&b[..]).is_ok());
+    let old_bad = with_header(&b, |h| {
+        let m = h.as_object_mut().unwrap();
+        m.remove("format_rev");
+        m.remove("flags_defined");
+    });
+    assert_eq!(read_outcome(&old_bad), Ok(false));
+}
+
+/// Format evolution: a dump from a newer revision, or declaring flag bits
+/// this build does not know, is refused rather than half-understood.
+#[test]
+fn ec_d61_unknown_revision_or_required_bits_are_rejected() {
+    let b = bytes(&random_dump(&mut Rng::new(61), 2, 2, 6));
+    let newer = with_header(&b, |h| h["format_rev"] = serde_json::json!(FORMAT_REV + 1));
+    let e = Dump::read_from(&newer[..]).unwrap_err().to_string();
+    assert!(e.contains("revision"), "{e}");
+    // A header whose flags_defined is wider than the byte this build knows
+    // (u8 here: 256 does not even parse) is an error too.
+    let wide = with_header(&b, |h| h["flags_defined"] = serde_json::json!(256));
+    assert_eq!(read_outcome(&wide), Ok(false));
+    // A declared mask narrower than the flags actually used is a mislabel.
+    let narrow = with_header(&b, |h| h["flags_defined"] = serde_json::json!(0));
+    let mut d = random_dump(&mut Rng::new(61), 2, 2, 6);
+    d.flags[0] = flag::LIQUID;
+    d.header.flags_defined = 0;
+    assert!(d.write_to(Vec::new()).is_err());
+    let _ = narrow;
 }

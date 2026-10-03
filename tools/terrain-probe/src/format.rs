@@ -87,6 +87,24 @@ pub mod flag {
     pub const RIM_NO_SAMPLE: u8 = 128;
 }
 
+/// Revision of the `tprobe v1` header/flags conventions this build writes.
+/// The magic and the section layout never change within v1; the revision says
+/// which flag bits a dump may use:
+///
+/// * rev 0 (no `format_rev` key; every dump written before the field existed):
+///   flags `1..=32`. Bits 1-16 are the first v1 (commit 59de1ec248), bit 32
+///   (`STRUCTURE_ABOVE_GROUND`) landed in the review round before the field.
+/// * rev 1 (this build): flags `1..=128` ([`FLAGS_DEFINED`]); adds `LAVA` and
+///   `RIM_NO_SAMPLE`.
+///
+/// The 8-bit flags lane is now full: the next flag needs a new revision (see
+/// the README's v2 plan), which this reader refuses with a clear error.
+pub const FORMAT_REV: u32 = 1;
+/// Flag bits that exist in this build (the whole byte).
+pub const FLAGS_DEFINED: u8 = 0xFF;
+/// Flag bits a rev-0 dump (no `flags_defined` key) may use.
+pub const FLAGS_DEFINED_REV0: u8 = 0x3F;
+
 pub const NO_Z: i16 = i16::MIN;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -96,10 +114,25 @@ pub struct SectionInfo {
     pub comp_len: u64,
 }
 
+fn flags_defined_rev0() -> u8 { FLAGS_DEFINED_REV0 }
+
+// A rev-0 header serialises without the two keys, byte-identical to the files
+// written before they existed.
+fn is_zero(v: &u32) -> bool { *v == 0 }
+
+fn is_rev0_mask(v: &u8) -> bool { *v == FLAGS_DEFINED_REV0 }
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Header {
     /// Always [`FORMAT_NAME`].
     pub format: String,
+    /// Convention revision, see [`FORMAT_REV`]; absent in rev-0 files.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub format_rev: u32,
+    /// Flag bits this dump may use (a mask over `Dump::flags`); absent in
+    /// rev-0 files, where it is [`FLAGS_DEFINED_REV0`].
+    #[serde(default = "flags_defined_rev0", skip_serializing_if = "is_rev0_mask")]
+    pub flags_defined: u8,
     /// `[x0, y0, x1, y1]` in world metres, half-open (`x0 <= x < x1`).
     pub box_xy: [i32; 4],
     /// Sampled z range, half-open.
@@ -155,6 +188,24 @@ pub struct ClientInfo {
     /// Chunk keys `[cx, cy]` that never arrived (their columns are class 3).
     pub missing_chunks: Vec<[i32; 2]>,
     pub tiles: Vec<TileInfo>,
+    /// Which server binary served the blocks (absent in older dumps).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<ServerIdentity>,
+}
+
+/// Identity of the `xindeler-server-cli` binary a client dump was streamed
+/// from. The probe samples the fast path in-process and the client path from
+/// the server; if the two binaries come from different engine commits, a
+/// "discrepancy" may just be a version skew.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ServerIdentity {
+    /// First line of `--version` (`Veloren server CLI <hash> [<date>]`).
+    pub version: Option<String>,
+    pub sha256: String,
+    /// Modification time, seconds since the Unix epoch.
+    pub mtime_unix: Option<u64>,
+    /// The probe's own `engine_commit` at the time of the dump.
+    pub probe_commit: String,
 }
 
 impl ClientInfo {
@@ -186,10 +237,33 @@ impl Header {
         (i64::from(self.zmax) - i64::from(self.zmin)).clamp(0, i64::from(i32::MAX)) as usize
     }
 
+    /// Refuse a dump from a newer revision, or one declaring flag bits this
+    /// build does not know (a reader must not guess at required bits).
+    // `FLAGS_DEFINED` is the whole byte today, so the mask below is zero by
+    // construction; it is the check that bites once a build narrows it.
+    #[allow(clippy::bad_bit_mask)]
+    pub fn check_rev(&self) -> io::Result<()> {
+        if self.format_rev > FORMAT_REV {
+            return Err(bad_data(format!(
+                "dump is revision {} of tprobe v1, this build reads up to {FORMAT_REV}: use a \
+                 newer terrain-probe",
+                self.format_rev
+            )));
+        }
+        if self.flags_defined & !FLAGS_DEFINED != 0 {
+            return Err(bad_data(format!(
+                "dump defines flag bits {:#04x} unknown to this build",
+                self.flags_defined & !FLAGS_DEFINED
+            )));
+        }
+        Ok(())
+    }
+
     /// Reject headers no writer of this tool produces: an inconsistent box,
     /// too many columns, or a z range outside [`Z_MIN_ALLOWED`]..=
     /// [`Z_MAX_ALLOWED`] / taller than [`MAX_HEIGHT`].
     pub fn check_dims(&self) -> io::Result<()> {
+        self.check_rev()?;
         let [x0, y0, x1, y1] = self.box_xy;
         let (w, h) = (i64::from(x1) - i64::from(x0), i64::from(y1) - i64::from(y0));
         if w <= 0 || h <= 0 || w != i64::from(self.nx) || h != i64::from(self.ny) {
@@ -438,6 +512,16 @@ impl Dump {
                 "run arrays have {}/{} entries, run_counts sum to {total}",
                 self.run_class.len(),
                 self.run_len.len()
+            ));
+        }
+        if let Some(&f) = self
+            .flags
+            .iter()
+            .find(|&&f| f & !self.header.flags_defined != 0)
+        {
+            return bad(format!(
+                "flags {f:#04x} use bits outside the declared flags_defined {:#04x}",
+                self.header.flags_defined
             ));
         }
         if let Some(&c) = self.run_class.iter().find(|&&c| c > class::SPRITE) {
@@ -863,6 +947,8 @@ mod tests {
         Dump {
             header: Header {
                 format: FORMAT_NAME.into(),
+                format_rev: FORMAT_REV,
+                flags_defined: FLAGS_DEFINED,
                 box_xy: [100, 200, 103, 202],
                 zmin,
                 zmax,
@@ -949,6 +1035,7 @@ mod tests {
         assert!(!hjson.contains("\"client\""), "fast dumps keep their bytes");
         d.header.path = "client".into();
         d.header.client = Some(ClientInfo {
+            server: None,
             view_distance: 24,
             chunks_total: 10,
             chunks_streamed: 9,
@@ -1281,6 +1368,10 @@ mod tests {
     #[test]
     fn golden_hash_of_the_v1_bytes_is_stable() {
         let mut d = sample();
+        // Written as a rev-0 dump (no revision keys), exactly like the files
+        // that existed when the golden was pinned.
+        d.header.format_rev = 0;
+        d.header.flags_defined = FLAGS_DEFINED_REV0;
         d.flags = vec![24, 24, 24, 24, 28, 24];
         let b = bytes(&d);
         assert_eq!(b.len(), 1394);

@@ -229,6 +229,8 @@ mod tests {
         let mut d = Dump {
             header: crate::format::Header {
                 format: crate::format::FORMAT_NAME.into(),
+                format_rev: crate::format::FORMAT_REV,
+                flags_defined: crate::format::FLAGS_DEFINED,
                 box_xy: [0, 0, n as i32, 1],
                 zmin: 0,
                 zmax: 4,
@@ -278,6 +280,7 @@ mod tests {
     fn with_landing(mut d: Dump, x: f32) -> Dump {
         d.header.path = "client".into();
         d.header.client = Some(ClientInfo {
+            server: None,
             view_distance: 8,
             chunks_total: 1,
             chunks_streamed: 1,

@@ -171,8 +171,12 @@ fn connect_bot(
         }
     };
     client.load_character_list();
+    let t_list = Instant::now();
     while client.character_list().loading {
         drv.tick(&mut client)?;
+        if t_list.elapsed() > Duration::from_secs(60) {
+            return Err("character list never loaded (60 s)".into());
+        }
     }
     let chosen = client.possible_starting_sites().first().copied();
     let alias = format!("Probe{}", std::process::id() % 1000);
@@ -244,12 +248,12 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
     if b.x0 < 0 || b.y0 < 0 || b.x1 > size.x || b.y1 > size.y {
         return Err(format!("box outside the world (0,0)..({},{})", size.x, size.y).into());
     }
-    let (zmin, zmax) = probe::resolve_z_range(o.zmin, o.zmax, probe::auto_z_range_for(p, b))?;
     probe::check_memory(
         (b.nx() * b.ny()) as u64,
         probe::CLIENT_BYTES_PER_COLUMN,
         o.force,
     )?;
+    let (zmin, zmax) = probe::resolve_z_lazy(o.zmin, o.zmax, || probe::auto_z_range_for(p, b))?;
     let (c0, c1) = b.chunk_range();
     let all = ChunkRect {
         cx0: c0.x,
@@ -276,8 +280,11 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
         ready_timeout: o.server_ready_timeout,
         keep_log_to: o.keep_server_log.clone(),
     })?;
-    scratch_server::install_signal_cleanup(Arc::clone(&server.inner));
     let server_secs = t_server.elapsed().as_secs_f32();
+    let server_id = scratch_server::server_identity(&o.server_bin, env!("TPROBE_ENGINE_COMMIT"));
+    if let Some(w) = scratch_server::version_skew_warning(&server_id) {
+        eprintln!("WARNING: {w}");
+    }
 
     let runtime = Arc::new(Runtime::new()?);
     let mut drv = Driver::new();
@@ -417,6 +424,8 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
     let mut d = Dump {
         header: Header {
             format: format::FORMAT_NAME.into(),
+            format_rev: format::FORMAT_REV,
+            flags_defined: format::FLAGS_DEFINED,
             box_xy: [b.x0, b.y0, b.x1, b.y1],
             zmin,
             zmax,
@@ -436,6 +445,7 @@ pub fn run(p: &Probe, o: &ClientDumpOpts) -> Res<ClientDumpResult> {
                 chunks_streamed: streamed_total,
                 missing_chunks: missing,
                 tiles: infos,
+                server: Some(server_id),
             }),
             sections: vec![],
         },

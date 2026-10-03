@@ -517,6 +517,21 @@ pub fn resolve_z_range(zmin: Option<i32>, zmax: Option<i32>, auto: (i32, i32)) -
     Ok((zmin, zmax))
 }
 
+/// [`resolve_z_range`] that evaluates the (expensive) automatic range only
+/// when `--zmin`/`--zmax` do not both fix it.
+pub fn resolve_z_lazy(
+    zmin: Option<i32>,
+    zmax: Option<i32>,
+    auto: impl FnOnce() -> (i32, i32),
+) -> Res<(i32, i32)> {
+    let auto = if zmin.is_some() && zmax.is_some() {
+        (0, 0)
+    } else {
+        auto()
+    };
+    resolve_z_range(zmin, zmax, auto)
+}
+
 /// Peak memory (bytes) the fast path needs for `columns` columns: the dump's
 /// column arrays plus run storage and the write path's compressed sections.
 /// Calibrated against a measured peak RSS of 2.43 GB for 25 M columns over a
@@ -563,12 +578,13 @@ pub fn dump(
         )
         .into());
     }
-    let (zmin, zmax) = resolve_z_range(o.zmin, o.zmax, auto_z_range_for(p, b))?;
     let (c0, c1) = b.chunk_range();
     let ncx = (c1.x - c0.x + 1) as usize;
     let ncy = (c1.y - c0.y + 1) as usize;
     let n = b.nx() * b.ny();
+    // Refuse oversized boxes before the automatic z range samples the box.
     check_memory(n as u64, FAST_BYTES_PER_COLUMN, o.force)?;
+    let (zmin, zmax) = resolve_z_lazy(o.zmin, o.zmax, || auto_z_range_for(p, b))?;
 
     let mut alt = Vec::with_capacity(n);
     let mut riverless_alt = Vec::with_capacity(n);
@@ -668,6 +684,8 @@ pub fn dump(
 
     let header = Header {
         format: format::FORMAT_NAME.into(),
+        format_rev: format::FORMAT_REV,
+        flags_defined: format::FLAGS_DEFINED,
         box_xy: [b.x0, b.y0, b.x1, b.y1],
         zmin,
         zmax,
@@ -798,14 +816,16 @@ pub fn sim_table(p: &Probe, c0: Vec2<i32>, c1: Vec2<i32>) -> String {
     s
 }
 
-/// Whether the point lies strictly inside the box grown by `margin` on every
-/// side (i64 arithmetic: boxes and margins near the i32 limits cannot wrap).
+/// Whether the point lies inside the box grown by `margin` on every side,
+/// **boundary included** (closed, like [`segment_near_box`], so a point and a
+/// segment end at the same place are judged alike; i64 arithmetic: boxes and
+/// margins near the i32 limits cannot wrap).
 fn near_box(x: i32, y: i32, b: Box2, margin: i32) -> bool {
     let (x, y, m) = (i64::from(x), i64::from(y), i64::from(margin));
-    x > i64::from(b.x0) - m
-        && x < i64::from(b.x1) + m
-        && y > i64::from(b.y0) - m
-        && y < i64::from(b.y1) + m
+    x >= i64::from(b.x0) - m
+        && x <= i64::from(b.x1) + m
+        && y >= i64::from(b.y0) - m
+        && y <= i64::from(b.y1) + m
 }
 
 /// Whether the segment `a`-`e` meets the box grown by `margin` (closed
@@ -920,6 +940,31 @@ impl Space {
     }
 }
 
+/// `cromatolis_v0_*.ron` files that declare no `coordinate_space` because they
+/// carry no map positions (climate tables, ground-cover rules, interior
+/// graphs...). Any other such file is an error: a new file with positions
+/// must not be silently ignored by the emptiness guard.
+pub const NO_POSITION_FILES: &[&str] = &[
+    "cromatolis_v0_alpine.ron",
+    "cromatolis_v0_aquatic_ecology.ron",
+    "cromatolis_v0_climate.ron",
+    "cromatolis_v0_ground_cover.ron",
+    "cromatolis_v0_ground_substrate_zones.ron",
+    "cromatolis_v0_interior_graphs.ron",
+    "cromatolis_v0_interior_places.ron",
+    "cromatolis_v0_map_ecology.ron",
+    "cromatolis_v0_procedural_layers.ron",
+    "cromatolis_v0_tree_candidate_policy.ron",
+];
+
+/// Slack (m) added to every authored feature's reach. The engine places
+/// authored points on chunk centres of a `(chunks - 1)` grid
+/// (`AuthoredMapPoint::to_chunk_pos`), while this tool maps `u * size`
+/// linearly; the two differ by up to 64 m (test
+/// `ec_f01_pixel_mapping_matches_the_engine_within_the_snap_slack`), so the
+/// guard widens its reach by that much.
+pub const ENGINE_SNAP_SLACK_M: i32 = 64;
+
 /// Every authored feature of the `cromatolis_v0_*.ron` files, in world metres.
 ///
 /// Handled coordinate spaces: `normalized_map_xy_top_left*`,
@@ -946,16 +991,25 @@ pub fn authored_features(root: &Path, size: Vec2<i32>) -> Result<Vec<AuthoredFea
         let text = std::fs::read_to_string(e.path()).map_err(|e| format!("{name}: {e}"))?;
         let v = match ron::from_str::<ron::Value>(&text) {
             Ok(v) => v,
-            Err(err) if text.contains("coordinate_space") => {
-                return Err(format!(
-                    "{name}: declares a coordinate space but does not parse: {err}"
-                ));
+            Err(err)
+                if text.contains("coordinate_space")
+                    || !NO_POSITION_FILES.contains(&name.as_str()) =>
+            {
+                return Err(format!("{name}: does not parse: {err}"));
             },
-            Err(_) => continue,
+            Err(_) => continue, // an allowlisted file this tool never needs to parse
         };
-        let ron::Value::Map(top) = &v else { continue };
+        let ron::Value::Map(top) = &v else {
+            return Err(format!("{name}: top level is not a struct"));
+        };
         let Some(space) = field(top, "coordinate_space").and_then(str_of) else {
-            continue; // no positions (climate, ground cover, ...)
+            if NO_POSITION_FILES.contains(&name.as_str()) {
+                continue;
+            }
+            return Err(format!(
+                "{name}: no coordinate_space and not in NO_POSITION_FILES; add it to the \
+                 allowlist (it has no positions) or teach authored_features() its layout"
+            ));
         };
         let space = match space.as_str() {
             s if s.starts_with("normalized_map_xy_top_left") => Space::Normalized,
@@ -1119,8 +1173,9 @@ pub fn authored_near(
     );
     let mut out = Vec::new();
     for f in authored_features(root, size)? {
-        let reach =
-            margin.saturating_add(f.radius.map_or(0, |r| r.ceil().clamp(0.0, 1.0e6) as i32));
+        let reach = margin
+            .saturating_add(ENGINE_SNAP_SLACK_M)
+            .saturating_add(f.radius.map_or(0, |r| r.ceil().clamp(0.0, 1.0e6) as i32));
         let best = if let [p] = f.pts[..] {
             let (x, y) = (p.0.round() as i32, p.1.round() as i32);
             near_box(x, y, b, reach).then_some(p)
@@ -1222,6 +1277,40 @@ mod tests {
         let d = "Some(River { cross_section: Vec2 { x: 64.0, y: 8.5 } })";
         assert_eq!(cross_section(d), Some((64.0, 8.5)));
         assert_eq!(cross_section("Some(Ocean)"), None);
+    }
+
+    #[test]
+    fn near_box_and_segments_agree_on_the_boundary() {
+        let b = Box2 {
+            x0: 100,
+            y0: 100,
+            x1: 200,
+            y1: 200,
+        };
+        // Exactly `margin` away: near for a point and for a degenerate or
+        // touching segment alike.
+        assert!(near_box(50, 150, b, 50));
+        assert!(segment_near_box((50.0, 150.0), (50.0, 150.0), b, 50));
+        assert!(segment_near_box((0.0, 150.0), (50.0, 150.0), b, 50));
+        assert!(!near_box(49, 150, b, 50));
+        assert!(!segment_near_box((0.0, 150.0), (49.0, 150.0), b, 50));
+    }
+
+    #[test]
+    fn auto_z_is_only_evaluated_when_needed() {
+        let calls = std::cell::Cell::new(0);
+        let auto = || {
+            calls.set(calls.get() + 1);
+            (10, 90)
+        };
+        assert_eq!(resolve_z_lazy(Some(0), Some(50), auto).unwrap(), (0, 50));
+        assert_eq!(calls.get(), 0, "both given: no automatic range");
+        assert_eq!(resolve_z_lazy(None, Some(50), auto).unwrap(), (10, 50));
+        assert_eq!(resolve_z_lazy(Some(0), None, auto).unwrap(), (0, 90));
+        assert_eq!(calls.get(), 2);
+        // Invalid explicit ranges still error without the automatic one.
+        assert!(resolve_z_lazy(Some(5), Some(5), auto).is_err());
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]
