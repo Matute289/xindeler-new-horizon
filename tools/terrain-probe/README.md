@@ -132,7 +132,7 @@ So: boxes that stay above the caverns (the research arena, any surface box with 
 explicit `--zmin`) give byte-identical files; boxes that include caverns give
 files that agree on everything except those decoration cells. `terrain-probe diff A B`
 quantifies exactly that (counts per class pair, bounding box, examples) and exits 1 on
-any difference; `info` and `diff` also report the surface columns separately.
+any difference, and it reports surface columns (ground/water top, depth, top kind) separately.
 
 ## Scope and caveats
 
