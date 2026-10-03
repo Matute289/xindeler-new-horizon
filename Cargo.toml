@@ -21,6 +21,7 @@ members = [
     "server",
     "server/agent",
     "server-cli",
+    "tools/terrain-probe",
     "voxygen",
     "voxygen/anim",
     "voxygen/egui",
