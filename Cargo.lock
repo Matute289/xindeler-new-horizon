@@ -11294,6 +11294,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "xindeler-terrain-probe"
+version = "0.21.0"
+dependencies = [
+ "clap",
+ "rayon",
+ "ron",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "strum",
+ "vek 0.17.2",
+ "xindeler-common",
+ "xindeler-world",
+ "zstd",
+]
+
+[[package]]
 name = "xindeler-voxygen"
 version = "0.21.0"
 dependencies = [

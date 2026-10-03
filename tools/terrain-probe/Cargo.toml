@@ -1,0 +1,32 @@
+[package]
+name = "xindeler-terrain-probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Non-shipped terrain probe: fast-path `tprobe v1` dumps of the real Cromatolis world."
+publish = false
+build = "build.rs"
+
+[lints]
+workspace = true
+
+# Developer tooling only. Nothing ships this binary: the release/Docker/deploy
+# pipelines build `xindeler-server-cli` / `xindeler-voxygen` by package name,
+# and no shipped crate depends on this one.
+[[bin]]
+name = "terrain-probe"
+path = "src/main.rs"
+
+[dependencies]
+common = { package = "xindeler-common", path = "../../common" }
+world = { package = "xindeler-world", path = "../../world" }
+
+clap = { workspace = true }
+rayon = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+strum = { workspace = true }
+vek = { workspace = true }
+zstd = "0.13"

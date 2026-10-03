@@ -1,0 +1,14 @@
+//! Embeds the engine git commit into the binary (recorded in dump headers).
+use std::process::Command;
+
+fn main() {
+    let commit = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map_or_else(|| "unknown".to_string(), |s| s.trim().to_string());
+    println!("cargo:rustc-env=TPROBE_ENGINE_COMMIT={commit}");
+    println!("cargo:rerun-if-changed=../../.git/HEAD");
+}
