@@ -233,6 +233,16 @@ pub fn resolve_npcs(
     } else {
         Outcome::default()
     };
+    record_digest(stored_digest, current, out)
+}
+
+/// Log the pass and record `current` as handled, unless some NPC was left
+/// in authored water (then the pass runs again on the next start).
+fn record_digest(
+    stored_digest: &mut Option<String>,
+    current: Option<String>,
+    out: Outcome,
+) -> Outcome {
     if out.unresolved > 0 {
         warn!(
             moved_npcs = out.moved,
@@ -356,5 +366,37 @@ mod tests {
         assert_eq!(actors[mount].wpos, Vec3::new(21.5, 7.5, 202.0));
         // The rider moved by the mount's offset, not on its own.
         assert_eq!(actors[rider].wpos, Vec3::new(21.5, 7.5, 204.0));
+    }
+
+    #[test]
+    fn unresolved_npcs_keep_the_digest_unrecorded() {
+        let flood = |_: Vec2<i32>| {
+            Some((
+                AuthoredCell::Wet {
+                    surface_block: 200,
+                    bed_block: 195,
+                },
+                Some(0.0),
+            ))
+        };
+        let mut actors = Actors::default();
+        let stuck = actors.create_actor(npc(
+            Body::Humanoid(humanoid::Body::random()),
+            Vec3::new(0.5, 0.5, 197.0),
+        ));
+        let out = resolve_with(&mut actors, &flood, &ground, &|_| false);
+        assert_eq!(out, Outcome {
+            moved: 0,
+            unresolved: 1
+        });
+        assert_eq!(actors[stuck].wpos, Vec3::new(0.5, 0.5, 197.0));
+        let mut stored = Some("old".to_owned());
+        record_digest(&mut stored, Some("new".to_owned()), out);
+        assert_eq!(stored.as_deref(), Some("old"));
+        record_digest(&mut stored, Some("new".to_owned()), Outcome {
+            moved: 1,
+            unresolved: 0,
+        });
+        assert_eq!(stored.as_deref(), Some("new"));
     }
 }
