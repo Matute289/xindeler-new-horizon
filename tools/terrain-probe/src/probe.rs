@@ -783,3 +783,7 @@ mod tests {
         assert_eq!(r.0.iter().map(|&(_, n)| u32::from(n)).sum::<u32>(), 70_000);
     }
 }
+
+#[cfg(test)]
+#[path = "probe_edge_tests.rs"]
+mod edge_tests;

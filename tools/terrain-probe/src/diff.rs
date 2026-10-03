@@ -103,3 +103,7 @@ pub fn compare(a: &Dump, b: &Dump, show: usize) -> Res<bool> {
     }
     Ok(total == 0 && col_float_diff == 0)
 }
+
+#[cfg(test)]
+#[path = "diff_edge_tests.rs"]
+mod edge_tests;
