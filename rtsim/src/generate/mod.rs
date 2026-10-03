@@ -106,6 +106,7 @@ impl Data {
             tick: 0,
             time_of_day: TimeOfDay(settings.start_time),
             should_purge: false,
+            authored_rasters_digest: None,
         };
 
         let initial_factions = (0..16)

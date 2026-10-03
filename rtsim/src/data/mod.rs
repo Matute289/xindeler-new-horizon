@@ -94,6 +94,14 @@ pub struct Data {
     #[serde(default)]
     pub should_purge: bool,
 
+    /// XINDELER: digest of the world's authored water rasters this save last
+    /// saw (`None`: none, or a save older than the field). When it differs
+    /// from the running world's, startup moves land NPCs out of authored
+    /// water once (`rule::authored_water`). Additive `#[serde(default)]`
+    /// field, so `CURRENT_VERSION` does not move.
+    #[serde(default)]
+    pub authored_rasters_digest: Option<String>,
+
     #[serde(skip)]
     pub airship_sim: AirshipSim,
 }

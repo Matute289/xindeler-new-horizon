@@ -1,5 +1,5 @@
 use crate::{
-    RtState, Rule, RuleError,
+    Data, RtState, Rule, RuleError,
     data::{
         Site,
         actor::Profession,
@@ -199,6 +199,19 @@ impl Rule for Migrate {
             for death in data.architect.deaths.iter() {
                 data.architect.population.on_spawn(death);
             }
+
+            // XINDELER: once per authored water manifest change, move land
+            // NPCs out of authored water (see `rule::authored_water`).
+            let Data {
+                actors,
+                authored_rasters_digest,
+                ..
+            } = data;
+            super::authored_water::resolve_npcs(
+                actors.values_mut(),
+                authored_rasters_digest,
+                ctx.world,
+            );
         });
 
         Ok(Self)

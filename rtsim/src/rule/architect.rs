@@ -8,6 +8,7 @@ use rand::{
     RngExt, rng,
     seq::{IndexedRandom, IteratorRandom},
 };
+use vek::Vec2;
 use world::{CONFIG, IndexRef, World, sim::SimChunk, site::SiteKind};
 
 use crate::{
@@ -286,6 +287,34 @@ fn role_personality(rng: &mut impl RngExt, role: &Role) -> Personality {
     }
 }
 
+/// Whether a body lives in water (`Some(true)`), on land (`Some(false)`) or
+/// does not care (`None`: flyers, objects, vehicles).
+fn body_aquatic(body: &Body) -> Option<bool> {
+    match body {
+        Body::Crustacean(_) | Body::FishSmall(_) | Body::FishMedium(_) => Some(true),
+        Body::Dragon(_)
+        | Body::BirdLarge(_)
+        | Body::BirdMedium(_)
+        | Body::Object(_)
+        | Body::Ship(_)
+        | Body::Item(_)
+        | Body::Plugin(_) => None,
+        _ => Some(false),
+    }
+}
+
+/// Inside an authored water region, the spawn column must match the body: a
+/// water body in authored water, a land body on dry ground at least 2 m from
+/// it (a bank lip next to a deep channel is a cliff edge, not a spawn).
+/// Always true outside every region.
+fn authored_spawn_ok(world: &World, wpos: Vec2<i32>, aquatic: Option<bool>) -> bool {
+    match (world.sim().authored_column_at(wpos), aquatic) {
+        (None, _) | (_, None) => true,
+        (Some(col), Some(true)) => col.cell.is_wet(),
+        (Some(col), Some(false)) => !col.cell.is_wet() && col.water_dist.is_none_or(|d| d >= 2.0),
+    }
+}
+
 fn spawn_anywhere(
     data: &mut Data,
     world: &World,
@@ -303,11 +332,16 @@ fn spawn_anywhere(
 
         // TODO: If we had access to `ChunkStates` here we could make sure
         // these aren't getting respawned in loaded chunks.
-        if let Some(chunk) = world.sim().get(cpos)
-            && (!check || !chunk.is_underwater())
+        let center = cpos.cpos_to_wpos_center();
+        // Authored-aware: authored water and its banks count, and z comes
+        // from the authored surface (see `world::authored_raster::queries`).
+        if world
+            .sim()
+            .chunk_with_authored_water(cpos)
+            .is_some_and(|chunk| !check || !chunk.is_underwater())
+            && (!check || authored_spawn_ok(world, center, body_aquatic(&body)))
         {
-            let wpos = cpos.cpos_to_wpos_center();
-            let wpos = wpos.as_().with_z(world.sim().get_surface_alt_approx(wpos));
+            let wpos = center.as_().with_z(world.sim().surface_alt_at(center));
 
             data.spawn_actor(
                 Actor::new_npc(rng.random(), wpos, body, death.role.clone())
@@ -559,11 +593,15 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
 
                     // TODO: If we had access to `ChunkStates` here we could make sure
                     // these aren't getting respawned in loaded chunks.
-                    if let Some(chunk) = world.sim().get(cpos)
-                        && chunk_filter(chunk)
+                    let center = cpos.cpos_to_wpos_center();
+                    // Authored-aware, as in `spawn_anywhere`.
+                    if world
+                        .sim()
+                        .chunk_with_authored_water(cpos)
+                        .is_some_and(|chunk| chunk_filter(&chunk))
+                        && authored_spawn_ok(world, center, body_aquatic(&body))
                     {
-                        let wpos = cpos.cpos_to_wpos_center();
-                        let wpos = wpos.as_().with_z(world.sim().get_surface_alt_approx(wpos));
+                        let wpos = center.as_().with_z(world.sim().surface_alt_at(center));
 
                         data.spawn_actor(
                             Actor::new_npc(rng.random(), wpos, body, death.role.clone())

@@ -5999,7 +5999,8 @@ rockiness {:?}
 tree_density {:?}
 spawn_rate {:?}
 path {:?}
-cliff_height {:?} "#,
+cliff_height {:?}
+authored {:?} "#,
             wpos,
             alt,
             col.alt,
@@ -6018,6 +6019,8 @@ cliff_height {:?} "#,
             spawn_rate,
             path,
             cliff_height,
+            // XINDELER: the authored water raster column, if any.
+            sim.authored_column_at(wpos).map(|a| (a.cell, a.water_dist)),
         ))
     };
     if let Some(s) = msg_generator(&calendar) {

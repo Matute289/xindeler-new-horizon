@@ -10,7 +10,7 @@ use common::{
     comp::{self, Body, agent::FlightMode},
     mounting::{Volume, VolumePos},
     rtsim::{NpcAction, NpcActivity},
-    terrain::{CoordinateConversions, TerrainChunkSize},
+    terrain::TerrainChunkSize,
     vol::RectVolSize,
 };
 use slotmap::SecondaryMap;
@@ -162,11 +162,10 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                             Body::Ship(comp::ship::Body::SailBoat | comp::ship::Body::Galleon)
                             | Body::FishMedium(_)
                             | Body::FishSmall(_) => {
-                                let chunk_pos = new_wpos.xy().as_().wpos_to_cpos();
+                                // Authored-aware (authored water regions).
                                 ctx.world
-                                    .sim()
-                                    .get(chunk_pos)
-                                    .is_none_or(|f| f.river.river_kind.is_some())
+                                    .is_wet_at(new_wpos.xy().as_())
+                                    .is_none_or(|wet| wet)
                             },
                             Body::Ship(comp::ship::Body::DefaultAirship) => false,
                             _ => true,
@@ -263,11 +262,10 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                                     )
                                     | Body::FishMedium(_)
                                     | Body::FishSmall(_) => {
-                                        let chunk_pos = new_wpos.xy().as_().wpos_to_cpos();
+                                        // Authored-aware (authored water regions).
                                         ctx.world
-                                            .sim()
-                                            .get(chunk_pos)
-                                            .is_none_or(|f| f.river.river_kind.is_some())
+                                            .is_wet_at(new_wpos.xy().as_())
+                                            .is_none_or(|wet| wet)
                                     },
                                     _ => true,
                                 };

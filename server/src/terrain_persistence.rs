@@ -95,6 +95,32 @@ impl TerrainPersistence {
         // reliable strategy should be implemented here.
     }
 
+    /// XINDELER: record the digest of the world's authored water rasters
+    /// (`world::authored_raster`) next to the persisted chunks and warn
+    /// loudly when it changed: persisted player edits are re-applied over
+    /// regenerated terrain, so edits inside a changed authored region can end
+    /// up floating or buried. Changing a manifest under a live world needs
+    /// those chunks' edits cleared (and an rtsim/site reset if sites moved).
+    pub fn check_authored_rasters_digest(&self, digest: Option<&str>) {
+        let path = self.path.join("authored_rasters.digest");
+        let current = digest.unwrap_or("none");
+        match std::fs::read_to_string(&path) {
+            Ok(previous) if previous.trim() == current => return,
+            Ok(previous) => error!(
+                previous = previous.trim(),
+                current,
+                "The world's authored water rasters changed since the persisted terrain edits \
+                 were made: edits inside the changed authored regions are re-applied over new \
+                 terrain and may float or be buried. Clear the persisted chunks of those regions \
+                 (see the authored water release checklist)."
+            ),
+            Err(_) => info!(current, "Recording the authored water raster digest"),
+        }
+        if let Err(e) = std::fs::write(&path, current) {
+            warn!(?e, "Could not record the authored water raster digest");
+        }
+    }
+
     fn path_for(&self, key: Vec2<i32>) -> PathBuf {
         let mut path = self.path.clone();
         path.push(format!("chunk_{}_{}.dat", key.x, key.y));
