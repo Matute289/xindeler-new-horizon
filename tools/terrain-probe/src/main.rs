@@ -6,6 +6,7 @@ mod client_dump;
 mod diff;
 mod format;
 mod legacy;
+mod login_check;
 mod probe;
 mod scratch_server;
 #[cfg(test)] mod test_alloc;
@@ -196,6 +197,24 @@ enum Cmd {
         #[arg(long, default_value_t = 10)]
         show: usize,
     },
+    /// Live login check: put a bot's waypoint inside an authored wet column
+    /// on a throw-away server, leave and select the character again, and
+    /// report whether it comes back on dry ground (exit 1 if not). Same
+    /// scratch server rules as `client-dump`.
+    LoginCheck {
+        /// `x,y` of an authored wet column (world metres).
+        #[arg(long)]
+        at: String,
+        #[arg(long, default_value_t = 6)]
+        view_distance: u32,
+        #[arg(long, default_value_t = 900)]
+        server_timeout: u64,
+        #[arg(long)]
+        server_bin: Option<PathBuf>,
+        /// Keep the server log at this path.
+        #[arg(long)]
+        keep_server_log: Option<PathBuf>,
+    },
     /// Compare two dumps of the same box and z range block by block.
     Diff {
         a: PathBuf,
@@ -339,6 +358,37 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 stats.cpu_gen_secs, stats.cpu_sample_secs, stats.cpu_runs_secs
             );
             Ok(ExitCode::SUCCESS)
+        },
+        Cmd::LoginCheck {
+            at,
+            view_distance,
+            server_timeout,
+            server_bin,
+            keep_server_log,
+        } => {
+            let xy: Vec<i32> = at
+                .split(',')
+                .map(|v| v.trim().parse::<i32>())
+                .collect::<Result<_, _>>()
+                .map_err(|e| format!("--at {at:?}: {e}"))?;
+            let [x, y] = xy[..] else {
+                return Err(format!("--at {at:?}: expected x,y").into());
+            };
+            let p = load_probe(cli)?;
+            let ok = login_check::run(&p, &login_check::LoginCheckOpts {
+                at: Vec2::new(x, y),
+                view_distance: *view_distance,
+                server_bin: server_bin
+                    .clone()
+                    .unwrap_or_else(scratch_server::default_server_bin),
+                server_ready_timeout: std::time::Duration::from_secs(*server_timeout),
+                keep_server_log: keep_server_log.clone(),
+            })?;
+            Ok(if ok {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
         },
         Cmd::ClientDump {
             bx,
