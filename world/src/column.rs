@@ -1,6 +1,7 @@
 use crate::{
     CONFIG, IndexRef, Land,
     all::ForestKind,
+    authored_raster,
     biome_profile::BiomeProfile,
     sim::{
         AuthoredGroundCoverProfile, CROMATOLIS_V0_REGION_ID, GroundSubstrate, Path, RiverKind,
@@ -148,6 +149,13 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let chunk_pos = wpos.wpos_to_cpos();
 
         let sim = &self.sim;
+        // XINDELER: the authored water raster at this column, `None` outside
+        // every authored region (then nothing below changes). See
+        // `crate::authored_raster`.
+        let authored = sim
+            .authored_rasters
+            .as_ref()
+            .and_then(|rasters| rasters.column(wpos));
 
         // let turb = Vec2::new(
         //     sim.gen_ctx.turb_x_nz.get((wposf.div(48.0)).into_array()) as f32,
@@ -784,13 +792,15 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let flood_block = biome_profile
             .filter(|rp| rp.flood_to.is_some())
             .map_or(BlockKind::Water, |rp| rp.profile.flood_block);
-        let water_level =
-            match biome_profile.and_then(|rp| rp.flood_to.map(|flood_to| (rp, flood_to))) {
-                Some((rp, flood_to)) => {
-                    water_level.max(Lerp::lerp(water_level, flood_to, rp.strength()))
-                },
-                None => water_level,
-            };
+        let apply_flood = |water_level: f32| match biome_profile
+            .and_then(|rp| rp.flood_to.map(|flood_to| (rp, flood_to)))
+        {
+            Some((rp, flood_to)) => {
+                water_level.max(Lerp::lerp(water_level, flood_to, rp.strength()))
+            },
+            None => water_level,
+        };
+        let water_level = apply_flood(water_level);
 
         let mut spawn_rules = SpawnRules::default();
         for site in sim_chunk.sites.iter().map(|site| &index.sites[*site]) {
@@ -1027,9 +1037,55 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let warp_factor = warp_factor * spawn_rules.max_warp;
         // NOTE: To disable warp, uncomment this line.
         // let warp_factor = 0.0;
+        let riverless_alt_delta_unfaded = riverless_alt_delta;
         let riverless_alt_delta = Lerp::lerp(0.0, riverless_alt_delta, warp_factor);
         let alt = alt + riverless_alt_delta;
         let alt = alt + warp * warp_factor;
+
+        // XINDELER: inside an authored region the raster replaces the
+        // sim-derived water and the terrain it carved (exact wet/bank
+        // columns, engine terrain without the suppressed sim water
+        // elsewhere, feathered at the region border). Applied before the
+        // `Damage` override and with the `BiomeProfile` flood re-applied, so
+        // regional terrain overrides stay on top of authored terrain.
+        let (alt, water_level, water_dist, warp_factor, cliff_offset, riverless_alt) =
+            match authored {
+                Some(authored) => {
+                    let r = authored.resolve(
+                        authored_raster::EngineColumn {
+                            alt,
+                            water_level,
+                            water_dist,
+                            warp_factor,
+                            cliff_offset,
+                            riverless_alt,
+                        },
+                        authored_raster::DryTerrain {
+                            riverless_alt,
+                            riverless_alt_delta: riverless_alt_delta_unfaded,
+                            warp,
+                            max_warp: spawn_rules.max_warp,
+                            base_sea_level,
+                        },
+                    );
+                    (
+                        r.alt,
+                        apply_flood(r.water_level),
+                        r.water_dist,
+                        r.warp_factor,
+                        r.cliff_offset,
+                        r.riverless_alt,
+                    )
+                },
+                None => (
+                    alt,
+                    water_level,
+                    water_dist,
+                    warp_factor,
+                    cliff_offset,
+                    riverless_alt,
+                ),
+            };
 
         // A `Damage` override's crater bowl/rim (see
         // `common::terrain::regional_override::DamageOverride`), applied

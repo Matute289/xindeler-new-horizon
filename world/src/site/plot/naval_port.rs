@@ -230,9 +230,18 @@ impl NavalPort {
         // (not the mean) is taken deliberately: a deck has to clear the
         // *highest* local water reading along its own footprint, not an
         // average that some of it would sit under.
+        //
+        // An authored wet column (see `crate::authored_raster`) answers with
+        // its exact surface instead: `surface_block + 1`, the altitude of the
+        // top of the top water block, which is what `water_alt` means for the
+        // sim's own water (sea level 140 over top water block 139).
         let sample_water_alt = |wpos: Vec2<i32>| {
-            land.get_chunk_wpos(wpos)
-                .map(|chunk| chunk.water_alt as i32)
+            land.authored_water_at(wpos)
+                .map(|(surface_block, _)| surface_block + 1)
+                .or_else(|| {
+                    land.get_chunk_wpos(wpos)
+                        .map(|chunk| chunk.water_alt as i32)
+                })
         };
         let water_alt = [
             deck.min,
@@ -1523,7 +1532,13 @@ impl NavalPort {
     /// placement against, so a berth's recorded depth and the placement
     /// that put the deck there can never silently disagree about which
     /// field "depth" means.
+    ///
+    /// An authored wet column answers with its exact number of water blocks
+    /// (`surface_block - bed_block`).
     fn sample_depth(&self, land: &Land, wpos: Vec2<i32>) -> Option<i32> {
+        if let Some((surface_block, bed_block)) = land.authored_water_at(wpos) {
+            return Some(surface_block - bed_block);
+        }
         land.get_chunk_wpos(wpos)
             .map(|chunk| (chunk.water_alt - chunk.alt) as i32)
     }

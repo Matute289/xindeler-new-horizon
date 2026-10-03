@@ -64,6 +64,9 @@ fixed = "1"
 strum = { workspace = true }
 delaunator = "1.0.2"
 tiny-skia = { version = "0.12", optional = true }
+# Authored raster tiles (zstd payload, sha256 checked against the manifest).
+zstd = "0.13"
+sha2 = { workspace = true }
 
 # compression benchmarks
 lz-fear = { version = "0.2", optional = true }

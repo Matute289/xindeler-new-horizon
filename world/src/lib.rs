@@ -10,6 +10,7 @@
 #![cfg_attr(feature = "simd", feature(portable_simd))]
 
 mod all;
+pub mod authored_raster;
 mod biome_profile;
 mod block;
 pub mod canvas;
@@ -467,7 +468,22 @@ impl World {
             .and_then(|base_z| self.sim.get(chunk_pos).map(|sim_chunk| (base_z, sim_chunk))) */
             .get_base_z(chunk_pos)
         {
-            Some(base_z) => (base_z as i32, self.sim.get(chunk_pos).unwrap()),
+            // XINDELER: an authored bed or bank can lie far below every sim
+            // chunk's own base (a slot canyon cut into a plateau); blocks below
+            // `base_z` default to stone, so the base must reach below it or
+            // the air over the authored water would stay solid rock.
+            Some(base_z) => (
+                match self
+                    .sim
+                    .authored_rasters
+                    .as_ref()
+                    .and_then(|rasters| rasters.min_authored_block_near(chunk_pos))
+                {
+                    Some(min_block) => (base_z as i32).min(min_block - 16),
+                    None => base_z as i32,
+                },
+                self.sim.get(chunk_pos).unwrap(),
+            ),
             // Some((base_z, sim_chunk)) => (base_z as i32, sim_chunk),
             None => {
                 // NOTE: This is necessary in order to generate a handful of chunks at the edges

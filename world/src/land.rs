@@ -43,6 +43,16 @@ impl<'a> Land<'a> {
             .unwrap_or(0.0)
     }
 
+    /// XINDELER: the authored water at `wpos` as `(surface_block,
+    /// bed_block)`, if `wpos` is an authored wet column (see
+    /// `crate::authored_raster`). `None` everywhere for a world without
+    /// authored rasters.
+    pub fn authored_water_at(&self, wpos: Vec2<i32>) -> Option<(i32, i32)> {
+        self.sim
+            .and_then(|sim| sim.authored_rasters.as_ref())
+            .and_then(|rasters| rasters.water_at(wpos))
+    }
+
     pub fn get_downhill(&self, wpos: Vec2<i32>) -> Vec2<i32> {
         self.sim
             .and_then(|sim| sim.get_wpos(wpos))

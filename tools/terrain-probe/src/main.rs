@@ -221,6 +221,20 @@ enum Cmd {
         #[arg(long)]
         legacy: PathBuf,
     },
+    /// Write authored water raster tiles and their manifest (synthetic
+    /// scenarios or imported rasters) into an asset root's `world/map`, so
+    /// the engine's authored water layer can be exercised before the real
+    /// exporter exists. Validates the result with the engine's own loader.
+    AwWrite {
+        /// JSON spec: `{"stem": "cromatolis_v0", "regions": [RegionSpec, ...]}`
+        /// (see `world::authored_raster::writer`); relative raster paths are
+        /// resolved against the spec's directory.
+        #[arg(long)]
+        spec: PathBuf,
+        /// Output directory (normally `<scratch assets>/world/map`).
+        #[arg(long)]
+        map_dir: PathBuf,
+    },
 }
 
 /// Select the asset root before any engine code reads it.
@@ -585,6 +599,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 ExitCode::from(1)
             })
         },
+        Cmd::AwWrite { spec, map_dir } => aw_write(spec, map_dir),
         Cmd::CheckLegacy { input, legacy } => {
             let d = Dump::read_file(input)?;
             let ok = legacy::compare(&d, legacy)?;
@@ -595,6 +610,76 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             })
         },
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AwSpec {
+    stem: String,
+    regions: Vec<world::authored_raster::writer::RegionSpec>,
+}
+
+fn aw_write(spec_path: &Path, map_dir: &Path) -> Res<ExitCode> {
+    use world::authored_raster::{
+        AuthoredRasters,
+        writer::{self, PaintOp},
+    };
+    let text =
+        std::fs::read_to_string(spec_path).map_err(|e| format!("{}: {e}", spec_path.display()))?;
+    let mut spec: AwSpec =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", spec_path.display()))?;
+    let base = spec_path.parent().unwrap_or(Path::new("."));
+    for region in &mut spec.regions {
+        for op in &mut region.ops {
+            if let PaintOp::Raster {
+                surface_file,
+                bed_file,
+                ..
+            } = op
+            {
+                *surface_file = base.join(&*surface_file);
+                *bed_file = base.join(&*bed_file);
+            }
+        }
+    }
+    let built = spec
+        .regions
+        .iter()
+        .map(writer::build_region)
+        .collect::<Result<Vec<_>, _>>()?;
+    // Validate with the engine's own loader before writing anything (the
+    // map size only matters for the rim check; Cromatolis is 32768 m).
+    let files: std::collections::HashMap<(String, i32, i32), Vec<u8>> = built
+        .iter()
+        .flat_map(|r| {
+            r.tiles
+                .iter()
+                .map(|((tx, ty), b)| ((r.manifest.id.clone(), *tx, *ty), b.clone()))
+        })
+        .collect();
+    let fetch = |id: &str, _: world::authored_raster::format::LayerKind, tx: i32, ty: i32| {
+        files
+            .get(&(id.to_string(), tx, ty))
+            .cloned()
+            .ok_or_else(|| format!("missing tile {id} {tx} {ty}"))
+    };
+    let loaded =
+        AuthoredRasters::from_manifest(writer::manifest(&built), Vec2::broadcast(32768), &fetch)
+            .map_err(|e| e.to_string())?;
+    let written = writer::write_assets(map_dir, &spec.stem, &built)?;
+    for (id, b) in loaded.regions() {
+        let r = built.iter().find(|r| r.manifest.id == id).expect("built");
+        eprintln!(
+            "region {id}: box {:?}..{:?}, {} tile(s)",
+            b.min,
+            b.max,
+            r.tiles.len()
+        );
+    }
+    for p in written {
+        println!("{}", p.display());
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn flag_letters(f: u8) -> String {
