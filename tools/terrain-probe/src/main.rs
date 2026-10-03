@@ -663,9 +663,13 @@ fn aw_write(spec_path: &Path, map_dir: &Path) -> Res<ExitCode> {
             .cloned()
             .ok_or_else(|| format!("missing tile {id} {tx} {ty}"))
     };
-    let loaded =
-        AuthoredRasters::from_manifest(writer::manifest(&built), Vec2::broadcast(32768), &fetch)
-            .map_err(|e| e.to_string())?;
+    let loaded = AuthoredRasters::from_manifest(
+        writer::manifest(&built),
+        Vec2::broadcast(32768),
+        &spec_path.display().to_string(),
+        &fetch,
+    )
+    .map_err(|e| e.to_string())?;
     let written = writer::write_assets(map_dir, &spec.stem, &built)?;
     for (id, b) in loaded.regions() {
         let r = built.iter().find(|r| r.manifest.id == id).expect("built");
