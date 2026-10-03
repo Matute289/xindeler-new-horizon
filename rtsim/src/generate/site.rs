@@ -25,6 +25,7 @@ fn good_or_evil(kind: Option<&SiteKind>, is_authored_settlement: bool) -> Option
         // Good
         Some(
             SiteKind::Refactor
+            | SiteKind::RiverPort
             | SiteKind::CliffTown
             | SiteKind::DesertCity
             | SiteKind::SavannahTown
@@ -121,6 +122,15 @@ mod tests {
         // A genuine wild procedural `Camp` (no authored-settlement context)
         // must keep its existing Evil classification.
         assert_eq!(good_or_evil(Some(&SiteKind::Camp), false), Some(false));
+    }
+
+    #[test]
+    fn a_river_port_is_a_good_settlement_whether_or_not_it_is_authored() {
+        // A river port is a landmark-pinned settlement, so the authored flag
+        // (which is for settlement pins) is false for it; it must still join a
+        // good faction like any other town.
+        assert_eq!(good_or_evil(Some(&SiteKind::RiverPort), false), Some(true));
+        assert_eq!(good_or_evil(Some(&SiteKind::RiverPort), true), Some(true));
     }
 
     #[test]

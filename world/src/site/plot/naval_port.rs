@@ -83,6 +83,57 @@ const SUPPORT_SPACING: i32 = 2 * TILE_SIZE as i32;
 /// landmarks does not need a second palette.
 const STONE_COLOR: Rgb<u8> = Rgb::new(150, 145, 135);
 
+/// The timber tone each forest species gives a dock's wood, shared by every
+/// plot that builds waterfront timberwork.
+fn timber_colour(forest: Option<ForestKind>) -> Rgb<u8> {
+    match forest {
+        Some(
+            ForestKind::Cedar
+            | ForestKind::AutumnTree
+            | ForestKind::Frostpine
+            | ForestKind::Mangrove,
+        ) => Rgb::new(63, 28, 12),
+        Some(ForestKind::Oak | ForestKind::Swamp | ForestKind::Baobab) => Rgb::new(102, 87, 63),
+        Some(ForestKind::Acacia | ForestKind::Birch | ForestKind::Palm) => Rgb::new(130, 104, 102),
+        Some(
+            ForestKind::Mapletree | ForestKind::Redwood | ForestKind::Pine | ForestKind::Cherry,
+        ) => Rgb::new(117, 95, 46),
+        _ => Rgb::new(63, 28, 12),
+    }
+}
+
+/// The look a group of ports shares when they are dressed as one district.
+///
+/// Every port of the group builds with the same stone footings (already one
+/// shared tone for every tier) and the same timber, and carries the same
+/// spaced street lighting along its deck. The timber is keyed off a single
+/// anchor position rather than each port's own apron, so two ports on
+/// different banks of a river cannot land on different species by a
+/// biome-boundary accident.
+///
+/// The shared lighting only changes the `Pier` tier (see `render_pier`); a
+/// `Harbour`-tier member of a district keeps its own lighting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortDressing {
+    /// World position whose local forest decides the district's timber --
+    /// the district's seat.
+    pub timber_anchor: Vec2<i32>,
+}
+
+impl PortDressing {
+    /// The district's timber tone: a species drawn from the forest at the
+    /// anchor with a seed derived from the anchor alone, so every member of
+    /// the district resolves the same one.
+    pub fn timber(&self, land: &Land) -> Rgb<u8> {
+        let seed = RandomField::new(0x4449_5354).get(self.timber_anchor.with_z(0));
+        timber_colour(
+            *land
+                .make_forest_lottery(self.timber_anchor)
+                .choose_seeded(seed),
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The berth contract (spec §4.3, §5.2, §11.2).
 // ---------------------------------------------------------------------------
@@ -167,7 +218,7 @@ pub struct NavalPort {
     pub water_alt: i32,
     /// The deck's own walking-surface altitude: `water_alt` plus freeboard.
     /// Not sea level -- see the module doc.
-    deck_alt: i32,
+    pub(super) deck_alt: i32,
     /// Tiles of the deck's own reach that cross the dilated hazard band
     /// before reaching real open water (`ShorePlacement::causeway`), clamped
     /// to at least one so there is always a ramp span even when the apron
@@ -182,8 +233,11 @@ pub struct NavalPort {
     /// the berth. `build_causeway` instead steps at single-block
     /// granularity, so even a steep rise over this fixed span reads as a
     /// real (if steep) staircase rather than a sheer wall.
-    ramp_tiles: i32,
+    pub(super) ramp_tiles: i32,
     wood_color: Rgb<u8>,
+    /// Whether this port belongs to a dressed district and so carries the
+    /// district's spaced street lighting rather than its own tier's.
+    district_lit: bool,
     /// This port's mooring slots, measured against real terrain and emitted
     /// only where they clear their class's depth and have a clear-water
     /// approach (see [`Self::measure_berths`]). A `Jetty` may legitimately
@@ -208,6 +262,26 @@ impl NavalPort {
         site: &Site,
         site_name: &str,
         placement: ShorePlacement,
+        dressing: Option<PortDressing>,
+    ) -> Self {
+        let mut port = Self::frame(land, rng, site, placement, dressing);
+        port.berths = port.measure_berths(land, site_name);
+        port.anchorages = port.find_anchorage(land, site_name, &port.berths);
+        port
+    }
+
+    /// The port's geometry and sampled altitudes, with no berths measured.
+    ///
+    /// Split out of [`Self::generate`] so a structure that only wants the
+    /// dock builders over a claimed waterfront (a shipyard's warehouse and
+    /// slipway apron) can reuse them without paying for, or exposing, a berth
+    /// contract it does not have.
+    pub(super) fn frame(
+        land: &Land,
+        rng: &mut impl Rng,
+        site: &Site,
+        placement: ShorePlacement,
+        dressing: Option<PortDressing>,
     ) -> Self {
         let to_wpos_aabr = |aabr: Aabr<i32>| Aabr {
             min: site.tile_wpos(aabr.min),
@@ -266,27 +340,16 @@ impl NavalPort {
         // a wall only because every block of run gets its own step.
         let ramp_tiles = placement.causeway.max(1);
 
-        let wood_color = match land
-            .make_forest_lottery(apron.center())
-            .choose_seeded(rng.random())
-        {
-            Some(
-                ForestKind::Cedar
-                | ForestKind::AutumnTree
-                | ForestKind::Frostpine
-                | ForestKind::Mangrove,
-            ) => Rgb::new(63, 28, 12),
-            Some(ForestKind::Oak | ForestKind::Swamp | ForestKind::Baobab) => Rgb::new(102, 87, 63),
-            Some(ForestKind::Acacia | ForestKind::Birch | ForestKind::Palm) => {
-                Rgb::new(130, 104, 102)
-            },
-            Some(
-                ForestKind::Mapletree | ForestKind::Redwood | ForestKind::Pine | ForestKind::Cherry,
-            ) => Rgb::new(117, 95, 46),
-            _ => Rgb::new(63, 28, 12),
+        let wood_color = match dressing {
+            Some(dressing) => dressing.timber(land),
+            None => timber_colour(
+                *land
+                    .make_forest_lottery(apron.center())
+                    .choose_seeded(rng.random()),
+            ),
         };
 
-        let mut port = Self {
+        Self {
             class: placement.class,
             apron,
             deck,
@@ -298,23 +361,80 @@ impl NavalPort {
             deck_alt,
             ramp_tiles,
             wood_color,
+            district_lit: dressing.is_some(),
             berths: Vec::new(),
             anchorages: Vec::new(),
-        };
-        port.berths = port.measure_berths(land, site_name);
-        port.anchorages = port.find_anchorage(land, site_name, &port.berths);
-        port
+        }
     }
 
-    fn wood_fill(&self) -> Fill { Fill::Block(Block::new(BlockKind::Wood, self.wood_color)) }
+    /// A frame with a `Pier`-sized deck, oriented onto `normal`, for the
+    /// tests of structures built over a naval port's frame.
+    #[cfg(test)]
+    pub(super) fn test_frame(normal: Vec2<i32>) -> Self {
+        let (along, seaward) = (18, 66);
+        let (dx, dy) = if normal.x != 0 {
+            (seaward, along)
+        } else {
+            (along, seaward)
+        };
+        let deck = match (normal.x, normal.y) {
+            (1, 0) => Aabr {
+                min: Vec2::new(30, -dy / 2),
+                max: Vec2::new(30 + dx, dy / 2),
+            },
+            (-1, 0) => Aabr {
+                min: Vec2::new(-30 - dx, -dy / 2),
+                max: Vec2::new(-30, dy / 2),
+            },
+            (0, 1) => Aabr {
+                min: Vec2::new(-dx / 2, 18),
+                max: Vec2::new(dx / 2, 18 + dy),
+            },
+            _ => Aabr {
+                min: Vec2::new(-dx / 2, -18 - dy),
+                max: Vec2::new(dx / 2, -18),
+            },
+        };
+        Self {
+            class: PortClass::Pier,
+            apron: Aabr {
+                min: Vec2::new(-60, -60),
+                max: Vec2::new(60, 60),
+            },
+            deck,
+            hinge: Aabr::new_empty(Vec2::zero()),
+            door_tile: Vec2::zero(),
+            normal,
+            alt: 10,
+            water_alt: 4,
+            deck_alt: 6,
+            ramp_tiles: 2,
+            wood_color: Rgb::new(102, 87, 63),
+            district_lit: false,
+            berths: Vec::new(),
+            anchorages: Vec::new(),
+        }
+    }
 
-    fn stone_fill(&self) -> Fill { Fill::Block(Block::new(BlockKind::Rock, STONE_COLOR)) }
+    /// The timber tone every wooden surface of this port is built in.
+    pub fn timber_colour(&self) -> Rgb<u8> { self.wood_color }
+
+    /// Whether this port carries its district's shared street lighting.
+    pub fn is_district_lit(&self) -> bool { self.district_lit }
+
+    pub(super) fn wood_fill(&self) -> Fill {
+        Fill::Block(Block::new(BlockKind::Wood, self.wood_color))
+    }
+
+    pub(super) fn stone_fill(&self) -> Fill {
+        Fill::Block(Block::new(BlockKind::Rock, STONE_COLOR))
+    }
 
     /// Whether the seaward normal runs along the X axis (as opposed to Y).
-    fn seaward_is_x(&self) -> bool { self.normal.x != 0 }
+    pub(super) fn seaward_is_x(&self) -> bool { self.normal.x != 0 }
 
     /// How many blocks the deck reaches, measured along the seaward normal.
-    fn deck_reach_blocks(&self) -> i32 {
+    pub(super) fn deck_reach_blocks(&self) -> i32 {
         if self.seaward_is_x() {
             self.deck.size().w
         } else {
@@ -327,7 +447,7 @@ impl NavalPort {
     /// cross-shore width. Mirrors `site::shore`'s private `shore_face` /
     /// `project_deck` -- same axis-generic slicing, over the deck's own
     /// aabr instead of the tile grid.
-    fn deck_strip(&self, near: i32, far: i32) -> Aabr<i32> {
+    pub(super) fn deck_strip(&self, near: i32, far: i32) -> Aabr<i32> {
         if self.normal.x > 0 {
             Aabr {
                 min: Vec2::new(self.deck.min.x + near, self.deck.min.y),
@@ -457,7 +577,7 @@ impl NavalPort {
     /// hand-picking coordinates per settlement. Mirrors `build_cargo_shed`'s
     /// own `center` computation, generalised with an along-shore offset for
     /// tiers that place more than one structure.
-    fn apron_center(&self, inland: i32, along: i32) -> Vec2<i32> {
+    pub(super) fn apron_center(&self, inland: i32, along: i32) -> Vec2<i32> {
         let base = self.hinge.center() + (-self.normal) * inland;
         if self.seaward_is_x() {
             base + Vec2::new(0, along)
@@ -472,7 +592,7 @@ impl NavalPort {
     /// can be described in the port's own along-shore/inland terms and
     /// still come out axis-aligned in world space, the same way
     /// [`Self::deck_strip`] does for the deck.
-    fn oriented_half(&self, along_half: i32, inland_half: i32) -> Vec2<i32> {
+    pub(super) fn oriented_half(&self, along_half: i32, inland_half: i32) -> Vec2<i32> {
         if self.seaward_is_x() {
             Vec2::new(inland_half, along_half)
         } else {
@@ -529,7 +649,7 @@ impl NavalPort {
     /// Visible timber piles under the jetty head, one pair (both cross-shore
     /// edges) every [`SUPPORT_SPACING`] blocks, driven from below the water
     /// surface up to just under the deck cap.
-    fn build_pilings(&self, painter: &Painter) {
+    pub(super) fn build_pilings(&self, painter: &Painter) {
         let fill = self.wood_fill();
         let run_blocks = self.ramp_tiles * TILE_SIZE as i32;
         let reach = self.deck_reach_blocks();
@@ -555,7 +675,7 @@ impl NavalPort {
     /// piles -- a stone-footed pier reads differently from a jetty on
     /// pilings), every [`SUPPORT_SPACING`] blocks, driven the same depth as
     /// a piling.
-    fn build_footings(&self, painter: &Painter) {
+    pub(super) fn build_footings(&self, painter: &Painter) {
         let fill = self.stone_fill();
         let run_blocks = self.ramp_tiles * TILE_SIZE as i32;
         let reach = self.deck_reach_blocks();
@@ -741,7 +861,7 @@ impl NavalPort {
     /// A stone warehouse on the apron (~8 blocks tall) -- the `Quay` tier's
     /// vertical presence, and one of `Harbour`'s two. `along_offset` lets
     /// `Harbour` place a second one beside the first without overlapping it.
-    fn build_warehouse(&self, painter: &Painter, along_offset: i32) {
+    pub(super) fn build_warehouse(&self, painter: &Painter, along_offset: i32) {
         const HALF_ALONG: i32 = 4;
         const HALF_INLAND: i32 = 5;
         const HEIGHT: i32 = 8;
@@ -896,6 +1016,23 @@ impl NavalPort {
         );
     }
 
+    /// A district port's night lighting: the tall street lamp the capital's
+    /// quay wall uses, spaced as it is there, along the deck's centre line
+    /// from the end of the causeway to the head, with a short lamp at the
+    /// head itself.
+    fn build_district_lighting(&self, painter: &Painter) {
+        let run_blocks = self.ramp_tiles * TILE_SIZE as i32;
+        let reach = self.deck_reach_blocks();
+        let mut offset = run_blocks + LIGHT_SPACING_HARBOUR / 2;
+        while offset < reach {
+            let lit = self.deck_strip(offset, offset + 1).center();
+            painter.sprite(lit.with_z(self.deck_alt + 1), SpriteKind::StreetLampTall);
+            offset += LIGHT_SPACING_HARBOUR;
+        }
+        let tip = self.deck_strip(reach - 1, reach).center();
+        painter.sprite(tip.with_z(self.deck_alt + 1), SpriteKind::StreetLamp);
+    }
+
     /// A small cargo shed on the apron, set back from the hinge so the
     /// approach from the door tile stays clear. The `Pier` tier's vertical
     /// presence above the apron.
@@ -946,7 +1083,11 @@ impl NavalPort {
         self.build_bollard_line(painter);
         self.build_prop_scatter(painter, PROP_DENSITY_PIER);
         self.build_cargo_shed(painter);
-        self.build_pier_lantern(painter);
+        if self.district_lit {
+            self.build_district_lighting(painter);
+        } else {
+            self.build_pier_lantern(painter);
+        }
     }
 
     /// A dressed-stone quay wall with one finger pier's worth of berthing on
@@ -1838,6 +1979,7 @@ mod tests {
             deck_alt: 6,
             ramp_tiles: 2,
             wood_color: Rgb::new(102, 87, 63),
+            district_lit: false,
             berths: Vec::new(),
             anchorages: Vec::new(),
         }
