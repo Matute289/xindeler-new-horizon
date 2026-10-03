@@ -99,7 +99,44 @@ pub struct Header {
     pub block_kinds: BTreeMap<String, u8>,
     /// Free-form counters (columns, chunks, clipped columns, ...).
     pub stats: BTreeMap<String, u64>,
+    /// Only on `path = "client"` dumps: how the blocks were streamed. Absent
+    /// (and not serialised) on fast dumps, so their bytes are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<ClientInfo>,
     pub sections: Vec<SectionInfo>,
+}
+
+/// One tile of a client dump: a rectangle of chunks the bot streamed from one
+/// teleport position.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TileInfo {
+    /// Inclusive chunk range `[cx0, cy0, cx1, cy1]`.
+    pub chunks: [i32; 4],
+    /// Teleport target `[x, y, z]` sent with `/goto`.
+    pub goto: [i32; 3],
+    /// Where the bot stood when the tile was harvested.
+    pub landing: Option<[f32; 3]>,
+    pub streamed: u64,
+    pub total: u64,
+    pub secs: f32,
+}
+
+/// Provenance of a client-path dump.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ClientInfo {
+    /// Terrain view distance the bot requested, in chunks.
+    pub view_distance: u32,
+    pub chunks_total: u64,
+    pub chunks_streamed: u64,
+    /// Chunk keys `[cx, cy]` that never arrived (their columns are class 3).
+    pub missing_chunks: Vec<[i32; 2]>,
+    pub tiles: Vec<TileInfo>,
+}
+
+impl ClientInfo {
+    pub fn streamed_pct(&self) -> f64 {
+        self.chunks_streamed as f64 * 100.0 / self.chunks_total.max(1) as f64
+    }
 }
 
 impl Header {
@@ -614,6 +651,7 @@ mod tests {
                 class_codes: Header::class_codes(),
                 block_kinds: BTreeMap::new(),
                 stats: [("columns".to_string(), n as u64)].into_iter().collect(),
+                client: None,
                 sections: vec![],
             },
             alt: (0..n).map(|i| 12.5 + i as f32 * 0.25).collect(),
@@ -673,6 +711,34 @@ mod tests {
         assert_eq!(r.header.box_xy, d.header.box_xy);
         assert_eq!(r.header.assets, d.header.assets);
         assert_eq!(r.header.sections.len(), 14);
+    }
+
+    #[test]
+    fn client_info_round_trips_and_fast_header_has_no_client_key() {
+        let mut d = sample();
+        let b = bytes(&d);
+        let hl = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
+        let hjson = std::str::from_utf8(&b[12..12 + hl]).unwrap();
+        assert!(!hjson.contains("\"client\""), "fast dumps keep their bytes");
+        d.header.path = "client".into();
+        d.header.client = Some(ClientInfo {
+            view_distance: 24,
+            chunks_total: 10,
+            chunks_streamed: 9,
+            missing_chunks: vec![[3, 4]],
+            tiles: vec![TileInfo {
+                chunks: [0, 0, 4, 1],
+                goto: [10, 20, 30],
+                landing: Some([10.5, 20.5, 31.0]),
+                streamed: 9,
+                total: 10,
+                secs: 1.5,
+            }],
+        });
+        let r = Dump::read_from(&bytes(&d)[..]).unwrap();
+        assert_eq!(r.header.client, d.header.client);
+        assert_eq!(r.header.path, "client");
+        assert!((r.header.client.unwrap().streamed_pct() - 90.0).abs() < 1e-9);
     }
 
     #[test]

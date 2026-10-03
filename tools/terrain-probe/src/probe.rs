@@ -27,7 +27,7 @@ pub type Res<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Asset specifier of the Cromatolis map (same one the server loads).
 pub const MAP_ASSET: &str = "world.map.cromatolis_v0";
-const CHUNK: i32 = 32;
+pub const CHUNK: i32 = 32;
 
 pub struct Probe {
     pub world: World,
@@ -213,7 +213,7 @@ impl Runs {
 /// Classes of the column at chunk-local `rel` for `z in [zmin, zmax)`, as runs.
 /// Blocks below/above the chunk's stored range are constant, so they are
 /// emitted as one run each instead of being queried one by one.
-fn column_runs(
+pub(crate) fn column_runs(
     ch: &TerrainChunk,
     rel: Vec2<i32>,
     zmin: i32,
@@ -459,6 +459,7 @@ pub fn dump(
         ]
         .into_iter()
         .collect(),
+        client: None,
         sections: vec![],
     };
     Ok((

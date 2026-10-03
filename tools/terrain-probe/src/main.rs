@@ -2,10 +2,13 @@
 //! Cromatolis world at 1 m resolution and writes/reads `tprobe v1` dumps.
 //! Never shipped; see `README.md`.
 
+mod client_dump;
 mod diff;
 mod format;
 mod legacy;
 mod probe;
+mod scratch_server;
+mod tiles;
 
 use std::{
     io::Write as _,
@@ -118,6 +121,70 @@ enum Cmd {
         #[arg(long = "in")]
         input: PathBuf,
     },
+    /// Client path: stream the box through a throw-away local server and a
+    /// headless bot, and dump the blocks the CLIENT holds (`path = "client"`).
+    ///
+    /// Starts `xindeler-server-cli` on scratch userdata in the OS temp dir
+    /// (loopback, free ports, no auth, Cromatolis map, `--seed`, calendar off),
+    /// teleports an admin bot along a tiling of the box and waits for every
+    /// chunk. Only the server process it started is ever killed.
+    ClientDump {
+        /// `x0,y0,x1,y1` in world metres, half-open.
+        #[arg(long = "box")]
+        bx: String,
+        #[arg(long)]
+        out: PathBuf,
+        /// Lowest sampled z (default: automatic, same as `dump`).
+        #[arg(long, allow_hyphen_values = true)]
+        zmin: Option<i32>,
+        /// One past the highest sampled z (default: automatic).
+        #[arg(long, allow_hyphen_values = true)]
+        zmax: Option<i32>,
+        /// Sites/authored points are recorded within this many metres of the
+        /// box.
+        #[arg(long, default_value_t = 600)]
+        margin: i32,
+        /// Terrain view distance the bot requests, in chunks; it sets the tile
+        /// size.
+        #[arg(long, default_value_t = 24)]
+        view_distance: u32,
+        /// Seconds to wait for one tile's chunks before giving up on it.
+        #[arg(long, default_value_t = 600)]
+        timeout: u64,
+        /// Seconds without a new chunk before the bot is nudged and chunks are
+        /// requested again.
+        #[arg(long, default_value_t = 30)]
+        stall_secs: u64,
+        /// Seconds to wait for the server to finish world generation.
+        #[arg(long, default_value_t = 900)]
+        server_timeout: u64,
+        /// `xindeler-server-cli` binary (default: next to this executable, or
+        /// $TPROBE_SERVER_BIN).
+        #[arg(long)]
+        server_bin: Option<PathBuf>,
+        /// Keep the server log as `<out>.server.log` instead of deleting it
+        /// with the scratch directory.
+        #[arg(long)]
+        keep_server_log: bool,
+        /// Also run the fast path on the same box and z range and print the
+        /// discrepancy (terrain/water must be identical outside the landing
+        /// radius; structures/sprites are reported separately).
+        #[arg(long)]
+        compare_fast: bool,
+        /// With `--compare-fast`: also write the fast dump here.
+        #[arg(long, requires = "compare_fast")]
+        save_fast: Option<PathBuf>,
+        /// Exit 1 when fewer than this percentage of chunks streamed.
+        #[arg(long, default_value_t = 99.9)]
+        min_streamed: f64,
+        /// Metres around each bot landing point where a terrain difference is
+        /// attributed to the bot itself.
+        #[arg(long, default_value_t = 8)]
+        landing_radius: i32,
+        /// Print this many example differences.
+        #[arg(long, default_value_t = 10)]
+        show: usize,
+    },
     /// Compare two dumps of the same box and z range block by block.
     Diff {
         a: PathBuf,
@@ -125,6 +192,14 @@ enum Cmd {
         /// Print this many example differences.
         #[arg(long, default_value_t = 10)]
         show: usize,
+        /// Fast-vs-client comparison: ignore the column floats (a client dump
+        /// has none), tolerate terrain differences within `--landing-radius`
+        /// of a recorded bot landing, and report structure/sprite-only
+        /// differences without failing on them.
+        #[arg(long)]
+        client_compare: bool,
+        #[arg(long, default_value_t = 8)]
+        landing_radius: i32,
     },
     /// Compare a dump with a legacy research dump
     /// (`blocks.bin`/`cols.f32`/`meta.txt`).
@@ -232,6 +307,116 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 dump.header.stats["clipped_top_columns"],
             );
             Ok(ExitCode::SUCCESS)
+        },
+        Cmd::ClientDump {
+            bx,
+            out,
+            zmin,
+            zmax,
+            margin,
+            view_distance,
+            timeout,
+            stall_secs,
+            server_timeout,
+            server_bin,
+            keep_server_log,
+            compare_fast,
+            save_fast,
+            min_streamed,
+            landing_radius,
+            show,
+        } => {
+            let bx = Box2::parse(bx)?;
+            let p = load_probe(cli)?;
+            let opts = client_dump::ClientDumpOpts {
+                bx,
+                zmin: *zmin,
+                zmax: *zmax,
+                site_margin: *margin,
+                view_distance: *view_distance,
+                tile_timeout: std::time::Duration::from_secs(*timeout),
+                stall_secs: *stall_secs,
+                server_bin: server_bin
+                    .clone()
+                    .unwrap_or_else(scratch_server::default_server_bin),
+                server_ready_timeout: std::time::Duration::from_secs(*server_timeout),
+                keep_server_log: keep_server_log.then(|| {
+                    let mut s = out.clone().into_os_string();
+                    s.push(".server.log");
+                    PathBuf::from(s)
+                }),
+            };
+            let t0 = std::time::Instant::now();
+            let res = client_dump::run(&p, &opts)?;
+            let dump = res.dump;
+            dump.write_file(out)?;
+            let ci = dump.header.client.as_ref().ok_or("client info missing")?;
+            eprintln!(
+                "client dump: {}/{} chunks streamed ({:.3}%), {} missing, {} tile(s); server \
+                 start {:.0}s, streaming {:.0}s, total {:.0}s; wrote {} ({:.1} MB), z {}..{}",
+                ci.chunks_streamed,
+                ci.chunks_total,
+                ci.streamed_pct(),
+                ci.missing_chunks.len(),
+                ci.tiles.len(),
+                res.server_secs,
+                res.stream_secs,
+                t0.elapsed().as_secs_f32(),
+                out.display(),
+                std::fs::metadata(out)?.len() as f64 / 1e6,
+                dump.header.zmin,
+                dump.header.zmax,
+            );
+            if !ci.missing_chunks.is_empty() {
+                eprintln!(
+                    "missing chunks (first 20): {:?}",
+                    &ci.missing_chunks[..ci.missing_chunks.len().min(20)]
+                );
+            }
+            let mut ok = ci.streamed_pct() >= *min_streamed;
+            if !ok {
+                eprintln!(
+                    "FAIL: {:.3}% streamed, below --min-streamed {min_streamed}",
+                    ci.streamed_pct()
+                );
+            }
+            if *compare_fast {
+                let fopts = DumpOpts {
+                    bx,
+                    zmin: Some(dump.header.zmin),
+                    zmax: Some(dump.header.zmax),
+                    site_margin: *margin,
+                    keep_sprites: false,
+                };
+                let (fast, st) = probe::dump(&p, &fopts, &|_, _| {})?;
+                eprintln!("fast path: {} chunks in {:.1}s", st.chunks, st.gen_secs);
+                if let Some(path) = save_fast {
+                    fast.write_file(path)?;
+                }
+                let dopts = diff::DiffOpts {
+                    show: *show,
+                    client_compare: true,
+                    landing_radius: *landing_radius,
+                };
+                let rep = diff::compare_with(&fast, &dump, &dopts)?;
+                println!("== fast path vs client path ==");
+                rep.print(&dopts);
+                let d_ok = rep.ok(&dopts);
+                println!(
+                    "discrepancy: {}",
+                    if d_ok {
+                        "PASS (no terrain/water difference outside the landing radius)"
+                    } else {
+                        "FAIL"
+                    }
+                );
+                ok &= d_ok;
+            }
+            Ok(if ok {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            })
         },
         Cmd::Cols {
             input,
@@ -351,8 +536,21 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             print_info(&d);
             Ok(ExitCode::SUCCESS)
         },
-        Cmd::Diff { a, b, show } => {
-            let ok = diff::compare(&Dump::read_file(a)?, &Dump::read_file(b)?, *show)?;
+        Cmd::Diff {
+            a,
+            b,
+            show,
+            client_compare,
+            landing_radius,
+        } => {
+            let opts = diff::DiffOpts {
+                show: *show,
+                client_compare: *client_compare,
+                landing_radius: *landing_radius,
+            };
+            let rep = diff::compare_with(&Dump::read_file(a)?, &Dump::read_file(b)?, &opts)?;
+            rep.print(&opts);
+            let ok = rep.ok(&opts);
             Ok(if ok {
                 ExitCode::SUCCESS
             } else {

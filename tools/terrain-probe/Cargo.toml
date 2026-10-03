@@ -20,6 +20,8 @@ path = "src/main.rs"
 [dependencies]
 common = { package = "xindeler-common", path = "../../common" }
 world = { package = "xindeler-world", path = "../../world" }
+# Headless bot for `client-dump` (the client path); tool-only dependency.
+xindeler-client = { path = "../../client" }
 
 clap = { workspace = true }
 rayon = { workspace = true }
@@ -27,6 +29,8 @@ ron = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+signal-hook = { workspace = true }
 strum = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 vek = { workspace = true }
 zstd = "0.13"

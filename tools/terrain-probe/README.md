@@ -29,7 +29,8 @@ export VELOREN_ASSETS=$PWD/assets          # or pass --assets DIR
 | `sim (--in F \| --box ...)` | Per-chunk sim table: alt, water_alt, basement, chaos, river kind, cross-section, velocity, rockiness, cliff height, path, humidity, temp, tree density, flux, underwater. From a dump, or live (about 3 s of world generation, no chunk generation) with `--box` and `--pad` chunks of context. |
 | `sites-near (--center x,y \| --box ...) --radius R` | Authored sites in the generated world **and** every authored point (settlements, landmarks, caves, bridges, interiors...) from `cromatolis_v0_*.ron`, with distance. `--require-empty` exits 1 if anything is found (use it to guarantee a test arena is empty); `--no-world` skips world generation and lists only the `.ron` points; `--json`. |
 | `info --in F` | Header, counters, column statistics, section sizes. |
-| `diff A B [--show N]` | Block-by-block comparison of two dumps of the same box and z range (class pairs, bounding box, examples, float and surface differences). Exit 1 on any difference. |
+| `client-dump --box x0,y0,x1,y1 --out F` | **Client path.** Starts a throw-away `xindeler-server-cli`, teleports a headless admin bot along a tiling of the box, waits until every chunk is streamed and dumps the blocks the client holds (see "Client path" below). `--compare-fast` also runs the fast path and prints the discrepancy. |
+| `diff A B [--show N] [--client-compare] [--landing-radius R]` | Block-by-block comparison of two dumps of the same box and z range (class pairs, bounding box, examples, float and surface differences). Exit 1 on any difference. `--client-compare` is the fast-vs-client mode: floats ignored, terrain/water differences tolerated within R m (default 8) of a recorded bot landing, structure/sprite-only differences reported but never failing. |
 | `check-legacy --in F --legacy DIR` | Compare a dump with the dense `blocks.bin`/`cols.f32`/`meta.txt` of the 2026-10-03 research harness (same box and z range required). Exit 1 on any difference. |
 
 Exit codes: 0 ok, 1 negative result (`--require-empty` hit, `check-legacy` differs), 2 error.
@@ -50,6 +51,62 @@ terrain-probe cols --in arena1.tprobe --line 22800,24900,23000,24900 --step 1 --
 terrain-probe --assets $A sim --box 22750,24550,23950,25610 --pad 2 --out sim.csv
 ```
 
+## Client path (`client-dump`)
+
+```bash
+cargo build -p xindeler-terrain-probe -p xindeler-server-cli
+terrain-probe --assets $A client-dump --box 22750,24550,23950,25610 \
+    --zmin 100 --zmax 280 --out arena_client.tprobe --compare-fast
+```
+
+What it does, and the exact settings it uses:
+
+- **Server:** `xindeler-server-cli` (next to this executable, `--server-bin`, or
+  `$TPROBE_SERVER_BIN`; it is *not* a build dependency) with `--no-auth
+  --non-interactive`, `VELOREN_ASSETS` = the asset root of the probe (`--assets`),
+  and `VELOREN_USERDATA` = a scratch dir `tprobe-client-dump-<pid>-<nanos>` under
+  the OS temp dir (set `$TMPDIR` to put it elsewhere). It writes
+  `server/server_config/settings.ron` with: one `Tcp` protocol on `127.0.0.1` and a
+  **free port**, `world_seed` = `--seed` (default 0), `map_file:
+  Some(LoadAsset("world.map.cromatolis_v0"))`, `auth_server_address/auth_service_address/
+  query_address: None`, `calendar_mode: None` (the fast path has no calendar either)
+  and `max_view_distance: Some(view_distance + 8)`; and `server-cli/settings.ron` with
+  the web/metrics endpoint on a second free loopback port and no signal handlers. The
+  user's real userdata, saves and ports (14004-14006) are never read or bound.
+- **Bot:** user `tprobebot`, registered with `admin add tprobebot admin`, connects
+  through the `xindeler-client` crate, creates a Human Warrior and teleports with
+  `/goto x y z` (z = base altitude + 3). The server runs a real game tick, so the
+  bot stands on the ground at each tile centre; those positions are stored in the
+  dump header (`client.tiles[].landing`).
+- **Tiling:** the client forgets chunks far from its player, so the box is split
+  into tiles that each fit inside the view distance (`--view-distance`, default 24
+  chunks gives tiles of up to 29x29 chunks; a 1.4 km box is 2x2 tiles). The bot
+  visits one tile at a time, waits until all of the tile's chunks are present
+  (`--timeout` per tile, default 600 s; after `--stall-secs` without a new chunk it
+  is nudged and chunks are requested again), harvests them, then moves on.
+- **Result:** the same `tprobe v1` file with `path = "client"`. Column floats
+  (`alt`, `riverless_alt`, ...) are NaN because the client never receives them
+  (`stats.floats_present = 0`); the sim table and sites come from the in-process
+  world. The header gains a `client` object: view distance, chunks total/streamed,
+  missing chunk keys (their blocks are class 3, unloaded) and per-tile goto,
+  landing position, counts and seconds. The exit status is 1 when fewer than
+  `--min-streamed` percent (default 99.9) of the chunks arrived or, with
+  `--compare-fast`, when terrain/water differ outside the landing radius.
+- **Cleanup:** only the server process it spawned is killed (by handle, never by
+  name), also on Ctrl-C/SIGTERM and on any error; the scratch dir is deleted.
+  `--keep-server-log` keeps the log as `<out>.server.log`.
+- Dump timing: the server needs about 5 s to start on the research arena; a
+  1.2 x 1.06 km box (1326 chunks) streams in about a minute on an 18-core Mac.
+
+`scripts/arena_client_check.sh ASSETS_DIR [OUT_DIR]` runs the fast dump, the client
+dump and the diff on the synthetic research arena box and prints the discrepancy
+summary (it only reproduces spec 4.5 on the arena build of the map).
+
+Tests: unit tests cover the tiling math, the scratch server's settings/ready-line/
+cleanup guard and the discrepancy classification; the real end-to-end test is
+`#[ignore]`d: `VELOREN_ASSETS=... cargo test -p xindeler-terrain-probe --
+--ignored client_dump`.
+
 ## `tprobe v1` format
 
 ```
@@ -57,10 +114,11 @@ terrain-probe --assets $A sim --box 22750,24550,23950,25610 --pad 2 --out sim.cs
 ```
 
 Header JSON: `format`, `box_xy` `[x0,y0,x1,y1]` (metres, half-open), `zmin`, `zmax`
-(half-open), `nx`, `ny`, `seed`, `path` (`fast`; `client` is produced by the client
-dump), `calendar` (null), `engine_commit`, `assets` (sha256 of every
+(half-open), `nx`, `ny`, `seed`, `path` (`fast`, or `client` from `client-dump`), `calendar` (null),
+`engine_commit`, `assets` (sha256 of every
 `cromatolis_v0*` file), `class_codes`, `block_kinds` (BlockKind name to code),
-`stats`, `sections` (`name`, `raw_len`, `comp_len`).
+`stats`, `client` (client dumps only: view distance, streamed counts, missing chunks, tiles with
+goto and landing positions), `sections` (`name`, `raw_len`, `comp_len`).
 
 Columns are row-major: `idx = (y - y0) * nx + (x - x0)` (row 0 = southernmost,
 `numpy.reshape(ny, nx)`). Multi-byte arrays are little-endian and byte-shuffled
