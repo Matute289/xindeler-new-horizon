@@ -9,7 +9,7 @@ pub mod oauth;
 // Reexports
 pub use crate::{
     error::{Error, TwoFaFailure},
-    init::ClientInitStage,
+    init::{ClientInitStage, CredentialProvider, Credentials, StaticCredentialProvider},
 };
 pub use authc::AuthClientError;
 pub use common_net::msg::ServerInfo;
@@ -359,18 +359,20 @@ pub struct CharacterList {
     pub loading: bool,
 }
 
+/// How long `Client::register` waits for the `CredentialProvider` to hand
+/// out credentials (same 5 minutes as upstream). Token acquisition and 2FA
+/// that follow are not covered by it -- the OAuth flow has its own 5-minute
+/// window and a 2FA challenge has a server-side TTL.
+const CREDENTIALS_TIMEOUT: Duration = Duration::from_secs(300);
+
 impl Client {
     pub async fn new(
         addr: ConnectionArgs,
         runtime: Arc<Runtime>,
         // TODO: refactor to avoid needing to use this out parameter
         mismatched_server_info: &mut Option<ServerInfo>,
-        username: &str,
-        password: &str,
         locale: Option<String>,
-        auth_trusted: impl FnMut(&str) -> bool,
-        two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
-        oauth: Option<oauth::OAuthLogin>,
+        credential_provider: &impl CredentialProvider,
         init_stage_update: &(dyn Fn(ClientInitStage) + Send + Sync),
         add_foreign_systems: impl Fn(&mut DispatcherBuilder) + Send + 'static,
         #[cfg_attr(not(feature = "plugins"), expect(unused_variables))] config_dir: PathBuf,
@@ -582,25 +584,24 @@ impl Client {
         init_stage_update(ClientInitStage::Authentication);
         // Register client
         //
-        // This can take a long time: for OAuth logins, `register` waits on the
-        // player completing an entire browser-based provider consent
-        // flow, which can easily exceed the server's default
-        // `client_timeout` (40s). Keep sending pings on the
-        // usual ~1-second cadence while registration is in flight so the server
-        // doesn't time out the connection for going silent (mirrors the
-        // ping loop used below while waiting for the initial sync).
+        // This can take a long time: the credential provider may wait on UI,
+        // OAuth logins wait on the player completing an entire browser-based
+        // provider consent flow, and 2FA waits on the player typing a code --
+        // any of which can easily exceed the server's default
+        // `client_timeout` (40s). Keep sending pings on the usual ~1-second
+        // cadence while registration is in flight so the server doesn't time
+        // out the connection for going silent (mirrors the ping loop used
+        // below while waiting for the initial sync). Upstream pings from
+        // inside `register` instead, but only while waiting for credentials;
+        // ours covers the token acquisition and 2FA steps too.
         let mut ping_interval = tokio::time::interval(Duration::from_secs(1));
         // Scoped so the pinned future (and its borrows of `server_info` and
         // `register_stream`) is dropped as soon as registration finishes,
         // freeing both for use below.
         {
             let register_fut = Self::register(
-                username,
-                password,
+                credential_provider,
                 locale,
-                auth_trusted,
-                two_fa_code,
-                oauth,
                 &server_info,
                 &mut register_stream,
             );
@@ -1231,50 +1232,49 @@ impl Client {
     }
 
     /// Request a state transition to `ClientState::Registered`.
+    ///
+    /// `Client::new` keeps pinging the server for as long as this future is
+    /// pending, so (unlike upstream) there is no ping timer in here.
     async fn register(
-        username: &str,
-        password: &str,
+        credential_provider: &impl CredentialProvider,
         locale: Option<String>,
-        mut auth_trusted: impl FnMut(&str) -> bool,
-        two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
-        oauth: Option<oauth::OAuthLogin>,
         server_info: &ServerInfo,
         register_stream: &mut Stream,
     ) -> Result<(), Error> {
-        // Authentication
-        let token_or_username = match (&server_info.auth_provider, oauth) {
-            (Some(addr), Some(oauth)) => {
-                if auth_trusted(addr) {
-                    let token = Self::acquire_oauth_token(addr.clone(), oauth, two_fa_code).await?;
-                    Ok(token.serialize())
-                } else {
-                    Err(Error::AuthServerNotTrusted)
-                }
-            },
-            // A server with no auth provider has no OAuth flow to run and no
-            // account to link the provider to.
-            (None, Some(_)) => Err(Error::OAuthFailed(oauth::OAuthFailure::NoAuthServer)),
-            (Some(addr), None) => {
-                // Query whether this is a trusted auth server
-                if auth_trusted(addr) {
-                    let token = Self::acquire_auth_token(
-                        addr.clone(),
-                        username.to_owned(),
-                        password.to_owned(),
-                        two_fa_code,
-                    )
-                    .await?;
+        // quick sanitation check if auth is trusted
+        if !credential_provider.auth_trusted(&server_info.auth_provider) {
+            return Err(Error::AuthServerNotTrusted);
+        }
 
-                    Ok(token.serialize())
-                } else {
-                    Err(Error::AuthServerNotTrusted)
-                }
-            },
-            (None, None) => Ok(username.to_owned()),
-        }?;
+        // fetching credentials from frontend, this might involve UI and take some time.
+        debug!("query frontend for credentials...");
+        let credentials = tokio::time::timeout(
+            CREDENTIALS_TIMEOUT,
+            credential_provider.get_credentials(&server_info.auth_provider),
+        )
+        .await
+        .map_err(|_| Error::ServerTimeout)?
+        .map_err(|()| Error::CredentialsNotProvided)?;
+
+        debug!("resolving token_or_username...");
+        let token_or_username =
+            match init::select_auth_flow(credentials, &server_info.auth_provider)? {
+                init::AuthFlow::PlainUsername(username) => username,
+                init::AuthFlow::Password {
+                    auth_addr,
+                    username,
+                    password,
+                } => Self::acquire_auth_token(auth_addr, username, password, credential_provider)
+                    .await?
+                    .serialize(),
+                init::AuthFlow::OAuth { auth_addr, login } => {
+                    Self::acquire_oauth_token(auth_addr, login, credential_provider)
+                        .await?
+                        .serialize()
+                },
+            };
 
         debug!("Registering client...");
-
         register_stream.send(ClientRegister {
             token_or_username,
             locale,
@@ -1301,35 +1301,38 @@ impl Client {
     /// browser, up to the full 5-minute window.
     ///
     /// A TOTP-required outcome is redeemed through the very same
-    /// `submit_2fa_code` path password login already uses, so OAuth-then-2FA
-    /// adds no second 2FA implementation.
+    /// `redeem_2fa_challenge` path password login already uses, so
+    /// OAuth-then-2FA adds no second 2FA implementation.
     async fn acquire_oauth_token(
         auth_addr: String,
         mut oauth: oauth::OAuthLogin,
-        mut two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
+        credential_provider: &impl CredentialProvider,
     ) -> Result<authc::AuthToken, Error> {
-        tokio::task::spawn_blocking(move || {
-            match oauth::run_oauth_login(&auth_addr, &mut oauth).map_err(Error::OAuthFailed)? {
-                oauth::OAuthOutcome::Token(token) => Ok(token),
-                oauth::OAuthOutcome::TotpRequired(challenge_id) => {
-                    let Some(code) = two_fa_code() else {
-                        return Err(Error::OAuthFailed(oauth::OAuthFailure::Cancelled));
-                    };
-                    Self::submit_2fa_code(&auth_addr, challenge_id, &code)
-                        .map_err(Error::TwoFaFailed)
-                },
-            }
-        })
-        .await
-        .map_err(|err| Error::AuthErr(err.to_string()))?
+        let addr = auth_addr.clone();
+        let outcome =
+            tokio::task::spawn_blocking(move || oauth::run_oauth_login(&addr, &mut oauth))
+                .await
+                .map_err(|err| Error::AuthErr(err.to_string()))?
+                .map_err(Error::OAuthFailed)?;
+        match outcome {
+            oauth::OAuthOutcome::Token(token) => Ok(token),
+            oauth::OAuthOutcome::TotpRequired(challenge_id) => {
+                let Some(code) = credential_provider
+                    .get_two_fa_code(&Some(auth_addr.clone()))
+                    .await
+                else {
+                    return Err(Error::OAuthFailed(oauth::OAuthFailure::Cancelled));
+                };
+                Self::redeem_2fa_challenge(auth_addr, challenge_id, code).await
+            },
+        }
     }
 
     /// Sign in against `auth_addr` and return the resulting auth token.
     ///
     /// EVERYTHING that touches `authc::AuthClient` — constructing it, using it,
-    /// *and* dropping it — happens inside a single `spawn_blocking`, and it
-    /// must stay that way. Two independent reasons, either of which is
-    /// sufficient:
+    /// *and* dropping it — happens inside `spawn_blocking`, and it must stay
+    /// that way. Two independent reasons, either of which is sufficient:
     ///
     /// 1. **Correctness (this used to abort the client).** `authc` wraps
     ///    `reqwest::blocking`, whose guard against being called from async is
@@ -1352,35 +1355,57 @@ impl Client {
     ///
     /// The same reasoning is why `server::login_provider` wraps its `authc`
     /// calls in `spawn_blocking` too.
+    ///
+    /// If the account has 2FA enabled (and the password was correct), the
+    /// blocking task ends with the challenge, the player is asked for the
+    /// code through the async [`CredentialProvider::get_two_fa_code`] (the
+    /// caller keeps the connection pinged meanwhile), and the challenge is
+    /// redeemed in a second `spawn_blocking`.
     async fn acquire_auth_token(
         auth_addr: String,
         username: String,
         password: String,
-        mut two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
+        credential_provider: &impl CredentialProvider,
     ) -> Result<authc::AuthToken, Error> {
-        tokio::task::spawn_blocking(move || {
+        let addr = auth_addr.clone();
+        let sign_in = tokio::task::spawn_blocking(move || {
             // `authc` takes the whole URL, and rejects plain http for anything
             // that is not loopback.
-            let auth = authc::AuthClient::new(auth_addr.as_str())
-                .map_err(|_| Error::AuthServerUrlInvalid(auth_addr.clone()))?;
-            match auth.sign_in(&username, &password) {
-                Ok(token) => Ok(token),
-                // The account has 2FA enabled and the password was correct --
-                // block (same as the `sign_in` call just above) until the UI
-                // supplies a code, then redeem the challenge. `two_fa_code`
-                // returning `None` means the player cancelled; that aborts
-                // the whole connect attempt the same way `CancelConnect`
-                // already does elsewhere, so the exact error here is never
-                // shown to the player.
-                Err(authc::AuthClientError::TwoFactorRequired(challenge)) => {
-                    let Some(code) = two_fa_code() else {
-                        return Err(Error::Other("2FA prompt cancelled".to_owned()));
-                    };
-                    Self::submit_2fa_code(&auth_addr, challenge.challenge_id, &code)
-                        .map_err(Error::TwoFaFailed)
-                },
-                Err(other) => Err(Error::from(other)),
-            }
+            let auth = authc::AuthClient::new(addr.as_str())
+                .map_err(|_| Error::AuthServerUrlInvalid(addr.clone()))?;
+            Ok::<_, Error>(auth.sign_in(&username, &password))
+        })
+        .await
+        .map_err(|err| Error::AuthErr(err.to_string()))??;
+
+        match sign_in {
+            Ok(token) => Ok(token),
+            Err(authc::AuthClientError::TwoFactorRequired(challenge)) => {
+                // `None` means the player cancelled; that aborts the whole
+                // connect attempt the same way `CancelConnect` already does
+                // elsewhere, so the exact error here is never shown to the
+                // player.
+                let Some(code) = credential_provider
+                    .get_two_fa_code(&Some(auth_addr.clone()))
+                    .await
+                else {
+                    return Err(Error::Other("2FA prompt cancelled".to_owned()));
+                };
+                Self::redeem_2fa_challenge(auth_addr, challenge.challenge_id, code).await
+            },
+            Err(other) => Err(Error::from(other)),
+        }
+    }
+
+    /// Runs the blocking [`Self::submit_2fa_code`] on the blocking pool (same
+    /// reasons as `acquire_auth_token`).
+    async fn redeem_2fa_challenge<T: serde::Serialize + Send + 'static>(
+        auth_addr: String,
+        challenge_id: T,
+        code: String,
+    ) -> Result<authc::AuthToken, Error> {
+        tokio::task::spawn_blocking(move || {
+            Self::submit_2fa_code(&auth_addr, challenge_id, &code).map_err(Error::TwoFaFailed)
         })
         .await
         .map_err(|err| Error::AuthErr(err.to_string()))?

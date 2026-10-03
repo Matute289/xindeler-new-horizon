@@ -43,6 +43,9 @@ pub enum Error {
     AuthClientError(AuthClientError),
     AuthServerUrlInvalid(String),
     AuthServerNotTrusted,
+    /// The `CredentialProvider` declined to hand out credentials (e.g. the
+    /// `StaticCredentialProvider` has nothing for this auth server).
+    CredentialsNotProvided,
     /// Redeeming a 2FA login challenge (`POST /login/2fa`) failed. See
     /// `TwoFaFailure`. Never constructed for a cancelled prompt -- that
     /// aborts the whole connect attempt the same way `CancelConnect`

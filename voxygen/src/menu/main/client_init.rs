@@ -1,5 +1,5 @@
 use client::{
-    Client, ClientInitStage, ServerInfo,
+    Client, ClientInitStage, CredentialProvider, Credentials, ServerInfo,
     addr::ConnectionArgs,
     error::{Error as ClientError, NetworkConnectError, NetworkError},
     oauth::{OAuthLogin, OAuthProvider},
@@ -9,7 +9,7 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use std::{
     path::Path,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -52,6 +52,64 @@ pub enum Msg {
 
 pub struct AuthTrust(String, bool);
 
+/// `CredentialProvider` for the main menu as it is today: the menu still
+/// collects the username/password -- or the OAuth provider choice -- *before*
+/// connecting, so this provider simply hands out what it was built with once
+/// the server has told the client which auth server it uses. The trust
+/// prompt and the 2FA prompt go through the same `Msg`s and channels the
+/// menu already handles, so the player-facing flow is unchanged.
+///
+/// Built fresh for every connection attempt (see `ClientInit::new`).
+struct MenuCredentialProvider {
+    username: String,
+    password: String,
+    /// Taken by the first `get_credentials` call: `OAuthLogin` owns one-shot
+    /// UI callbacks and there is exactly one OAuth run per attempt.
+    oauth: Mutex<Option<OAuthLogin>>,
+    tx: Sender<Msg>,
+    trust_rx: Receiver<AuthTrust>,
+    code_rx: Receiver<String>,
+}
+
+impl CredentialProvider for MenuCredentialProvider {
+    fn auth_trusted(&self, auth_provider: &Option<String>) -> bool {
+        // A server without an auth server has nothing to trust.
+        let Some(auth_server) = auth_provider else {
+            return true;
+        };
+        let _ = self.tx.send(Msg::IsAuthTrusted(auth_server.clone()));
+        self.trust_rx
+            .recv()
+            .map(|AuthTrust(server, trust)| trust && server == *auth_server)
+            .unwrap_or(false)
+    }
+
+    async fn get_credentials(&self, _auth_provider: &Option<String>) -> Result<Credentials, ()> {
+        let oauth = self.oauth.lock().ok().and_then(|mut oauth| oauth.take());
+        Ok(match oauth {
+            Some(login) => Credentials::OAuth(login),
+            None => Credentials::UsernamePassword(self.username.clone(), self.password.clone()),
+        })
+    }
+
+    async fn get_two_fa_code(&self, _auth_provider: &Option<String>) -> Option<String> {
+        // `code_rx.recv()` blocks until the player submits a code (or the
+        // `ClientInit` is dropped, which drops `code_tx` and ends it with a
+        // clean `Err` = cancel), so it runs on the blocking pool rather than
+        // stalling the reactor. Crossbeam channels are MPMC and cheap to
+        // clone.
+        let tx = self.tx.clone();
+        let code_rx = self.code_rx.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = tx.send(Msg::TwoFaRequired);
+            code_rx.recv().ok()
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+}
+
 // Used to asynchronously parse the server address, resolve host names,
 // and create the client (which involves establishing a connection to the
 // server).
@@ -86,14 +144,6 @@ impl ClientInit {
         let config_dir = config_dir.to_path_buf();
 
         runtime.spawn(async move {
-            let trust_fn = |auth_server: &str| {
-                let _ = tx.send(Msg::IsAuthTrusted(auth_server.to_string()));
-                trust_rx
-                    .recv()
-                    .map(|AuthTrust(server, trust)| trust && server == *auth_server)
-                    .unwrap_or(false)
-            };
-
             let mut last_err = None;
 
             const FOUR_MINUTES_RETRIES: u64 = 48;
@@ -102,26 +152,8 @@ impl ClientInit {
                     break;
                 }
                 let mut mismatched_server_info = None;
-                // Rebuilt fresh each attempt (unlike `trust_fn`, which only
-                // borrows `tx`/ `trust_rx` and so is implicitly
-                // `Copy`): this closure runs inside
-                // `Client::acquire_auth_token`'s `spawn_blocking`, which
-                // requires `Send + 'static`, so it must own its
-                // captures -- `tx`/`code_rx` are
-                // cloned in (crossbeam channels are cheap to clone and MPMC, so
-                // whichever clone is actively blocked on
-                // `code_rx.recv()` still receives the one
-                // `code_tx.send` a real submission produces).
-                let code_fn = {
-                    let tx = tx.clone();
-                    let code_rx = code_rx.clone();
-                    move || -> Option<String> {
-                        let _ = tx.send(Msg::TwoFaRequired);
-                        code_rx.recv().ok()
-                    }
-                };
-                // Rebuilt per attempt for the same reason `code_fn` is: the
-                // boxed closures must own their captures to be `Send +
+                // Rebuilt per attempt: the `OAuthLogin` callbacks are one-shot
+                // boxed closures that must own their captures to be `Send +
                 // 'static` inside `spawn_blocking`. `cancel2` is the very
                 // `Arc<AtomicBool>` that `Drop for ClientInit` sets, so
                 // cancelling an OAuth attempt is the existing cancel-by-drop
@@ -143,16 +175,21 @@ impl ClientInit {
                         }),
                     }
                 });
+                let credential_provider = MenuCredentialProvider {
+                    username: username.clone(),
+                    password: password.clone(),
+                    oauth: Mutex::new(oauth_login),
+                    tx: tx.clone(),
+                    trust_rx: trust_rx.clone(),
+                    code_rx: code_rx.clone(),
+                };
+
                 match Client::new(
                     connection_args.clone(),
                     Arc::clone(&runtime2),
                     &mut mismatched_server_info,
-                    &username,
-                    &password,
                     locale.clone(),
-                    trust_fn,
-                    code_fn,
-                    oauth_login,
+                    &credential_provider,
                     &|stage| {
                         let _ = init_stage_tx.send(stage);
                     },

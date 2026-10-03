@@ -732,6 +732,9 @@ pub(crate) fn get_client_msg_error(
         Error::AuthServerNotTrusted => localization
             .get_msg("main-login-untrusted_auth_server")
             .into(),
+        Error::CredentialsNotProvided => localization
+            .get_msg("main-login-credentials_not_provided")
+            .into(),
         Error::ServerTimeout => localization.get_msg("main-login-timeout").into(),
         Error::ServerShutdown => localization.get_msg("main-login-server_shut_down").into(),
         Error::NotOnWhitelist => localization.get_msg("main-login-not_on_whitelist").into(),
