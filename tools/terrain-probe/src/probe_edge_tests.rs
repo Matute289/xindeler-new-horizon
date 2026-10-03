@@ -508,6 +508,13 @@ fn ec_d41_world_edge_boxes() {
         for y in b.y0..b.y1 {
             for x in b.x0..b.x1 {
                 let i = d.col_index(x, y).unwrap();
+                // Every column the sampler returned nothing for is flagged,
+                // and only those.
+                assert_eq!(
+                    d.alt[i].is_nan(),
+                    d.flags[i] & flag::RIM_NO_SAMPLE != 0,
+                    "{name}: ({x},{y}) RIM_NO_SAMPLE flag disagrees with a NaN alt"
+                );
                 if d.alt[i].is_nan() {
                     nan += 1;
                     nan_no_ground += usize::from(d.ground_top[i] == NO_Z);
@@ -529,6 +536,7 @@ fn ec_d41_world_edge_boxes() {
             d.ground_top.iter().max()
         );
         assert!(band <= 64, "{name}: NaN columns {band} m inside the world");
+        assert_eq!(d.header.stats["rim_no_sample_columns"], nan as u64);
     }
 }
 

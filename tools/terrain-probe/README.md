@@ -24,10 +24,10 @@ export VELOREN_ASSETS=$PWD/assets          # or pass --assets DIR
 
 | Command | What |
 |---|---|
-| `dump --box x0,y0,x1,y1 --out F` | Fast path. `generate_chunk` for every chunk of the box (rayon), every 1 m column sampled, writes a `tprobe v1` file. `--zmin/--zmax` set the z range (default: automatic from the sim table, `lowest basement - 16` to `highest alt/water + 96`); `--margin` is the site report margin (default 600 m); `--seed` (default 0); `--keep-sprites` (see Reproducibility); `--force` skips the memory pre-flight. z must lie in `-32767..=32768` (z is stored as i16, -32768 means "none") and be at most 32767 blocks tall, otherwise the command errors. Before sampling, the estimated peak memory (about 100 bytes per column, 160 for `client-dump`) is checked against 8 GB and bigger boxes are refused unless `--force`. |
+| `dump --box x0,y0,x1,y1 --out F` | Fast path. `generate_chunk` for every chunk of the box (rayon), every 1 m column sampled, writes a `tprobe v1` file. `--zmin/--zmax` set the z range (default: automatic, `lowest basement/alt - 16` to `highest alt/water + 96`, taken over the chunks the box touches plus a one-chunk halo (a column's altitude is a spline of the neighbouring chunk knots) and widened to the column sampler's actual `alt`/`water_level` on a 4 m grid over the box; BUG-P8 clipped 938 of 1024 columns next to a 500 m step before this); `--margin` is the site report margin (default 600 m); `--seed` (default 0); `--keep-sprites` (see Reproducibility); `--force` skips the memory pre-flight. z must lie in `-32767..=32768` (z is stored as i16, -32768 means "none") and be at most 32767 blocks tall, otherwise the command errors. Before sampling, the estimated peak memory (about 100 bytes per column, 160 for `client-dump`) is checked against 8 GB and bigger boxes are refused unless `--force`. |
 | `cols --in F --line x0,y0,x1,y1 [--step 1] [--runs]` | Print the columns along a line (transect): alt, riverless alt, water level, ground top, top block kind, water top, liquid depth, flags, number of runs (or the full run list with `--runs`). |
 | `sim (--in F \| --box ...)` | Per-chunk sim table: alt, water_alt, basement, chaos, river kind, cross-section, velocity, rockiness, cliff height, path, humidity, temp, tree density, flux, underwater. From a dump, or live (about 3 s of world generation, no chunk generation) with `--box` and `--pad` chunks of context. |
-| `sites-near (--center x,y \| --box ...) --radius R` | Authored sites in the generated world **and** every authored point (settlements, landmarks, caves, bridges, interiors...) from `cromatolis_v0_*.ron`, with distance. `--require-empty` exits 1 if anything is found (use it to guarantee a test arena is empty); `--no-world` skips world generation and lists only the `.ron` points; `--json`. |
+| `sites-near (--center x,y \| --box ...) --radius R` | Authored sites in the generated world **and** every authored point (settlements, landmarks, caves, bridges, interiors...) from `cromatolis_v0_*.ron`, with distance. Authored linear features (routes, maritime routes, bridges, fortification walls) are tested by their **segments** against the box grown by the radius (a route whose vertices are kilometres away but whose span passes within the radius is reported, one record per feature at its point nearest the box centre); fortifications are converted from their source pixels (`px / (dim - 1)`, like the engine loader), the aerial citadel by its centre and `max_radius_m`, world sites by origin within radius + their own radius. A `.ron` file declaring a coordinate space the tool cannot convert is an error (exit 2), never a silent skip. `--require-empty` exits 1 if anything is found (use it to guarantee a test arena is empty); `--no-world` skips world generation and lists only the `.ron` points; `--json`. |
 | `info --in F` | Header, counters, column statistics, section sizes. |
 | `client-dump --box x0,y0,x1,y1 --out F` | **Client path.** Starts a throw-away `xindeler-server-cli`, teleports a headless admin bot along a tiling of the box, waits until every chunk is streamed and dumps the blocks the client holds (see "Client path" below). `--compare-fast` also runs the fast path and prints the discrepancy. |
 | `diff A B [--show N] [--client-compare] [--landing-radius R]` | Block-by-block comparison of two dumps of the same box and z range (class pairs, bounding box, examples, float and surface differences). Exit 1 on any difference. `--client-compare` is the fast-vs-client mode: floats ignored, terrain/water differences tolerated within R m (default 8) of a recorded bot landing, structure/sprite-only differences reported but never failing. |
@@ -128,7 +128,7 @@ Columns are row-major: `idx = (y - y0) * nx + (x - x0)` (row 0 = southernmost,
 |---|---|---|
 | `alt`, `riverless_alt`, `water_level`, `warp_factor` | f32 x columns | the column sampler's float fields (NaN when the sampler returned none) |
 | `top_kind` | u8 | `BlockKind` code of the topmost natural ground block, i.e. the top class-1 block (255 = none) |
-| `flags` | u8 | 1 structure, 2 sprite, 4 void (non-solid run below the ground top: cave/shaft/authored void), 8 liquid, 16 clipped top (raise `--zmax`), 32 structure above ground (a class-4 block above `ground_top`: wall, keep, tree, bridge deck, boulder; or structure blocks in a column with no ground). Bit 32 was added within v1 (older readers ignore unknown bits; older files simply never have it); `cols` prints it as `A`. |
+| `flags` | u8 | 1 structure, 2 sprite, 4 void (non-solid run below the ground top: cave/shaft/authored void), 8 liquid, 16 clipped top (raise `--zmax`), 32 structure above ground (a class-4 block above `ground_top`: wall, keep, tree, bridge deck, boulder; or structure blocks in a column with no ground). 64 lava (the column holds at least one lava block; class 2 is water *and* lava, so `liquid` with `lava` = lava present, `liquid` alone = water only; set by the probe from block kinds), 128 rim / no sample (the column sampler returned nothing, NaN `alt`: within 32 m of the map's W/S border and 64 m of its E/N border; such columns have no natural ground and read as water to the bottom, so verifiers must not treat them as terrain; what to do about the band is a map-level policy decision, T23). Bits 32, 64 and 128 were added within v1 (flags are bits only, the byte layout is unchanged; older readers ignore unknown bits; older files simply never have them); `cols` prints 32/64/128 as `A`/`L`/`R`. |
 | `ground_top` | i16 | z of the topmost natural ground block (class 1; -32768 = none). Natural-kind blocks above the sampler's surface are class 4 and do not count (see Natural terrain vs structures) |
 | `water_top` | i16 | z of the topmost liquid block; the water surface is `water_top + 1` |
 | `liquid_depth` | u16 | liquid blocks above `ground_top` |
@@ -137,8 +137,8 @@ Columns are row-major: `idx = (y - y0) * nx + (x - x0)` (row 0 = southernmost,
 | `sim_csv` | text | the `sim` table for the box plus 2 chunks of margin (`;`-separated, header row) |
 | `sites_json` | JSON | sites and authored points within `--margin` of the box |
 
-Block classes: `0` air, `1` natural terrain (a Rock, WeakRock, GlowingRock, Grass,
-Snow, Earth, Sand or Ice block that is not above the column sampler's surface), `2` liquid (water and lava), `3` unloaded (client path
+Block classes: `0` air, `1` natural terrain (a Rock, WeakRock, GlowingRock, GlowingWeakRock, Grass,
+Snow, Earth, Sand or Ice block that is not above the column sampler's surface), `2` liquid (water and lava; lava columns carry flag 64), `3` unloaded (client path
 only), `4` any other solid, non-sprite block (structures, wood, leaves, and natural-kind blocks standing above the sampler's surface), `5`
 sprite (only with `--keep-sprites`; otherwise sprites are recorded as air). Voids and air gaps are simply the air/liquid runs below the
 ground top.
@@ -162,7 +162,7 @@ kind, a colour and sprite data, and site/structure code places plain Rock, Earth
 and Sand. So the classifier uses the column sampler, which is exactly what the
 engine fills terrain from (`world/src/block.rs`: solid iff `z <= alt as i32`;
 the one natural exception is Ice, frozen water at the water level, which sits
-above `alt`). A block of a natural kind (Rock, WeakRock, GlowingRock, Grass,
+above `alt`). A block of a natural kind (Rock, WeakRock, GlowingRock, GlowingWeakRock, Grass,
 Snow, Earth, Sand) with `z > trunc(alt)` is therefore **not terrain** and is
 recorded as class 4. Consequences:
 
@@ -231,7 +231,7 @@ So: boxes that stay above the caverns (the research arena, any surface box with 
 explicit `--zmin`) give byte-identical files; boxes that include caverns give
 files that agree on everything except those decoration cells. `terrain-probe diff A B`
 quantifies exactly that (counts per class pair, bounding box, examples) and exits 1 on
-any difference, and it reports surface columns (ground/water top, depth, top kind) separately.
+any difference (blocks, column floats, or the surface summary: ground/water top, depth, top kind), and it reports surface columns separately. In `--client-compare` mode a top-kind-only difference does not fail.
 
 ## Scope and caveats
 
