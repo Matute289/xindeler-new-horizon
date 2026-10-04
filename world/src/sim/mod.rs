@@ -2,6 +2,7 @@ mod diffusion;
 mod erosion;
 mod location;
 mod map;
+#[cfg(test)] pub(crate) mod test_hooks;
 mod util;
 mod way;
 
@@ -3296,6 +3297,10 @@ impl WorldSim {
         };
 
         let (alt, basement) = if let Some(map) = parsed_world_file {
+            // XINDELER: test-only terrain-perturbation seam (no-op unless a
+            // test's thread pool installed one).
+            #[cfg(test)]
+            let map = test_hooks::perturb_loaded_map(map_size_lg, map);
             (map.alt, map.basement)
         } else {
             let (alt, basement) = do_erosion(

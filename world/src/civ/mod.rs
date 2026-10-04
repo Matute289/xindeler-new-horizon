@@ -4,6 +4,7 @@ pub mod airship_travel;
 mod econ;
 mod maritime_traffic;
 pub mod naval_berths;
+pub(crate) mod seeds;
 
 #[cfg(feature = "airship_maps")]
 pub mod airship_route_map;
@@ -722,7 +723,6 @@ fn bridge_is_selected_for_preview(preview: &str, bridge_id: &str) -> bool {
 
 #[derive(Debug, Clone)]
 struct AuthoredBridgeMeta {
-    #[expect(dead_code)]
     id: String,
     name: String,
     design: site::AuthoredBridgeDesign,
@@ -901,7 +901,6 @@ struct AuthoredCromatolisGate {
 
 #[derive(Debug, Clone)]
 struct AuthoredFortificationMeta {
-    #[expect(dead_code)]
     id: String,
     name: String,
     design: site::AuthoredFortificationDesign,
@@ -1442,7 +1441,6 @@ struct AuthoredSettlementMeta {
 
 #[derive(Debug, Clone)]
 struct AuthoredLandmarkMeta {
-    #[expect(dead_code)]
     id: String,
     name: String,
     #[expect(dead_code)]
@@ -2112,6 +2110,14 @@ impl Civs {
             None
         };
         let mut ctx = GenCtx { sim, rng };
+        // XINDELER: in an authored region each site and each procedural
+        // connector draws from an RNG derived from its own stable identity
+        // instead of the shared stream (see `seeds`); every other world is
+        // unchanged. Same gate as every other RNG decoupling: one flag.
+        let seed_policy = seeds::CivSeedPolicy::new(
+            seed,
+            ctx.sim.chunks.first().is_some_and(seeds::uses_derived_rngs),
+        );
 
         // info!("starting cave generation");
         // this.generate_caves(&mut ctx);
@@ -2171,6 +2177,7 @@ impl Civs {
                 this.establish_authored_cromatolis_routes(&ctx, routes);
                 this.establish_procedural_cromatolis_route_connectors(
                     &mut ctx,
+                    seed,
                     CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS,
                     &[],
                 );
@@ -2181,6 +2188,7 @@ impl Civs {
                 // landmass the mainland pass never considers.
                 this.establish_procedural_cromatolis_route_connectors(
                     &mut ctx,
+                    seed,
                     CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS,
                     CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS,
                 );
@@ -2433,7 +2441,7 @@ impl Civs {
                     e * sz as i32 + sz as i32 / 2
                 });
 
-            let mut rng = ctx.reseed().rng;
+            let mut rng = ctx.site_rng(seed_policy.site_seed(sim_site));
             let site = index.sites.insert({
                 let index_ref = IndexRef {
                     colors: &index.colors(),
@@ -2452,16 +2460,45 @@ impl Civs {
                             authored_maritime_routes.as_ref(),
                         )
                         .map(|class| NavalPortRequest::new(class, &naval_port_exclusions));
-                        WorldSite::generate_city(
-                            &Land::from_sim(ctx.sim),
-                            index_ref,
-                            &mut rng,
-                            wpos,
-                            size,
-                            calendar,
-                            &mut gen_meta,
-                            naval_port,
-                        )
+                        // XINDELER: an authored settlement whose layout
+                        // falls below its size band is re-drawn from
+                        // derived sub-seeds (see `seeds`); others are
+                        // untouched. Each attempt records its generation
+                        // statistics into its own scratch `SitesGenMeta`
+                        // and only the kept attempt's are merged, so a
+                        // discarded re-draw (with its own random town name)
+                        // never shows up in the stats. The random name
+                        // never reaches the world either: an authored
+                        // settlement is renamed to its authored name right
+                        // after this match (`authored_name`).
+                        let generate = |rng: &mut ChaChaRng| {
+                            let mut meta = SitesGenMeta::new(seed);
+                            let site = WorldSite::generate_city(
+                                &Land::from_sim(ctx.sim),
+                                index_ref,
+                                rng,
+                                wpos,
+                                size,
+                                calendar,
+                                &mut meta,
+                                naval_port,
+                            );
+                            (site, meta)
+                        };
+                        let first = generate(&mut rng);
+                        let (site, meta) = seeds::keep_layout_within_band(
+                            first,
+                            seed_policy.layout_band(sim_site),
+                            |(site, _)| seeds::building_count(site),
+                            || seeds::site_seed_key(sim_site),
+                            |attempt| {
+                                generate(&mut ChaChaRng::from_seed(
+                                    seed_policy.layout_retry_seed(sim_site, attempt),
+                                ))
+                            },
+                        );
+                        gen_meta.absorb(meta);
+                        site
                     },
                     SiteKind::GliderCourse => WorldSite::generate_glider_course(
                         &Land::from_sim(ctx.sim),
@@ -3910,6 +3947,7 @@ impl Civs {
     fn establish_procedural_cromatolis_route_connectors(
         &mut self,
         ctx: &mut GenCtx<impl Rng>,
+        world_seed: u32,
         connector_target_ids: &[&str],
         seed_anchor_ids: &[&str],
     ) {
@@ -3970,7 +4008,11 @@ impl Civs {
                     let dist = self.sites.get(id).center.distance_squared(target_loc);
                     (id, dist)
                 })
-                .min_by_key(|&(_, dist)| dist);
+                // `connected` is a std `HashSet`, whose iteration order is
+                // randomised per instance: break distance ties on the stable
+                // site key so the chosen anchor (and with it the connector's
+                // path and RNG key) never depends on hasher state.
+                .min_by_key(|&(id, dist)| (dist, seeds::site_seed_key(self.sites.get(id))));
 
             let Some((anchor_site, _)) = nearest else {
                 warn!(
@@ -4002,7 +4044,15 @@ impl Civs {
                 continue;
             };
 
-            self.carve_track_into_terrain(ctx, &path);
+            // Carve with this connector's own RNG (keyed by its endpoints),
+            // never the shared stream: how many nodes this road has must not
+            // shift any other road's offsets or any site's seed. See `seeds`.
+            let road_rng = ChaChaRng::from_seed(seeds::road_seed(
+                world_seed,
+                &seeds::site_seed_key(self.sites.get(target_site)),
+                &seeds::site_seed_key(self.sites.get(anchor_site)),
+            ));
+            self.carve_track_into_terrain(&mut ctx.with_rng(road_rng), &path);
 
             // A direct single-hop connector (its two endpoints already
             // adjacent chunks) never enters `carve_track_into_terrain`'s
@@ -4630,10 +4680,21 @@ impl Site {
             .map(|settlement| settlement.id.as_str())
     }
 
+    /// The authored settlement's `(category, size)` contract keys (e.g.
+    /// `("city", "large")`), if this is an authored settlement.
+    pub(crate) fn authored_category_and_size(&self) -> Option<(&'static str, &'static str)> {
+        self.authored.as_ref().map(|settlement| {
+            (
+                settlement.category.contract_key(),
+                settlement.size.contract_key(),
+            )
+        })
+    }
+
     /// The authored name for this site, if it was established from an
     /// authored settlement or landmark pin rather than procedural
     /// generation.
-    fn authored_name(&self) -> Option<&str> {
+    pub(crate) fn authored_name(&self) -> Option<&str> {
         self.authored
             .as_ref()
             .map(|settlement| settlement.name.as_str())
@@ -5862,6 +5923,31 @@ mod tests {
                 "{site_id} is on the island connector pass but not on \
                  CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS -- the island pass only makes \
                  sense for settlements the reviewed connector bookkeeping already covers"
+            );
+        }
+    }
+
+    /// Connector endpoints key each connector's RNG (`seeds::road_seed`) by
+    /// their stable site key. Both ends are drawn from authored
+    /// *settlements* only (`sites_by_authored_id` is built from
+    /// `Site::authored`), so every target and seed anchor must name a real
+    /// settlement: then each key is a distinct `settlement:<id>`, never a
+    /// landmark or an empty id two connectors could share.
+    #[test]
+    fn cromatolis_connector_endpoints_are_all_real_settlements() {
+        let settlements: HashSet<String> = real_settlements()
+            .settlements
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        for &id in CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS
+            .iter()
+            .chain(CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS)
+            .chain(CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS)
+        {
+            assert!(
+                settlements.contains(id),
+                "{id} is a connector endpoint but not an authored settlement"
             );
         }
     }

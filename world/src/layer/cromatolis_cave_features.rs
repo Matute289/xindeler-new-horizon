@@ -2670,11 +2670,19 @@ mod tests {
     /// The guard cannot change which surface cave entrances exist, and this
     /// pins that it did not: markers come from the node lattice
     /// (`surface_entrances` never calls the tunnel query at all), so a change
-    /// here means the lattice or the authored map moved, never the guard.
+    /// here means the lattice, the authored map or a nearby site's layout
+    /// moved (a mouth is only marked where the column sample sees no water
+    /// within 5 blocks, and a nearby site's spawn rules -- its radius and
+    /// preferred altitude -- shift that sample's ground), never the guard.
     #[test]
     #[ignore]
     fn the_real_region_still_derives_its_surface_cave_markers() {
-        const EXPECTED_MARKERS: usize = 150;
+        // Coupled to town layouts: it moved 150 -> 149 when per-site seeds
+        // re-rolled Gloomshear's layout (one mouth ~250 m away). A change
+        // here together with a changed `cromatolis_site_layout_digests.txt`
+        // is that coupling, not a cave regression; re-check which mouth
+        // moved before re-baselining.
+        const EXPECTED_MARKERS: usize = 149;
 
         let (world, index) = cromatolis_world();
         let land = Land::from_sim(world.sim());

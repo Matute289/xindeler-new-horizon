@@ -1493,8 +1493,29 @@ const EXPECTED_BERTH_CLASSES: &[(PortClass, &[BerthClass])] = &[
 /// ceiling). If Portland's authored waterfront position or footprint ever
 /// changes (e.g. COW-24.1 §11.9's Portland redesign), this row needs
 /// re-measuring, not just re-approving.
-const EXPECTED_BERTH_CLASS_OVERRIDES: &[(&str, &[BerthClass])] =
-    &[("site.portland", &[BerthClass::Small])];
+///
+/// **`site.dove_city` (`Quay`) is `[Large, Small, Small]`, not the tier's
+/// `[Large, Large, Small, Small]`, since site seeds became per-site
+/// (`civ::seeds`, 2026-10-04).** That one-time re-roll moved Dove City's
+/// layout: the Large finger now moors at x 27,735 / 27,754 and its Port
+/// berth lands over chunk (866, 272), about 5.2 blocks deep, under
+/// `Large`'s 6, so `measure_berths` drops it (the Starboard twin keeps 6).
+/// The 4/4 berths on the old roll were luck: every tried seed domain
+/// (`v1`..`v4`) and the earlier heightmap re-encode all land on this same
+/// 3-berth deck, so this is the coast's real capacity at that spot, not a
+/// berth-search bug. Accepted as the expected value on 2026-10-04; restoring
+/// the 4th Large berth is follow-up work by editing the coast in a heightmap
+/// revision (deepen the water under the Large finger's Port berth to at
+/// least 6 blocks), after which this row goes away. Re-measure if Dove
+/// City's waterfront or the heightmap there changes.
+const EXPECTED_BERTH_CLASS_OVERRIDES: &[(&str, &[BerthClass])] = &[
+    ("site.portland", &[BerthClass::Small]),
+    ("site.dove_city", &[
+        BerthClass::Large,
+        BerthClass::Small,
+        BerthClass::Small,
+    ]),
+];
 
 /// The settlements whose `Jetty` berth is small enough that the hull-cap
 /// table (spec §4.4) depends on an anchorage existing for their routes to
@@ -1756,3 +1777,7 @@ fn every_jetty_has_an_anchorage_or_the_known_exception() {
          waterfront); these villages unexpectedly also have none: {capped:?}"
     );
 }
+
+/// Per-site layout digests, determinism and terrain-perturbation
+/// experiments for the authored world's civ layer.
+pub(crate) mod site_layouts;

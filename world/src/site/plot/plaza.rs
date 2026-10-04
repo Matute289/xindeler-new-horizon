@@ -194,6 +194,25 @@ impl Plaza {
                     }
                     let mut stands = Vec::new();
 
+                    // XINDELER: in an authored region, place the stands from
+                    // a sub-RNG seeded by one draw. Whether a stand attempt
+                    // succeeds depends on `is_even` below -- an integer
+                    // truncation of terrain altitude -- so a sub-block terrain
+                    // edit can change how many numbers this loop consumes,
+                    // and on the shared site RNG that re-rolls every plot the
+                    // town places afterwards. The sub-RNG confines such an
+                    // edit to the stands themselves. Procedural worlds keep
+                    // drawing from `rng` directly (unchanged).
+                    let mut stand_rng = land
+                        .get_chunk_wpos(aabr.center())
+                        .is_some_and(crate::civ::seeds::uses_derived_rngs)
+                        .then(|| rand_chacha::ChaChaRng::from_seed(rng.random()));
+                    let mut rng: &mut dyn Rng = match stand_rng.as_mut() {
+                        Some(stand_rng) => stand_rng,
+                        None => rng,
+                    };
+                    let rng = &mut rng;
+
                     for _ in 0..24 {
                         if let Some(stand) = attempt(8, || {
                             let offset = Vec2::new(
