@@ -99,7 +99,13 @@ use vek::Vec2;
 /// The single gate for every RNG decoupling in this module's doc: true in an
 /// authored region, false everywhere else.
 pub(crate) fn uses_derived_rngs(chunk: &crate::sim::SimChunk) -> bool {
-    chunk.authored_cromatolis_v0
+    // SCRATCH probe: XINDELER_PROBE_LEGACY=1 reproduces main's shared stream.
+    chunk.authored_cromatolis_v0 && std::env::var("XINDELER_PROBE_LEGACY").is_err()
+}
+
+/// SCRATCH probe: a variant seed for `key` (same domain as real site seeds).
+pub(crate) fn probe_variant_seed(world_seed: u32, key: &str) -> [u8; 32] {
+    derive_seed(SITE_SEED_DOMAIN, world_seed, key)
 }
 
 /// Domain separator for per-site seeds. Bump the version suffix only as a

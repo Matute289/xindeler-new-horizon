@@ -2460,8 +2460,127 @@ impl Civs {
                             authored_maritime_routes.as_ref(),
                         )
                         .map(|class| NavalPortRequest::new(class, &naval_port_exclusions));
-                        WorldSite::generate_city(
-                            &Land::from_sim(ctx.sim),
+                        let probe_key = sim_site.authored.as_ref().map(|_| seeds::site_seed_key(sim_site));
+                        let (probe_cat, probe_size) =
+                            sim_site.authored_category_and_size().unwrap_or(("-", "-"));
+                        let land = Land::from_sim(ctx.sim);
+                        let probe_out = std::env::var("XINDELER_PROBE_OUT").ok();
+                        let probe_dump = std::env::var("XINDELER_PROBE_DUMP").ok();
+                        let fp = std::env::var("XINDELER_PROBE_FP").ok().and_then(|spec| {
+                            // id|radius_tiles|target|restrict|nx,ny,c|...
+                            let parts: Vec<&str> = spec.split('|').collect();
+                            let key = probe_key.as_deref()?;
+                            (key == format!("settlement:{}", parts[0])).then(|| {
+                                crate::site::probe::Footprint {
+                                    radius_tiles: parts[1].parse().unwrap(),
+                                    target_buildings: parts[2].parse().unwrap(),
+                                    restrict: parts[3] == "1",
+                                    anchor: parts[4..].iter().find_map(|p| {
+                                        let v: Vec<i32> = p.strip_prefix("A=")?.split(',').map(|x| x.parse().unwrap()).collect();
+                                        Some(Vec2::new(v[0], v[1]))
+                                    }),
+                                    frontier: parts[4..].contains(&"F"),
+                                    half_planes: parts[4..]
+                                        .iter()
+                                        .filter(|p| !p.starts_with("A=") && **p != "F")
+                                        .map(|hp| {
+                                            let v: Vec<f32> =
+                                                hp.split(',').map(|x| x.parse().unwrap()).collect();
+                                            ((v[0], v[1]), v[2])
+                                        })
+                                        .collect(),
+                                }
+                            })
+                        });
+                        let mut emit = |line: String| {
+                            if let Some(path) = probe_out.as_ref() {
+                                use std::io::Write as _;
+                                let mut f = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(path)
+                                    .unwrap();
+                                let _ = writeln!(f, "{line}");
+                            }
+                        };
+                        let fmt_counts = |c: &std::collections::BTreeMap<&'static str, u64>| {
+                            c.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ")
+                        };
+                        let gen_one = |rng: &mut ChaChaRng, meta: &mut SitesGenMeta| {
+                            crate::site::probe::start();
+                            let s = WorldSite::generate_city(
+                                &land, index_ref, rng, wpos, size, calendar, meta, naval_port,
+                            );
+                            (s, crate::site::probe::take())
+                        };
+                        let variants: u32 = std::env::var("XINDELER_PROBE_VARIANTS")
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(0);
+                        let only = std::env::var("XINDELER_PROBE_ONLY").ok();
+                        if let (Some(key), Some(_)) = (probe_key.as_ref(), probe_out.as_ref())
+                            && only.as_deref().is_none_or(|o| key.ends_with(o))
+                        {
+                            let modes: Vec<(&str, Option<crate::site::probe::Footprint>)> =
+                                match fp.clone() {
+                                    Some(f) => vec![("base", None), ("fp", Some(f))],
+                                    None => vec![("base", None)],
+                                };
+                            for (mode, fpm) in modes {
+                                crate::site::probe::FOOTPRINT.with(|c| *c.borrow_mut() = fpm.clone());
+                                for k in 0..variants {
+                                    let mut vrng = ChaChaRng::from_seed(seeds::probe_variant_seed(
+                                        seed,
+                                        &format!("{key}#v{k}"),
+                                    ));
+                                    let mut meta = SitesGenMeta::new(seed);
+                                    let (s, c) = gen_one(&mut vrng, &mut meta);
+                                    let (b, p, h, pz, fl) = crate::site::probe::summarize(&s);
+                                    emit(format!(
+                                        "VAR\t{mode}\t{key}\t{probe_cat}\t{probe_size}\t{size}\t{k}\t{b}\t{p}\t{h}\t{pz}\t{fl}\t{}",
+                                        fmt_counts(&c)
+                                    ));
+                                    if mode == "fp" && k < 3 && probe_dump.as_deref().is_some_and(|d| key.ends_with(d)) {
+                                        if let Some(path) = probe_out.as_ref() {
+                                            let _ = std::fs::write(
+                                                format!("{path}.{}.fp_v{k}.dump", key.replace(':', "_")),
+                                                crate::site::probe::dump(&s, 70),
+                                            );
+                                        }
+                                    }
+                                }
+                                // the real site seed under this mode
+                                let mut rrng = rng.clone();
+                                let mut meta = SitesGenMeta::new(seed);
+                                let (s, c) = gen_one(&mut rrng, &mut meta);
+                                let (b, p, h, pz, fl) = crate::site::probe::summarize(&s);
+                                emit(format!(
+                                    "REAL\t{mode}\t{key}\t{probe_cat}\t{probe_size}\t{size}\treal\t{b}\t{p}\t{h}\t{pz}\t{fl}\t{}",
+                                    fmt_counts(&c)
+                                ));
+                                if probe_dump.as_deref().is_some_and(|d| key.ends_with(d)) {
+                                    if let Some(path) = probe_out.as_ref() {
+                                        let _ = std::fs::write(
+                                            format!("{path}.{}.{mode}_real.dump", key.replace(':', "_")),
+                                            crate::site::probe::dump(&s, 70),
+                                        );
+                                    }
+                                }
+                            }
+                            crate::site::probe::FOOTPRINT.with(|c| *c.borrow_mut() = None);
+                        }
+                        // Stop-gap: deterministic sub-seed retry until the size band holds.
+                        let band = match (probe_cat, probe_size) {
+                            ("capital" | "city" | "town" | "village" | "hamlet", "very_large") => 45,
+                            ("capital" | "city" | "town" | "village" | "hamlet", "large") => 40,
+                            ("capital" | "city" | "town" | "village" | "hamlet", "medium") => 20,
+                            ("capital" | "city" | "town" | "village" | "hamlet", "small") => 6,
+                            ("capital" | "city" | "town" | "village" | "hamlet", "minimal") => 1,
+                            _ => 0,
+                        };
+                        let retry = std::env::var("XINDELER_PROBE_RETRY").is_ok() && probe_key.is_some();
+                        let mut site_out = WorldSite::generate_city(
+                            &land,
                             index_ref,
                             &mut rng,
                             wpos,
@@ -2469,7 +2588,35 @@ impl Civs {
                             calendar,
                             &mut gen_meta,
                             naval_port,
-                        )
+                        );
+                        if retry {
+                            let key = probe_key.clone().unwrap();
+                            let first = crate::site::probe::summarize(&site_out).0;
+                            let mut used = 0;
+                            let mut best = (first, 0u32);
+                            while crate::site::probe::summarize(&site_out).0 < band && used < 32 {
+                                used += 1;
+                                let mut r2 = ChaChaRng::from_seed(seeds::probe_variant_seed(
+                                    seed,
+                                    &format!("{key}#retry{used}"),
+                                ));
+                                let cand = WorldSite::generate_city(
+                                    &land, index_ref, &mut r2, wpos, size, calendar, &mut gen_meta, naval_port,
+                                );
+                                let cb = crate::site::probe::summarize(&cand).0;
+                                if cb > best.0 {
+                                    best = (cb, used);
+                                }
+                                site_out = cand;
+                            }
+                            emit(format!(
+                                "RETRY\t{key}\t{probe_cat}\t{probe_size}\t{band}\t{first}\t{}\t{used}\tbest={}@{}",
+                                crate::site::probe::summarize(&site_out).0,
+                                best.0,
+                                best.1
+                            ));
+                        }
+                        site_out
                     },
                     SiteKind::GliderCourse => WorldSite::generate_glider_course(
                         &Land::from_sim(ctx.sim),

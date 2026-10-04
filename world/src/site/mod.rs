@@ -5,6 +5,7 @@ pub mod namegen;
 pub mod plot;
 mod shore;
 mod tile;
+pub mod probe;
 pub mod util;
 
 use self::tile::{HazardKind, KeepKind, RoofKind, TILE_SIZE, Tile, TileGrid};
@@ -580,11 +581,33 @@ impl Site {
         area_range: Range<u32>,
         min_dims: Extent2<u32>,
     ) -> Option<(Aabr<i32>, Vec2<i32>, Vec2<i32>, Option<i32>)> {
-        let ((aabr, (door_dir, hard_alt)), door_pos) =
+        let found =
             self.tiles.find_near(search_pos, |center, _| {
+                if probe::enabled() {
+                    let t = self.tiles.get(center);
+                    if !t.is_empty() {
+                        probe::bump(match probe::tile_class(t) {
+                            "water" => "cand.reject.center_water",
+                            "hill" => "cand.reject.center_hill",
+                            "path" => "cand.reject.center_path",
+                            "road" => "cand.reject.center_road",
+                            "building" => "cand.reject.center_building",
+                            "field" => "cand.reject.center_field",
+                            _ => "cand.reject.center_other",
+                        });
+                    }
+                }
+                if !probe::footprint_allows(center) {
+                    probe::bump("cand.reject.outside_footprint");
+                    return None;
+                }
                 let dir = CARDINALS
                     .iter()
-                    .find(|dir| self.tiles.get(center + *dir).is_road())?;
+                    .find(|dir| self.tiles.get(center + *dir).is_road());
+                if dir.is_none() && self.tiles.get(center).is_empty() {
+                    probe::bump("cand.reject.no_adjacent_road");
+                }
+                let dir = dir?;
                 let hard_alt = self.tiles.get(center + *dir).hard_alt.or(self
                     .tiles
                     .get(center + *dir)
@@ -596,11 +619,25 @@ impl Site {
                             None
                         }
                     }));
-                self.tiles
-                    .grow_aabr(center, area_range.clone(), min_dims)
-                    .ok()
-                    .zip(Some((*dir, hard_alt)))
-            })?;
+                let grown = self.tiles.grow_aabr(center, area_range.clone(), min_dims);
+                if self.tiles.get(center).is_empty() {
+                    probe::bump(if grown.is_ok() { "cand.ok" } else { "cand.reject.too_small" });
+                }
+                let grown = grown.ok().filter(|a| {
+                    let ok = [a.min, a.max - 1, Vec2::new(a.min.x, a.max.y - 1), Vec2::new(a.max.x - 1, a.min.y)]
+                        .into_iter()
+                        .all(probe::footprint_allows);
+                    if !ok {
+                        probe::bump("cand.reject.aabr_leaves_footprint");
+                    }
+                    ok
+                });
+                grown.zip(Some((*dir, hard_alt)))
+            });
+        let Some(((aabr, (door_dir, hard_alt)), door_pos)) = found else {
+            probe::bump("find_aabr.exhausted");
+            return None;
+        };
         Some((aabr, door_pos, door_dir, hard_alt))
     }
 
@@ -762,8 +799,37 @@ impl Site {
                     max: center_tile + Vec2::broadcast(plaza_radius + 1),
                 })
                 .filter(|&aabr| {
-                    rng.random_range(0..48) > aabr.center().map(|e| e.abs()).reduce_max()
-                        && aabr_tiles(aabr).all(|tile| !self.tiles.get(tile).is_obstacle())
+                    probe::bump("plaza.try");
+                    let reach = rng.random_range(0..48) > aabr.center().map(|e| e.abs()).reduce_max();
+                    if !reach {
+                        probe::bump("plaza.reject.reach_lottery");
+                        return false;
+                    }
+                    if !probe::footprint_allows(aabr.center()) {
+                        probe::bump("plaza.reject.outside_footprint");
+                        return false;
+                    }
+                    let mut water = false;
+                    let mut hill = false;
+                    let mut other = false;
+                    for tile in aabr_tiles(aabr) {
+                        let t = self.tiles.get(tile);
+                        if t.is_obstacle() {
+                            match probe::tile_class(t) {
+                                "water" => water = true,
+                                "hill" => hill = true,
+                                _ => other = true,
+                            }
+                        }
+                    }
+                    if water {
+                        probe::bump("plaza.reject.water");
+                    } else if hill {
+                        probe::bump("plaza.reject.hill");
+                    } else if other {
+                        probe::bump("plaza.reject.built_or_path");
+                    }
+                    !(water || hill || other)
                 })
                 .filter(|&aabr| {
                     self.plazas.iter().all(|&p| {
@@ -781,9 +847,50 @@ impl Site {
                             closest_point.as_::<f32>().distance_squared(r.as_::<f32>())
                         };
                         dist_sqr > (plaza_dist * 0.85).powi(2)
-                    })
+                    }) || {
+                        probe::bump("plaza.reject.too_close");
+                        false
+                    }
                 })
-        })?;
+        });
+        let aabr = aabr.or_else(|| {
+            // Prototype: deterministic frontier plaza inside the footprint.
+            let fp = probe::footprint().filter(|f| f.frontier)?;
+            let r = fp.radius_tiles.ceil() as u32;
+            let found = Spiral2d::new()
+                .take(((r * 2 + 1) * (r * 2 + 1)) as usize)
+                .map(|t| Aabr {
+                    min: t + Vec2::broadcast(-plaza_radius),
+                    max: t + Vec2::broadcast(plaza_radius + 1),
+                })
+                .find(|&aabr| {
+                    fp.allows(aabr.center())
+                        && aabr_tiles(aabr).all(|tile| !self.tiles.get(tile).is_obstacle()
+                            && !self.tiles.get(tile).is_road())
+                        && {
+                            let d2 = self
+                                .plazas
+                                .iter()
+                                .map(|&p| {
+                                    self.plot(p)
+                                        .root_tile
+                                        .as_::<f32>()
+                                        .distance_squared(aabr.center().as_::<f32>())
+                                })
+                                .fold(f32::MAX, f32::min);
+                            d2 > (plaza_dist * 0.85).powi(2) && d2 <= (plaza_dist * 1.6).powi(2)
+                        }
+                });
+            if found.is_some() {
+                probe::bump("plaza.frontier_ok");
+            }
+            found
+        });
+        let Some(aabr) = aabr else {
+            probe::bump("plaza.fail");
+            return None;
+        };
+        probe::bump("plaza.ok");
         generator_stats.success(site_name, GenStatPlotKind::Plaza);
         self.make_plaza_at(land, index, aabr, rng, road_kind)
     }
@@ -871,7 +978,9 @@ impl Site {
             };
             // if all the tiles in the proposed plaza location are also not hazards or roads
             // then add the tile as a candidate for a plaza location
-            if aabr_tiles(aabr).all(|tpos| self.tiles.get(tpos).is_empty()) {
+            if aabr_tiles(aabr).all(|tpos| self.tiles.get(tpos).is_empty())
+                && probe::footprint_allows(tpos)
+            {
                 plaza_locations.push(aabr);
             }
         });
@@ -882,13 +991,19 @@ impl Site {
             self.make_plaza(land, index, rng, generator_stats, site_name, road_kind)
         } else {
             // Choose the minimum distance from the town center.
-            plaza_locations.sort_by_key(|&aabr| {
-                aabr.min
+            let anchor = probe::footprint().and_then(|f| f.anchor);
+            plaza_locations.sort_by_key(|&aabr| match anchor {
+                Some(a) => (aabr.center() - a).magnitude_squared(),
+                None => aabr
+                    .min
                     .map2(aabr.max, |a, b| a.abs().min(b.abs()))
-                    .magnitude_squared()
+                    .magnitude_squared(),
             });
             // use the first plaza location as the plaza position
             let aabr = plaza_locations.first()?;
+            probe::add("init.radius", plaza_radius as u64);
+            probe::add("init.x1000", (aabr.center().x + 1000) as u64);
+            probe::add("init.y1000", (aabr.center().y + 1000) as u64);
             generator_stats.success(site_name, GenStatPlotKind::InitialPlaza);
             self.make_plaza_at(land, index, *aabr, rng, road_kind)
         }
@@ -1459,10 +1574,71 @@ impl Site {
         let mut taverns = 0;
         let mut airship_docks = 0;
 
-        for _ in 0..(size * 200.0) as i32 {
-            match *build_chance.choose_seeded(rng.random()) {
+        if probe::enabled() {
+            // Terrain census of the city domain after demarcation, in rings.
+            for r in [16i32, 32, 48] {
+                let mut n = 0u64;
+                let mut w = 0u64;
+                let mut h = 0u64;
+                let mut pth = 0u64;
+                for y in -r..=r {
+                    for x in -r..=r {
+                        if x * x + y * y > r * r {
+                            continue;
+                        }
+                        n += 1;
+                        match probe::tile_class(site.tiles.get(Vec2::new(x, y))) {
+                            "water" => w += 1,
+                            "hill" => h += 1,
+                            "path" => pth += 1,
+                            _ => {},
+                        }
+                    }
+                }
+                let (kn, kw, kh, kp) = match r {
+                    16 => ("dom16.tiles", "dom16.water", "dom16.hill", "dom16.path"),
+                    32 => ("dom32.tiles", "dom32.water", "dom32.hill", "dom32.path"),
+                    _ => ("dom48.tiles", "dom48.water", "dom48.hill", "dom48.path"),
+                };
+                probe::add(kn, n);
+                probe::add(kw, w);
+                probe::add(kh, h);
+                probe::add(kp, pth);
+            }
+            probe::add("initial_plazas", site.plazas.len() as u64);
+        }
+        let base_draws = (size * 200.0) as i32;
+        let quota = probe::FOOTPRINT.with(|f| f.borrow().as_ref().map(|f| f.target_buildings));
+        let count_buildings = |site: &Site| {
+            site.plots
+                .values()
+                .filter(|p| {
+                    !matches!(
+                        p.kind(),
+                        PlotKind::Plaza(_) | PlotKind::Road(_) | PlotKind::FarmField(_)
+                    )
+                })
+                .count()
+        };
+        let mut draw = 0i32;
+        loop {
+            if draw >= base_draws {
+                match quota {
+                    Some(target)
+                        if draw < base_draws * 6 && count_buildings(&site) < target => {},
+                    _ => break,
+                }
+            }
+            draw += 1;
+            probe::bump("draws");
+            let n_drawn = *build_chance.choose_seeded(rng.random());
+            if workshops == 0 && n_drawn != 5 {
+                probe::bump("draws.eaten_by_workshop_gate");
+            }
+            match n_drawn {
                 // Workshop
                 n if (n == 5 && workshops < (size * 5.0) as i32) || workshops == 0 => {
+                    probe::bump("workshop.try");
                     generator_stats.attempt(site.name(), GenStatPlotKind::Workshop);
                     let size = (3.0 + rng.random::<f32>().powf(5.0) * 1.5).round() as u32;
                     if let Some((aabr, door_tile, door_dir, alt)) = attempt(32, || {
@@ -1494,14 +1670,17 @@ impl Site {
                             hard_alt: Some(workshop_alt),
                         });
                         workshops += 1;
+                        probe::bump("workshop.ok");
                         generator_stats.success(site.name(), GenStatPlotKind::Workshop);
                     } else {
+                        probe::bump("workshop.fail");
                         site.make_plaza(land, index, &mut rng, generator_stats, &name, road_kind);
                     }
                 },
                 // House
                 1 => {
                     let size = (1.5 + rng.random::<f32>().powf(5.0) * 1.0).round() as u32;
+                    probe::bump("house.try");
                     generator_stats.attempt(site.name(), GenStatPlotKind::House);
                     if let Some((aabr, door_tile, door_dir, alt)) = attempt(32, || {
                         site.find_roadside_aabr(
@@ -1532,8 +1711,10 @@ impl Site {
                             plot: Some(plot),
                             hard_alt: Some(house_alt),
                         });
+                        probe::bump("house.ok");
                         generator_stats.success(site.name(), GenStatPlotKind::House);
                     } else {
+                        probe::bump("house.fail");
                         site.make_plaza(land, index, &mut rng, generator_stats, &name, road_kind);
                     }
                 },
@@ -1563,7 +1744,10 @@ impl Site {
                 },
                 // Field
                 3 => {
-                    Self::generate_farm(false, &mut rng, &mut site, land);
+                    probe::bump("field.try");
+                    if Self::generate_farm(false, &mut rng, &mut site, land) {
+                        probe::bump("field.ok");
+                    }
                 },
                 // Castle
                 4 if size > 0.2 && castles < 1 => {
@@ -1751,6 +1935,7 @@ impl Site {
                             hard_alt: Some(airship_dock_alt),
                         });
                         airship_docks += 1;
+                        probe::bump("airship.ok");
                         generator_stats.success(site.name(), GenStatPlotKind::AirshipDock);
                     } else {
                         site.make_plaza(land, index, &mut rng, generator_stats, &name, road_kind);
@@ -1790,15 +1975,21 @@ impl Site {
                         });
 
                         taverns += 1;
+                        probe::bump("tavern.ok");
                         generator_stats.success(site.name(), GenStatPlotKind::Tavern);
                     } else {
                         site.make_plaza(land, index, &mut rng, generator_stats, &name, road_kind);
                     }
                 },
                 8 => {
-                    Self::generate_barn(false, &mut rng, &mut site, land, index);
+                    probe::bump("barn.try");
+                    if Self::generate_barn(false, &mut rng, &mut site, land, index) {
+                        probe::bump("barn.ok");
+                    }
                 },
-                _ => {},
+                6 => probe::bump("draws.airship_noop"),
+                7 => probe::bump("draws.tavern_capped_noop"),
+                _ => probe::bump("draws.other_noop"),
             }
         }
 
