@@ -27,13 +27,55 @@
 //!   so a road's node count can only ever change that road's own offsets (and
 //!   the bridges it creates) -- never another road or a site.
 //!
+//! * **Plaza market stands** (`site::plot::plaza`) draw from a sub-RNG, so a
+//!   stand attempt that an altitude truncation lets succeed or fail can't
+//!   change how many numbers the rest of the town consumes.
+//!
 //! # Gating
 //!
-//! Only the authored Cromatolis path (authored settlements loaded) uses the
-//! derived seeds. Every other world -- every procedural world, every
-//! non-Cromatolis map -- keeps drawing from the shared stream exactly as
-//! upstream does, byte for byte ([`GenCtx::site_rng`] with `None` is
-//! `reseed().rng`, pinned by a test below).
+//! Every one of these decouplings is switched by the same predicate,
+//! [`uses_derived_rngs`] (the chunk's authored-region flag): the civ pass
+//! asks it of the world's first chunk, the plaza of its own chunk, and
+//! authored regions are map-global, so the two always agree. Every other
+//! world -- every procedural world, every non-authored map -- keeps drawing
+//! from the shared stream exactly as upstream does, byte for byte
+//! ([`GenCtx::site_rng`] with `None` is `reseed().rng`, pinned by a test
+//! below, and
+//! `site_layouts::procedural_world_civ_layer_matches_the_committed_digest` pins
+//! a whole procedural world's civ layer, recorded before any of this existed).
+//!
+//! # Operating notes
+//!
+//! * **Renaming an authored id re-rolls that site** (and any connector keyed by
+//!   it): the id *is* the seed. Rename only together with a reviewed re-bless.
+//! * **Coordinates.** `Site::center` and the two ends of a
+//!   `SiteKind::Bridge`/`SiteKind::Fortification` are chunk coordinates (the
+//!   carver builds bridges from `find_path` nodes, which are chunks), so the
+//!   procedural keys below are chunk-quantised: moving a crossing within the
+//!   same chunks keeps its key.
+//! * **Bumping a domain version** (`SITE_SEED_DOMAIN` / `ROAD_SEED_DOMAIN`)
+//!   re-rolls every Cromatolis site, or every connector, once. It requires
+//!   updating the pinned constants in `derived_seeds_are_pinned_constants` and
+//!   re-blessing both digest files (see below). There is no per-world "seed
+//!   version" setting: nothing needs two versions at once yet.
+//! * **Regression guard.**
+//!   `world/src/cromatolis_generation_tests/site_layouts.rs` digests every
+//!   site's layout into `world/src/cromatolis_site_layout_digests.txt` and the
+//!   default procedural map's civ layer into
+//!   `world/src/procedural_world_civ_digest.txt`. They record **world seed 0
+//!   only**: a smoke net for "this edit re-rolled N towns", not a contract
+//!   about any other seed. They need the real LFS assets and are `#[ignore]`d,
+//!   so they run locally or on the VPS, never on GitHub CI:
+//!   `VELOREN_ASSETS=$PWD/assets cargo test -p xindeler-world --release --lib
+//!   -- --ignored site_layouts::`. After a deliberate change, re-record with
+//!   `XINDELER_BLESS_SITE_LAYOUTS=1` on the same command; the reviewer must
+//!   read the per-site list of changed sites the failing run printed (and
+//!   commit the new file with the change), never bless blind.
+//! * **Terrain experiments.** Under `cfg(test)` only, `sim::test_hooks` lets a
+//!   test perturb the loaded heightmap before anything is derived from it
+//!   (installed per rayon worker, so concurrent tests are unaffected);
+//!   `site_layouts::perturbation_experiment_from_env` uses it to measure how
+//!   many towns an edit would re-roll before making it for real.
 //!
 //! # Why SHA-256
 //!
@@ -53,6 +95,12 @@ use rand::{SeedableRng, prelude::*};
 use rand_chacha::ChaChaRng;
 use sha2::{Digest, Sha256};
 use vek::Vec2;
+
+/// The single gate for every RNG decoupling in this module's doc: true in an
+/// authored region, false everywhere else.
+pub(crate) fn uses_derived_rngs(chunk: &crate::sim::SimChunk) -> bool {
+    chunk.authored_cromatolis_v0
+}
 
 /// Domain separator for per-site seeds. Bump the version suffix only as a
 /// deliberate, documented re-roll of every Cromatolis site.
@@ -171,15 +219,21 @@ fn procedural_kind_tag(kind: SiteKind) -> &'static str {
 }
 
 /// The 32-byte seed of one procedural Cromatolis connector's own RNG, keyed
-/// by the ordered (directed) pair of its endpoints' authored settlement
-/// ids -- what the connector pass searches between (`find_path(target ->
-/// anchor)`) -- and therefore independent of the path the search returns.
-pub(super) fn road_seed(world_seed: u32, from_authored_id: &str, to_authored_id: &str) -> [u8; 32] {
-    // Length-prefix each id so no pair of ids can forge another pair's key.
+/// by the ordered (directed) pair of its endpoints' stable site keys
+/// ([`site_seed_key`], e.g. `settlement:site.itos_village`) -- what the
+/// connector pass searches between (`find_path(target -> anchor)`) -- and
+/// therefore independent of the path the search returns. Using the full
+/// site key (not just an authored settlement id) means an endpoint without
+/// one still gets a unique, stable key instead of an empty string.
+pub(super) fn road_seed(world_seed: u32, from_site_key: &str, to_site_key: &str) -> [u8; 32] {
+    // Length-prefix each key so no pair of keys can forge another pair's.
+    // (`derive_seed` length-prefixes the key as a whole as well; the inner
+    // prefixes are what separate the two keys. Dropping either would change
+    // every connector's RNG, so both stay.)
     let key = format!(
-        "road:{}:{from_authored_id}->{}:{to_authored_id}",
-        from_authored_id.len(),
-        to_authored_id.len()
+        "road:{}:{from_site_key}->{}:{to_site_key}",
+        from_site_key.len(),
+        to_site_key.len()
     );
     derive_seed(ROAD_SEED_DOMAIN, world_seed, &key)
 }
@@ -294,8 +348,12 @@ mod tests {
             "cc1be8c8abee13137a2338269257d71b3ab735e71a2bda8f4486fef9241c6bb3",
         );
         assert_eq!(
-            hex(road_seed(0, "site.bronze_shore", "site.kalthis")),
-            "b01767b5701b043a95b0b44360c37d3095f1455046eda66c1ca753109a205e79",
+            hex(road_seed(
+                0,
+                "settlement:site.bronze_shore",
+                "settlement:site.kalthis"
+            )),
+            "71f07160decb57ea2ffc4ff32ba58689aa9e7104c0f80499a6fc8564d366cd44",
         );
     }
 

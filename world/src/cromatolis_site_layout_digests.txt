@@ -28,19 +28,19 @@ procedural-bridge:115,206:119,206	4638f5042d6970b7	1	0	Bridge of Melen
 procedural-bridge:427,641:432,641	dd1340e00add1c5f	1	0	Bridge of Ostostendam
 procedural-bridge:89,219:94,219	f06f50b7d694ccf7	1	0	Bridge of Ondauslandam
 settlement:site.andiran	24f072da94f80b1c	20	14	Andiran
-settlement:site.belletoile_village	415196861231a193	13	11	Belletoile Village
+settlement:site.belletoile_village	63e673743e837eee	13	11	Belletoile Village
 settlement:site.bg_central_post	e36f458d0bdd9e1b	1	1	BG Central Post
 settlement:site.bg_east_post	9528cf8775f3a663	1	1	BG East Post
 settlement:site.bg_west_post	10dad34d90226a7f	1	1	BG West Post
 settlement:site.bronze_shore	ecf53ba9bd6b1b4d	32	28	Bronze Shore
 settlement:site.cutstone_city	b8cfa93a779404d2	86	55	Cutstone City
-settlement:site.cutwood_town	ea03e7420c86d34a	48	32	Cutwood Town
+settlement:site.cutwood_town	ebf82cc3ad574e0e	50	32	Cutwood Town
 settlement:site.dove_city	27272671111ddd7c	78	35	Dove City
 settlement:site.dromos_city	fcfe3f6638920d44	75	44	Dromos City
 settlement:site.duren	26efdaedc4a0a8e1	70	45	Duren
 settlement:site.el_ojo_de_luna	eccce4e2b5dfdb69	1	1	El Ojo de Luna
-settlement:site.elynshara	734c61de3ab33a52	44	31	Elynshara
-settlement:site.evercross	24ee19d58c677c3d	43	24	Evercross
+settlement:site.elynshara	f836cb287b1e76d0	40	29	Elynshara
+settlement:site.evercross	d8d79fe367ba2da8	49	28	Evercross
 settlement:site.fallfair	51eb419e41a45f07	19	14	Fallfair
 settlement:site.falsepost	c5197e4d8f39aeda	17	13	Falsepost
 settlement:site.farhaven	ec2262714c964f58	14	8	Farhaven
@@ -50,10 +50,10 @@ settlement:site.garens_town	abfc45497f5a2df2	17	12	Garens Town
 settlement:site.giva	ab241005cacda12a	17	11	Giva
 settlement:site.gloomshear	63949cf2465ba327	17	9	Gloomshear
 settlement:site.green_post	6ad2626dc8b9b0d6	1	1	Green Post
-settlement:site.hita	35a7ca9a36918ac2	20	15	Hita
+settlement:site.hita	5abf745d11b8403e	18	14	Hita
 settlement:site.hita_post	f5af5d44231fa7e0	1	1	Hita Post
 settlement:site.inebel	4866d01857877f6a	92	40	Inebel
-settlement:site.itos_village	50bd041024497123	14	9	Itos Village
+settlement:site.itos_village	549b5c157df5de1a	15	10	Itos Village
 settlement:site.kalitos	85b51d80f7271803	42	24	Kalitos
 settlement:site.kalthis	4d31322ecd28409e	20	10	Kalthis
 settlement:site.le_pont_dargent	458d2762fb69a3c9	1	1	Le Pont D'argent
@@ -68,14 +68,14 @@ settlement:site.malicious_haven.susy.thlug_nyarr	4c3e5340e1f8ccd2	13	7	Thlûg-Ny
 settlement:site.mazon_town	55c0bab28e75b910	45	24	Mazon Town
 settlement:site.meyenahone	bc2f0bdf3059733f	42	24	Myenahone
 settlement:site.mordorin	a27f39bc43197817	17	9	Mordorin
-settlement:site.morhe_dorei	e806a290f6fb952f	48	26	Morhe Dorei
-settlement:site.naville	8a5b923ac8d69c2a	17	12	Naville
-settlement:site.neoland	53e1408f97da834c	96	59	Neoland
-settlement:site.nugget_field_mines	ec669bcdd8d5c205	17	13	Nugget Field Mines
+settlement:site.morhe_dorei	95d4295d47ed7cc4	47	28	Morhe Dorei
+settlement:site.naville	4c80745115199d04	12	9	Naville
+settlement:site.neoland	f38be63a97408db5	84	54	Neoland
+settlement:site.nugget_field_mines	e9681d2f57a0a9de	16	11	Nugget Field Mines
 settlement:site.ourez	283435a456db3148	40	32	Ourez
 settlement:site.portland	cf3ff44db40424e7	37	17	Portland
-settlement:site.ravenfair	30ac7516efb63cf1	16	13	Ravenfair
-settlement:site.rios_port	c1466b18aa339106	21	13	Rios Port
+settlement:site.ravenfair	1b95e252583da8e3	16	13	Ravenfair
+settlement:site.rios_port	f76e588a36548c7d	16	13	Rios Port
 settlement:site.rivermore_town	9309504a3a27503b	16	12	Rivermore Town
 settlement:site.rosemire	f9f874eb2111f547	16	11	Rosemire
 settlement:site.sutar_town	fb01d3db81347805	39	23	Sutar Town
@@ -88,7 +88,7 @@ settlement:site.trident_dreams	a9f32d27d981c9c3	1	1	Trident Dreams
 settlement:site.trident_post	308d3181bd2acd4e	1	1	Trident Post
 settlement:site.twin_dreams	4bfa193059b546ad	1	1	Twin Dreams
 settlement:site.under_the_river	204331e119767068	1	1	Under the River
-settlement:site.vaelindra_dorei	9613c37361bfc53c	127	73	Vaelindra Dorei
-settlement:site.wanora	c9c66500f6f80545	42	26	Wanora
+settlement:site.vaelindra_dorei	2fb875f823d154b9	119	65	Vaelindra Dorei
+settlement:site.wanora	da0edab12a5a6bfc	49	31	Wanora
 settlement:site.wazir_town	970191bddb627e59	52	35	Wazir Town
 settlement:site.windgrave	888229904db937a4	53	30	Windgrave

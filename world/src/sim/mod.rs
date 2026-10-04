@@ -2,6 +2,7 @@ mod diffusion;
 mod erosion;
 mod location;
 mod map;
+#[cfg(test)] pub(crate) mod test_hooks;
 mod util;
 mod way;
 
@@ -3299,10 +3300,7 @@ impl WorldSim {
             // XINDELER: test-only terrain-perturbation seam (no-op unless a
             // test's thread pool installed one).
             #[cfg(test)]
-            let map = crate::cromatolis_generation_tests::site_layouts::perturb_loaded_map(
-                map_size_lg,
-                map,
-            );
+            let map = test_hooks::perturb_loaded_map(map_size_lg, map);
             (map.alt, map.basement)
         } else {
             let (alt, basement) = do_erosion(

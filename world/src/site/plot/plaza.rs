@@ -205,7 +205,7 @@ impl Plaza {
                     // drawing from `rng` directly (unchanged).
                     let mut stand_rng = land
                         .get_chunk_wpos(aabr.center())
-                        .is_some_and(|chunk| chunk.authored_cromatolis_v0)
+                        .is_some_and(crate::civ::seeds::uses_derived_rngs)
                         .then(|| rand_chacha::ChaChaRng::from_seed(rng.random()));
                     let mut rng: &mut dyn Rng = match stand_rng.as_mut() {
                         Some(stand_rng) => stand_rng,
