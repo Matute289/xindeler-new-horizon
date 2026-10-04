@@ -2677,6 +2677,11 @@ mod tests {
     #[test]
     #[ignore]
     fn the_real_region_still_derives_its_surface_cave_markers() {
+        // Coupled to town layouts: it moved 150 -> 149 when per-site seeds
+        // re-rolled Gloomshear's layout (one mouth ~250 m away). A change
+        // here together with a changed `cromatolis_site_layout_digests.txt`
+        // is that coupling, not a cave regression; re-check which mouth
+        // moved before re-baselining.
         const EXPECTED_MARKERS: usize = 149;
 
         let (world, index) = cromatolis_world();

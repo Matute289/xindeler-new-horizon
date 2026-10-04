@@ -326,6 +326,10 @@ impl<R: Rng> GenCtx<'_, R> {
 /// large 40, medium 23, small 7), so only a clearly starved roll trips it.
 /// A stop-gap floor, not a size model: settlements of one category should
 /// eventually be *sized* by their authored footprint, not re-drawn.
+///
+/// TODO: these are balance numbers and belong in data, next to the sizes
+/// they describe -- the authored settlement template contract RON, keyed by
+/// `AuthoredSettlementSize::contract_key()` -- not in code.
 pub(crate) const MIN_BUILDINGS_BY_SIZE: &[(&str, usize)] = &[
     ("very_large", 45),
     ("large", 40),
@@ -370,31 +374,37 @@ pub(crate) fn building_count(site: &crate::site::Site) -> usize {
 }
 
 /// Keeps `first` if it reaches `band`; otherwise re-draws with `retry(1)`,
-/// `retry(2)`, ... up to [`MAX_LAYOUT_RETRIES`] and keeps the first layout
+/// `retry(2)`, ... up to [`MAX_LAYOUT_RETRIES`] and keeps the first attempt
 /// that does. If none does, keeps the largest attempt (the earliest on a
 /// tie) and warns. A site already within its band is never re-drawn, so a
 /// terrain edit can only bring retries into play for a town whose own first
 /// draw it pushed below the band.
-pub(super) fn keep_layout_within_band(
-    first: crate::site::Site,
+///
+/// Generic over the attempt type so the caller can carry per-attempt state
+/// (the generated site plus its own generation statistics) and so the
+/// selection rule is unit-testable without generating a town. `buildings`
+/// measures an attempt; `site_key` is only called to label a log line.
+pub(super) fn keep_layout_within_band<T>(
+    first: T,
     band: Option<usize>,
-    site_key: &str,
-    mut retry: impl FnMut(u32) -> crate::site::Site,
-) -> crate::site::Site {
+    buildings: impl Fn(&T) -> usize,
+    site_key: impl Fn() -> String,
+    mut retry: impl FnMut(u32) -> T,
+) -> T {
     let Some(min) = band else {
         return first;
     };
-    let first_count = building_count(&first);
+    let first_count = buildings(&first);
     if first_count >= min {
         return first;
     }
     let (mut best, mut best_count) = (first, first_count);
     for attempt in 1..=MAX_LAYOUT_RETRIES {
         let candidate = retry(attempt);
-        let count = building_count(&candidate);
+        let count = buildings(&candidate);
         if count >= min {
             tracing::info!(
-                %site_key, attempt, first_count, count, min,
+                site_key = %site_key(), attempt, first_count, count, min,
                 "Re-drew a settlement layout that fell below its size band"
             );
             return candidate;
@@ -404,7 +414,7 @@ pub(super) fn keep_layout_within_band(
         }
     }
     tracing::warn!(
-        %site_key, first_count, best_count, min,
+        site_key = %site_key(), first_count, best_count, min,
         retries = MAX_LAYOUT_RETRIES,
         "No settlement layout reached its size band; keeping the largest attempt"
     );
@@ -592,6 +602,64 @@ mod tests {
                 assert!(min_buildings_for(category, size).is_some());
             }
         }
+    }
+
+    /// Runs `keep_layout_within_band` over plain numbers ("buildings" =
+    /// the value itself) with scripted retries, returning the kept value and
+    /// the retry attempts that were requested.
+    fn pick(first: usize, band: Option<usize>, retries: &[usize]) -> (usize, Vec<u32>) {
+        let mut asked = Vec::new();
+        let kept = keep_layout_within_band(
+            first,
+            band,
+            |n: &usize| *n,
+            || "test".to_string(),
+            |attempt| {
+                asked.push(attempt);
+                retries.get(attempt as usize - 1).copied().unwrap_or(0)
+            },
+        );
+        (kept, asked)
+    }
+
+    #[test]
+    fn layout_band_keeps_an_in_band_first_draw_without_retrying() {
+        assert_eq!(pick(50, Some(40), &[99]), (50, vec![]));
+        assert_eq!(pick(40, Some(40), &[99]), (40, vec![]));
+    }
+
+    #[test]
+    fn layout_band_without_a_band_returns_the_first_draw() {
+        assert_eq!(pick(3, None, &[99]), (3, vec![]));
+    }
+
+    #[test]
+    fn layout_band_takes_the_first_retry_that_reaches_the_band() {
+        assert_eq!(pick(10, Some(40), &[20, 41, 90]), (41, vec![1, 2]));
+    }
+
+    #[test]
+    fn layout_band_falls_back_to_the_largest_attempt_earliest_on_a_tie() {
+        // Retries 2 and 4 tie at 30; nothing reaches 40: keep the earliest 30
+        // after trying every retry. A tagged value tells the two 30s apart.
+        let mut script = vec![(0usize, 0u32); MAX_LAYOUT_RETRIES as usize];
+        script[1] = (30, 2);
+        script[3] = (30, 4);
+        let mut asked = 0;
+        let kept = keep_layout_within_band(
+            (10usize, 0u32),
+            Some(40),
+            |(n, _): &(usize, u32)| *n,
+            || "test".to_string(),
+            |attempt| {
+                asked += 1;
+                script[attempt as usize - 1]
+            },
+        );
+        assert_eq!(kept, (30, 2));
+        assert_eq!(asked, MAX_LAYOUT_RETRIES);
+        // A first draw no retry beats is kept.
+        assert_eq!(pick(25, Some(40), &[]).0, 25);
     }
 
     /// Gating guarantee: the non-derived path is byte-for-byte upstream's

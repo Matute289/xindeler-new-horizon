@@ -232,9 +232,19 @@ fn world_layouts(world: &World, index: &IndexOwned) -> WorldLayouts {
         let Some(site_id) = civ_site.site_tmp else {
             panic!("{key} has no generated site");
         };
+        let generated = index_ref.sites.get(site_id);
+        // A size-band re-draw generates a new random town name each attempt;
+        // the authored name must still be the one that reaches the world.
+        if let Some(authored) = civ_site.authored_name() {
+            assert_eq!(
+                generated.name(),
+                Some(authored),
+                "{key} lost its authored name"
+            );
+        }
         let layout = SiteLayout {
             authored_size: civ_site.authored_category_and_size(),
-            ..site_layout(index_ref.sites.get(site_id))
+            ..site_layout(generated)
         };
         assert!(
             sites.insert(key.clone(), layout).is_none(),
@@ -475,6 +485,26 @@ fn cromatolis_site_layouts_are_deterministic() {
 }
 
 const ENFORCE_SIZE_BANDS_ENV: &str = "XINDELER_ENFORCE_SIZE_BANDS";
+
+/// Hard check: no authored settlement ran out of size-band re-draws. A
+/// layout below its band after generation means all
+/// `civ::seeds::MAX_LAYOUT_RETRIES` re-draws failed too -- worldgen paid for
+/// sixteen extra towns and still kept a starved one -- which a terrain edit
+/// must surface here rather than as a silent slowdown and a log warning.
+#[test]
+#[ignore]
+fn no_authored_settlement_exhausts_its_layout_retries() {
+    let exhausted: Vec<String> = base_layouts()
+        .sites
+        .iter()
+        .filter_map(|(key, site)| {
+            let (category, size) = site.authored_size?;
+            let min = crate::civ::seeds::min_buildings_for(category, size)?;
+            (site.buildings < min).then(|| format!("{key}: {} < {min}", site.buildings))
+        })
+        .collect();
+    assert!(exhausted.is_empty(), "{}", exhausted.join("\n"));
+}
 
 /// Soft check: every authored settlement reaches the building band of its
 /// authored size (`civ::seeds::MIN_BUILDINGS_BY_SIZE`). Generation re-draws

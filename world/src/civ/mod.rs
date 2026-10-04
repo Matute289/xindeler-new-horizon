@@ -2460,33 +2460,45 @@ impl Civs {
                             authored_maritime_routes.as_ref(),
                         )
                         .map(|class| NavalPortRequest::new(class, &naval_port_exclusions));
-                        let mut generate = |rng: &mut ChaChaRng| {
-                            WorldSite::generate_city(
+                        // XINDELER: an authored settlement whose layout
+                        // falls below its size band is re-drawn from
+                        // derived sub-seeds (see `seeds`); others are
+                        // untouched. Each attempt records its generation
+                        // statistics into its own scratch `SitesGenMeta`
+                        // and only the kept attempt's are merged, so a
+                        // discarded re-draw (with its own random town name)
+                        // never shows up in the stats. The random name
+                        // never reaches the world either: an authored
+                        // settlement is renamed to its authored name right
+                        // after this match (`authored_name`).
+                        let generate = |rng: &mut ChaChaRng| {
+                            let mut meta = SitesGenMeta::new(seed);
+                            let site = WorldSite::generate_city(
                                 &Land::from_sim(ctx.sim),
                                 index_ref,
                                 rng,
                                 wpos,
                                 size,
                                 calendar,
-                                &mut gen_meta,
+                                &mut meta,
                                 naval_port,
-                            )
+                            );
+                            (site, meta)
                         };
-                        // XINDELER: an authored settlement whose layout
-                        // falls below its size band is re-drawn from
-                        // derived sub-seeds (see `seeds`); others are
-                        // untouched.
                         let first = generate(&mut rng);
-                        seeds::keep_layout_within_band(
+                        let (site, meta) = seeds::keep_layout_within_band(
                             first,
                             seed_policy.layout_band(sim_site),
-                            &seeds::site_seed_key(sim_site),
+                            |(site, _)| seeds::building_count(site),
+                            || seeds::site_seed_key(sim_site),
                             |attempt| {
                                 generate(&mut ChaChaRng::from_seed(
                                     seed_policy.layout_retry_seed(sim_site, attempt),
                                 ))
                             },
-                        )
+                        );
+                        gen_meta.absorb(meta);
+                        site
                     },
                     SiteKind::GliderCourse => WorldSite::generate_glider_course(
                         &Land::from_sim(ctx.sim),
@@ -4682,7 +4694,7 @@ impl Site {
     /// The authored name for this site, if it was established from an
     /// authored settlement or landmark pin rather than procedural
     /// generation.
-    fn authored_name(&self) -> Option<&str> {
+    pub(crate) fn authored_name(&self) -> Option<&str> {
         self.authored
             .as_ref()
             .map(|settlement| settlement.name.as_str())

@@ -227,6 +227,11 @@ impl SitesGenMeta {
         }
     }
 
+    /// XINDELER: merge another (scratch) collector's per-site statistics
+    /// into this one, e.g. the attempt a caller decided to keep out of
+    /// several generated alternatives.
+    pub fn absorb(&mut self, other: SitesGenMeta) { self.sites.extend(other.sites); }
+
     pub fn add<'a>(&mut self, site_name: impl Into<Option<&'a str>>, kind: GenStatSiteKind) {
         let site_name = site_name.into().unwrap_or("");
         self.sites
