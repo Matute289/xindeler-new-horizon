@@ -71,7 +71,7 @@
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
             ),
-            center: (x: 0.55691, y: 0.00586),
+            center: (x: 0.55591, y: 0.00590),
             requires_capital_castle: false,
         ),
         (
@@ -227,7 +227,7 @@
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
             ),
-            center: (x: 0.95603, y: 0.35635),
+            center: (x: 0.95581, y: 0.35482),
             requires_capital_castle: false,
         ),
         (
