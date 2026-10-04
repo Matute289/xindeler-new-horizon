@@ -192,11 +192,7 @@ fn site_layout(site: &site::Site) -> SiteLayout {
     for plot in site.plots() {
         *kinds.entry(plot.kind().to_string()).or_default() += 1;
     }
-    let buildings = kinds
-        .iter()
-        .filter(|(kind, _)| !matches!(kind.as_str(), "Plaza" | "Road" | "FarmField" | "Bridge"))
-        .map(|(_, n)| n)
-        .sum();
+    let buildings = crate::civ::seeds::building_count(site);
     SiteLayout {
         name: site.name().unwrap_or("-").to_string(),
         digest: sha16(&canonical),
@@ -478,29 +474,15 @@ fn cromatolis_site_layouts_are_deterministic() {
     }
 }
 
-/// Minimum building count (plots that are not plazas, roads, farm fields or
-/// bridges) an authored settlement of each size is expected to reach.
-/// Judgement values: each sits a little under the smallest count any
-/// settlement of that size reached on the roll the old shared-stream seeds
-/// gave at world seed 0 (very large 60 bar Kalthis, large 40, medium 23,
-/// small 7), so only a clearly starved roll trips it. Inns and posts are
-/// single structures and are not checked.
-const MIN_BUILDINGS_BY_SIZE: &[(&str, usize)] = &[
-    ("very_large", 45),
-    ("large", 40),
-    ("medium", 20),
-    ("small", 6),
-    ("minimal", 1),
-];
-/// Categories the size bands apply to.
-const SIZE_BANDED_CATEGORIES: &[&str] = &["capital", "city", "town", "village", "hamlet"];
 const ENFORCE_SIZE_BANDS_ENV: &str = "XINDELER_ENFORCE_SIZE_BANDS";
 
 /// Soft check: every authored settlement reaches the building band of its
-/// authored size. A starved town is a seed-lottery outcome, not a bug, so
-/// this only *reports* (prints `WARN size band` lines) unless
-/// `XINDELER_ENFORCE_SIZE_BANDS=1` is set; whether to re-roll or freeze a
-/// specific town is a content decision.
+/// authored size (`civ::seeds::MIN_BUILDINGS_BY_SIZE`). Generation re-draws
+/// a starved first layout up to `MAX_LAYOUT_RETRIES` times and otherwise
+/// keeps its largest attempt with a warning, so a violation here means even
+/// that ran out. Reports `WARN size band` lines; fails only with
+/// `XINDELER_ENFORCE_SIZE_BANDS=1`, because what to do about such a town (a
+/// larger authored footprint, a terrain edit) is a content decision.
 #[test]
 #[ignore]
 fn authored_settlement_size_bands_soft_check() {
@@ -509,14 +491,9 @@ fn authored_settlement_size_bands_soft_check() {
         let Some((category, size)) = site.authored_size else {
             continue;
         };
-        if !SIZE_BANDED_CATEGORIES.contains(&category) {
+        let Some(min) = crate::civ::seeds::min_buildings_for(category, size) else {
             continue;
-        }
-        let min = MIN_BUILDINGS_BY_SIZE
-            .iter()
-            .find(|(s, _)| *s == size)
-            .map(|(_, n)| *n)
-            .unwrap_or_else(|| panic!("no size band for {size:?}"));
+        };
         if site.buildings < min {
             violations.push(format!(
                 "{key} ({category}, {size}): {} buildings < {min}",

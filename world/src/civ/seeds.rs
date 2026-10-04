@@ -262,6 +262,32 @@ impl CivSeedPolicy {
         self.derived
             .then(|| derive_seed(SITE_SEED_DOMAIN, self.world_seed, &site_seed_key(site)))
     }
+
+    /// The minimum building count this site's generated layout must reach
+    /// ([`MIN_BUILDINGS_BY_SIZE`]), or `None` if it isn't held to one: only
+    /// authored settlements of a banded category, and only where seeds are
+    /// derived at all.
+    pub(super) fn layout_band(&self, site: &Site) -> Option<usize> {
+        if !self.derived {
+            return None;
+        }
+        let settlement = site.authored.as_ref()?;
+        min_buildings_for(
+            settlement.category.contract_key(),
+            settlement.size.contract_key(),
+        )
+    }
+
+    /// The seed of retry `attempt` (1-based) of a site whose first layout
+    /// fell below its band: same stable key, a distinct derived suffix, so
+    /// the sequence of retries is as reproducible as the first draw.
+    pub(super) fn layout_retry_seed(&self, site: &Site, attempt: u32) -> [u8; 32] {
+        derive_seed(
+            SITE_SEED_DOMAIN,
+            self.world_seed,
+            &format!("{}#layout-retry-{attempt}", site_seed_key(site)),
+        )
+    }
 }
 
 impl<R: Rng> GenCtx<'_, R> {
@@ -289,6 +315,100 @@ impl<R: Rng> GenCtx<'_, R> {
     pub(super) fn with_rng<R2: Rng>(&mut self, rng: R2) -> GenCtx<'_, R2> {
         GenCtx { sim: self.sim, rng }
     }
+}
+
+/// Minimum building count (plots that are not plazas, roads, farm fields or
+/// bridges, see [`building_count`]) an authored settlement of each authored
+/// size must reach; a first layout below it is re-drawn
+/// ([`keep_layout_within_band`]). Judgement values: each sits a little under
+/// the smallest count any settlement of that size reached on the roll the
+/// old shared-stream seeds gave at world seed 0 (very large 60 bar Kalthis,
+/// large 40, medium 23, small 7), so only a clearly starved roll trips it.
+/// A stop-gap floor, not a size model: settlements of one category should
+/// eventually be *sized* by their authored footprint, not re-drawn.
+pub(crate) const MIN_BUILDINGS_BY_SIZE: &[(&str, usize)] = &[
+    ("very_large", 45),
+    ("large", 40),
+    ("medium", 20),
+    ("small", 6),
+    ("minimal", 1),
+];
+/// Settlement categories the bands apply to. Inns and posts are single
+/// structures and are never re-drawn.
+pub(crate) const SIZE_BANDED_CATEGORIES: &[&str] =
+    &["capital", "city", "town", "village", "hamlet"];
+/// Upper bound on re-draws per settlement, so a site whose terrain can't fit
+/// its band costs a bounded amount of generation time.
+pub(crate) const MAX_LAYOUT_RETRIES: u32 = 16;
+
+/// The band for an authored `(category, size)` pair, by contract keys.
+pub(crate) fn min_buildings_for(category: &str, size: &str) -> Option<usize> {
+    if !SIZE_BANDED_CATEGORIES.contains(&category) {
+        return None;
+    }
+    MIN_BUILDINGS_BY_SIZE
+        .iter()
+        .find(|(s, _)| *s == size)
+        .map(|(_, n)| *n)
+}
+
+/// Plots that are buildings: everything but plazas, roads, farm fields and
+/// bridges.
+pub(crate) fn building_count(site: &crate::site::Site) -> usize {
+    use crate::site::PlotKind;
+    site.plots()
+        .filter(|plot| {
+            !matches!(
+                plot.kind(),
+                PlotKind::Plaza(_)
+                    | PlotKind::Road(_)
+                    | PlotKind::FarmField(_)
+                    | PlotKind::Bridge(_)
+            )
+        })
+        .count()
+}
+
+/// Keeps `first` if it reaches `band`; otherwise re-draws with `retry(1)`,
+/// `retry(2)`, ... up to [`MAX_LAYOUT_RETRIES`] and keeps the first layout
+/// that does. If none does, keeps the largest attempt (the earliest on a
+/// tie) and warns. A site already within its band is never re-drawn, so a
+/// terrain edit can only bring retries into play for a town whose own first
+/// draw it pushed below the band.
+pub(super) fn keep_layout_within_band(
+    first: crate::site::Site,
+    band: Option<usize>,
+    site_key: &str,
+    mut retry: impl FnMut(u32) -> crate::site::Site,
+) -> crate::site::Site {
+    let Some(min) = band else {
+        return first;
+    };
+    let first_count = building_count(&first);
+    if first_count >= min {
+        return first;
+    }
+    let (mut best, mut best_count) = (first, first_count);
+    for attempt in 1..=MAX_LAYOUT_RETRIES {
+        let candidate = retry(attempt);
+        let count = building_count(&candidate);
+        if count >= min {
+            tracing::info!(
+                %site_key, attempt, first_count, count, min,
+                "Re-drew a settlement layout that fell below its size band"
+            );
+            return candidate;
+        }
+        if count > best_count {
+            (best, best_count) = (candidate, count);
+        }
+    }
+    tracing::warn!(
+        %site_key, first_count, best_count, min,
+        retries = MAX_LAYOUT_RETRIES,
+        "No settlement layout reached its size band; keeping the largest attempt"
+    );
+    best
 }
 
 #[cfg(test)]
@@ -459,6 +579,19 @@ mod tests {
         assert_eq!(short_offsets[1], long_offsets[1], "road B must not move");
         assert_eq!(short_sites, long_sites, "no site seed may move");
         assert_eq!(short_offsets[0][..], long_offsets[0][..20]);
+    }
+
+    #[test]
+    fn size_bands_cover_every_banded_category_and_size() {
+        assert_eq!(min_buildings_for("city", "large"), Some(40));
+        assert_eq!(min_buildings_for("capital", "very_large"), Some(45));
+        assert_eq!(min_buildings_for("inn", "minimal"), None);
+        assert_eq!(min_buildings_for("post", "minimal"), None);
+        for &category in SIZE_BANDED_CATEGORIES {
+            for size in ["very_large", "large", "medium", "small", "minimal"] {
+                assert!(min_buildings_for(category, size).is_some());
+            }
+        }
     }
 
     /// Gating guarantee: the non-derived path is byte-for-byte upstream's

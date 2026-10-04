@@ -2460,15 +2460,32 @@ impl Civs {
                             authored_maritime_routes.as_ref(),
                         )
                         .map(|class| NavalPortRequest::new(class, &naval_port_exclusions));
-                        WorldSite::generate_city(
-                            &Land::from_sim(ctx.sim),
-                            index_ref,
-                            &mut rng,
-                            wpos,
-                            size,
-                            calendar,
-                            &mut gen_meta,
-                            naval_port,
+                        let mut generate = |rng: &mut ChaChaRng| {
+                            WorldSite::generate_city(
+                                &Land::from_sim(ctx.sim),
+                                index_ref,
+                                rng,
+                                wpos,
+                                size,
+                                calendar,
+                                &mut gen_meta,
+                                naval_port,
+                            )
+                        };
+                        // XINDELER: an authored settlement whose layout
+                        // falls below its size band is re-drawn from
+                        // derived sub-seeds (see `seeds`); others are
+                        // untouched.
+                        let first = generate(&mut rng);
+                        seeds::keep_layout_within_band(
+                            first,
+                            seed_policy.layout_band(sim_site),
+                            &seeds::site_seed_key(sim_site),
+                            |attempt| {
+                                generate(&mut ChaChaRng::from_seed(
+                                    seed_policy.layout_retry_seed(sim_site, attempt),
+                                ))
+                            },
                         )
                     },
                     SiteKind::GliderCourse => WorldSite::generate_glider_course(

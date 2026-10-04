@@ -35,7 +35,7 @@ settlement:site.bg_west_post	10dad34d90226a7f	1	1	BG West Post
 settlement:site.bronze_shore	ecf53ba9bd6b1b4d	32	28	Bronze Shore
 settlement:site.cutstone_city	b8cfa93a779404d2	86	55	Cutstone City
 settlement:site.cutwood_town	ebf82cc3ad574e0e	50	32	Cutwood Town
-settlement:site.dove_city	27272671111ddd7c	78	35	Dove City
+settlement:site.dove_city	0eda20290ab052b2	71	42	Dove City
 settlement:site.dromos_city	fcfe3f6638920d44	75	44	Dromos City
 settlement:site.duren	26efdaedc4a0a8e1	70	45	Duren
 settlement:site.el_ojo_de_luna	eccce4e2b5dfdb69	1	1	El Ojo de Luna
@@ -55,7 +55,7 @@ settlement:site.hita_post	f5af5d44231fa7e0	1	1	Hita Post
 settlement:site.inebel	4866d01857877f6a	92	40	Inebel
 settlement:site.itos_village	549b5c157df5de1a	15	10	Itos Village
 settlement:site.kalitos	85b51d80f7271803	42	24	Kalitos
-settlement:site.kalthis	4d31322ecd28409e	20	10	Kalthis
+settlement:site.kalthis	684751b6d4892c45	116	55	Kalthis
 settlement:site.le_pont_dargent	458d2762fb69a3c9	1	1	Le Pont D'argent
 settlement:site.levannois_village	657627410f4d1766	20	11	Levannois Village
 settlement:site.levassi	cd9d41ff48ce202c	42	25	Levassi
@@ -73,9 +73,9 @@ settlement:site.naville	4c80745115199d04	12	9	Naville
 settlement:site.neoland	f38be63a97408db5	84	54	Neoland
 settlement:site.nugget_field_mines	e9681d2f57a0a9de	16	11	Nugget Field Mines
 settlement:site.ourez	283435a456db3148	40	32	Ourez
-settlement:site.portland	cf3ff44db40424e7	37	17	Portland
+settlement:site.portland	e31553fda7db72ff	46	24	Portland
 settlement:site.ravenfair	1b95e252583da8e3	16	13	Ravenfair
-settlement:site.rios_port	f76e588a36548c7d	16	13	Rios Port
+settlement:site.rios_port	0cc706ae9af10ec5	42	24	Rios Port
 settlement:site.rivermore_town	9309504a3a27503b	16	12	Rivermore Town
 settlement:site.rosemire	f9f874eb2111f547	16	11	Rosemire
 settlement:site.sutar_town	fb01d3db81347805	39	23	Sutar Town
