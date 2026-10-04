@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use tokio::runtime::Runtime;
 use tracing::{info, trace, warn};
-use xindeler_client::{Client, ClientType, addr::ConnectionArgs};
+use xindeler_client::{
+    Client, ClientInitStage, ClientType, Credentials, StaticCredentialProvider,
+    addr::ConnectionArgs,
+};
 
 mod settings;
 mod tui;
@@ -56,6 +59,7 @@ pub fn make_client(
     runtime: &Arc<Runtime>,
     server: &str,
     server_info: &mut Option<ServerInfo>,
+    auth_provider: &Option<String>,
     username: &str,
     password: &str,
 ) -> Option<Client> {
@@ -64,26 +68,39 @@ pub fn make_client(
         prefer_ipv6: false,
         hostname: server.to_owned(),
     };
-    runtime
+
+    // Trust exactly the auth server this server advertised (`None` for a
+    // server without auth). Bots have no one to prompt for a 2FA code and
+    // never sign in through a browser, so a 2FA bot account just fails.
+    let provider = StaticCredentialProvider {
+        credentials_by_auth: [(
+            auth_provider.clone(),
+            Credentials::UsernamePassword(username.to_string(), password.to_string()),
+        )]
+        .into(),
+    };
+
+    let mismatched_server_info: Arc<std::sync::Mutex<Option<ServerInfo>>> = Default::default();
+
+    let res = runtime
         .block_on(Client::new(
             addr,
             runtime_clone,
-            server_info,
-            username,
-            password,
             None,
-            |_| true,
-            // Bots don't have anyone to prompt for a code; a bot account
-            // hitting a 2FA challenge just fails the connection.
-            || None,
-            // Bots never sign in through a browser.
-            None,
-            &|_| {},
+            &provider,
+            &|stage| {
+                if let ClientInitStage::ServerVersionArrived(ref info) = stage {
+                    *mismatched_server_info.lock().unwrap() = Some(info.clone());
+                }
+            },
             |_| {},
             Default::default(),
             ClientType::Game,
         ))
-        .ok()
+        .ok();
+
+    *server_info = mismatched_server_info.lock().unwrap().take();
+    res
 }
 
 impl BotClient {
@@ -91,7 +108,7 @@ impl BotClient {
         let runtime = Arc::new(Runtime::new().unwrap());
         let mut server_info = None;
         // Don't care if we connect, just trying to grab the server info.
-        let _ = make_client(&runtime, &settings.server, &mut server_info, "", "");
+        let _ = make_client(&runtime, &settings.server, &mut server_info, &None, "", "");
         let server_info = server_info.expect("Failed to connect to server.");
         let clock = Clock::new(Duration::from_secs_f64(1.0 / 60.0));
         BotClient {
@@ -183,12 +200,20 @@ impl BotClient {
             let runtime = Arc::clone(&self.runtime);
 
             let server = &self.settings.server;
+            let auth_provider = &self.server_info.auth_provider;
             // TODO: log the clients in in parallel instead of in series
             let client = self
                 .bot_clients
                 .entry(cred.username.clone())
                 .or_insert_with(|| {
-                    make_client(&runtime, server, &mut None, &cred.username, &cred.password)
+                    make_client(
+                        &runtime,
+                        server,
+                        &mut None,
+                        auth_provider,
+                        &cred.username,
+                        &cred.password,
+                    )
                         .expect("Failed to connect to server")
                 });
 

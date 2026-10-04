@@ -151,7 +151,7 @@ impl ClientInit {
                 if cancel2.load(Ordering::Relaxed) {
                     break;
                 }
-                let mut mismatched_server_info = None;
+                let mismatched_server_info: Arc<Mutex<Option<ServerInfo>>> = Default::default();
                 // Rebuilt per attempt: the `OAuthLogin` callbacks are one-shot
                 // boxed closures that must own their captures to be `Send +
                 // 'static` inside `spawn_blocking`. `cancel2` is the very
@@ -187,10 +187,12 @@ impl ClientInit {
                 match Client::new(
                     connection_args.clone(),
                     Arc::clone(&runtime2),
-                    &mut mismatched_server_info,
                     locale.clone(),
                     &credential_provider,
                     &|stage| {
+                        if let ClientInitStage::ServerVersionArrived(ref info) = stage {
+                            *mismatched_server_info.lock().unwrap() = Some(info.clone());
+                        }
                         let _ = init_stage_tx.send(stage);
                     },
                     crate::ecs::sys::add_local_systems,
@@ -218,6 +220,7 @@ impl ClientInit {
                     },
                     Err(e) => {
                         trace!(?e, "Aborting server connection attempt");
+                        let mismatched_server_info = mismatched_server_info.lock().unwrap().take();
                         last_err = Some(Error::ClientError {
                             error: e,
                             mismatched_server_info,

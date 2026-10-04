@@ -369,8 +369,6 @@ impl Client {
     pub async fn new(
         addr: ConnectionArgs,
         runtime: Arc<Runtime>,
-        // TODO: refactor to avoid needing to use this out parameter
-        mismatched_server_info: &mut Option<ServerInfo>,
         locale: Option<String>,
         credential_provider: &impl CredentialProvider,
         init_stage_update: &(dyn Fn(ClientInitStage) + Send + Sync),
@@ -574,10 +572,8 @@ impl Client {
                 *common::util::DISPLAY_VERSION,
             );
         }
-        // Pass the server info back to the caller to ensure they can access it
-        // even if this function errors.
-        *mismatched_server_info = Some(server_info.clone());
         debug!("Auth Server: {:?}", server_info.auth_provider);
+        init_stage_update(ClientInitStage::ServerVersionArrived(server_info.clone()));
 
         ping_stream.send(PingMsg::Ping)?;
 
@@ -1117,6 +1113,8 @@ impl Client {
                 role,
             ))
         });
+
+        init_stage_update(ClientInitStage::RequestingPlugins);
 
         let (
             state,
@@ -3971,20 +3969,24 @@ mod tests {
         let runtime2 = Arc::clone(&runtime);
         let username = "Foo";
         let password = "Bar";
-        let auth_server = "auth.xindeler.com";
+        let auth_server = "https://auth.xindeler.com";
+
+        let provider = StaticCredentialProvider {
+            credentials_by_auth: [(
+                Some(auth_server.to_string()),
+                Credentials::UsernamePassword(username.to_string(), password.to_string()),
+            )]
+            .into(),
+        };
+
         let xindeler_client: Result<Client, Error> = runtime.block_on(Client::new(
             ConnectionArgs::Tcp {
                 hostname: "127.0.0.1:9000".to_owned(),
                 prefer_ipv6: false,
             },
             runtime2,
-            &mut None,
-            username,
-            password,
             None,
-            |suggestion: &str| suggestion == auth_server,
-            || None,
-            None,
+            &provider,
             &|_| {},
             |_| {},
             PathBuf::default(),

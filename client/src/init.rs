@@ -1,6 +1,7 @@
 //! Code and utils for Initializing the connection to the server.
 use std::{future::Future, sync::Arc};
 
+use common_net::msg::ServerInfo;
 use network::{ConnectAddr, Network};
 use rustls::client::danger::ServerCertVerified;
 use tracing::warn;
@@ -108,6 +109,8 @@ pub enum ClientInitStage {
     ConnectionEstablish,
     /// Waiting for server version
     WatingForServerVersion,
+    /// Server Version successfuly arrived, do a first PING
+    ServerVersionArrived(ServerInfo),
     /// We're currently authenticating with the server
     Authentication,
     /// Loading map data, site information, recipe information and other
@@ -116,6 +119,8 @@ pub enum ClientInitStage {
     /// Prepare data received by the server to be used by the client (insert
     /// data into the ECS, render map)
     StartingClient,
+    /// Requesting Plugins from Server and downloading them
+    RequestingPlugins,
 }
 
 /// Xindeler: what `Client::register` has to do to turn the provider's

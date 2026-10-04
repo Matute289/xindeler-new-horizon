@@ -12,7 +12,9 @@ use std::{
 use tokio::runtime::Runtime;
 use tracing::{error, info};
 use voxygen_i18n_helpers::localize_chat_message;
-use xindeler_client::{Client, ClientType, Event, addr::ConnectionArgs};
+use xindeler_client::{
+    Client, ClientType, Credentials, Event, StaticCredentialProvider, addr::ConnectionArgs,
+};
 
 const TPS: u64 = 10; // Low value is okay, just reading messages.
 
@@ -55,18 +57,25 @@ fn main() {
         hostname: server_addr,
     };
 
+    let provider = StaticCredentialProvider {
+        credentials_by_auth: [
+            (
+                Some("https://auth.xindeler.com".to_string()),
+                Credentials::UsernamePassword(username.to_string(), password.to_string()),
+            ),
+            // Servers without an auth server only need the username.
+            (None, Credentials::Username(username.to_string())),
+        ]
+        .into(),
+    };
+
     // Create a client.
     let mut client = runtime
         .block_on(Client::new(
             addr,
             runtime2,
-            &mut None,
-            &username,
-            &password,
             None,
-            |provider| provider == "https://auth.xindeler.com",
-            || None,
-            None,
+            &provider,
             &|_| {},
             |_| {},
             Default::default(),
