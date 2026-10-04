@@ -10089,11 +10089,32 @@ mod tests {
         // ground, and the wide tributary network was the longest shoreline in
         // the foothills. `Jungle` takes most of the freed ground because the
         // Whitekasing foothills sit in the painted tropical south.
-        assert_eq!(biome_count(BiomeKind::Savannah), 2_266);
-        assert_eq!(biome_count(BiomeKind::Grassland), 180_103);
-        assert_eq!(biome_count(BiomeKind::Taiga), 45_922);
-        assert_eq!(biome_count(BiomeKind::Mountain), 27_971);
-        assert_eq!(biome_count(BiomeKind::Snowland), 32_971);
+        //
+        // ⚠️ Re-baselined again 2026-10-03 for the height-profile adoption
+        // (NH-161 T24b: `heightmap_manual_v25`, profile `l16_v2_z0`). That is a
+        // re-encode of the WHOLE master onto a 10.68 cm lattice, not a local
+        // edit: every chunk's `alt` moves by -5.34..+5.07 cm (mean +1.09 cm,
+        // the dominant +5.07 cm on the 99 m plateau gray), so it is the
+        // relief-plus-CDF mechanism above applied map-wide. The water
+        // classification was hand-corrected to stay identical, and `Ocean`
+        // (316,682) and `Lake` (49,403) do not move. Measured on the
+        // regenerated engine, v23 -> v25:
+        //
+        //   Savannah   2,266 ->   2,157  (-109)   Grassland 180,103 -> 180,152 ( +49)
+        //   Taiga     45,922 ->  45,918  (  -4)   Mountain   27,971 ->  27,972 (  +1)
+        //   Snowland  32,971 ->  32,973  (  +2)   Jungle     69,084 ->  69,084 (   0)
+        //   Forest   310,520 -> 310,484  ( -36)   Swamp      13,654 ->  13,751 ( +97)
+        //
+        // `Savannah` is the readout of the `temp >= 0.3` microclimate pocket
+        // (see above): a few cm of higher ground there, through the altitude
+        // lapse and the re-ranked temperature CDF, moves its rim. `Swamp`
+        // (+0.71 %) left its 0.5 % band, so its reference moves too; `Forest`
+        // (-0.01 %) stays inside its band and keeps its reference.
+        assert_eq!(biome_count(BiomeKind::Savannah), 2_157);
+        assert_eq!(biome_count(BiomeKind::Grassland), 180_152);
+        assert_eq!(biome_count(BiomeKind::Taiga), 45_918);
+        assert_eq!(biome_count(BiomeKind::Mountain), 27_972);
+        assert_eq!(biome_count(BiomeKind::Snowland), 32_973);
         // Banded instead: the biomes where a small move really would be the CDF
         // knock-on rather than a design change, so that an unrelated CDF shift
         // reads as one signal instead of three simultaneous "failures".
@@ -10107,7 +10128,7 @@ mod tests {
         for (biome, measured) in [
             (BiomeKind::Jungle, 69_084.0),
             (BiomeKind::Forest, 310_520.0),
-            (BiomeKind::Swamp, 13_654.0),
+            (BiomeKind::Swamp, 13_751.0),
         ] {
             let counted = biome_count(biome) as f64;
             assert!(
