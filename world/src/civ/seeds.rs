@@ -1,0 +1,430 @@
+//! Order- and terrain-independent RNG seeds for civ generation in the
+//! authored Cromatolis world.
+//!
+//! # The problem this solves
+//!
+//! Upstream `Civs::generate` draws every site's generator seed, in order,
+//! from one shared `ChaChaRng` (`GenCtx::reseed`), and the road carver
+//! (`Civs::carve_track_into_terrain`) draws from that *same* stream: two
+//! numbers per interior road node (the random chunk offset) plus a 32-byte
+//! reseed per procedural bridge. In the authored Cromatolis world the
+//! procedural route connectors run before the site loop, and their length
+//! comes from an A* whose step cost reads chunk altitudes. So a terrain edit
+//! anywhere on the map that changes the *number of nodes* of any connector
+//! shifts the shared stream and hands every later site a different seed: a
+//! heightmap re-encode that took the connectors from 1,824 to 1,821 nodes
+//! re-rolled every multi-plot town at once.
+//!
+//! # What this module does instead (Cromatolis only)
+//!
+//! * **Per-site seeds.** Each site's generator RNG is seeded from
+//!   `SHA-256(domain, world_seed, stable_site_key)`
+//!   ([`CivSeedPolicy::site_seed`]); see [`site_seed_key`] for the key of every
+//!   kind of site and how stable each one is.
+//! * **Per-road RNG.** Each procedural Cromatolis connector carves with its own
+//!   `ChaChaRng` seeded from `SHA-256(domain, world_seed, road_key)`
+//!   ([`road_seed`]), keyed by the ordered pair of its endpoints' authored ids,
+//!   so a road's node count can only ever change that road's own offsets (and
+//!   the bridges it creates) -- never another road or a site.
+//!
+//! # Gating
+//!
+//! Only the authored Cromatolis path (authored settlements loaded) uses the
+//! derived seeds. Every other world -- every procedural world, every
+//! non-Cromatolis map -- keeps drawing from the shared stream exactly as
+//! upstream does, byte for byte ([`GenCtx::site_rng`] with `None` is
+//! `reseed().rng`, pinned by a test below).
+//!
+//! # Why SHA-256
+//!
+//! The seed must be identical on every machine, every Rust version and every
+//! build: a save's world is regenerated from its seed on each server start.
+//! `std`'s `DefaultHasher` is explicitly unstable across releases, and
+//! `FxHash` is not designed to spread a short key over 32 bytes. `sha2` is
+//! already a dependency of this crate (authored raster checks), is a fixed,
+//! standardised function, and produces exactly the 32 bytes `ChaChaRng`
+//! takes as a seed. Every field is length-prefixed so no two distinct
+//! (domain, key) pairs can serialise to the same bytes. The cost (about a
+//! hundred hashes per world) is negligible.
+
+use super::{GenCtx, SEED_SKIP, Site};
+use crate::site::SiteKind;
+use rand::{SeedableRng, prelude::*};
+use rand_chacha::ChaChaRng;
+use sha2::{Digest, Sha256};
+use vek::Vec2;
+
+/// Domain separator for per-site seeds. Bump the version suffix only as a
+/// deliberate, documented re-roll of every Cromatolis site.
+const SITE_SEED_DOMAIN: &str = "xindeler.civ.site-seed.v1";
+/// Domain separator for per-road (procedural connector) RNGs.
+const ROAD_SEED_DOMAIN: &str = "xindeler.civ.road-seed.v1";
+
+/// `SHA-256(len(domain) || domain || world_seed || len(key) || key)`, all
+/// integers little-endian.
+fn derive_seed(domain: &str, world_seed: u32, key: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update((domain.len() as u64).to_le_bytes());
+    hasher.update(domain.as_bytes());
+    hasher.update(world_seed.to_le_bytes());
+    hasher.update((key.len() as u64).to_le_bytes());
+    hasher.update(key.as_bytes());
+    hasher.finalize().into()
+}
+
+/// The stable identity a site's seed is derived from.
+///
+/// Stability properties, by origin:
+///
+/// * **Authored settlement / landmark / bridge / fortification** -- keyed by
+///   the authored id (e.g. `settlement:site.kalthis`). Fully independent of
+///   terrain, of generation order and of every other site: the seed changes
+///   only if the id itself is renamed in the authored data.
+/// * **Procedural bridge** (created by the road carver where a connector jumps
+///   a water/cliff gap) -- keyed by its two end chunks, ordered, e.g.
+///   `procedural-bridge:89,219:94,219`. Independent of generation order and of
+///   how many nodes any road has, but not of terrain *at the crossing*: if an
+///   edit moves the road so it crosses the gap elsewhere, the bridge is
+///   genuinely a different bridge (different place, different key, different
+///   name). Its creation index, its slot in `Civs::sites` and the shared stream
+///   are deliberately not used, because all three move whenever any earlier
+///   road gains or loses a bridge.
+/// * **Any other procedural site** (unreachable in Cromatolis today, kept total
+///   so a future kind can't silently fall back to the shared stream) -- keyed
+///   by kind and centre chunk. Same caveat: stable unless the site itself
+///   moves.
+pub(crate) fn site_seed_key(site: &Site) -> String {
+    if let Some(settlement) = site.authored.as_ref() {
+        return format!("settlement:{}", settlement.id);
+    }
+    if let Some(landmark) = site.authored_landmark.as_ref() {
+        return format!("landmark:{}", landmark.id);
+    }
+    if let Some(bridge) = site.authored_bridge.as_ref() {
+        return format!("bridge:{}", bridge.id);
+    }
+    if let Some(fortification) = site.authored_fortification.as_ref() {
+        return format!("fortification:{}", fortification.id);
+    }
+    match site.kind {
+        SiteKind::Bridge(a, b) => {
+            let (lo, hi) = ordered_pair(a, b);
+            format!("procedural-bridge:{},{}:{},{}", lo.x, lo.y, hi.x, hi.y)
+        },
+        SiteKind::Fortification(a, b) => {
+            let (lo, hi) = ordered_pair(a, b);
+            format!(
+                "procedural-fortification:{},{}:{},{}",
+                lo.x, lo.y, hi.x, hi.y
+            )
+        },
+        kind => format!(
+            "procedural:{}:{},{}",
+            procedural_kind_tag(kind),
+            site.center.x,
+            site.center.y
+        ),
+    }
+}
+
+/// `(min, max)` in lexicographic `(x, y)` order, so a bridge or wall keys
+/// the same whichever end the carver happened to reach first.
+fn ordered_pair(a: Vec2<i32>, b: Vec2<i32>) -> (Vec2<i32>, Vec2<i32>) {
+    if (a.x, a.y) <= (b.x, b.y) {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
+/// An explicit, frozen spelling per kind -- not `Debug`, whose output is
+/// not a stability promise. Exhaustive on purpose: a new `SiteKind` must
+/// pick its tag here.
+fn procedural_kind_tag(kind: SiteKind) -> &'static str {
+    match kind {
+        SiteKind::Refactor => "refactor",
+        SiteKind::CliffTown => "cliff_town",
+        SiteKind::SavannahTown => "savannah_town",
+        SiteKind::DesertCity => "desert_city",
+        SiteKind::ChapelSite => "chapel_site",
+        SiteKind::DwarvenMine => "dwarven_mine",
+        SiteKind::CoastalTown => "coastal_town",
+        SiteKind::Citadel => "citadel",
+        SiteKind::Terracotta => "terracotta",
+        SiteKind::GiantTree => "giant_tree",
+        SiteKind::Gnarling => "gnarling",
+        SiteKind::Bridge(..) => "bridge",
+        SiteKind::Fortification(..) => "fortification",
+        SiteKind::Adlet => "adlet",
+        SiteKind::Haniwa => "haniwa",
+        SiteKind::PirateHideout => "pirate_hideout",
+        SiteKind::JungleRuin => "jungle_ruin",
+        SiteKind::RockCircle => "rock_circle",
+        SiteKind::TrollCave => "troll_cave",
+        SiteKind::Camp => "camp",
+        SiteKind::Cultist => "cultist",
+        SiteKind::Sahagin => "sahagin",
+        SiteKind::VampireCastle => "vampire_castle",
+        SiteKind::GliderCourse => "glider_course",
+        SiteKind::Myrmidon => "myrmidon",
+    }
+}
+
+/// The 32-byte seed of one procedural Cromatolis connector's own RNG, keyed
+/// by the ordered (directed) pair of its endpoints' authored settlement
+/// ids -- what the connector pass searches between (`find_path(target ->
+/// anchor)`) -- and therefore independent of the path the search returns.
+pub(super) fn road_seed(world_seed: u32, from_authored_id: &str, to_authored_id: &str) -> [u8; 32] {
+    // Length-prefix each id so no pair of ids can forge another pair's key.
+    let key = format!(
+        "road:{}:{from_authored_id}->{}:{to_authored_id}",
+        from_authored_id.len(),
+        to_authored_id.len()
+    );
+    derive_seed(ROAD_SEED_DOMAIN, world_seed, &key)
+}
+
+/// Whether, and from what, sites get their seed. Built once per
+/// `Civs::generate`.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CivSeedPolicy {
+    world_seed: u32,
+    /// `true` only for the authored Cromatolis path.
+    derived: bool,
+}
+
+impl CivSeedPolicy {
+    pub(super) fn new(world_seed: u32, derived: bool) -> Self {
+        Self {
+            world_seed,
+            derived,
+        }
+    }
+
+    /// `Some(seed)` when this world derives per-site seeds, `None` when the
+    /// site must keep drawing from the shared stream (every non-Cromatolis
+    /// world).
+    pub(super) fn site_seed(&self, site: &Site) -> Option<[u8; 32]> {
+        self.derived
+            .then(|| derive_seed(SITE_SEED_DOMAIN, self.world_seed, &site_seed_key(site)))
+    }
+}
+
+impl<R: Rng> GenCtx<'_, R> {
+    /// The RNG one site's generator draws from.
+    ///
+    /// `Some(seed)` (Cromatolis) seeds it directly and does **not** touch the
+    /// shared stream. `None` is exactly `self.reseed().rng` -- same draw from
+    /// the shared stream, same `SEED_SKIP` tweak -- spelled out here only
+    /// because `reseed`'s return type is opaque and cannot be named next to a
+    /// `ChaChaRng`. `site_rng_none_is_bit_identical_to_reseed` pins the two
+    /// together.
+    pub(super) fn site_rng(&mut self, derived_seed: Option<[u8; 32]>) -> ChaChaRng {
+        match derived_seed {
+            Some(seed) => ChaChaRng::from_seed(seed),
+            None => {
+                let mut entropy = self.rng.random::<[u8; 32]>();
+                entropy[0] = entropy[0].wrapping_add(SEED_SKIP);
+                ChaChaRng::from_seed(entropy)
+            },
+        }
+    }
+
+    /// A context over the same `WorldSim` that draws from `rng` instead of
+    /// the shared stream (used to give one road its own RNG).
+    pub(super) fn with_rng<R2: Rng>(&mut self, rng: R2) -> GenCtx<'_, R2> {
+        GenCtx { sim: self.sim, rng }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        super::{
+            AuthoredLandmarkKind, AuthoredLandmarkMeta, AuthoredSettlementCategory,
+            AuthoredSettlementMeta, AuthoredSettlementPeople, AuthoredSettlementPopulation,
+            AuthoredSettlementPopulationTag, AuthoredSettlementSize,
+        },
+        *,
+    };
+    use crate::sim::WorldSim;
+    use common::store::Id;
+
+    fn bare_site(kind: SiteKind, center: Vec2<i32>) -> Site {
+        Site {
+            kind,
+            site_tmp: None,
+            center,
+            place: Id::new(0),
+            authored: None,
+            authored_landmark: None,
+            authored_bridge: None,
+            authored_fortification: None,
+        }
+    }
+
+    fn settlement(id: &str, center: Vec2<i32>) -> Site {
+        let mut site = bare_site(SiteKind::Refactor, center);
+        site.authored = Some(AuthoredSettlementMeta {
+            id: id.to_string(),
+            name: id.to_string(),
+            category: AuthoredSettlementCategory::Town,
+            size: AuthoredSettlementSize::Medium,
+            population: AuthoredSettlementPopulation {
+                tag: AuthoredSettlementPopulationTag::Human,
+                peoples: vec![AuthoredSettlementPeople::Human],
+                future_peoples: Vec::new(),
+            },
+            requires_capital_castle: false,
+            start_eligible: true,
+        });
+        site
+    }
+
+    fn hex(seed: [u8; 32]) -> String { seed.iter().map(|b| format!("{b:02x}")).collect() }
+
+    /// Golden values (cross-checked against Python's `hashlib.sha256` over
+    /// the same byte layout): if these change, every Cromatolis site and
+    /// connector re-rolls. Only ever update them together with a deliberate
+    /// domain version bump.
+    #[test]
+    fn derived_seeds_are_pinned_constants() {
+        assert_eq!(
+            hex(derive_seed(SITE_SEED_DOMAIN, 0, "settlement:site.kalthis")),
+            "cc1be8c8abee13137a2338269257d71b3ab735e71a2bda8f4486fef9241c6bb3",
+        );
+        assert_eq!(
+            hex(road_seed(0, "site.bronze_shore", "site.kalthis")),
+            "b01767b5701b043a95b0b44360c37d3095f1455046eda66c1ca753109a205e79",
+        );
+    }
+
+    #[test]
+    fn site_seed_depends_on_world_seed_and_key_only() {
+        let kalthis = settlement("site.kalthis", Vec2::new(10, 10));
+        let moved_kalthis = settlement("site.kalthis", Vec2::new(500, 3));
+        let duren = settlement("site.duren", Vec2::new(10, 10));
+        let policy = CivSeedPolicy::new(7, true);
+        // Position is irrelevant for an authored site; identity is all.
+        assert_eq!(policy.site_seed(&kalthis), policy.site_seed(&moved_kalthis));
+        assert_ne!(policy.site_seed(&kalthis), policy.site_seed(&duren));
+        assert_ne!(
+            policy.site_seed(&kalthis),
+            CivSeedPolicy::new(8, true).site_seed(&kalthis)
+        );
+        // Upstream / non-Cromatolis worlds never derive.
+        assert_eq!(CivSeedPolicy::new(7, false).site_seed(&kalthis), None);
+    }
+
+    #[test]
+    fn site_seed_keys_are_disjoint_across_origins() {
+        let mut landmark = bare_site(SiteKind::GiantTree, Vec2::new(1, 2));
+        landmark.authored_landmark = Some(AuthoredLandmarkMeta {
+            id: "site.kalthis".to_string(),
+            name: String::new(),
+            kind: AuthoredLandmarkKind::TreeOfLife,
+            profile: None,
+        });
+        assert_eq!(
+            site_seed_key(&settlement("site.kalthis", Vec2::new(1, 2))),
+            "settlement:site.kalthis"
+        );
+        assert_eq!(site_seed_key(&landmark), "landmark:site.kalthis");
+    }
+
+    #[test]
+    fn procedural_keys_ignore_endpoint_order_and_creation_order() {
+        let (a, b) = (Vec2::new(94, 219), Vec2::new(89, 219));
+        let ab = bare_site(SiteKind::Bridge(a, b), (a + b) / 2);
+        let ba = bare_site(SiteKind::Bridge(b, a), (a + b) / 2);
+        assert_eq!(site_seed_key(&ab), "procedural-bridge:89,219:94,219");
+        assert_eq!(site_seed_key(&ab), site_seed_key(&ba));
+        assert_eq!(
+            site_seed_key(&bare_site(SiteKind::Camp, Vec2::new(3, -4))),
+            "procedural:camp:3,-4"
+        );
+    }
+
+    #[test]
+    fn road_seeds_depend_on_direction_world_seed_and_both_ids() {
+        let ab = road_seed(0, "site.a", "site.b");
+        assert_ne!(ab, road_seed(0, "site.b", "site.a"));
+        assert_ne!(ab, road_seed(1, "site.a", "site.b"));
+        // Ids containing the separator can't forge another pair's key.
+        assert_ne!(
+            road_seed(0, "site.a->x", "y"),
+            road_seed(0, "site.a", "x->y")
+        );
+    }
+
+    /// The core property, asset-free: carving a road with *more* nodes (more
+    /// draws from its own RNG) changes neither another road's draws nor any
+    /// site seed -- where the old shared stream shifted all of them.
+    #[test]
+    fn a_roads_node_count_cannot_shift_another_road_or_any_site() {
+        let mut sim = WorldSim::empty();
+        let sites = [
+            settlement("site.kalthis", Vec2::new(5, 5)),
+            settlement("site.duren", Vec2::new(9, 5)),
+        ];
+        let policy = CivSeedPolicy::new(0, true);
+
+        let run = |sim: &mut WorldSim, road_a_nodes: usize| {
+            let mut ctx = GenCtx {
+                sim,
+                rng: ChaChaRng::from_seed([3; 32]),
+            };
+            let mut offsets = Vec::new();
+            for (from, to, nodes) in [("site.a", "site.b", road_a_nodes), ("site.c", "site.d", 10)]
+            {
+                let mut road = ctx.with_rng(ChaChaRng::from_seed(road_seed(0, from, to)));
+                // The 2 draws per interior node `carve_track_into_terrain` makes.
+                let drawn: Vec<(i32, i32)> = (0..nodes)
+                    .map(|_| {
+                        (
+                            road.rng.random_range(-16..17),
+                            road.rng.random_range(-16..17),
+                        )
+                    })
+                    .collect();
+                offsets.push(drawn);
+            }
+            let site_draws: Vec<u64> = sites
+                .iter()
+                .map(|site| ctx.site_rng(policy.site_seed(site)).random::<u64>())
+                .collect();
+            (offsets, site_draws)
+        };
+
+        let (short_offsets, short_sites) = run(&mut sim, 20);
+        let (long_offsets, long_sites) = run(&mut sim, 23);
+        assert_eq!(short_offsets[1], long_offsets[1], "road B must not move");
+        assert_eq!(short_sites, long_sites, "no site seed may move");
+        assert_eq!(short_offsets[0][..], long_offsets[0][..20]);
+    }
+
+    /// Gating guarantee: the non-derived path is byte-for-byte upstream's
+    /// `reseed()`, so every procedural / non-Cromatolis world is unchanged.
+    #[test]
+    fn site_rng_none_is_bit_identical_to_reseed() {
+        let mut sim_a = WorldSim::empty();
+        let mut sim_b = WorldSim::empty();
+        let mut a = GenCtx {
+            sim: &mut sim_a,
+            rng: ChaChaRng::from_seed([42; 32]),
+        };
+        let mut b = GenCtx {
+            sim: &mut sim_b,
+            rng: ChaChaRng::from_seed([42; 32]),
+        };
+        for _ in 0..16 {
+            let mut upstream = a.reseed().rng;
+            let mut ours = b.site_rng(None);
+            let x: [u64; 8] = upstream.random();
+            let y: [u64; 8] = ours.random();
+            assert_eq!(x, y);
+        }
+        // And both left the shared stream in the same state.
+        assert_eq!(a.rng.random::<u64>(), b.rng.random::<u64>());
+    }
+}

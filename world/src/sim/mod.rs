@@ -3296,6 +3296,13 @@ impl WorldSim {
         };
 
         let (alt, basement) = if let Some(map) = parsed_world_file {
+            // XINDELER: test-only terrain-perturbation seam (no-op unless a
+            // test's thread pool installed one).
+            #[cfg(test)]
+            let map = crate::cromatolis_generation_tests::site_layouts::perturb_loaded_map(
+                map_size_lg,
+                map,
+            );
             (map.alt, map.basement)
         } else {
             let (alt, basement) = do_erosion(

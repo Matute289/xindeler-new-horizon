@@ -1756,3 +1756,7 @@ fn every_jetty_has_an_anchorage_or_the_known_exception() {
          waterfront); these villages unexpectedly also have none: {capped:?}"
     );
 }
+
+/// Per-site layout digests, determinism and terrain-perturbation
+/// experiments for the authored world's civ layer.
+pub(crate) mod site_layouts;

@@ -4,6 +4,7 @@ pub mod airship_travel;
 mod econ;
 mod maritime_traffic;
 pub mod naval_berths;
+pub(crate) mod seeds;
 
 #[cfg(feature = "airship_maps")]
 pub mod airship_route_map;
@@ -722,7 +723,6 @@ fn bridge_is_selected_for_preview(preview: &str, bridge_id: &str) -> bool {
 
 #[derive(Debug, Clone)]
 struct AuthoredBridgeMeta {
-    #[expect(dead_code)]
     id: String,
     name: String,
     design: site::AuthoredBridgeDesign,
@@ -901,7 +901,6 @@ struct AuthoredCromatolisGate {
 
 #[derive(Debug, Clone)]
 struct AuthoredFortificationMeta {
-    #[expect(dead_code)]
     id: String,
     name: String,
     design: site::AuthoredFortificationDesign,
@@ -1442,7 +1441,6 @@ struct AuthoredSettlementMeta {
 
 #[derive(Debug, Clone)]
 struct AuthoredLandmarkMeta {
-    #[expect(dead_code)]
     id: String,
     name: String,
     #[expect(dead_code)]
@@ -2112,6 +2110,10 @@ impl Civs {
             None
         };
         let mut ctx = GenCtx { sim, rng };
+        // XINDELER: the authored path seeds each site and each procedural
+        // connector from its own stable identity instead of the shared
+        // stream (see `seeds`); every other world is unchanged.
+        let seed_policy = seeds::CivSeedPolicy::new(seed, authored_settlements.is_some());
 
         // info!("starting cave generation");
         // this.generate_caves(&mut ctx);
@@ -2171,6 +2173,7 @@ impl Civs {
                 this.establish_authored_cromatolis_routes(&ctx, routes);
                 this.establish_procedural_cromatolis_route_connectors(
                     &mut ctx,
+                    seed,
                     CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS,
                     &[],
                 );
@@ -2181,6 +2184,7 @@ impl Civs {
                 // landmass the mainland pass never considers.
                 this.establish_procedural_cromatolis_route_connectors(
                     &mut ctx,
+                    seed,
                     CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS,
                     CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS,
                 );
@@ -2433,7 +2437,7 @@ impl Civs {
                     e * sz as i32 + sz as i32 / 2
                 });
 
-            let mut rng = ctx.reseed().rng;
+            let mut rng = ctx.site_rng(seed_policy.site_seed(sim_site));
             let site = index.sites.insert({
                 let index_ref = IndexRef {
                     colors: &index.colors(),
@@ -3910,6 +3914,7 @@ impl Civs {
     fn establish_procedural_cromatolis_route_connectors(
         &mut self,
         ctx: &mut GenCtx<impl Rng>,
+        world_seed: u32,
         connector_target_ids: &[&str],
         seed_anchor_ids: &[&str],
     ) {
@@ -4002,7 +4007,16 @@ impl Civs {
                 continue;
             };
 
-            self.carve_track_into_terrain(ctx, &path);
+            // Carve with this connector's own RNG (keyed by its endpoints),
+            // never the shared stream: how many nodes this road has must not
+            // shift any other road's offsets or any site's seed. See `seeds`.
+            let anchor_id = self
+                .sites
+                .get(anchor_site)
+                .authored_id()
+                .unwrap_or_default();
+            let road_rng = ChaChaRng::from_seed(seeds::road_seed(world_seed, target_id, anchor_id));
+            self.carve_track_into_terrain(&mut ctx.with_rng(road_rng), &path);
 
             // A direct single-hop connector (its two endpoints already
             // adjacent chunks) never enters `carve_track_into_terrain`'s

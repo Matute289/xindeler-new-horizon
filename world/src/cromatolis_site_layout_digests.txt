@@ -1,0 +1,94 @@
+# Per-site layout digests of the authored Cromatolis world (world seed 0).
+# Checked by world/src/cromatolis_generation_tests/site_layouts.rs; re-record with
+# XINDELER_BLESS_SITE_LAYOUTS=1 (see that module's doc) only after reviewing
+# which sites changed and why.
+#
+# key	digest	plots	buildings	name
+@roads	135142837bb52f85	81	1824	-
+fortification:site.eastwall_stone	505f3f6154824724	1	1	Eastwall Stone
+fortification:site.greenhwall_stone	596a7c13fb745fa4	1	1	Greenhwall Stone
+fortification:site.northwall_stone	4045a4383d16fcb2	1	1	Northwall Stone
+landmark:site.black_tower_north	a0d43500d69ce73f	1	1	Black Tower
+landmark:site.black_tower_south	404c4b91af114c1c	1	1	Black Tower
+landmark:site.bs_lighthouse	b3890bf9589d8ca8	1	1	BS Lighthouse
+landmark:site.dove_point_lighthouse	f754b001a9f93df9	1	1	Dove Point Lighthouse
+landmark:site.duren_river_port	85a11396ed9b6499	1	1	Duren River Port
+landmark:site.faro_de_alzinder	658fe97786440f51	1	1	Faro De Alzinder
+landmark:site.faro_de_caros	6a402544a2464853	1	1	Faro De Caros
+landmark:site.headlamp_tip	63cb95ca67203bca	1	1	Headlamp Tip
+landmark:site.kalitos_last_light	928e3b027462010d	1	1	Kalitos Last Light
+landmark:site.kalthis_river_port	b88e688e178bece1	1	1	Kalthis River Port
+landmark:site.kinderpon_beacon	f84f6b83574ddbb9	1	1	Kinderpon Beacon
+landmark:site.portland_lighthouse	7b18bab864a46e90	1	1	Portland Lighthouse
+landmark:site.red_lighthouse	94c1840efbe04a06	1	1	Red Lighthouse
+landmark:site.temple_arch_wright	81fdad5a02cc6885	1	1	Temple of the Arch-Wright
+landmark:site.the_tree_of_souls	cf1b72526af771d9	1	1	The Tree of Souls
+landmark:site.tree_of_life	0918ce1b23675414	1	1	Tree of Life
+procedural-bridge:115,206:119,206	4638f5042d6970b7	1	0	Bridge of Melen
+procedural-bridge:427,641:432,641	dd1340e00add1c5f	1	0	Bridge of Ostostendam
+procedural-bridge:89,219:94,219	f06f50b7d694ccf7	1	0	Bridge of Ondauslandam
+settlement:site.andiran	24f072da94f80b1c	20	14	Andiran
+settlement:site.belletoile_village	415196861231a193	13	11	Belletoile Village
+settlement:site.bg_central_post	e36f458d0bdd9e1b	1	1	BG Central Post
+settlement:site.bg_east_post	9528cf8775f3a663	1	1	BG East Post
+settlement:site.bg_west_post	10dad34d90226a7f	1	1	BG West Post
+settlement:site.bronze_shore	ecf53ba9bd6b1b4d	32	28	Bronze Shore
+settlement:site.cutstone_city	b8cfa93a779404d2	86	55	Cutstone City
+settlement:site.cutwood_town	ea03e7420c86d34a	48	32	Cutwood Town
+settlement:site.dove_city	27272671111ddd7c	78	35	Dove City
+settlement:site.dromos_city	fcfe3f6638920d44	75	44	Dromos City
+settlement:site.duren	26efdaedc4a0a8e1	70	45	Duren
+settlement:site.el_ojo_de_luna	eccce4e2b5dfdb69	1	1	El Ojo de Luna
+settlement:site.elynshara	734c61de3ab33a52	44	31	Elynshara
+settlement:site.evercross	24ee19d58c677c3d	43	24	Evercross
+settlement:site.fallfair	51eb419e41a45f07	19	14	Fallfair
+settlement:site.falsepost	c5197e4d8f39aeda	17	13	Falsepost
+settlement:site.farhaven	ec2262714c964f58	14	8	Farhaven
+settlement:site.fire_post_north	ff6d7b90537c190c	1	1	Fire Post North
+settlement:site.fire_post_south	e2d10ad005333b75	1	1	Fire Post South
+settlement:site.garens_town	abfc45497f5a2df2	17	12	Garens Town
+settlement:site.giva	ab241005cacda12a	17	11	Giva
+settlement:site.gloomshear	63949cf2465ba327	17	9	Gloomshear
+settlement:site.green_post	6ad2626dc8b9b0d6	1	1	Green Post
+settlement:site.hita	35a7ca9a36918ac2	20	15	Hita
+settlement:site.hita_post	f5af5d44231fa7e0	1	1	Hita Post
+settlement:site.inebel	4866d01857877f6a	92	40	Inebel
+settlement:site.itos_village	50bd041024497123	14	9	Itos Village
+settlement:site.kalitos	85b51d80f7271803	42	24	Kalitos
+settlement:site.kalthis	4d31322ecd28409e	20	10	Kalthis
+settlement:site.le_pont_dargent	458d2762fb69a3c9	1	1	Le Pont D'argent
+settlement:site.levannois_village	657627410f4d1766	20	11	Levannois Village
+settlement:site.levassi	cd9d41ff48ce202c	42	25	Levassi
+settlement:site.lighthill	0be8b9297563ef20	37	28	Lighthill
+settlement:site.maistra	227d8d4779f3009d	13	11	Maistra
+settlement:site.malicious_haven.alice.zha_lloig_rhaz	2a89eabcfcbcec9c	14	7	Zha’Lloig-Rhaz
+settlement:site.malicious_haven.elena.vhorr_azhal	5764c279ba79eef2	14	9	Vhôrr-Azhal
+settlement:site.malicious_haven.merid.gha_rrul_uth	aaf4a373f6a1dc5c	22	15	Gha’rrul-Uth
+settlement:site.malicious_haven.susy.thlug_nyarr	4c3e5340e1f8ccd2	13	7	Thlûg-Nyarr
+settlement:site.mazon_town	55c0bab28e75b910	45	24	Mazon Town
+settlement:site.meyenahone	bc2f0bdf3059733f	42	24	Myenahone
+settlement:site.mordorin	a27f39bc43197817	17	9	Mordorin
+settlement:site.morhe_dorei	e806a290f6fb952f	48	26	Morhe Dorei
+settlement:site.naville	8a5b923ac8d69c2a	17	12	Naville
+settlement:site.neoland	53e1408f97da834c	96	59	Neoland
+settlement:site.nugget_field_mines	ec669bcdd8d5c205	17	13	Nugget Field Mines
+settlement:site.ourez	283435a456db3148	40	32	Ourez
+settlement:site.portland	cf3ff44db40424e7	37	17	Portland
+settlement:site.ravenfair	30ac7516efb63cf1	16	13	Ravenfair
+settlement:site.rios_port	c1466b18aa339106	21	13	Rios Port
+settlement:site.rivermore_town	9309504a3a27503b	16	12	Rivermore Town
+settlement:site.rosemire	f9f874eb2111f547	16	11	Rosemire
+settlement:site.sutar_town	fb01d3db81347805	39	23	Sutar Town
+settlement:site.tathune	daa51124896470e9	16	10	Tathune
+settlement:site.tenoxitlan	d0389be160a748f6	86	52	Tenoxitlan
+settlement:site.the_fish_journey	096b8820af503fff	1	1	The Fish Journey
+settlement:site.the_sapphire_pillow	0c6988063e283ad9	1	1	The Sapphire Pillow
+settlement:site.timos	7b0586c6c6441f8a	19	14	Timos
+settlement:site.trident_dreams	a9f32d27d981c9c3	1	1	Trident Dreams
+settlement:site.trident_post	308d3181bd2acd4e	1	1	Trident Post
+settlement:site.twin_dreams	4bfa193059b546ad	1	1	Twin Dreams
+settlement:site.under_the_river	204331e119767068	1	1	Under the River
+settlement:site.vaelindra_dorei	9613c37361bfc53c	127	73	Vaelindra Dorei
+settlement:site.wanora	c9c66500f6f80545	42	26	Wanora
+settlement:site.wazir_town	970191bddb627e59	52	35	Wazir Town
+settlement:site.windgrave	888229904db937a4	53	30	Windgrave
