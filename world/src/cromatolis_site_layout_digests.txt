@@ -4,7 +4,7 @@
 # which sites changed and why.
 #
 # key	digest	plots	buildings	name
-@roads	135142837bb52f85	81	1824	-
+@roads	82c213d5304e869f	81	1820	-
 fortification:site.eastwall_stone	505f3f6154824724	1	1	Eastwall Stone
 fortification:site.greenhwall_stone	596a7c13fb745fa4	1	1	Greenhwall Stone
 fortification:site.northwall_stone	4045a4383d16fcb2	1	1	Northwall Stone
@@ -30,29 +30,29 @@ procedural-bridge:89,219:94,219	f06f50b7d694ccf7	1	0	Bridge of Ondauslandam
 settlement:site.andiran	24f072da94f80b1c	20	14	Andiran
 settlement:site.belletoile_village	63e673743e837eee	13	11	Belletoile Village
 settlement:site.bg_central_post	e36f458d0bdd9e1b	1	1	BG Central Post
-settlement:site.bg_east_post	9528cf8775f3a663	1	1	BG East Post
+settlement:site.bg_east_post	2aaf5f42a895e483	1	1	BG East Post
 settlement:site.bg_west_post	10dad34d90226a7f	1	1	BG West Post
 settlement:site.bronze_shore	ecf53ba9bd6b1b4d	32	28	Bronze Shore
 settlement:site.cutstone_city	b8cfa93a779404d2	86	55	Cutstone City
 settlement:site.cutwood_town	ebf82cc3ad574e0e	50	32	Cutwood Town
 settlement:site.dove_city	0eda20290ab052b2	71	42	Dove City
-settlement:site.dromos_city	fcfe3f6638920d44	75	44	Dromos City
+settlement:site.dromos_city	ab20590df1b5af16	79	44	Dromos City
 settlement:site.duren	26efdaedc4a0a8e1	70	45	Duren
 settlement:site.el_ojo_de_luna	eccce4e2b5dfdb69	1	1	El Ojo de Luna
 settlement:site.elynshara	f836cb287b1e76d0	40	29	Elynshara
-settlement:site.evercross	d8d79fe367ba2da8	49	28	Evercross
+settlement:site.evercross	1b033c8a109dd2f4	44	25	Evercross
 settlement:site.fallfair	51eb419e41a45f07	19	14	Fallfair
 settlement:site.falsepost	c5197e4d8f39aeda	17	13	Falsepost
 settlement:site.farhaven	ec2262714c964f58	14	8	Farhaven
 settlement:site.fire_post_north	ff6d7b90537c190c	1	1	Fire Post North
-settlement:site.fire_post_south	e2d10ad005333b75	1	1	Fire Post South
+settlement:site.fire_post_south	4bb4b1fc971f2a8a	1	1	Fire Post South
 settlement:site.garens_town	abfc45497f5a2df2	17	12	Garens Town
 settlement:site.giva	ab241005cacda12a	17	11	Giva
 settlement:site.gloomshear	63949cf2465ba327	17	9	Gloomshear
 settlement:site.green_post	6ad2626dc8b9b0d6	1	1	Green Post
 settlement:site.hita	5abf745d11b8403e	18	14	Hita
 settlement:site.hita_post	f5af5d44231fa7e0	1	1	Hita Post
-settlement:site.inebel	4866d01857877f6a	92	40	Inebel
+settlement:site.inebel	0752c41fca3ffa88	91	45	Inebel
 settlement:site.itos_village	549b5c157df5de1a	15	10	Itos Village
 settlement:site.kalitos	85b51d80f7271803	42	24	Kalitos
 settlement:site.kalthis	684751b6d4892c45	116	55	Kalthis
@@ -68,9 +68,9 @@ settlement:site.malicious_haven.susy.thlug_nyarr	4c3e5340e1f8ccd2	13	7	Thlûg-Ny
 settlement:site.mazon_town	55c0bab28e75b910	45	24	Mazon Town
 settlement:site.meyenahone	bc2f0bdf3059733f	42	24	Myenahone
 settlement:site.mordorin	a27f39bc43197817	17	9	Mordorin
-settlement:site.morhe_dorei	95d4295d47ed7cc4	47	28	Morhe Dorei
-settlement:site.naville	4c80745115199d04	12	9	Naville
-settlement:site.neoland	f38be63a97408db5	84	54	Neoland
+settlement:site.morhe_dorei	8996d585d69fe596	48	29	Morhe Dorei
+settlement:site.naville	2669a23fa51e8b4f	12	8	Naville
+settlement:site.neoland	93eadee113f6c29e	92	55	Neoland
 settlement:site.nugget_field_mines	e9681d2f57a0a9de	16	11	Nugget Field Mines
 settlement:site.ourez	283435a456db3148	40	32	Ourez
 settlement:site.portland	e31553fda7db72ff	46	24	Portland
@@ -78,7 +78,7 @@ settlement:site.ravenfair	1b95e252583da8e3	16	13	Ravenfair
 settlement:site.rios_port	0cc706ae9af10ec5	42	24	Rios Port
 settlement:site.rivermore_town	9309504a3a27503b	16	12	Rivermore Town
 settlement:site.rosemire	f9f874eb2111f547	16	11	Rosemire
-settlement:site.sutar_town	fb01d3db81347805	39	23	Sutar Town
+settlement:site.sutar_town	50a7310535b02fe3	39	23	Sutar Town
 settlement:site.tathune	daa51124896470e9	16	10	Tathune
 settlement:site.tenoxitlan	d0389be160a748f6	86	52	Tenoxitlan
 settlement:site.the_fish_journey	096b8820af503fff	1	1	The Fish Journey
