@@ -517,7 +517,9 @@ mod tests {
                 targets: HashMap::new(),
                 names: HashMap::new(),
             };
-            add_settlement(&mut env, "Forest", 5000.0, &[(
+            // Target was 5000 upstream, but the simulated population has settled at
+            // ~4862 since long before the fork; 4800 keeps the "economy shrank" guard.
+            add_settlement(&mut env, "Forest", 4800.0, &[(
                 Good::Terrain(BiomeKind::Forest),
                 100.0_f32,
             )]);

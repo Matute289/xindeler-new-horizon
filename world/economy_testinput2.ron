@@ -2,7 +2,7 @@
     (
         name: "Forest Settlement",
         position: (1, 1),
-        kind: Settlement,
+        kind: Settlement(Default),
         neighbors: [
             1,
             2,
@@ -17,7 +17,7 @@
     (
         name: "Mountain Peak",
         position: (10, 10),
-        kind: Settlement,
+        kind: Settlement(Default),
         neighbors: [
             0,
         ],
@@ -31,7 +31,7 @@
     (
         name: "Farmer Village",
         position: (20, 10),
-        kind: Settlement,
+        kind: Settlement(Default),
         neighbors: [
             0,
         ],
