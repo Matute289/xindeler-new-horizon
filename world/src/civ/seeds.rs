@@ -215,6 +215,7 @@ fn procedural_kind_tag(kind: SiteKind) -> &'static str {
         SiteKind::VampireCastle => "vampire_castle",
         SiteKind::GliderCourse => "glider_course",
         SiteKind::Myrmidon => "myrmidon",
+        SiteKind::RiverPort => "river_port",
     }
 }
 
