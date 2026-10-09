@@ -1275,7 +1275,7 @@ impl AuthoredRasters {
     }
 }
 
-fn io_error_kind(err: &assets::Error) -> Option<std::io::ErrorKind> {
+pub(crate) fn io_error_kind(err: &assets::Error) -> Option<std::io::ErrorKind> {
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err.reason());
     while let Some(e) = source {
         if let Some(io) = e.downcast_ref::<std::io::Error>() {

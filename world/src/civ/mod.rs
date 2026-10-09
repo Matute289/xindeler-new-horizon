@@ -77,10 +77,11 @@ pub struct Civs {
 //   at runtime.
 // - Loading is gated on `SimChunk::authored_region_id ==
 //   Some(CROMATOLIS_V0_REGION_ID)` (the region registry `world/src/sim`
-//   maintains), not a literal asset-name check, and never panics on
-//   invalid/missing data -- it warns and falls back to procedural generation
-//   instead (same posture as the terrain/water/biome loaders this crate already
-//   uses).
+//   maintains), not a literal asset-name check. Inside an authored Cromatolis
+//   world every one of these layers is mandatory: missing, unparsable or
+//   invalid data stops world generation with a message naming the asset file
+//   and the reason (`load_authored_cromatolis_layer`), the same posture as the
+//   authored raster manifest. Procedural worlds never load them.
 // - `AuthoredCromatolisLandmarkProfiles` is ported as data + validation only.
 //   Its physical-template/style/material fields describe a real bespoke
 //   landmark renderer that exists in the reference engine
@@ -1844,15 +1845,89 @@ const CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS: &[&str] =
 /// `establish_authored_cromatolis_maritime_routes` normally already gives
 /// Rios Port a real `Track` of its own by the time this runs (making this
 /// seed redundant in the common case), but the explicit seed stays as a
-/// deliberate fallback: if the maritime route asset ever fails to load or
-/// validate (`warn!`-and-`None`, never a hard failure -- see that loader's
-/// call site), Rios Port would otherwise have no real `Track` yet, and
+/// deliberate fallback: if maritime route registration ever leaves Rios Port
+/// without a `Track` (the asset itself failing to load or validate is now a
+/// hard error, see `load_authored_cromatolis_layer`), Rios Port would
+/// otherwise have no real `Track` yet, and
 /// without this seed the island-scoped pass would have nothing to anchor its
 /// first target to (its normal "already reachable" set is derived from real
 /// Track edges) and every island target would fail immediately with "no
 /// already-connected settlement to anchor to" -- degrading island-internal
 /// connectivity along with mainland reachability instead of just the latter.
 const CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS: &[&str] = &["site.rios_port"];
+
+/// A failure to load or validate one authored Cromatolis layer. `Display`
+/// names the layer, the asset file and the reason (a RON parse error carries
+/// its own line and column), so a startup panic is actionable on its own.
+#[derive(Debug, PartialEq, Eq)]
+struct AuthoredLayerError(String);
+
+impl fmt::Display for AuthoredLayerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) }
+}
+
+/// `world.map.cromatolis_v0_sites` ->
+/// `assets/world/map/cromatolis_v0_sites.ron`
+fn authored_layer_file(specifier: &str) -> String {
+    format!("assets/{}.ron", specifier.replace('.', "/"))
+}
+
+/// Builds the message for a layer asset that could not be loaded. `io_kind`
+/// is the underlying I/O error kind when the failure was I/O (not a parse
+/// error); `reason` is the underlying error's text.
+fn authored_layer_load_failure(
+    layer: &str,
+    specifier: &str,
+    io_kind: Option<std::io::ErrorKind>,
+    reason: &dyn fmt::Display,
+) -> AuthoredLayerError {
+    let file = authored_layer_file(specifier);
+    AuthoredLayerError(match io_kind {
+        Some(std::io::ErrorKind::NotFound) => {
+            format!(
+                "authored Cromatolis {layer} [{specifier}]: {file} is missing, but this world is \
+                 the              authored Cromatolis map and requires it"
+            )
+        },
+        Some(kind) => {
+            format!(
+                "authored Cromatolis {layer} [{specifier}]: I/O error reading {file} ({kind:?}): \
+                 {reason}"
+            )
+        },
+        None => {
+            format!(
+                "authored Cromatolis {layer} [{specifier}]: {file} does not parse (unknown \
+                 fields,              unknown enum values such as an unknown category, and wrong \
+                 types are errors):              {reason}"
+            )
+        },
+    })
+}
+
+/// Loads and validates one authored Cromatolis layer; see the comment above
+/// `authored_settlements` in [`Civs::generate`] for why this is fatal.
+fn load_authored_cromatolis_layer<T: FileAsset>(
+    layer: &str,
+    specifier: &str,
+    validate: impl FnOnce(&T) -> Result<(), String>,
+) -> Result<T, AuthoredLayerError> {
+    let loaded = T::load_owned(specifier).map_err(|err| {
+        authored_layer_load_failure(
+            layer,
+            specifier,
+            crate::authored_raster::io_error_kind(&err),
+            err.reason(),
+        )
+    })?;
+    validate(&loaded).map_err(|reason| {
+        AuthoredLayerError(format!(
+            "authored Cromatolis {layer} [{specifier}]: {} failed validation: {reason}",
+            authored_layer_file(specifier)
+        ))
+    })?;
+    Ok(loaded)
+}
 
 impl Civs {
     pub fn generate(
@@ -1884,107 +1959,55 @@ impl Civs {
         let authored_cromatolis = sim.chunks.first().is_some_and(|chunk| {
             chunk.authored_region_id == Some(crate::sim::CROMATOLIS_V0_REGION_ID)
         });
+        // XINDELER: in an authored Cromatolis world every authored layer below
+        // is mandatory. A layer that is missing, does not parse or fails
+        // validation stops world generation with a message naming the asset
+        // file and the reason (the same posture as the authored raster
+        // manifest in `WorldSim::generate`) instead of silently falling back
+        // to procedural sites, which would hide the failure behind a
+        // plausible-looking world. Procedural worlds never reach these loads.
+        let map_size_lg = sim.map_size_lg();
         let authored_settlements = if authored_cromatolis {
-            match AuthoredCromatolisSettlements::load_owned("world.map.cromatolis_v0_sites") {
-                Ok(settlements) => match settlements.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(settlements),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored settlements; using procedural \
-                             sites"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored settlements; using procedural sites"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "settlements",
+                    "world.map.cromatolis_v0_sites",
+                    |settlements: &AuthoredCromatolisSettlements| settlements.validate(map_size_lg),
+                )
+                .unwrap_or_else(|err| panic!("{err}")),
+            )
         } else {
             None
         };
         let authored_landmarks = if authored_cromatolis {
-            match AuthoredCromatolisLandmarks::load_owned("world.map.cromatolis_v0_landmarks") {
-                Ok(landmarks) => match landmarks.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(landmarks),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored landmarks; continuing without \
-                             them"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored landmarks; continuing without them"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "landmarks",
+                    "world.map.cromatolis_v0_landmarks",
+                    |landmarks: &AuthoredCromatolisLandmarks| landmarks.validate(map_size_lg),
+                )
+                .unwrap_or_else(|err| panic!("{err}")),
+            )
         } else {
             None
         };
-        let authored_landmark_profiles = if authored_cromatolis {
-            match AuthoredCromatolisLandmarkProfiles::load_owned(
+        let authored_landmark_profiles = authored_landmarks.as_ref().map(|landmarks| {
+            load_authored_cromatolis_layer(
+                "landmark profiles",
                 "world.map.cromatolis_v0_landmark_profiles",
-            ) {
-                Ok(profiles) => match authored_landmarks.as_ref() {
-                    Some(landmarks) => match profiles.validate(landmarks) {
-                        Ok(()) => Some(profiles),
-                        Err(err) => {
-                            warn!(
-                                ?err,
-                                "Could not validate Cromatolis landmark profiles; continuing \
-                                 without them"
-                            );
-                            None
-                        },
-                    },
-                    None => None,
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis landmark profiles; continuing without them"
-                    );
-                    None
-                },
-            }
-        } else {
-            None
-        };
+                |profiles: &AuthoredCromatolisLandmarkProfiles| profiles.validate(landmarks),
+            )
+            .unwrap_or_else(|err| panic!("{err}"))
+        });
         let authored_settlement_template_contract = if authored_settlements.is_some() {
-            match SettlementTemplateContract::load_owned(
-                "world.map.cromatolis_v0_settlement_template_contract",
-            ) {
-                Ok(contract) => match contract.validate() {
-                    Ok(()) => Some(contract),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate the settlement template contract; falling back to \
-                             the default Camp/Refactor split"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load the settlement template contract; falling back to the \
-                         default Camp/Refactor split"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "settlement template contract",
+                    "world.map.cromatolis_v0_settlement_template_contract",
+                    |contract: &SettlementTemplateContract| contract.validate(),
+                )
+                .unwrap_or_else(|err| panic!("{err}")),
+            )
         } else {
             None
         };
@@ -1992,27 +2015,14 @@ impl Civs {
         // only make sense once the settlement loader itself is available
         // (region-scoped the same way, not a literal asset-name check).
         let authored_routes = if authored_cromatolis && authored_settlements.is_some() {
-            match AuthoredCromatolisRouteGraph::load_owned("world.map.cromatolis_v0_routes") {
-                Ok(routes) => match routes.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(routes),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored route graph; continuing \
-                             without RTSim routes"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored route graph; continuing without RTSim \
-                         routes"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "route graph",
+                    "world.map.cromatolis_v0_routes",
+                    |routes: &AuthoredCromatolisRouteGraph| routes.validate(map_size_lg),
+                )
+                .unwrap_or_else(|err| panic!("{err}")),
+            )
         } else {
             None
         };
@@ -2020,29 +2030,14 @@ impl Civs {
         // maritime routes also resolve their endpoints by authored
         // settlement id.
         let authored_maritime_routes = if authored_cromatolis && authored_settlements.is_some() {
-            match AuthoredCromatolisMaritimeRoutes::load_owned(
-                "world.map.cromatolis_v0_maritime_routes",
-            ) {
-                Ok(routes) => match routes.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(routes),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored maritime route graph; \
-                             continuing without RTSim maritime routes"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored maritime route graph; continuing \
-                         without RTSim maritime routes"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "maritime route graph",
+                    "world.map.cromatolis_v0_maritime_routes",
+                    |routes: &AuthoredCromatolisMaritimeRoutes| routes.validate(map_size_lg),
+                )
+                .unwrap_or_else(|err| panic!("{err}")),
+            )
         } else {
             None
         };
@@ -2055,26 +2050,14 @@ impl Civs {
             None
         };
         let authored_bridges = if authored_bridge_preview.is_some() {
-            match AuthoredCromatolisBridges::load_owned("world.map.cromatolis_v0_bridges") {
-                Ok(bridges) => match bridges.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(bridges),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored bridges; continuing without \
-                             them"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored bridges; continuing without them"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "bridges",
+                    "world.map.cromatolis_v0_bridges",
+                    |bridges: &AuthoredCromatolisBridges| bridges.validate(map_size_lg),
+                )
+                .unwrap_or_else(|err| panic!("{err}")),
+            )
         } else {
             None
         };
@@ -2083,29 +2066,16 @@ impl Civs {
         // Cromatolis layer above (and, like bridges, only make sense once
         // settlements exist).
         let authored_fortifications = if authored_cromatolis && authored_settlements.is_some() {
-            match AuthoredCromatolisFortifications::load_owned(
-                "world.map.cromatolis_v0_fortifications",
-            ) {
-                Ok(fortifications) => match fortifications.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(fortifications),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored fortifications; continuing \
-                             without them"
-                        );
-                        None
+            Some(
+                load_authored_cromatolis_layer(
+                    "fortifications",
+                    "world.map.cromatolis_v0_fortifications",
+                    |fortifications: &AuthoredCromatolisFortifications| {
+                        fortifications.validate(map_size_lg)
                     },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored fortifications; continuing without \
-                         them"
-                    );
-                    None
-                },
-            }
+                )
+                .unwrap_or_else(|err| panic!("{err}")),
+            )
         } else {
             None
         };
@@ -5223,6 +5193,123 @@ mod tests {
         }
         total
     };
+
+    // ---- Authored Cromatolis layers: a bad layer is a hard startup error ----
+
+    const SITES_SPECIFIER: &str = "world.map.cromatolis_v0_sites";
+
+    fn parse_failure_message(text: &str) -> String {
+        let err = AuthoredCromatolisSettlements::from_bytes(Cow::Borrowed(text.as_bytes()))
+            .expect_err("the test input must not parse");
+        authored_layer_load_failure("settlements", SITES_SPECIFIER, None, &err).to_string()
+    }
+
+    #[test]
+    fn authored_layer_error_for_malformed_ron_names_file_and_position() {
+        let message = parse_failure_message("(\n  schema: \"x\",\n  coordinate_space: ");
+        assert!(message.contains(SITES_SPECIFIER), "{message}");
+        assert!(
+            message.contains("assets/world/map/cromatolis_v0_sites.ron"),
+            "{message}"
+        );
+        assert!(message.contains("does not parse"), "{message}");
+        // RON's own error carries "line:column".
+        assert!(message.contains("3:"), "{message}");
+    }
+
+    #[test]
+    fn authored_layer_error_for_unknown_category_names_the_value() {
+        let real = include_str!("../../../assets/world/map/cromatolis_v0_sites.ron");
+        assert!(real.contains("category: Capital,"));
+        let message =
+            parse_failure_message(&real.replacen("category: Capital,", "category: Spaceport,", 1));
+        assert!(message.contains("Spaceport"), "{message}");
+        assert!(message.contains("does not parse"), "{message}");
+    }
+
+    #[test]
+    fn authored_layer_missing_file_is_an_error_naming_the_file() {
+        let err = load_authored_cromatolis_layer::<AuthoredCromatolisSettlements>(
+            "settlements",
+            "world.map.cromatolis_v0_no_such_sites",
+            |_| Ok(()),
+        )
+        .expect_err("a missing authored layer must not load");
+        let message = err.to_string();
+        assert!(message.contains("is missing"), "{message}");
+        assert!(
+            message.contains("assets/world/map/cromatolis_v0_no_such_sites.ron"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn authored_layer_validation_failure_names_file_and_reason() {
+        let err = load_authored_cromatolis_layer::<AuthoredCromatolisSettlements>(
+            "settlements",
+            SITES_SPECIFIER,
+            |_| Err("duplicate settlement id site.x".to_string()),
+        )
+        .expect_err("a failing validation must not load");
+        let message = err.to_string();
+        assert!(message.contains("failed validation"), "{message}");
+        assert!(
+            message.contains("duplicate settlement id site.x"),
+            "{message}"
+        );
+        assert!(
+            message.contains("assets/world/map/cromatolis_v0_sites.ron"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn authored_layer_valid_real_files_still_load() {
+        let map_size = synthetic_map_size();
+        let settlements = load_authored_cromatolis_layer(
+            "settlements",
+            SITES_SPECIFIER,
+            |s: &AuthoredCromatolisSettlements| s.validate(map_size),
+        )
+        .expect("the real settlements export must load");
+        let landmarks = load_authored_cromatolis_layer(
+            "landmarks",
+            "world.map.cromatolis_v0_landmarks",
+            |l: &AuthoredCromatolisLandmarks| l.validate(map_size),
+        )
+        .expect("the real landmarks export must load");
+        load_authored_cromatolis_layer(
+            "landmark profiles",
+            "world.map.cromatolis_v0_landmark_profiles",
+            |p: &AuthoredCromatolisLandmarkProfiles| p.validate(&landmarks),
+        )
+        .expect("the real landmark profiles export must load");
+        load_authored_cromatolis_layer(
+            "settlement template contract",
+            "world.map.cromatolis_v0_settlement_template_contract",
+            |c: &SettlementTemplateContract| c.validate(),
+        )
+        .expect("the real template contract must load");
+        load_authored_cromatolis_layer(
+            "route graph",
+            "world.map.cromatolis_v0_routes",
+            |r: &AuthoredCromatolisRouteGraph| r.validate(map_size),
+        )
+        .expect("the real route graph must load");
+        load_authored_cromatolis_layer(
+            "maritime route graph",
+            "world.map.cromatolis_v0_maritime_routes",
+            |r: &AuthoredCromatolisMaritimeRoutes| r.validate(map_size),
+        )
+        .expect("the real maritime route graph must load");
+        load_authored_cromatolis_layer(
+            "fortifications",
+            "world.map.cromatolis_v0_fortifications",
+            |f: &AuthoredCromatolisFortifications| f.validate(map_size),
+        )
+        .expect("the real fortifications must load");
+        assert!(!settlements.settlements.is_empty());
+    }
 
     #[test]
     fn cromatolis_authored_settlements_parse_and_validate_real_export_without_panicking() {
