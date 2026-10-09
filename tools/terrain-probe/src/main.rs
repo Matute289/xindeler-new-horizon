@@ -254,6 +254,34 @@ enum Cmd {
         #[arg(long)]
         map_dir: PathBuf,
     },
+    /// Load an existing authored raster manifest and its tiles with the
+    /// engine's own loader (every load-time rule: sha256, header, containment,
+    /// margin, memory budget) and print what the engine reads back as JSON:
+    /// the regions, the digest, the per-chunk summaries and, with `--box`,
+    /// the authored cell of every column. Fails (exit 1) with the loader's
+    /// message when the manifest would stop world generation. Used by the
+    /// external exporters' round-trip tests.
+    AwRead {
+        /// Directory holding `<stem>_authored_rasters.ron` and the tiles
+        /// (normally `<assets>/world/map`).
+        #[arg(long)]
+        map_dir: PathBuf,
+        /// Map stem, e.g. `cromatolis_v0`.
+        #[arg(long, default_value = "cromatolis_v0")]
+        stem: String,
+        /// Map edge in blocks (for the rim check).
+        #[arg(long, default_value_t = 32768)]
+        map_size: i32,
+        /// `x0,y0,x1,y1` (wpos, half-open): also dump the authored cell of
+        /// every column in this box to `--cells-out`.
+        #[arg(long = "box")]
+        bbox: Option<String>,
+        /// Raw dump of the box: per column (rows from the south, `x` fastest)
+        /// three little-endian `i32`: kind (0 none, 1 bank, 2 wet), top water
+        /// block (0 unless wet), top ground block (0 if none).
+        #[arg(long)]
+        cells_out: Option<PathBuf>,
+    },
 }
 
 /// Select the asset root before any engine code reads it.
@@ -650,6 +678,19 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             })
         },
         Cmd::AwWrite { spec, map_dir } => aw_write(spec, map_dir),
+        Cmd::AwRead {
+            map_dir,
+            stem,
+            map_size,
+            bbox,
+            cells_out,
+        } => aw_read(
+            map_dir,
+            stem,
+            *map_size,
+            bbox.as_deref(),
+            cells_out.as_deref(),
+        ),
         Cmd::CheckLegacy { input, legacy } => {
             let d = Dump::read_file(input)?;
             let ok = legacy::compare(&d, legacy)?;
@@ -733,6 +774,123 @@ fn aw_write(spec_path: &Path, map_dir: &Path) -> Res<ExitCode> {
     for p in written {
         println!("{}", p.display());
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `terrain-probe aw-read`: see [`Cmd::AwRead`].
+fn aw_read(
+    map_dir: &Path,
+    stem: &str,
+    map_size: i32,
+    bbox: Option<&str>,
+    cells_out: Option<&Path>,
+) -> Res<ExitCode> {
+    use world::authored_raster::{
+        self, AuthoredCell, AuthoredRasters, Manifest, format::LayerKind,
+    };
+    let manifest_path = map_dir.join(format!("{stem}_authored_rasters.ron"));
+    let text = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    let manifest: Manifest =
+        ron::from_str(&text).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    let fetch = |id: &str, layer: LayerKind, tx: i32, ty: i32| {
+        let p = map_dir.join(format!(
+            "{stem}_ar_{id}_{}_{tx}_{ty}.bin",
+            layer.asset_name()
+        ));
+        std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))
+    };
+    let loaded = match AuthoredRasters::from_manifest(
+        manifest,
+        Vec2::broadcast(map_size),
+        &manifest_path.display().to_string(),
+        &fetch,
+    ) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("{e}");
+            return Ok(ExitCode::from(1));
+        },
+    };
+    let parse_box = |s: &str| -> Res<[i32; 4]> {
+        let v: Vec<i32> = s
+            .split(',')
+            .map(|p| p.trim().parse::<i32>())
+            .collect::<Result<_, _>>()?;
+        <[i32; 4]>::try_from(v).map_err(|_| "--box needs x0,y0,x1,y1".into())
+    };
+    let b = bbox.map(parse_box).transpose()?;
+    let mut regions = Vec::new();
+    for (id, r) in loaded.regions() {
+        regions.push(serde_json::json!({
+            "id": id,
+            "min": [r.min.x, r.min.y],
+            "max": [r.max.x, r.max.y],
+        }));
+    }
+    // Chunk summaries over every region (chunk = 32 m).
+    let mut chunks = Vec::new();
+    for (_, r) in loaded.regions() {
+        for cy in r.min.y.div_euclid(32)..r.max.y.div_euclid(32) {
+            for cx in r.min.x.div_euclid(32)..r.max.x.div_euclid(32) {
+                if let Some(s) = loaded.chunk_summary(Vec2::new(cx, cy)) {
+                    chunks.push(serde_json::json!({
+                        "cx": cx,
+                        "cy": cy,
+                        "authored_columns": s.authored_columns,
+                        "wet_columns": s.wet_columns,
+                        "min_surface_block": s.min_surface_block,
+                        "max_surface_block": s.max_surface_block,
+                        "min_bed_block": s.min_bed_block,
+                    }));
+                }
+            }
+        }
+    }
+    if let (Some([x0, y0, x1, y1]), Some(out)) = (b, cells_out) {
+        if x1 <= x0 || y1 <= y0 {
+            return Err(format!("--box {x0},{y0},{x1},{y1} is empty").into());
+        }
+        let mut bytes = Vec::with_capacity((x1 - x0) as usize * (y1 - y0) as usize * 12);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let (kind, sb, gb) = match loaded.cell_at(Vec2::new(x, y)) {
+                    Some(AuthoredCell::Wet {
+                        surface_block,
+                        bed_block,
+                    }) => (2i32, surface_block, bed_block),
+                    Some(AuthoredCell::Bank { bed_block }) => (1, 0, bed_block),
+                    Some(AuthoredCell::None) | None => (0, 0, 0),
+                };
+                for v in [kind, sb, gb] {
+                    bytes.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+        }
+        std::fs::write(out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+    }
+    // The loader's own limits, so an exporter that mirrors them can assert it has
+    // not drifted.
+    let constants = serde_json::json!({
+        "manifest_schema": authored_raster::MANIFEST_SCHEMA,
+        "tile_size": authored_raster::format::TILE_SIZE,
+        "sea_top_block": authored_raster::SEA_TOP_BLOCK,
+        "rim_margin_m": authored_raster::RIM_MARGIN_M,
+        "max_feather_m": authored_raster::MAX_FEATHER_M,
+        "dist_cap_m": authored_raster::DIST_CAP_M,
+        "region_margin_m": authored_raster::REGION_MARGIN_M,
+        "resident_budget_bytes": authored_raster::RESIDENT_BUDGET_BYTES,
+        "global_resident_cap_bytes": authored_raster::GLOBAL_RESIDENT_CAP_BYTES,
+        "max_offset_cm": authored_raster::format::MAX_OFFSET_CM,
+    });
+    let report = serde_json::json!({
+        "manifest": manifest_path.display().to_string(),
+        "constants": constants,
+        "digest": loaded.digest(),
+        "regions": regions,
+        "chunks": chunks,
+    });
+    println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(ExitCode::SUCCESS)
 }
 
@@ -871,5 +1029,92 @@ fn print_info(d: &Dump) {
             "section     {:<14} {:>12} -> {:>12} bytes",
             s.name, s.raw_len, s.comp_len
         );
+    }
+}
+
+#[cfg(test)]
+mod aw_read_tests {
+    use super::*;
+    use world::authored_raster::writer::{self, PaintOp, RegionSpec, Shape};
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("tprobe-aw-read-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A river written by the engine's own writer is read back cell for cell by
+    /// `aw-read`.
+    #[test]
+    fn aw_read_reports_what_the_loader_reads() {
+        let dir = scratch("ok");
+        let spec = RegionSpec::new("arena", (2048, 2048), (2560, 2560), 32, vec![
+            PaintOp::Water {
+                shape: Shape::Rect {
+                    x0: 2200.0,
+                    y0: 2290.0,
+                    x1: 2400.0,
+                    y1: 2310.0,
+                },
+                surface_cm: 23_850,
+                bed_cm: 23_250,
+            },
+            PaintOp::BankRing {
+                width_m: 1,
+                bed_cm: Some(23_900),
+            },
+        ]);
+        let built = writer::build_region(&spec).unwrap();
+        writer::write_assets(&dir, "cromatolis_v0", &[built]).unwrap();
+        let cells = dir.join("cells.bin");
+        let code = aw_read(
+            &dir,
+            "cromatolis_v0",
+            32768,
+            Some("2190,2280,2410,2320"),
+            Some(&cells),
+        )
+        .unwrap();
+        assert_eq!(code, ExitCode::SUCCESS);
+        let bytes = std::fs::read(&cells).unwrap();
+        let at = |x: i32, y: i32| {
+            let k = ((y - 2280) * 220 + (x - 2190)) as usize * 12;
+            let v = |o: usize| i32::from_le_bytes(bytes[k + o..k + o + 4].try_into().unwrap());
+            (v(0), v(4), v(8))
+        };
+        assert_eq!(
+            at(2300, 2300),
+            (2, 238, 232),
+            "wet: water top 238 over ground 232"
+        );
+        assert_eq!(at(2300, 2310), (1, 0, 239), "bank ring: ground top 239");
+        assert_eq!(at(2300, 2285), (0, 0, 0), "not authored");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A manifest the loader refuses is an exit code, with the loader's
+    /// message.
+    #[test]
+    fn aw_read_fails_with_the_loaders_verdict() {
+        let dir = scratch("bad");
+        // water beside nothing: the loader refuses "water next to unauthored column"
+        let spec = RegionSpec::new("arena", (2048, 2048), (2560, 2560), 32, vec![
+            PaintOp::Water {
+                shape: Shape::Rect {
+                    x0: 2200.0,
+                    y0: 2290.0,
+                    x1: 2210.0,
+                    y1: 2300.0,
+                },
+                surface_cm: 23_850,
+                bed_cm: 23_250,
+            },
+        ]);
+        let built = writer::build_region(&spec).unwrap();
+        writer::write_assets(&dir, "cromatolis_v0", &[built]).unwrap();
+        let code = aw_read(&dir, "cromatolis_v0", 32768, None, None).unwrap();
+        assert_eq!(code, ExitCode::from(1));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
