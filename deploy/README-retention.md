@@ -52,9 +52,14 @@ The service runs as `mgrinberg` (owner of the files, member of `docker`; no sudo
 
 ## Known / not handled
 
-- `public/releases/<tag>/updater/` is a byte copy of `public/updater/` (~2 GB per
-  release). The script only warns. Fixing it needs `build.yml` to stop rsyncing
-  `updater/` into the versioned dir (or hardlink with `cp -al`); left for a decision.
+- `public/releases/<tag>/updater/` (and the five `*-updater.zip` files next to the
+  manual packages) were byte copies of `public/updater/` (~4 GB per release). Fixed in
+  `build.yml`: the updater tree is generated outside `dist/` and the release rsync
+  excludes `/updater/` and `*-updater.zip`, so releases published after that change
+  no longer carry them. Releases published before it (v0.26.1 at the time of writing)
+  keep their copies until retention deletes them; the script still only warns.
+  To reclaim one by hand: `rm -rf public/releases/<tag>/updater public/releases/<tag>/*-updater.zip`
+  (nothing reads them; `manifest.json`, `latest.json` and the rollback packages are untouched).
 - `target/release` (~6.6 GB incremental/deps cache) is kept on purpose: deleting it
   makes every deploy a from-scratch ~30 min build. Docker volumes (~2.2 GB reclaimable,
   they hold DB data) and unused tagged images are never touched.

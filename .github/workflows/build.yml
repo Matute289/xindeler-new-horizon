@@ -690,8 +690,13 @@ jobs:
       # Channel "release" per that spec's recommendation (single channel,
       # matches NH-60 [Q4]'s existing "no nightly channel" decision) —
       # trivial to rename later if Matías picks something else.
+      #
+      # The tree is written OUTSIDE dist/ on purpose: dist/ is rsynced to
+      # releases/$VERSION/ below, and a tree inside it used to be uploaded a
+      # second time there (~2 GB per release of byte-identical copies that
+      # nothing ever reads; the updater tree is "always-current", not versioned).
       - name: Generate updater/ static tree
-        run: bash .github/scripts/generate-updater-tree.sh "$VERSION" release dist dist/updater
+        run: bash .github/scripts/generate-updater-tree.sh "$VERSION" release dist updater-tree
 
       - name: Setup SSH
         run: |
@@ -712,7 +717,16 @@ jobs:
           # the remote host has) is the intent.
           # shellcheck disable=SC2029
           ssh mgrinberg@greenmountain.dev "mkdir -p '$REMOTE_DIR'"
-          rsync -avz --progress dist/ "mgrinberg@greenmountain.dev:$REMOTE_DIR/"
+          # The *-updater.zip packages and any updater/ tree are inputs for the
+          # always-current public/updater/ tree (next step); they are byte
+          # copies of files published there, are not listed in manifest.json,
+          # and no consumer reads them from releases/$VERSION/, so they are
+          # not uploaded a second time (~4 GB per release saved on the VPS).
+          # The manual-download packages, assets.tar.gz and manifest.json (the
+          # rollback target for latest.json) are unchanged.
+          rsync -avz --progress \
+            --exclude='/updater/' --exclude='*-updater.zip' \
+            dist/ "mgrinberg@greenmountain.dev:$REMOTE_DIR/"
           scp dist/manifest.json "mgrinberg@greenmountain.dev:/srv/xindeler/downloads/public/latest.json"
 
       - name: Upload the updater/ tree (always-current, not versioned under releases/)
@@ -721,7 +735,7 @@ jobs:
         # for "latest" rather than a specific tag.
         run: |
           ssh mgrinberg@greenmountain.dev "mkdir -p /srv/xindeler/downloads/public/updater"
-          rsync -avz --progress --delete dist/updater/ "mgrinberg@greenmountain.dev:/srv/xindeler/downloads/public/updater/"
+          rsync -avz --progress --delete updater-tree/ "mgrinberg@greenmountain.dev:/srv/xindeler/downloads/public/updater/"
 
       - name: Retention - keep only this release + the previous one (best effort)
         # Runs strictly AFTER latest.json was repointed at $VERSION, and the

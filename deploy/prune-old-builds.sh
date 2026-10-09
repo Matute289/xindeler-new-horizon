@@ -276,8 +276,10 @@ prune_downloads() {
         fi
     done
 
-    # Warn-only: releases/<tag>/updater/ is a byte-copy of public/updater/ (the
-    # publish step rsyncs dist/ -- which contains updater/ -- AND dist/updater/).
+    # Warn-only: older releases/<tag>/updater/ dirs are byte-copies of
+    # public/updater/ (before build.yml stopped uploading them, the publish step
+    # rsynced dist/ -- which contained updater/ -- AND dist/updater/). New
+    # releases no longer have one; this only reports legacy ones.
     local sub f1 f2 rf
     for v in "$latest" "$prev"; do
         sub="$rel/$v/updater"
