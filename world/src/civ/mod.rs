@@ -15,8 +15,8 @@ use crate::{
     config::CONFIG,
     sim::WorldSim,
     site::{
-        self, NavalPortRequest, PortClass, PortExclusion, Site as WorldSite, SiteKind,
-        SitesGenMeta, namegen::NameGen,
+        self, NavalPortRequest, PortClass, PortDressing, PortExclusion, Site as WorldSite,
+        SiteKind, SitesGenMeta, namegen::NameGen,
     },
     util::{DHashMap, NEIGHBORS, attempt, seed_expan},
 };
@@ -961,9 +961,18 @@ struct AuthoredLandmarkProfile {
     #[expect(dead_code)]
     keeper_house: bool,
     light_range: i32,
-    #[expect(dead_code)]
     #[serde(default)]
     facing: AuthoredLandmarkFacing,
+    /// The authored id of the settlement whose port district this landmark
+    /// belongs to (e.g. `site.kalthis`). The landmark and that settlement
+    /// then share one port palette and lighting.
+    #[serde(default)]
+    district_seat: Option<String>,
+    /// Authored ids of the settlements this landmark is linked to by a
+    /// walkable travel edge. A river port is not a settlement for the
+    /// automatic road linker, so its links are declared here instead.
+    #[serde(default)]
+    road_links: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -1002,6 +1011,19 @@ enum AuthoredLandmarkFacing {
     South,
     East,
     West,
+}
+
+impl AuthoredLandmarkFacing {
+    /// The unit cardinal in world space the landmark faces: `+y` is north and
+    /// `+x` east.
+    const fn outward(self) -> Vec2<i32> {
+        match self {
+            Self::North => Vec2::new(0, 1),
+            Self::South => Vec2::new(0, -1),
+            Self::East => Vec2::new(1, 0),
+            Self::West => Vec2::new(-1, 0),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
@@ -1104,6 +1126,50 @@ fn resolve_naval_port(
 /// therefore how much room it deserves.
 const AUTHORED_LANDMARK_CLEARANCE_BLOCKS: i32 = 12;
 
+/// The shared look of each river-port district, keyed by the chunk centre of
+/// every member site.
+///
+/// A district is a settlement (its seat) plus the river-port landmarks whose
+/// profile names that settlement in `district_seat`. Every member -- the seat
+/// and its river ports -- maps to the same timber anchor (the seat's centre),
+/// so they build with one palette. A river port that declares no seat, or
+/// whose seat is not an established site, is left out and dresses itself like
+/// any other port.
+fn river_port_districts(sites: &Store<Site>) -> std::collections::HashMap<Vec2<i32>, PortDressing> {
+    let centre_wpos = |site: &Site| {
+        site.center.map2(TerrainChunkSize::RECT_SIZE, |e, sz: u32| {
+            e * sz as i32 + sz as i32 / 2
+        })
+    };
+
+    let mut districts = std::collections::HashMap::new();
+    for river_port in sites
+        .values()
+        .filter(|site| matches!(site.kind, SiteKind::RiverPort))
+    {
+        let Some(seat_id) = river_port
+            .authored_landmark
+            .as_ref()
+            .and_then(|landmark| landmark.profile.as_ref())
+            .and_then(|profile| profile.district_seat.as_deref())
+        else {
+            continue;
+        };
+        let Some(seat) = sites
+            .values()
+            .find(|site| site.authored_id() == Some(seat_id))
+        else {
+            continue;
+        };
+        let dressing = PortDressing {
+            timber_anchor: centre_wpos(seat),
+        };
+        districts.insert(river_port.center, dressing);
+        districts.insert(seat.center, dressing);
+    }
+    districts
+}
+
 /// Every established authored landmark, as a keep-out region for the shoreline
 /// port search.
 ///
@@ -1152,6 +1218,7 @@ enum AuthoredLandmarkTemplate {
     GiantTree,
     Citadel,
     ChapelSite,
+    RiverPort,
 }
 
 impl AuthoredLandmarkTemplate {
@@ -1160,6 +1227,7 @@ impl AuthoredLandmarkTemplate {
             Self::GiantTree => SiteKind::GiantTree,
             Self::Citadel => SiteKind::Citadel,
             Self::ChapelSite => SiteKind::ChapelSite,
+            Self::RiverPort => SiteKind::RiverPort,
         }
     }
 }
@@ -2163,6 +2231,7 @@ impl Civs {
                     CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS,
                 );
             }
+            this.establish_river_port_links();
             report_stage(WorldCivStage::CivCreation(1, 1));
         } else {
             for i in 0..initial_civ_count {
@@ -2398,6 +2467,7 @@ impl Civs {
         // `this.sites` mutably, so this cannot be done inside it) and hand
         // them to the shoreline search as explicit keep-out regions.
         let naval_port_exclusions = authored_landmark_exclusions(&this.sites);
+        let port_districts = river_port_districts(&this.sites);
 
         // Place sites in world
         prof_span!(guard, "Place sites in world");
@@ -2429,7 +2499,13 @@ impl Civs {
                             sim_site.authored.as_ref(),
                             authored_maritime_routes.as_ref(),
                         )
-                        .map(|class| NavalPortRequest::new(class, &naval_port_exclusions));
+                        .map(|class| {
+                            let request = NavalPortRequest::new(class, &naval_port_exclusions);
+                            match port_districts.get(&sim_site.center) {
+                                Some(dressing) => request.with_dressing(*dressing),
+                                None => request,
+                            }
+                        });
                         // XINDELER: an authored settlement whose layout
                         // falls below its size band is re-drawn from
                         // derived sub-seeds (see `seeds`); others are
@@ -2469,6 +2545,36 @@ impl Civs {
                         );
                         gen_meta.absorb(meta);
                         site
+                    },
+                    SiteKind::RiverPort => {
+                        // A river port's own landmark footprint must not
+                        // keep its own port out, only other landmarks'.
+                        let exclusions: Vec<PortExclusion> = naval_port_exclusions
+                            .iter()
+                            .filter(|exclusion| exclusion.centre_wpos != wpos)
+                            .copied()
+                            .collect();
+                        let mut request = NavalPortRequest::new(PortClass::Pier, &exclusions);
+                        if let Some(profile) = sim_site
+                            .authored_landmark
+                            .as_ref()
+                            .and_then(|landmark| landmark.profile.as_ref())
+                        {
+                            request = request.with_facing(profile.facing.outward());
+                        }
+                        if let Some(dressing) = port_districts.get(&sim_site.center) {
+                            request = request.with_dressing(*dressing);
+                        }
+                        WorldSite::generate_river_port(
+                            &Land::from_sim(ctx.sim),
+                            index_ref,
+                            &mut rng,
+                            wpos,
+                            sim_site.authored_name().unwrap_or("River Port").to_string(),
+                            calendar,
+                            &mut gen_meta,
+                            request,
+                        )
                     },
                     SiteKind::GliderCourse => WorldSite::generate_glider_course(
                         &Land::from_sim(ctx.sim),
@@ -3508,6 +3614,57 @@ impl Civs {
         );
     }
 
+    /// Registers a land travel edge from every landmark whose profile lists
+    /// `road_links` to each settlement it names, so NPCs can walk between
+    /// the parts of a river-port district.
+    ///
+    /// Each edge is a straight two-node `Track` between the two site
+    /// centres. It carves nothing into the terrain, consumes no randomness,
+    /// and skips a pair that already has a track in either direction, so
+    /// every other site's tracks are exactly what they were without it.
+    /// Landmarks do not take part in the economy simulation, so the edges
+    /// add no economy neighbours.
+    fn establish_river_port_links(&mut self) {
+        let by_authored_id = self
+            .sites
+            .iter()
+            .filter_map(|(id, site)| site.authored_id().map(|authored| (authored.to_owned(), id)))
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut links = Vec::new();
+        for (landmark, site) in self.sites.iter() {
+            let Some(profile) = site
+                .authored_landmark
+                .as_ref()
+                .and_then(|landmark| landmark.profile.as_ref())
+            else {
+                continue;
+            };
+            for target_id in &profile.road_links {
+                match by_authored_id.get(target_id) {
+                    Some(&target) if target != landmark => links.push((landmark, target)),
+                    _ => warn!(
+                        landmark = ?site.authored_landmark_id(),
+                        target = %target_id,
+                        "Landmark road link has no settlement to reach"
+                    ),
+                }
+            }
+        }
+        for (from, to) in links {
+            if self.track_between(from, to).is_some() {
+                continue;
+            }
+            let path = vec![self.sites.get(from).center, self.sites.get(to).center];
+            let cost = path[0].as_::<f32>().distance(path[1].as_()).max(1.0);
+            let track = self.tracks.insert(Track {
+                cost,
+                kind: TrackKind::Land,
+                path: Path { nodes: path },
+            });
+            self.track_map.entry(from).or_default().insert(to, track);
+        }
+    }
+
     /// Establishes logical travel edges for Cromatolis's authored maritime
     /// trade routes (COW-24) as real `Track`s in
     /// `self.tracks`/`self.track_map` -- exactly the same RTSim travel-edge
@@ -3733,6 +3890,12 @@ impl Civs {
         }
 
         // Find neighbors
+        //
+        // `SiteKind::RiverPort` is left out of both `matches!` lists below on
+        // purpose: a river port is not linked to its neighbours by an
+        // automatic road, which is a separate decision from it being a
+        // settlement.
+        //
         // Note, the maximum distance that I have so far observed not hitting the
         // iteration limit in `find_path` is 364. So I think this is a reasonable
         // limit (although the relationship between distance and pathfinding iterations
@@ -4634,9 +4797,13 @@ impl Site {
     /// it (e.g. a settlement whose lore/terrain makes it unsuitable, such as
     /// a permanently stormy or volcanic hamlet).
     pub fn is_eligible_as_starting_site(&self) -> bool {
-        self.authored
-            .as_ref()
-            .is_none_or(|settlement| settlement.start_eligible)
+        // A landmark is never a place to start, even one that now generates as
+        // a small settlement.
+        self.authored_landmark.is_none()
+            && self
+                .authored
+                .as_ref()
+                .is_none_or(|settlement| settlement.start_eligible)
     }
 
     /// The authored settlement id (e.g. `"site.dromos_city"`), if this site
@@ -4659,6 +4826,25 @@ impl Site {
                 settlement.size.contract_key(),
             )
         })
+    }
+
+    /// The authored landmark id (e.g. `"site.kalthis_river_port"`), if this
+    /// site was established from an authored landmark pin. `None` for a
+    /// settlement or any procedural site.
+    pub fn authored_landmark_id(&self) -> Option<&str> {
+        self.authored_landmark
+            .as_ref()
+            .map(|landmark| landmark.id.as_str())
+    }
+
+    /// The world-space cardinal (`+y` north, `+x` east) this site's authored
+    /// landmark profile asks its waterfront to face, if it has a profile.
+    pub fn authored_landmark_facing(&self) -> Option<Vec2<i32>> {
+        self.authored_landmark
+            .as_ref()?
+            .profile
+            .as_ref()
+            .map(|profile| profile.facing.outward())
     }
 
     /// The authored name for this site, if it was established from an
@@ -4764,6 +4950,9 @@ impl SiteKind {
                         && (-0.3..0.4).contains(&chunk.temp)
                 },
                 SiteKind::Citadel => true,
+                // Only ever placed from an authored landmark, never searched
+                // for procedurally.
+                SiteKind::RiverPort => true,
                 SiteKind::CliffTown => {
                     chunk.temp >= CONFIG.desert_temp
                         && chunk.cliff_height > 40.0
@@ -4885,6 +5074,11 @@ impl Site {
         )
     }
 
+    /// Whether this site is a full settlement. `SiteKind::RiverPort` is
+    /// deliberately absent: a river port gets residents through its own
+    /// settlement metadata, but is not a spawn-town fallback and takes no part
+    /// in the economy simulation or the automatic inter-site road linking
+    /// that this predicate gates.
     pub fn is_settlement(&self) -> bool {
         matches!(
             self.kind,
@@ -6575,6 +6769,172 @@ mod tests {
         };
         assert!(!procedural.is_authored_starting_settlement());
         assert_eq!(procedural.authored_name(), None);
+    }
+
+    fn district_test_site(kind: SiteKind, chunk: (i32, i32)) -> Site {
+        Site {
+            kind,
+            site_tmp: None,
+            center: Vec2::new(chunk.0, chunk.1),
+            place: Id::new(0),
+            authored: None,
+            authored_landmark: None,
+            authored_bridge: None,
+            authored_fortification: None,
+        }
+    }
+
+    fn district_seat_site(id: &str, chunk: (i32, i32)) -> Site {
+        let mut site = district_test_site(SiteKind::Refactor, chunk);
+        site.authored = Some(AuthoredSettlementMeta {
+            id: id.to_string(),
+            name: id.to_string(),
+            category: AuthoredSettlementCategory::Capital,
+            size: AuthoredSettlementSize::Large,
+            population: AuthoredSettlementPopulation {
+                tag: AuthoredSettlementPopulationTag::Human,
+                peoples: vec![AuthoredSettlementPeople::Human],
+                future_peoples: Vec::new(),
+            },
+            requires_capital_castle: false,
+            start_eligible: true,
+        });
+        site
+    }
+
+    fn district_river_port_site(chunk: (i32, i32), seat: Option<&str>) -> Site {
+        let mut site = district_test_site(SiteKind::RiverPort, chunk);
+        site.authored_landmark = Some(AuthoredLandmarkMeta {
+            id: format!("site.test_port_{}_{}", chunk.0, chunk.1),
+            name: "Test River Port".to_string(),
+            kind: AuthoredLandmarkKind::Harbour,
+            profile: Some(AuthoredLandmarkProfile {
+                site_id: "site.test".to_string(),
+                physical_template: AuthoredLandmarkPhysicalTemplate::Harbour,
+                style: AuthoredLandmarkStyle::RiverPort,
+                material: AuthoredLandmarkMaterial::WeatheredStone,
+                footprint_radius: 26,
+                height: 24,
+                keeper_house: false,
+                light_range: 0,
+                facing: AuthoredLandmarkFacing::North,
+                district_seat: seat.map(str::to_string),
+                road_links: Vec::new(),
+            }),
+        });
+        site
+    }
+
+    /// Chunk centres are 32 blocks apart, so `n` chunks along one axis is
+    /// `32 * n` blocks.
+    fn district_world(seats: &[(&str, (i32, i32))], river_ports: Vec<Site>) -> Store<Site> {
+        let mut sites = Store::default();
+        for &(id, chunk) in seats {
+            sites.insert(district_seat_site(id, chunk));
+        }
+        for river_port in river_ports {
+            sites.insert(river_port);
+        }
+        sites
+    }
+
+    #[test]
+    fn river_ports_naming_a_seat_share_its_timber_anchor() {
+        let sites = district_world(&[("site.seat", (0, 0))], vec![
+            district_river_port_site((7, 0), Some("site.seat")),
+            district_river_port_site((-14, 0), Some("site.seat")),
+        ]);
+        let districts = river_port_districts(&sites);
+        let anchor = Vec2::new(16, 16);
+        for member in [(0, 0), (7, 0), (-14, 0)] {
+            assert_eq!(
+                districts[&Vec2::new(member.0, member.1)].timber_anchor,
+                anchor,
+                "{member:?} is not dressed from the seat"
+            );
+        }
+    }
+
+    #[test]
+    fn a_river_port_declaring_no_seat_is_left_undressed_however_close_a_settlement_is() {
+        let sites = district_world(&[("site.seat", (0, 0))], vec![district_river_port_site(
+            (1, 0),
+            None,
+        )]);
+        assert!(river_port_districts(&sites).is_empty());
+    }
+
+    #[test]
+    fn a_river_port_whose_declared_seat_does_not_exist_is_left_undressed() {
+        let sites = district_world(&[("site.seat", (0, 0))], vec![district_river_port_site(
+            (1, 0),
+            Some("site.elsewhere"),
+        )]);
+        assert!(river_port_districts(&sites).is_empty());
+    }
+
+    #[test]
+    fn a_river_port_joins_the_seat_it_names_not_the_nearest_settlement() {
+        let sites = district_world(&[("site.near", (14, 0)), ("site.named", (40, 0))], vec![
+            district_river_port_site((15, 0), Some("site.named")),
+        ]);
+        let districts = river_port_districts(&sites);
+        let named_anchor = Vec2::new(40 * 32 + 16, 16);
+        assert_eq!(districts[&Vec2::new(15, 0)].timber_anchor, named_anchor);
+        assert_eq!(districts[&Vec2::new(40, 0)].timber_anchor, named_anchor);
+        assert!(
+            !districts.contains_key(&Vec2::new(14, 0)),
+            "a settlement no river port names is not part of any district"
+        );
+    }
+
+    #[test]
+    fn a_profile_without_a_district_seat_still_deserializes() {
+        let profile: AuthoredLandmarkProfile = ron::from_str(
+            r#"(site_id: "site.x", physical_template: Harbour, style: RiverPort, material: WeatheredStone, footprint_radius: 26, height: 24, keeper_house: false, light_range: 0)"#,
+        )
+        .expect("a profile row with no district_seat is valid");
+        assert_eq!(profile.district_seat, None);
+    }
+
+    #[test]
+    fn a_landmark_is_never_an_eligible_starting_site() {
+        let mut river_port = district_test_site(SiteKind::RiverPort, (0, 0));
+        assert!(
+            river_port.is_eligible_as_starting_site(),
+            "a site with no authored origin is eligible by default"
+        );
+        river_port.authored_landmark = Some(AuthoredLandmarkMeta {
+            id: "site.test_river_port".to_string(),
+            name: "Test River Port".to_string(),
+            kind: AuthoredLandmarkKind::Harbour,
+            profile: None,
+        });
+        assert!(!river_port.is_eligible_as_starting_site());
+        assert_eq!(
+            river_port.authored_landmark_id(),
+            Some("site.test_river_port")
+        );
+    }
+
+    #[test]
+    fn landmark_facing_maps_onto_world_cardinals() {
+        assert_eq!(AuthoredLandmarkFacing::West.outward(), Vec2::new(-1, 0));
+        assert_eq!(AuthoredLandmarkFacing::East.outward(), Vec2::new(1, 0));
+        assert_eq!(AuthoredLandmarkFacing::North.outward(), Vec2::new(0, 1));
+        assert_eq!(AuthoredLandmarkFacing::South.outward(), Vec2::new(0, -1));
+    }
+
+    #[test]
+    fn the_river_port_template_generates_the_river_port_site_kind() {
+        assert_eq!(
+            AuthoredLandmarkTemplate::RiverPort.site_kind(),
+            SiteKind::RiverPort
+        );
+        assert!(matches!(
+            SiteKind::RiverPort.meta(),
+            Some(common::terrain::SiteKindMeta::Settlement(_))
+        ));
     }
 
     // ---- Heavy, real-terrain-backed tests: require the real Cromatolis LFS

@@ -19,7 +19,12 @@ use vek::*;
 
 use crate::{
     IndexRef, Land,
-    site::{Dir2, Fill, Site, SpawnRules, Structure, generation::PrimitiveTransform, namegen},
+    site::{
+        Dir2, Fill, Site, SpawnRules, Structure,
+        generation::PrimitiveTransform,
+        namegen,
+        util::sprites::{PainterSpriteExt, Tileable2},
+    },
     util::RandomField,
 };
 
@@ -84,6 +89,10 @@ enum RoomKind {
     Seating,
     Entrance,
     Cellar,
+    /// An upper storey of beds. Never drawn by the side-room lottery: an inn
+    /// stacks one over an existing ground-floor room, see
+    /// [`Tavern::generate`].
+    Lodging,
 }
 
 impl RoomKind {
@@ -96,6 +105,7 @@ impl RoomKind {
             RoomKind::Stage => (11..=22, 150..=400),
             RoomKind::Bar => (9..=16, 80..=196),
             RoomKind::Entrance => (3..=7, 12..=40),
+            RoomKind::Lodging => (5..=22, 30..=400),
         }
     }
 
@@ -114,6 +124,7 @@ impl RoomKind {
             },
             RoomKind::Entrance => 0.0,
             RoomKind::Cellar => 1.0,
+            RoomKind::Lodging => 0.0,
         }
     }
 
@@ -223,6 +234,89 @@ pub enum Detail {
     Stage {
         aabr: Aabr<i32>,
     },
+    /// A bed whose centre block is `pos`, laid along `dir`.
+    Bed {
+        pos: Vec2<i32>,
+        dir: Dir2,
+    },
+}
+
+/// Blocks of clear floor kept between one bed and the next in a lodging room.
+const LODGING_BED_GAP: i32 = 2;
+
+/// The most beds one lodging room holds.
+const LODGING_MAX_BEDS: usize = 8;
+
+/// Interior height of a lodging storey, in blocks.
+const LODGING_HEIGHT: i32 = 3;
+
+/// The footprint (inclusive) of a bed centred on `pos` and laid along `dir`.
+fn bed_bounds(pos: Vec2<i32>, dir: Dir2) -> Aabr<i32> {
+    Tileable2::two_by(3, pos.with_z(0), dir).bounds()
+}
+
+/// Where beds go inside the free `areas` of a lodging room: every position
+/// whose bed fits wholly inside one area and keeps [`LODGING_BED_GAP`] blocks
+/// of floor from every bed already placed, up to [`LODGING_MAX_BEDS`].
+/// `dirs` is the order the two bed orientations are tried in.
+fn place_beds(areas: &[Aabr<i32>], dirs: [Dir2; 2]) -> Vec<(Vec2<i32>, Dir2)> {
+    let mut beds: Vec<(Vec2<i32>, Dir2)> = Vec::new();
+    let mut footprints: Vec<Aabr<i32>> = Vec::new();
+    for area in areas {
+        for dir in dirs {
+            for y in area.min.y..=area.max.y {
+                for x in area.min.x..=area.max.x {
+                    if beds.len() >= LODGING_MAX_BEDS {
+                        return beds;
+                    }
+                    let pos = Vec2::new(x, y);
+                    let bounds = bed_bounds(pos, dir);
+                    let fits = bounds.min.x >= area.min.x
+                        && bounds.min.y >= area.min.y
+                        && bounds.max.x <= area.max.x
+                        && bounds.max.y <= area.max.y;
+                    let clear = footprints.iter().all(|other| {
+                        bounds.min.x > other.max.x + LODGING_BED_GAP
+                            || other.min.x > bounds.max.x + LODGING_BED_GAP
+                            || bounds.min.y > other.max.y + LODGING_BED_GAP
+                            || other.min.y > bounds.max.y + LODGING_BED_GAP
+                    });
+                    if fits && clear {
+                        beds.push((pos, dir));
+                        footprints.push(bounds);
+                    }
+                }
+            }
+        }
+    }
+    beds
+}
+
+/// The ground-floor room an inn's lodging storey is stacked over: the
+/// largest bar, seating room or stage whose smallest side leaves the
+/// staircase room to climb (`height + 4` blocks), if any.
+fn lodging_parent(rooms: &Store<Room>) -> Option<Id<Room>> {
+    let footprint = |room: &Room| {
+        Aabr {
+            min: room.bounds.min.xy(),
+            max: room.bounds.max.xy(),
+        }
+        .size()
+    };
+    rooms
+        .iter()
+        .filter(|(_, room)| {
+            matches!(
+                room.kind,
+                RoomKind::Bar | RoomKind::Seating | RoomKind::Stage
+            )
+        })
+        .filter(|(_, room)| {
+            let height = room.bounds.max.z - room.bounds.min.z;
+            footprint(room).reduce_min() >= height + 4
+        })
+        .max_by_key(|(_, room)| footprint(room).product())
+        .map(|(id, _)| id)
 }
 
 pub struct Room {
@@ -275,9 +369,15 @@ pub struct Tavern {
     pub door_wpos: Vec3<i32>,
     /// Axis aligned bounding region for the house
     pub bounds: Aabr<i32>,
+    /// Whether the tavern has an upper storey of beds a guest can climb to,
+    /// i.e. it is an inn as well.
+    pub lodging: bool,
 }
 
 impl Tavern {
+    /// `lodging` stacks a storey of beds over one of the ground-floor rooms,
+    /// making the tavern an inn too. With `lodging` false nothing about the
+    /// generated tavern changes, and no extra randomness is drawn.
     pub fn generate(
         land: &Land,
         _index: IndexRef,
@@ -287,6 +387,7 @@ impl Tavern {
         door_dir: Dir2,
         tile_aabr: Aabr<i32>,
         alt: Option<i32>,
+        lodging: bool,
     ) -> Self {
         let name = namegen::NameGen::location(rng).generate_tavern();
 
@@ -742,6 +843,28 @@ impl Tavern {
             // If there are more directions to continue from, push this room again.
             if !room_meta.free_walls.is_empty() || room_meta.can_add_basement {
                 room_metas.push(room_meta);
+            }
+        }
+
+        // Stack the inn's lodging storey over a ground-floor room, if there is
+        // one big enough and nothing already occupies the space above it.
+        if lodging && let Some(parent_id) = lodging_parent(&rooms) {
+            let parent = &rooms[parent_id];
+            let min_z = parent.bounds.max.z + 2;
+            let upper = Aabb {
+                min: parent.bounds.min.xy().with_z(min_z),
+                max: parent.bounds.max.xy().with_z(min_z + LODGING_HEIGHT),
+            };
+            let upper_aabr = to_aabr(upper);
+            let blocked = rooms.iter().any(|(id, room)| {
+                id != parent_id
+                    && room.bounds.min.z - 1 <= upper.max.z
+                    && room.bounds.max.z + 1 >= upper.min.z
+                    && extend_aabr(to_aabr(room.bounds), 2).collides_with_aabr(upper_aabr)
+            });
+            if !blocked {
+                rooms.insert(Room::new(upper, RoomKind::Lodging));
+                room_counts[RoomKind::Lodging] += 1;
             }
         }
 
@@ -1265,8 +1388,31 @@ impl Tavern {
                     });
                 },
                 RoomKind::Entrance => {},
+                RoomKind::Lodging => {
+                    let dirs = if rng.random_bool(0.5) {
+                        [Dir2::X, Dir2::Y]
+                    } else {
+                        [Dir2::Y, Dir2::X]
+                    };
+                    room.details.extend(
+                        place_beds(&room.detail_areas, dirs)
+                            .into_iter()
+                            .map(|(pos, dir)| Detail::Bed { pos, dir }),
+                    );
+                    room.detail_areas.clear();
+                },
             }
         }
+
+        // The storey only counts as lodging if a staircase actually leads up
+        // to it: the roof under it is the floor it stands on.
+        let lodging = rooms.values().any(|room| {
+            matches!(room.kind, RoomKind::Lodging)
+                && room
+                    .floors
+                    .iter()
+                    .any(|floor| roofs[*floor].stairs.is_some())
+        });
 
         Self {
             name,
@@ -1276,6 +1422,7 @@ impl Tavern {
             door_tile,
             door_wpos,
             bounds,
+            lodging,
         }
     }
 }
@@ -1721,7 +1868,7 @@ impl Structure for Tavern {
                         }
                     }
                 },
-                RoomKind::Bar | RoomKind::Seating => {
+                RoomKind::Bar | RoomKind::Seating | RoomKind::Lodging => {
                     for aabr in room.detail_areas.iter().copied() {
                         for dir in Dir2::iter()
                             .filter(|dir| dir.select_aabr(aabr) == dir.select_aabr(room_aabr))
@@ -1861,6 +2008,9 @@ impl Structure for Tavern {
                                 );
                             }
                         }
+                    },
+                    Detail::Bed { pos, dir } => {
+                        painter.bed_wood_woodland(pos.with_z(room.bounds.min.z), dir);
                     },
                     Detail::Table { pos, chairs } => {
                         let pos = pos.with_z(room.bounds.min.z);
@@ -2041,5 +2191,239 @@ impl Structure for Tavern {
                     .clear();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Index;
+    use rand::SeedableRng;
+    use rand_chacha::ChaChaRng;
+
+    /// A tavern on a `tiles`-by-`tiles` plot with its door on the plot's
+    /// near edge, on flat ground at altitude zero.
+    fn tavern(seed: u8, tiles: i32, lodging: bool) -> Tavern {
+        let index = Index::new(0);
+        let index_ref = IndexRef {
+            colors: &index.colors(),
+            features: &index.features(),
+            biome_profiles: &index.biome_profiles(),
+            index: &index,
+        };
+        let mut rng = ChaChaRng::from_seed([seed; 32]);
+        Tavern::generate(
+            &Land::empty(),
+            index_ref,
+            &mut rng,
+            &Site::default(),
+            Vec2::new(tiles / 2, 0),
+            Dir2::NegY,
+            Aabr {
+                min: Vec2::zero(),
+                max: Vec2::broadcast(tiles),
+            },
+            Some(0),
+            lodging,
+        )
+    }
+
+    fn lodging_rooms(tavern: &Tavern) -> Vec<&Room> {
+        tavern
+            .rooms
+            .values()
+            .filter(|room| matches!(room.kind, RoomKind::Lodging))
+            .collect()
+    }
+
+    fn room_with(kind: RoomKind, min: Vec3<i32>, max: Vec3<i32>) -> Room {
+        Room::new(Aabb { min, max }, kind)
+    }
+
+    fn aabr_of(room: &Room) -> Aabr<i32> {
+        Aabr {
+            min: room.bounds.min.xy(),
+            max: room.bounds.max.xy(),
+        }
+    }
+
+    #[test]
+    fn a_tavern_asked_for_no_lodging_has_none() {
+        for seed in 0..32u8 {
+            let tavern = tavern(seed, 6, false);
+            assert!(!tavern.lodging);
+            assert!(lodging_rooms(&tavern).is_empty());
+        }
+    }
+
+    #[test]
+    fn asking_for_lodging_leaves_the_ground_floor_layout_untouched() {
+        for seed in 0..32u8 {
+            let plain = tavern(seed, 6, false);
+            let inn = tavern(seed, 6, true);
+            let plain_rooms: Vec<_> = plain
+                .rooms
+                .values()
+                .map(|r| (r.kind as u8, r.bounds))
+                .collect();
+            let inn_rooms: Vec<_> = inn
+                .rooms
+                .values()
+                .filter(|r| !matches!(r.kind, RoomKind::Lodging))
+                .map(|r| (r.kind as u8, r.bounds))
+                .collect();
+            assert_eq!(
+                plain_rooms, inn_rooms,
+                "seed {seed}: the lodging flag changed the rooms generated before it"
+            );
+            assert!(
+                lodging_rooms(&inn).len() <= 1,
+                "an inn has one lodging storey"
+            );
+        }
+    }
+
+    #[test]
+    fn an_inn_stacks_a_bedded_storey_over_a_ground_floor_room_most_of_the_time() {
+        let mut inns = 0;
+        for seed in 0..64u8 {
+            let tavern = tavern(seed, 6, true);
+            if !tavern.lodging {
+                continue;
+            }
+            inns += 1;
+            let lodging = lodging_rooms(&tavern);
+            assert_eq!(lodging.len(), 1);
+            let upper = lodging[0];
+
+            let below = tavern.rooms.values().find(|room| {
+                !matches!(room.kind, RoomKind::Lodging)
+                    && aabr_of(room) == aabr_of(upper)
+                    && room.bounds.max.z + 2 == upper.bounds.min.z
+            });
+            assert!(
+                below.is_some(),
+                "seed {seed}: nothing is directly under the lodging"
+            );
+
+            let beds: Vec<_> = upper
+                .details
+                .iter()
+                .filter_map(|detail| match *detail {
+                    Detail::Bed { pos, dir } => Some(bed_bounds(pos, dir)),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                !beds.is_empty(),
+                "seed {seed}: the lodging storey has no beds"
+            );
+            let room = aabr_of(upper);
+            for bed in &beds {
+                assert!(
+                    bed.min.x >= room.min.x
+                        && bed.min.y >= room.min.y
+                        && bed.max.x <= room.max.x
+                        && bed.max.y <= room.max.y,
+                    "seed {seed}: a bed sticks out of its room"
+                );
+            }
+        }
+        assert!(
+            inns >= 48,
+            "only {inns} of 64 seeds produced an inn on a six-tile plot"
+        );
+    }
+
+    #[test]
+    fn beds_keep_clear_of_each_other_and_stay_inside_their_area() {
+        let area = Aabr {
+            min: Vec2::new(10, 10),
+            max: Vec2::new(30, 24),
+        };
+        let beds = place_beds(&[area], [Dir2::X, Dir2::Y]);
+        assert!(!beds.is_empty());
+        assert!(beds.len() <= LODGING_MAX_BEDS);
+        let footprints: Vec<_> = beds
+            .iter()
+            .map(|(pos, dir)| bed_bounds(*pos, *dir))
+            .collect();
+        for (i, a) in footprints.iter().enumerate() {
+            assert!(
+                a.min.x >= area.min.x
+                    && a.min.y >= area.min.y
+                    && a.max.x <= area.max.x
+                    && a.max.y <= area.max.y
+            );
+            for b in &footprints[i + 1..] {
+                let apart_x =
+                    a.min.x > b.max.x + LODGING_BED_GAP || b.min.x > a.max.x + LODGING_BED_GAP;
+                let apart_y =
+                    a.min.y > b.max.y + LODGING_BED_GAP || b.min.y > a.max.y + LODGING_BED_GAP;
+                assert!(apart_x || apart_y, "{a:?} and {b:?} crowd each other");
+            }
+        }
+    }
+
+    #[test]
+    fn no_bed_fits_an_area_smaller_than_one() {
+        let sliver = Aabr {
+            min: Vec2::new(0, 0),
+            max: Vec2::new(1, 1),
+        };
+        assert!(place_beds(&[sliver], [Dir2::X, Dir2::Y]).is_empty());
+        assert!(place_beds(&[], [Dir2::X, Dir2::Y]).is_empty());
+    }
+
+    #[test]
+    fn the_lodging_parent_is_the_largest_roomy_ground_floor_hall() {
+        let mut rooms = Store::default();
+        let small_bar = rooms.insert(room_with(
+            RoomKind::Bar,
+            Vec3::new(0, 0, 0),
+            Vec3::new(9, 9, 4),
+        ));
+        let big_stage = rooms.insert(room_with(
+            RoomKind::Stage,
+            Vec3::new(20, 0, 0),
+            Vec3::new(40, 18, 4),
+        ));
+        rooms.insert(room_with(
+            RoomKind::Cellar,
+            Vec3::new(0, 20, -10),
+            Vec3::new(30, 50, -6),
+        ));
+        rooms.insert(room_with(
+            RoomKind::Garden,
+            Vec3::new(50, 0, 0),
+            Vec3::new(90, 40, 4),
+        ));
+        assert_eq!(lodging_parent(&rooms), Some(big_stage));
+
+        let mut only_small = Store::default();
+        let bar = only_small.insert(room_with(
+            RoomKind::Bar,
+            Vec3::new(0, 0, 0),
+            Vec3::new(9, 9, 4),
+        ));
+        assert_eq!(lodging_parent(&only_small), Some(bar));
+        let _ = small_bar;
+    }
+
+    #[test]
+    fn a_hall_too_narrow_to_climb_through_is_never_the_lodging_parent() {
+        let mut rooms = Store::default();
+        // 4 blocks tall needs 8 blocks of clear side for the staircase.
+        rooms.insert(room_with(
+            RoomKind::Seating,
+            Vec3::new(0, 0, 0),
+            Vec3::new(7, 40, 4),
+        ));
+        rooms.insert(room_with(
+            RoomKind::Entrance,
+            Vec3::new(0, 50, 0),
+            Vec3::new(30, 80, 3),
+        ));
+        assert_eq!(lodging_parent(&rooms), None);
     }
 }

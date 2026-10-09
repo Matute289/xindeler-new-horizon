@@ -4,7 +4,7 @@
 # which sites changed and why.
 #
 # key	digest	plots	buildings	name
-@roads	82c213d5304e869f	81	1820	-
+@roads	59232dc76b6cc72d	85	1828	-
 fortification:site.eastwall_stone	505f3f6154824724	1	1	Eastwall Stone
 fortification:site.greenhwall_stone	596a7c13fb745fa4	1	1	Greenhwall Stone
 fortification:site.northwall_stone	4045a4383d16fcb2	1	1	Northwall Stone
@@ -12,12 +12,12 @@ landmark:site.black_tower_north	a0d43500d69ce73f	1	1	Black Tower
 landmark:site.black_tower_south	404c4b91af114c1c	1	1	Black Tower
 landmark:site.bs_lighthouse	b3890bf9589d8ca8	1	1	BS Lighthouse
 landmark:site.dove_point_lighthouse	f754b001a9f93df9	1	1	Dove Point Lighthouse
-landmark:site.duren_river_port	85a11396ed9b6499	1	1	Duren River Port
+landmark:site.duren_river_port	c0228e1f4fd0cfce	14	11	Duren River Port
 landmark:site.faro_de_alzinder	658fe97786440f51	1	1	Faro De Alzinder
 landmark:site.faro_de_caros	6a402544a2464853	1	1	Faro De Caros
 landmark:site.headlamp_tip	63cb95ca67203bca	1	1	Headlamp Tip
 landmark:site.kalitos_last_light	928e3b027462010d	1	1	Kalitos Last Light
-landmark:site.kalthis_river_port	b88e688e178bece1	1	1	Kalthis River Port
+landmark:site.kalthis_river_port	40e79e6473a78bfd	13	12	Kalthis River Port
 landmark:site.kinderpon_beacon	f84f6b83574ddbb9	1	1	Kinderpon Beacon
 landmark:site.portland_lighthouse	7b18bab864a46e90	1	1	Portland Lighthouse
 landmark:site.red_lighthouse	94c1840efbe04a06	1	1	Red Lighthouse
