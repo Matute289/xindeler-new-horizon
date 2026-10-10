@@ -20,6 +20,7 @@ use crate::{
         architect::{Death, TrackedPopulation},
     },
     event::OnDeath,
+    generate::settlement_population,
 };
 
 use super::{Rule, RuleError};
@@ -34,14 +35,23 @@ const MIN_SPAWN_DELAY: f64 = 60.0 * 60.0 * 24.0;
 /// respawn.
 const RESPAWN_ATTEMPTS: usize = 30;
 
-pub struct Architect;
+// XINDELER: NH-171 technical NPC ceiling (see `ceiling`).
+mod ceiling;
+
+use ceiling::{NpcCeiling, tracked_npc_count};
+
+pub struct Architect {
+    ceiling: NpcCeiling,
+}
 
 impl Rule for Architect {
     fn start(rtstate: &mut RtState) -> Result<Self, RuleError> {
         rtstate.bind(on_death);
         rtstate.bind(architect_tick);
 
-        Ok(Self)
+        Ok(Self {
+            ceiling: NpcCeiling::from_env(),
+        })
     }
 }
 
@@ -66,6 +76,7 @@ fn architect_tick(ctx: EventCtx<Architect, OnTick>) {
 
     let mut rng = rng();
     let mut count_to_spawn = rng.random_range(1..20);
+    let allowance = ctx.rule.ceiling.allowance(tracked_npc_count(data));
 
     let pop = data.architect.population.clone();
     'outer: for (pop, count) in pop
@@ -223,6 +234,21 @@ fn architect_tick(ctx: EventCtx<Architect, OnTick>) {
         count_to_spawn += count;
     }
 
+    // The ceiling caps what this round may create; at 0 the queue is left
+    // exactly as it is.
+    respawn_queued(data, tod, count_to_spawn.min(allowance), |data, death| {
+        spawn_npc(data, ctx.world, ctx.index, death)
+    });
+}
+
+/// Works through the respawn queue, creating at most `count_to_spawn` NPCs
+/// with `spawn`. Deaths that cannot spawn yet stay queued, in order.
+fn respawn_queued(
+    data: &mut Data,
+    tod: TimeOfDay,
+    mut count_to_spawn: u32,
+    mut spawn: impl FnMut(&mut Data, &Death) -> bool,
+) {
     // @perf: Could reuse previous allocation here.
     let mut failed_spawn = Vec::new();
 
@@ -242,7 +268,7 @@ fn architect_tick(ctx: EventCtx<Architect, OnTick>) {
             break;
         }
 
-        if spawn_npc(data, ctx.world, ctx.index, &death) {
+        if spawn(data, &death) {
             count_to_spawn -= 1;
         } else {
             failed_spawn.push(death);
@@ -448,17 +474,51 @@ fn spawn_profession(
                 },
             )
         },
-        _ => spawn_at_plot(
-            data,
-            world,
-            index,
-            death,
-            rng,
-            body,
-            personality,
-            |_, _, p| p.is_house(),
-        ),
+        // A town NPC goes to a settlement that still has room for its
+        // population (NH-171); when none has (or those that have are
+        // loaded), to any house as before, so the total is never lost.
+        _ => {
+            spawn_at_plot(
+                data,
+                world,
+                index,
+                death,
+                rng,
+                body,
+                personality,
+                |data, s, p| p.is_house() && settlement_has_room(data, index, s) != Some(false),
+            ) || spawn_at_plot(
+                data,
+                world,
+                index,
+                death,
+                rng,
+                body,
+                personality,
+                |_, _, p| p.is_house(),
+            )
+        },
     }
+}
+
+/// Whether a settlement's resident population is still below the number it
+/// wants ([`settlement_population`]): `Some(true)` / `Some(false)`, or
+/// `None` for a site that is not a settlement.
+fn settlement_has_room(data: &Data, index: IndexRef, site: common::rtsim::SiteId) -> Option<bool> {
+    let site = &data.sites[site];
+    site.world_site
+        .and_then(|ws| settlement_population(index.sites.get(ws)))
+        .map(|wanted| (site.population.len() as u32) < wanted.total())
+}
+
+/// A town NPC (not a pirate or cultist), whose respawn is steered toward
+/// settlements below their population.
+fn is_town_npc(role: &Role) -> bool {
+    matches!(
+        role,
+        Role::Civilised(Some(profession))
+            if !matches!(profession, Profession::Pirate(_) | Profession::Cultist)
+    )
 }
 
 fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> bool {
@@ -469,12 +529,28 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
     let did_spawn = if let Some(faction_id) = death.faction
         && data.factions.get(faction_id).is_some()
     {
-        if let Some((id, site)) = data
+        let in_faction = |data: &Data, id, site: &crate::data::Site| {
+            site.faction == Some(faction_id) && !site.is_loaded() && {
+                // XINDELER: a town NPC goes to a settlement of its faction
+                // that still has room for its population (NH-171).
+                !is_town_npc(&death.role) || settlement_has_room(data, index, id) == Some(true)
+            }
+        };
+        let site = data
             .sites
             .iter()
-            .filter(|(_, site)| site.faction == Some(faction_id) && !site.is_loaded())
+            .filter(|(id, site)| in_faction(data, *id, site))
             .choose(&mut rng)
-        {
+            .map(|(id, _)| id)
+            .or_else(|| {
+                data.sites
+                    .iter()
+                    .filter(|(_, site)| site.faction == Some(faction_id) && !site.is_loaded())
+                    .choose(&mut rng)
+                    .map(|(id, _)| id)
+            })
+            .map(|id| (id, &data.sites[id]));
+        if let Some((id, site)) = site {
             let wpos = site.wpos;
             let wpos = wpos
                 .as_()
