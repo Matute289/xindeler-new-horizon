@@ -6911,13 +6911,12 @@ mod tests {
                 .iter()
                 .all(|s| s.population.npc_count.is_none())
         );
-        assert!(
-            real_settlements()
-                .settlements
-                .iter()
-                .all(|s| s.population.npc_count.is_none()),
-            "no real settlement sets npc_count yet: every population is today's"
-        );
+        // Kalthis and Duren are set to 400 NPCs each (decided 2026-10-10);
+        // every other real settlement keeps the plot-count rule.
+        for s in &real_settlements().settlements {
+            let expected = matches!(s.id.as_str(), "site.kalthis" | "site.duren").then_some(400);
+            assert_eq!(s.population.npc_count, expected, "{}", s.id);
+        }
 
         let with = |n: u32| {
             settlement_ron("Town", "Small", Some("50")).replace(
