@@ -81,7 +81,7 @@ pub(crate) fn warm(index: &Index, sim: &WorldSim) {
     // worker, where it would be both repeated and untimely. Reporting lives
     // here rather than in the index so that stays a pure query.
     let land = Land::from_sim(sim);
-    let inert = voids.inert_connect_features(|wpos| land.get_alt_approx(wpos));
+    let inert = voids.inert_connect_features(|wpos| land.get_alt_approx_table(wpos));
     if !inert.is_empty() {
         // `info!`, not `warn!`, and the level is a deliberate choice. This is a
         // standing fact about the authored content, not a fault: it is expected

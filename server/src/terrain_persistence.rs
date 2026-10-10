@@ -22,6 +22,27 @@ use vek::*;
 
 const MAX_BLOCK_CACHE: usize = 64_000_000;
 
+/// XINDELER: the per-region authored raster digest record, next to the
+/// persisted chunks (see `TerrainPersistence::check_authored_rasters_digest`).
+const AUTHORED_DIGESTS_FILE: &str = "authored_rasters.digests.ron";
+
+/// XINDELER: one authored region as terrain persistence guards it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthoredRegionDigest {
+    pub id: String,
+    pub digest: String,
+    /// Box in chunk coordinates (min inclusive, max exclusive).
+    pub min_chunk: Vec2<i32>,
+    pub max_chunk: Vec2<i32>,
+}
+
+/// XINDELER: what `authored_rasters.digests.ron` holds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct AuthoredDigestRecord {
+    manifest: String,
+    regions: std::collections::BTreeMap<String, String>,
+}
+
 pub struct TerrainPersistence {
     path: PathBuf,
     chunks: HashMap<Vec2<i32>, LoadedChunk>,
@@ -95,77 +116,128 @@ impl TerrainPersistence {
         // reliable strategy should be implemented here.
     }
 
-    /// XINDELER: guard persisted edits against a changed authored water
-    /// manifest (`world::authored_raster`). Persisted player edits are
-    /// re-applied over regenerated terrain, so edits inside a changed authored
-    /// region can end up floating or buried.
+    /// XINDELER: guard persisted edits against changed authored rasters
+    /// (`world::authored_raster`). Persisted player edits are re-applied over
+    /// regenerated terrain, so edits inside a changed authored region can end
+    /// up floating or buried.
     ///
-    /// The digest of the world's manifest is recorded next to the persisted
-    /// chunks. When it differs from the recorded one -- or none is recorded
-    /// but persisted chunks exist (a manifest applied for the first time to an
-    /// old save) -- and any persisted chunk lies inside an authored region
-    /// (`region_chunks`: the regions' boxes in chunk coordinates), the server
+    /// The digest of the world's manifest and of each of its regions
+    /// (`regions`: id, digest, box in chunk coordinates) are recorded next to
+    /// the persisted chunks (`authored_rasters.digests.ron`; the one-line
+    /// `authored_rasters.digest` of older engines is still written and read).
+    /// When a region's digest differs from the recorded one -- or the region
+    /// is new -- and a persisted chunk lies inside its box, the server
     /// refuses to start: clear those chunk files (or move them aside) first,
     /// or set `XINDELER_ALLOW_STALE_AUTHORED_EDITS=1` to keep them on purpose.
-    /// Edits outside every region are unaffected and never block. Without the
-    /// `persistent_world` feature nothing is persisted, so there is nothing to
-    /// guard.
+    /// Edits outside every changed region never block, so a small edit in one
+    /// region does not refuse start for edits in another.
+    ///
+    /// Migration from the single digest: when only the old record exists and
+    /// it equals the current manifest digest, every region digest is recorded
+    /// without a check; when it differs (or nothing was recorded but persisted
+    /// chunks exist), every region counts as changed (the old rule). Removed
+    /// regions are pruned from the record. Nothing is recorded while a
+    /// refusal stands. Without the `persistent_world` feature nothing is
+    /// persisted, so there is nothing to guard.
     pub fn check_authored_rasters_digest(
         &self,
         digest: Option<&str>,
-        region_chunks: &[(Vec2<i32>, Vec2<i32>)],
+        regions: &[AuthoredRegionDigest],
     ) {
-        let path = self.path.join("authored_rasters.digest");
+        let record_path = self.path.join(AUTHORED_DIGESTS_FILE);
+        let old_path = self.path.join("authored_rasters.digest");
         let current = digest.unwrap_or("none");
-        let previous = std::fs::read_to_string(&path).ok();
-        if previous.as_deref().map(str::trim) == Some(current) {
+        let recorded: Option<AuthoredDigestRecord> = std::fs::read_to_string(&record_path)
+            .ok()
+            .and_then(|text| ron::from_str(&text).ok());
+        let old = std::fs::read_to_string(&old_path)
+            .ok()
+            .map(|s| s.trim().to_string());
+        let previous = recorded
+            .as_ref()
+            .map(|r| r.manifest.clone())
+            .or_else(|| old.clone());
+        let changed: Vec<&AuthoredRegionDigest> = match &recorded {
+            Some(r) => regions
+                .iter()
+                .filter(|g| r.regions.get(&g.id) != Some(&g.digest))
+                .collect(),
+            // Migration: an unchanged single digest means no region changed.
+            None if old.as_deref() == Some(current) => Vec::new(),
+            None => regions.iter().collect(),
+        };
+        let record = AuthoredDigestRecord {
+            manifest: current.to_string(),
+            regions: regions
+                .iter()
+                .map(|g| (g.id.clone(), g.digest.clone()))
+                .collect(),
+        };
+        if recorded.as_ref() == Some(&record) && old.as_deref() == Some(current) {
             return;
         }
-        let stale: Vec<Vec2<i32>> = std::fs::read_dir(&self.path)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                let rest = name.strip_prefix("chunk_")?.strip_suffix(".dat")?;
-                let (x, y) = rest.split_once('_')?;
-                Some(Vec2::new(x.parse().ok()?, y.parse().ok()?))
-            })
-            .filter(|c| {
-                region_chunks
-                    .iter()
-                    .any(|(min, max)| c.x >= min.x && c.y >= min.y && c.x < max.x && c.y < max.y)
-            })
-            .collect();
+        let stale: Vec<Vec2<i32>> = if changed.is_empty() {
+            Vec::new()
+        } else {
+            std::fs::read_dir(&self.path)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    let rest = name.strip_prefix("chunk_")?.strip_suffix(".dat")?;
+                    let (x, y) = rest.split_once('_')?;
+                    Some(Vec2::new(x.parse().ok()?, y.parse().ok()?))
+                })
+                .filter(|c| {
+                    changed.iter().any(|g| {
+                        c.x >= g.min_chunk.x
+                            && c.y >= g.min_chunk.y
+                            && c.x < g.max_chunk.x
+                            && c.y < g.max_chunk.y
+                    })
+                })
+                .collect()
+        };
         if !stale.is_empty() {
             let allow =
                 std::env::var("XINDELER_ALLOW_STALE_AUTHORED_EDITS").is_ok_and(|v| v == "1");
+            let changed_ids: Vec<&str> = changed.iter().map(|g| g.id.as_str()).collect();
             error!(
-                previous = previous.as_deref().map(str::trim).unwrap_or("not recorded"),
+                previous = previous.as_deref().unwrap_or("not recorded"),
                 current,
+                changed_regions = ?changed_ids,
                 persisted_chunks_in_regions = stale.len(),
                 examples = ?&stale[..stale.len().min(5)],
                 allowed = allow,
-                "The world's authored water rasters changed (or were applied for the first \
-                 time) under persisted terrain edits inside authored regions: those edits would \
-                 be re-applied over new terrain and may float or be buried."
+                "The world's authored rasters changed (or were applied for the first time) under \
+                 persisted terrain edits inside the changed regions: those edits would be \
+                 re-applied over new terrain and may float or be buried."
             );
             if !allow {
                 panic!(
-                    "Refusing to start: {} persisted chunk(s) inside authored regions were saved \
-                     under a different authored water manifest (e.g. {:?}). Clear or move aside \
-                     those chunk_<x>_<y>.dat files in {:?}, or set \
-                     XINDELER_ALLOW_STALE_AUTHORED_EDITS=1 to keep them.",
+                    "Refusing to start: {} persisted chunk(s) inside changed authored regions \
+                     ({changed_ids:?}) were saved under a different authored raster manifest \
+                     (e.g. {:?}). Clear or move aside those chunk_<x>_<y>.dat files in {:?}, or \
+                     set XINDELER_ALLOW_STALE_AUTHORED_EDITS=1 to keep them.",
                     stale.len(),
                     &stale[..stale.len().min(5)],
                     self.path
                 );
             }
         } else {
-            info!(current, "Recording the authored water raster digest");
+            info!(current, "Recording the authored raster digests");
         }
-        if let Err(e) = std::fs::write(&path, current) {
-            warn!(?e, "Could not record the authored water raster digest");
+        match ron::ser::to_string_pretty(&record, ron::ser::PrettyConfig::default()) {
+            Ok(text) => {
+                if let Err(e) = std::fs::write(&record_path, text) {
+                    warn!(?e, "Could not record the authored raster digests");
+                }
+            },
+            Err(e) => warn!(?e, "Could not serialise the authored raster digests"),
+        }
+        if let Err(e) = std::fs::write(&old_path, current) {
+            warn!(?e, "Could not record the authored raster digest");
         }
     }
 
@@ -564,17 +636,32 @@ mod authored_digest_tests {
         TerrainPersistence::new(dir)
     }
 
+    fn region(id: &str, digest: &str, min: (i32, i32), max: (i32, i32)) -> AuthoredRegionDigest {
+        AuthoredRegionDigest {
+            id: id.into(),
+            digest: digest.into(),
+            min_chunk: min.into(),
+            max_chunk: max.into(),
+        }
+    }
+
+    fn record(p: &TerrainPersistence) -> AuthoredDigestRecord {
+        ron::from_str(&std::fs::read_to_string(p.path.join(AUTHORED_DIGESTS_FILE)).unwrap())
+            .unwrap()
+    }
+
     #[test]
     fn edits_outside_every_region_never_block_and_the_digest_is_recorded() {
         let p = persistence("outside");
         std::fs::write(p.path.join("chunk_5_5.dat"), b"x").unwrap();
-        p.check_authored_rasters_digest(Some("abc"), &[(Vec2::new(10, 10), Vec2::new(20, 20))]);
+        p.check_authored_rasters_digest(Some("abc"), &[region("a", "r1", (10, 10), (20, 20))]);
         assert_eq!(
             std::fs::read_to_string(p.path.join("authored_rasters.digest")).unwrap(),
             "abc"
         );
-        // Same digest again: nothing to do.
-        p.check_authored_rasters_digest(Some("abc"), &[(Vec2::new(0, 0), Vec2::new(20, 20))]);
+        assert_eq!(record(&p).regions.get("a").map(String::as_str), Some("r1"));
+        // Same digests again: nothing to do.
+        p.check_authored_rasters_digest(Some("abc"), &[region("a", "r1", (0, 0), (20, 20))]);
     }
 
     #[test]
@@ -582,6 +669,57 @@ mod authored_digest_tests {
     fn edits_inside_a_region_under_a_new_manifest_refuse_to_start() {
         let p = persistence("inside");
         std::fs::write(p.path.join("chunk_12_15.dat"), b"x").unwrap();
-        p.check_authored_rasters_digest(Some("abc"), &[(Vec2::new(10, 10), Vec2::new(20, 20))]);
+        p.check_authored_rasters_digest(Some("abc"), &[region("a", "r1", (10, 10), (20, 20))]);
+    }
+
+    /// A change in one region does not refuse start for edits in another.
+    #[test]
+    fn only_edits_inside_changed_regions_block() {
+        let p = persistence("per-region");
+        p.check_authored_rasters_digest(Some("m1"), &[
+            region("a", "a1", (0, 0), (10, 10)),
+            region("b", "b1", (20, 20), (30, 30)),
+        ]);
+        std::fs::write(p.path.join("chunk_5_5.dat"), b"x").unwrap();
+        // Region b changes; the edit lies in a: no refusal, recorded.
+        p.check_authored_rasters_digest(Some("m2"), &[
+            region("a", "a1", (0, 0), (10, 10)),
+            region("b", "b2", (20, 20), (30, 30)),
+        ]);
+        let r = record(&p);
+        assert_eq!(r.manifest, "m2");
+        assert_eq!(r.regions.get("b").map(String::as_str), Some("b2"));
+        // Region b removed: pruned.
+        p.check_authored_rasters_digest(Some("m3"), &[region("a", "a1", (0, 0), (10, 10))]);
+        assert_eq!(record(&p).regions.len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Refusing to start")]
+    fn an_edit_inside_a_changed_region_blocks() {
+        let p = persistence("per-region-block");
+        p.check_authored_rasters_digest(Some("m1"), &[region("a", "a1", (0, 0), (10, 10))]);
+        std::fs::write(p.path.join("chunk_5_5.dat"), b"x").unwrap();
+        p.check_authored_rasters_digest(Some("m2"), &[region("a", "a2", (0, 0), (10, 10))]);
+    }
+
+    /// Migration from the single digest of older engines: unchanged means no
+    /// region changed, even with persisted chunks inside regions.
+    #[test]
+    fn an_unchanged_single_digest_migrates_without_a_refusal() {
+        let p = persistence("migrate");
+        std::fs::write(p.path.join("authored_rasters.digest"), "m1").unwrap();
+        std::fs::write(p.path.join("chunk_5_5.dat"), b"x").unwrap();
+        p.check_authored_rasters_digest(Some("m1"), &[region("a", "a1", (0, 0), (10, 10))]);
+        assert_eq!(record(&p).regions.get("a").map(String::as_str), Some("a1"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Refusing to start")]
+    fn a_changed_single_digest_keeps_the_old_rule() {
+        let p = persistence("migrate-changed");
+        std::fs::write(p.path.join("authored_rasters.digest"), "m0").unwrap();
+        std::fs::write(p.path.join("chunk_5_5.dat"), b"x").unwrap();
+        p.check_authored_rasters_digest(Some("m1"), &[region("a", "a1", (0, 0), (10, 10))]);
     }
 }

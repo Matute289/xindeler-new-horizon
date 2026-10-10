@@ -273,6 +273,21 @@ pub fn apply_paths_to(canvas: &mut Canvas) {
         {
             let inset = 0;
 
+            // XINDELER: on an exact authored ground cell the patch is the
+            // road's terrain: paint the top block only (no notch, no dike, no
+            // head-space cut). See `authored_raster::post_civ` for the report
+            // of civ roads crossing authored cliffs.
+            if col
+                .authored
+                .is_some_and(|a| a.cell.is_exact_ground_layer_cell())
+            {
+                let wpos = Vec3::new(wpos2d.x, wpos2d.y, col.alt as i32);
+                let path_color =
+                    path.surface_color(col.sub_surface_color.map(|e| (e * 255.0) as u8), wpos);
+                canvas.set(wpos, Block::new(BlockKind::Earth, path_color));
+                return;
+            }
+
             let authored_path_profile = if canvas.info().chunk.authored_cromatolis_v0 {
                 let info = canvas.info();
                 let center_alt = PathLocals::new(&info, col, path_nearest).riverless_alt;
@@ -488,7 +503,7 @@ pub fn apply_caverns_to<R: Rng>(canvas: &mut Canvas, dynamic_rng: &mut R) {
 
     // Get cavern attributes at a position
     let cavern_at = |wpos2d| {
-        let alt = info.land().get_alt_approx(wpos2d);
+        let alt = info.land().get_alt_approx_table(wpos2d);
 
         // Range of heights for the caverns
         let height_range = 16.0..250.0;

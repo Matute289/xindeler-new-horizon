@@ -475,6 +475,7 @@ mod tests {
                 tag: AuthoredSettlementPopulationTag::Human,
                 peoples: vec![AuthoredSettlementPeople::Human],
                 future_peoples: Vec::new(),
+                npc_count: None,
             },
             requires_capital_castle: false,
             start_eligible: true,

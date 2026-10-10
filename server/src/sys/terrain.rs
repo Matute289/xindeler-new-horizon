@@ -347,6 +347,14 @@ impl<'a> System<'a> for Sys {
         let avoid_liquid = data.world.sim().authored_rasters().is_some();
         #[cfg(not(feature = "worldgen"))]
         let avoid_liquid = false;
+        // XINDELER: a world with an authored ground layer can have raised the
+        // ground over a saved position (see `WorldSim::buried_ground_lift`).
+        #[cfg(feature = "worldgen")]
+        let ground_layer = data
+            .world
+            .sim()
+            .authored_rasters()
+            .is_some_and(|r| r.region_entries().any(|e| e.has_ground));
         let repositioned = (&data.entities, &mut data.positions, (&mut data.forced_updates).maybe(), &data.reposition_entities)
             // TODO: Consider using par_bridge() because Rayon has very poor work splitting for
             // sparse joins.
@@ -359,6 +367,29 @@ impl<'a> System<'a> for Sys {
                 // from having just logged in), reposition them.
                 let chunk_pos = TerrainGrid::chunk_key(entity_pos);
                 let chunk = data.terrain.get_key(chunk_pos)?;
+                // XINDELER: spawn-fix for a position buried by an authored
+                // ground patch: search from the new surface (both branches),
+                // never from inside the ground (a cave below would win, or
+                // the ground would be out of the search's reach).
+                #[cfg(feature = "worldgen")]
+                let entity_pos = if ground_layer {
+                    let solid = common::vol::ReadVol::get(&*data.terrain, entity_pos)
+                        .is_ok_and(|b| b.is_solid());
+                    match data.world.sim().buried_ground_lift(entity_pos, solid) {
+                        Some(z) => {
+                            tracing::info!(
+                                ?entity_pos,
+                                to_z = z,
+                                "Repositioning an entity buried by an authored ground patch: \
+                                 searching from the new surface"
+                            );
+                            entity_pos.with_z(z)
+                        },
+                        None => entity_pos,
+                    }
+                } else {
+                    entity_pos
+                };
                 let new_pos = if reposition.needs_ground {
                     // XINDELER: on a world with authored water, a position
                     // saved on old land can now be inside an authored

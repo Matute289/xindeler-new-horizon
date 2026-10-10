@@ -11,6 +11,13 @@ use vek::*;
 
 /// A wrapper type that may contain a reference to a generated world. If not,
 /// default values will be provided.
+///
+/// XINDELER: `Land` is authored-aware (its altitude, surface and gradient
+/// read the authored ground layer inside authored regions, see
+/// `WorldSim::ground_alt_at`); `WorldSim::get_alt_approx` is the chunk table.
+/// The `*_table` accessors give the table through `Land`, for consumers whose
+/// result reaches beyond the sampled point (everything under `layer/` by
+/// default).
 pub struct Land<'a> {
     sim: Option<&'a sim::WorldSim>,
 }
@@ -32,13 +39,19 @@ impl<'a> Land<'a> {
     }
 
     /// See `WorldSim::get_surface_alt_approx`.
-    pub fn get_surface_alt_approx(&self, wpos: Vec2<i32>) -> f32 {
+    // XINDELER: authored-aware (`WorldSim::surface_alt_at`).
+    pub fn get_surface_alt_approx(&self, wpos: Vec2<i32>) -> f32 { self.surface_alt_at(wpos) }
+
+    // XINDELER: authored-aware (`WorldSim::ground_alt_at`).
+    pub fn get_alt_approx(&self, wpos: Vec2<i32>) -> f32 {
         self.sim
-            .map(|sim| sim.get_surface_alt_approx(wpos))
+            .and_then(|sim| sim.ground_alt_at(wpos))
             .unwrap_or(0.0)
     }
 
-    pub fn get_alt_approx(&self, wpos: Vec2<i32>) -> f32 {
+    /// XINDELER: the chunk table's altitude (`WorldSim::get_alt_approx`),
+    /// ignoring the authored ground layer.
+    pub fn get_alt_approx_table(&self, wpos: Vec2<i32>) -> f32 {
         self.sim
             .and_then(|sim| sim.get_alt_approx(wpos))
             .unwrap_or(0.0)
@@ -84,7 +97,16 @@ impl<'a> Land<'a> {
             .unwrap_or(Vec2::zero())
     }
 
+    // XINDELER: authored-aware (`WorldSim::ground_gradient_at`).
     pub fn get_gradient_approx(&self, wpos: Vec2<i32>) -> f32 {
+        self.sim
+            .and_then(|sim| sim.ground_gradient_at(wpos))
+            .unwrap_or(0.0)
+    }
+
+    /// XINDELER: the chunk table's gradient (`WorldSim::get_gradient_approx`),
+    /// ignoring the authored ground layer.
+    pub fn get_gradient_approx_table(&self, wpos: Vec2<i32>) -> f32 {
         self.sim
             .and_then(|sim| sim.get_gradient_approx(self.wpos_chunk_pos(wpos)))
             .unwrap_or(0.0)

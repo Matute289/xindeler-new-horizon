@@ -140,6 +140,51 @@ fn fixtures() -> Vec<Fixture> {
             },
         },
         Fixture {
+            name: "accept_consumer_settings",
+            refuse: None,
+            build: || {
+                let mut s = region(vec![ground(rect(2100.0, 2100.0, 2500.0, 2500.0), PLATEAU)]);
+                s.sites_on_patch = vec![
+                    "settlement:site.fixture".into(),
+                    "procedural-bridge:1,2:3,2".into(),
+                ];
+                s.site_levelling = false;
+                s.max_exposed_void_columns = 12;
+                built(s)
+            },
+        },
+        Fixture {
+            name: "refuse_consumer_settings_without_ground",
+            refuse: Some("the region does not declare Ground"),
+            build: || {
+                let mut s = region(vec![
+                    PaintOp::Water {
+                        shape: rect(2200.0, 2290.0, 2400.0, 2310.0),
+                        surface_cm: 23_850,
+                        bed_cm: 23_250,
+                    },
+                    PaintOp::BankRing {
+                        width_m: 2,
+                        bed_cm: Some(PLATEAU),
+                    },
+                ]);
+                s.sites_on_patch = vec!["settlement:site.fixture".into()];
+                built(s)
+            },
+        },
+        Fixture {
+            name: "refuse_sites_on_patch_listed_twice",
+            refuse: Some("is empty or listed twice"),
+            build: || {
+                let mut s = region(vec![ground(rect(2100.0, 2100.0, 2500.0, 2500.0), PLATEAU)]);
+                s.sites_on_patch = vec![
+                    "settlement:site.fixture".into(),
+                    "settlement:site.fixture".into(),
+                ];
+                built(s)
+            },
+        },
+        Fixture {
             // Blend cells beside authored water: only exact ground (or a
             // bank) at least as high holds water.
             name: "refuse_blend_ground_beside_water",

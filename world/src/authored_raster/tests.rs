@@ -163,6 +163,7 @@ const SETTINGS: RegionSettings = RegionSettings {
     exclude_procedural_margin_m: 0.0,
     aquatic_profile: None,
     sea_fill: SeaFill::Auto,
+    site_levelling: true,
 };
 
 fn engine() -> EngineColumn {
@@ -183,6 +184,7 @@ fn dry() -> DryTerrain {
         warp: 1.5,
         max_warp: 1.0,
         base_sea_level: 139.01,
+        site_prefer_alt: (0.1, f32::NEG_INFINITY),
     }
 }
 
@@ -688,6 +690,7 @@ fn procedural_suppression_follows_the_region_settings() {
             exclude_procedural_margin_m: margin,
             aquatic_profile: None,
             sea_fill: SeaFill::Auto,
+            site_levelling: true,
         },
         weight: 1.0,
         cell,
@@ -1425,6 +1428,9 @@ fn new_manifest_fields_at_their_defaults_do_not_change_the_digest() {
             aquatic_ecology_profile: None,
             consistency: ConsistencyBudget::default(),
             sea_fill: SeaFill::Auto,
+            sites_on_patch: vec![],
+            site_levelling: true,
+            max_exposed_void_columns: 0,
         }],
     };
     let text = ron::ser::to_string(&m).unwrap();
@@ -1777,4 +1783,342 @@ fn seam_pairs_are_ground_cells_meeting_the_natural_map() {
             .ground_seam_pairs()
             .is_empty()
     );
+}
+
+#[test]
+fn site_levelling_applies_on_ground_cells_only_when_the_region_levels() {
+    let exact = AuthoredCell::Ground {
+        block: 251,
+        weight: GROUND_EXACT,
+    };
+    let with_pref = |pref: (f32, f32)| DryTerrain {
+        site_prefer_alt: pref,
+        ..dry()
+    };
+    // No site: the exact block, untouched.
+    let r = ground_col(exact, SeaFill::Auto).resolve(engine(), dry());
+    assert_eq!((r.alt, r.riverless_alt), (251.5, 251.5));
+    // A prepared flat: the plot's altitude is the block (+0.1, the
+    // sampler's hack): the top block does not move at any factor.
+    for f in [0.25, 0.5, 1.0] {
+        let r = ground_col(exact, SeaFill::Auto).resolve(engine(), with_pref((251.1, f)));
+        assert_eq!(r.alt as i32, 251, "factor {f}");
+    }
+    // A plot 3 blocks lower levels its lot (houses level their lots).
+    let r = ground_col(exact, SeaFill::Auto).resolve(engine(), with_pref((248.1, 1.0)));
+    assert_eq!((r.alt, r.riverless_alt), (248.1, 248.1));
+    // AuthoredOnly: the water level follows the levelled ground (no water).
+    let r = ground_col(exact, SeaFill::AuthoredOnly).resolve(engine(), with_pref((248.1, 1.0)));
+    assert_eq!(r.water_level, r.alt);
+    // The region opts out: the patch wins.
+    let mut col = ground_col(exact, SeaFill::Auto);
+    col.settings.site_levelling = false;
+    assert_eq!(col.resolve(engine(), with_pref((248.1, 1.0))).alt, 251.5);
+    // Banks keep the Stage-1 behaviour (no levelling).
+    let bank = ground_col(AuthoredCell::Bank { bed_block: 251 }, SeaFill::Auto)
+        .resolve(engine(), with_pref((248.1, 1.0)));
+    assert_eq!(bank.alt, 251.5);
+    // Blend cells: levelled on top of the blend.
+    let blend = AuthoredCell::Ground {
+        block: 251,
+        weight: 128,
+    };
+    let plain = ground_col(blend, SeaFill::Auto).resolve(engine(), dry());
+    let levelled = ground_col(blend, SeaFill::Auto).resolve(engine(), with_pref((248.1, 0.5)));
+    assert_eq!(levelled.alt, plain.alt + (248.1 - plain.alt) * 0.5);
+}
+
+#[test]
+fn region_digests_follow_each_region_and_the_new_fields_are_digest_stable() {
+    let spec = |id: &str, x: i32, cm: i32| {
+        region(id, (x, 1024), (x + 256, 1280), 32, vec![PaintOp::Ground {
+            shape: Shape::Rect {
+                x0: (x + 64) as f32,
+                y0: 1100.0,
+                x1: (x + 70) as f32,
+                y1: 1106.0,
+            },
+            ground_cm: cm,
+            weight: GROUND_EXACT,
+        }])
+    };
+    let a = load(&[
+        build_region(&spec("a", 1024, 24_000)).unwrap(),
+        build_region(&spec("b", 2048, 24_000)).unwrap(),
+    ])
+    .unwrap();
+    let b = load(&[
+        build_region(&spec("a", 1024, 24_000)).unwrap(),
+        build_region(&spec("b", 2048, 24_100)).unwrap(),
+    ])
+    .unwrap();
+    let (da, db) = (a.region_digests(), b.region_digests());
+    assert_eq!(da["a"], db["a"], "an untouched region keeps its digest");
+    assert_ne!(da["b"], db["b"], "an edited region changes its digest");
+    assert_ne!(a.digest(), b.digest());
+    // A listed site or a non-default setting changes the region digest; the
+    // defaults serialise to nothing.
+    let mut listed = spec("a", 1024, 24_000);
+    listed.sites_on_patch = vec!["procedural:town:1,2".into()];
+    let mut no_level = spec("a", 1024, 24_000);
+    no_level.site_levelling = false;
+    let mut voids = spec("a", 1024, 24_000);
+    voids.max_exposed_void_columns = 3;
+    for s in [listed, no_level, voids] {
+        let r = load(&[build_region(&s).unwrap()]).unwrap();
+        assert_ne!(r.region_digests()["a"], da["a"]);
+    }
+    let text = ron::ser::to_string(&build_region(&spec("a", 1024, 24_000)).unwrap().manifest)
+        .unwrap();
+    for field in ["sites_on_patch", "site_levelling", "max_exposed_void_columns"] {
+        assert!(!text.contains(field), "{field} serialised at its default: {text}");
+    }
+    let parsed: RegionManifest = ron::from_str(&text).unwrap();
+    assert!(parsed.site_levelling && parsed.sites_on_patch.is_empty());
+    assert_eq!(parsed.max_exposed_void_columns, 0);
+}
+
+#[test]
+fn blend_cells_fade_into_the_natural_map_and_authored_only_chunks_are_lakes() {
+    // A partial region: half of a chunk is an exact quay, the rest a ring
+    // (half low weights) and unauthored natural columns.
+    let mut s = region("fade", (1024, 1024), (1536, 1280), 32, vec![
+        PaintOp::Ground {
+            shape: Shape::Rect {
+                x0: 1104.0,
+                y0: 1088.0,
+                x1: 1120.0,
+                y1: 1120.0,
+            },
+            ground_cm: 14_150,
+            weight: GROUND_EXACT,
+        },
+        PaintOp::GroundRing {
+            width_m: 8,
+            ground_cm: None,
+        },
+    ]);
+    s.allow_partial = true;
+    let r = load(&[build_region(&s).unwrap()]).unwrap();
+    let sum = r.chunk_summary(Vec2::new(34, 34)).unwrap();
+    assert!(sum.fading_blend_columns > 0);
+    assert!(sum.fading_blend_columns < sum.ground_columns);
+    assert!(!sum.authored_only);
+    // The same in AuthoredOnly: blend cells are dry there (no fading).
+    s.sea_fill = SeaFill::AuthoredOnly;
+    let r = load(&[build_region(&s).unwrap()]).unwrap();
+    let sum = r.chunk_summary(Vec2::new(34, 34)).unwrap();
+    assert_eq!(sum.fading_blend_columns, 0);
+    assert!(sum.authored_only);
+}
+
+/// The login spawn-fix and the ground queries on exact cells (no table
+/// needed there): a feet position inside the ground of an exact cell is
+/// lifted to one block above it; free space, water and unauthored columns
+/// are left alone.
+#[test]
+fn buried_positions_are_lifted_to_the_authored_ground() {
+    let s = region("lift", (1024, 1024), (1536, 1280), 32, vec![PaintOp::Ground {
+        shape: Shape::Rect {
+            x0: 1100.0,
+            y0: 1100.0,
+            x1: 1200.0,
+            y1: 1200.0,
+        },
+        ground_cm: 25_050,
+        weight: GROUND_EXACT,
+    }]);
+    let mut sim = crate::sim::WorldSim::empty();
+    sim.set_authored_rasters_for_test(Some(load(&[build_region(&s).unwrap()]).unwrap()));
+    let p = |z| Vec3::new(1150, 1150, z);
+    // Buried 10 m and 90 m (a cave below or not: the search starts on top).
+    assert_eq!(sim.buried_ground_lift(p(240), true), Some(251));
+    assert_eq!(sim.buried_ground_lift(p(160), true), Some(251));
+    // Feet in free space (a cave or an interior under the patch): unmoved.
+    assert_eq!(sim.buried_ground_lift(p(240), false), None);
+    // Already above the surface (ground dropped): the normal search.
+    assert_eq!(sim.buried_ground_lift(p(260), true), None);
+    // Outside the patch, outside every region: nothing.
+    assert_eq!(
+        sim.buried_ground_lift(Vec3::new(1300, 1150, 240), true),
+        None
+    );
+    assert_eq!(sim.buried_ground_lift(Vec3::new(5, 5, 240), true), None);
+    // The ground and surface queries on the exact cell, with no clamp.
+    assert_eq!(sim.ground_alt_at(p(0).xy()), Some(250.5));
+    assert_eq!(sim.surface_alt_at(p(0).xy()), 251.0);
+}
+
+/// Everything under `world/src/layer/` reads the chunk table through `Land`
+/// (`*_table` accessors): a routed (authored-aware) altitude or gradient
+/// call there would move spatially extended features (the cave graph,
+/// caverns, authored voids) outside the regions. A new call must use a table
+/// accessor or be added to the allow-list below with its reason.
+#[test]
+fn layers_read_the_chunk_table() {
+    // (file, trimmed line): `WorldSim` receivers, which are the table.
+    const ALLOWED: &[(&str, &str)] = &[
+        // `world` is the `WorldSim`: `get_gradient_approx` is the table.
+        ("spot.rs", ".get_gradient_approx(pos)"),
+    ];
+    const ROUTED: &[&str] = &[
+        ".get_alt_approx(",
+        ".get_surface_alt_approx(",
+        ".get_gradient_approx(",
+        ".surface_alt_at(",
+        ".ground_alt_at(",
+        ".ground_gradient_at(",
+    ];
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/layer"),
+        &mut files,
+    );
+    let mut bad = Vec::new();
+    for f in &files {
+        let name = f.file_name().unwrap().to_string_lossy().into_owned();
+        for (i, line) in std::fs::read_to_string(f).unwrap().lines().enumerate() {
+            let t = line.trim();
+            if ROUTED.iter().any(|r| t.contains(r))
+                && !ALLOWED.iter().any(|(af, al)| *af == name && t == *al)
+            {
+                bad.push(format!("{name}:{}: {t}", i + 1));
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "authored-aware ground reads under world/src/layer (use the *_table accessors): {bad:#?}"
+    );
+}
+
+/// B-K1 / §9.6: an authored void under a patch that comes within the
+/// tolerance of the ground is exposed (a start-up error at the default
+/// tolerance 0, allowed when the region raises it); a declared mouth is
+/// exempt; a declared wet mouth must not hold more water than it declares.
+#[test]
+fn voids_exposed_by_a_patch_are_counted_and_mouths_are_exempt() {
+    use super::post_civ::{VoidMouth, void_exposure};
+    use crate::layer::{
+        authored_voids::{AuthoredVoidsBuilder, DiscShape, ProceduralContact},
+        traversal::AccommodationTier,
+    };
+    // Ground at block 250 over x 1100..1200; water (top 249, bed 243) at
+    // x 1200..1210 held by a bank at 250 beyond it.
+    let spec = |max_exposed: u32| {
+        let mut s = region("voids", (1024, 1024), (1536, 1280), 32, vec![
+            PaintOp::Ground {
+                shape: Shape::Rect {
+                    x0: 1100.0,
+                    y0: 1100.0,
+                    x1: 1200.0,
+                    y1: 1200.0,
+                },
+                ground_cm: 25_050,
+                weight: GROUND_EXACT,
+            },
+            PaintOp::Water {
+                shape: Shape::Rect {
+                    x0: 1200.0,
+                    y0: 1100.0,
+                    x1: 1210.0,
+                    y1: 1200.0,
+                },
+                surface_cm: 24_950,
+                bed_cm: 24_350,
+            },
+            PaintOp::Bank {
+                shape: Shape::Rect {
+                    x0: 1210.0,
+                    y0: 1099.0,
+                    x1: 1211.0,
+                    y1: 1201.0,
+                },
+                bed_cm: 25_050,
+            },
+            PaintOp::Bank {
+                shape: Shape::Rect {
+                    x0: 1200.0,
+                    y0: 1099.0,
+                    x1: 1210.0,
+                    y1: 1100.0,
+                },
+                bed_cm: 25_050,
+            },
+            PaintOp::Bank {
+                shape: Shape::Rect {
+                    x0: 1200.0,
+                    y0: 1200.0,
+                    x1: 1210.0,
+                    y1: 1201.0,
+                },
+                bed_cm: 25_050,
+            },
+        ]);
+        s.max_exposed_void_columns = max_exposed;
+        s
+    };
+    let voids = |ceiling_z: i32| {
+        let mut b = AuthoredVoidsBuilder::default();
+        b.push_disc(
+            DiscShape {
+                centre: Vec2::new(1150, 1150),
+                radius: 4.0,
+                floor_z: 200,
+                ceiling_z,
+            },
+            ProceduralContact::Seal,
+            AccommodationTier::HandAuthored,
+            "test_cave",
+        );
+        b.finish().unwrap()
+    };
+    let (mut world, _) = crate::World::empty();
+    world.sim.set_authored_rasters_for_test(Some(load(&[build_region(&spec(0)).unwrap()]).unwrap()));
+    // Ceiling 10 blocks under the ground: covered.
+    let r = void_exposure(&world, Some(&voids(240)), &[]);
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].exposed, 0);
+    assert!(!r[0].is_error());
+    // Ceiling 2 blocks under the ground: exposed on the disc's columns.
+    let r = void_exposure(&world, Some(&voids(248)), &[]);
+    let exposed = r[0].exposed;
+    assert!(exposed > 0 && r[0].is_error(), "{r:?}");
+    assert_eq!(r[0].features[0].0, "test_cave");
+    // A declared mouth is exempt.
+    let mouth = VoidMouth {
+        column: r[0].features[0].2,
+        max_water_depth_blocks: None,
+    };
+    let r = void_exposure(&world, Some(&voids(248)), &[mouth]);
+    assert_eq!(r[0].exposed, exposed - 1);
+    // A wet mouth on the water: 6 blocks of water against 2 declared.
+    let wet = VoidMouth {
+        column: Vec2::new(1205, 1150),
+        max_water_depth_blocks: Some(2),
+    };
+    let r = void_exposure(&world, Some(&voids(240)), &[wet]);
+    assert_eq!(r[0].flooded_mouths, vec![(Vec2::new(1205, 1150), 6)]);
+    assert!(r[0].is_error());
+    let r = void_exposure(&world, Some(&voids(240)), &[VoidMouth {
+        max_water_depth_blocks: Some(6),
+        ..wet
+    }]);
+    assert!(!r[0].is_error());
+    // The region allows the opening.
+    world.sim.set_authored_rasters_for_test(Some(
+        load(&[build_region(&spec(exposed as u32)).unwrap()]).unwrap(),
+    ));
+    let r = void_exposure(&world, Some(&voids(248)), &[]);
+    assert!(!r[0].is_error(), "{r:?}");
 }
