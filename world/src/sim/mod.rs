@@ -4190,6 +4190,8 @@ impl WorldSim {
             let mut cliffs = DHashSet::default();
             let mut cliff_path = Vec::new();
 
+            // XINDELER: the chunk table by design (the sim is built from the
+            // natural map, never from the authored ground layer).
             for _ in 0..64 {
                 if self.get_gradient_approx(pos).is_some_and(|g| g > 1.5) {
                     if !cliffs.insert(pos) {

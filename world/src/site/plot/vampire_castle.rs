@@ -30,7 +30,7 @@ impl VampireCastle {
             max: site.tile_wpos(tile_aabr.max),
         };
         let center = bounds.center();
-        let plot_base = land.get_alt_approx(center) as i32;
+        let plot_base = land.ground_alt_at(center) as i32;
         let castle_length = 24;
         let castle_width = 18;
         let tower_base = plot_base + 1;
@@ -85,7 +85,7 @@ impl VampireCastle {
 
         Self {
             bounds,
-            alt: land.get_alt_approx(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
+            alt: land.ground_alt_at(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
                 as i32,
             castle_data,
         }

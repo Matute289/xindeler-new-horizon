@@ -37,7 +37,7 @@ impl SeaChapel {
         // at it, so using the constant directly left a real gap/overlap
         // between the structure and the actual ground whenever a site
         // landed even a couple meters off from sea_level.
-        let alt = land.get_alt_approx(center) as i32;
+        let alt = land.ground_alt_at(center) as i32;
         Self { center, alt }
     }
 }

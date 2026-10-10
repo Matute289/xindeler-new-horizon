@@ -1,12 +1,11 @@
-//! Real-world checks of the consumers of the authored ground layer (Stage
-//! 2c) on the Cromatolis map: the authored-aware ground queries (identity
-//! outside regions, the patch inside, the ring tolerance), B-T10 (a town on a
-//! prepared flat and on a slope; a site on a ring and an unlisted site
-//! refused), B-T11 (buried players and simulated NPCs on raised patches),
-//! B-T14 (rtsim, spawns and wildlife on a dry pit floor below 0 m), B-W6 (a
-//! quay beside an authored basin) and B-R1 (a civ road over an authored
-//! cliff). Synthetic manifests only: the calibration arena, or a wilderness
-//! site / road found far from every other site.
+//! Real-world checks of the consumers of the authored ground layer on the
+//! Cromatolis map: the authored-aware ground queries (identity outside
+//! regions, the patch inside, the ring tolerance), a town on a prepared flat
+//! and on a slope (a site on a ring and an unlisted site refused), buried
+//! players and simulated NPCs on raised patches, rtsim, spawns and wildlife
+//! on a dry pit floor below 0 m, a quay beside an authored basin, and a civ
+//! road over an authored cliff. Synthetic manifests only: the calibration
+//! arena, or a wilderness site / road found far from every other site.
 //!
 //! ```text
 //! VELOREN_ASSETS=$PWD/assets cargo test -p xindeler-world --release --features tools \
@@ -74,7 +73,7 @@ fn entry<'a>(world: &'a World, id: &str) -> RegionEntry<'a> {
 /// every region (10^6 random columns, with a ground manifest loaded), the
 /// authored block on exact cells (the column sampler agrees), within the
 /// documented tolerance on ring cells, a flat patch has gradient 0, and a
-/// quay beside an authored basin (B-W6) reads the quay and the water.
+/// quay beside an authored basin reads the quay and the water.
 #[test]
 #[ignore]
 fn ground_queries_are_the_table_outside_and_the_patch_inside() {
@@ -86,7 +85,7 @@ fn ground_queries_are_the_table_outside_and_the_patch_inside() {
         exact(rect(x0 as f32, y0 as f32, 23280.0, y1 as f32), raised),
         ring(32),
     ]);
-    // B-W6: a basin (water top 139, bed 130) held by an exact quay at
+    // A basin (water top 139, bed 130) held by an exact quay at
     // block 141 (sea level + 1.5 m), in an Auto region.
     let quay = RegionSpec::new("q_quay", (23360, REGION_MIN.1), REGION_MAX, 32, vec![
         PaintOp::Water {
@@ -120,9 +119,8 @@ fn ground_queries_are_the_table_outside_and_the_patch_inside() {
         .filter(|&&p| {
             sim.ground_alt_at(p).map(f32::to_bits) != sim.get_alt_approx(p).map(f32::to_bits)
                 || sim.surface_alt_at(p).to_bits() != sim.get_surface_alt_approx(p).to_bits()
-                || land.get_alt_approx(p).to_bits() != land.get_alt_approx_table(p).to_bits()
-                || land.get_gradient_approx(p).to_bits()
-                    != land.get_gradient_approx_table(p).to_bits()
+                || land.ground_alt_at(p).to_bits() != land.get_alt_approx(p).to_bits()
+                || land.ground_gradient_at(p).to_bits() != land.get_gradient_approx(p).to_bits()
         })
         .count();
     println!("outside: {} columns compared, {bad} differ", points.len());
@@ -135,7 +133,7 @@ fn ground_queries_are_the_table_outside_and_the_patch_inside() {
         .collect();
     for p in &exact_pts {
         assert_eq!(sim.ground_alt_at(*p), Some(top_block_alt(block)));
-        assert_eq!(land.get_alt_approx(*p), top_block_alt(block));
+        assert_eq!(land.ground_alt_at(*p), top_block_alt(block));
         assert_eq!(sim.surface_alt_at(*p), (block + 1) as f32);
     }
     let rendered_off = exact_pts
@@ -145,10 +143,10 @@ fn ground_queries_are_the_table_outside_and_the_patch_inside() {
     assert_eq!(rendered_off, 0, "exact cells render the block");
     // A chunk deep inside the flat: gradient 0 (the table's is not).
     let centre = Vec2::new(23136, 24992);
-    assert_eq!(land.get_gradient_approx(centre), 0.0);
+    assert_eq!(land.ground_gradient_at(centre), 0.0);
     println!(
         "flat patch gradient 0 (table {:.3})",
-        land.get_gradient_approx_table(centre)
+        land.get_gradient_approx(centre)
     );
 
     // Ring cells: the query lerps toward the table, the blocks toward the
@@ -158,9 +156,7 @@ fn ground_queries_are_the_table_outside_and_the_patch_inside() {
         .step_by(3)
         .flat_map(|y| (x0 - 40..x0).map(move |x| Vec2::new(x, y)))
         .filter_map(|p| match rasters.cell_at(p) {
-            Some(AuthoredCell::Ground { weight, .. }) if weight < GROUND_EXACT => {
-                Some((p, weight))
-            },
+            Some(AuthoredCell::Ground { weight, .. }) if weight < GROUND_EXACT => Some((p, weight)),
             _ => None,
         })
         .collect();
@@ -181,20 +177,20 @@ fn ground_queries_are_the_table_outside_and_the_patch_inside() {
         .map(|e| e.1)
         .fold(0.0, f32::max);
     println!(
-        "ring tolerance: {} ring cells, |rendered - ground_alt_at| mean {mean:.2} m, max {max:.2} m \
-         (weight >= 192: max {hi:.2} m)",
+        "ring tolerance: {} ring cells, |rendered - ground_alt_at| mean {mean:.2} m, max {max:.2} \
+         m (weight >= 192: max {hi:.2} m)",
         errs.len()
     );
     assert!(!errs.is_empty() && max < 16.0);
 
-    // B-W6: the quay and the basin through the routed queries.
+    // The quay and the basin through the routed queries.
     let q = Vec2::new(23495, 24850);
-    assert_eq!(land.get_alt_approx(q), top_block_alt(141));
-    assert_eq!(land.get_surface_alt_approx(q), 142.0);
+    assert_eq!(land.ground_alt_at(q), top_block_alt(141));
+    assert_eq!(land.surface_alt_at(q), 142.0);
     let b = Vec2::new(23550, 24850);
     assert_eq!(land.authored_depth_at(b), Some(9));
-    assert_eq!(land.get_surface_alt_approx(b), 140.0);
-    assert_eq!(land.get_alt_approx(b), top_block_alt(130));
+    assert_eq!(land.surface_alt_at(b), 140.0);
+    assert_eq!(land.ground_alt_at(b), top_block_alt(130));
     assert_eq!(sampled_alt(&world, index, q) as i32, 141);
 }
 
@@ -266,16 +262,28 @@ fn grounding(
     let land = Land::from_sim(&world.sim);
     let (mut buildings, mut floating, mut buried) = (0, 0, 0);
     for plot in site.plots().filter(|p| p.is_building()) {
-        let base = land.get_alt_approx(site.tile_center_wpos(plot.root_tile())) as i32;
+        let base = land.ground_alt_at(site.tile_center_wpos(plot.root_tile())) as i32;
         let own: std::collections::HashSet<Vec2<i32>> = plot.tiles().collect();
         let mut ring: Vec<Vec2<i32>> = Vec::new();
         for t in plot.tiles() {
             let (a, e) = (site.tile_wpos(t), site.tile_wpos(t + 1));
             for (n, edge) in [
-                (Vec2::new(1, 0), (Vec2::new(e.x, a.y), Vec2::new(e.x + 1, e.y))),
-                (Vec2::new(-1, 0), (Vec2::new(a.x - 1, a.y), Vec2::new(a.x, e.y))),
-                (Vec2::new(0, 1), (Vec2::new(a.x, e.y), Vec2::new(e.x, e.y + 1))),
-                (Vec2::new(0, -1), (Vec2::new(a.x, a.y - 1), Vec2::new(e.x, a.y))),
+                (
+                    Vec2::new(1, 0),
+                    (Vec2::new(e.x, a.y), Vec2::new(e.x + 1, e.y)),
+                ),
+                (
+                    Vec2::new(-1, 0),
+                    (Vec2::new(a.x - 1, a.y), Vec2::new(a.x, e.y)),
+                ),
+                (
+                    Vec2::new(0, 1),
+                    (Vec2::new(a.x, e.y), Vec2::new(e.x, e.y + 1)),
+                ),
+                (
+                    Vec2::new(0, -1),
+                    (Vec2::new(a.x, a.y - 1), Vec2::new(e.x, a.y)),
+                ),
             ] {
                 if own.contains(&(t + n)) {
                     continue;
@@ -308,8 +316,8 @@ fn lot_check(world: &World, index: crate::IndexRef, site: &crate::site::Site) ->
     let mut row = LotRow::default();
     for plot in site.plots().filter(|p| p.is_building()) {
         let root = site.tile_center_wpos(plot.root_tile());
-        let base = land.get_alt_approx(root) as i32;
-        let base_table = land.get_alt_approx_table(root) as i32;
+        let base = land.ground_alt_at(root) as i32;
+        let base_table = land.get_alt_approx(root) as i32;
         let cols: Vec<Vec2<i32>> = plot
             .tiles()
             .flat_map(|t| {
@@ -333,7 +341,7 @@ fn lot_check(world: &World, index: crate::IndexRef, site: &crate::site::Site) ->
     row
 }
 
-/// B-T10: a town on a prepared flat and on a 0.1 slope, both exact patches
+/// A town on a prepared flat and on a 0.1 slope, both exact patches
 /// of the arena: every building's lot matches its base (0 floating/buried
 /// buildings), levelling moves no exact column on the flat (it levels the
 /// lots on the slope, reported), and no ring cell lies under either town.
@@ -402,9 +410,7 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
             cells.levelled_exact.len()
         );
         let (buildings, floating, buried) = grounding(&world, index_ref, site);
-        println!(
-            "{id}: grounding: {buildings} buildings, {floating} floating, {buried} buried"
-        );
+        println!("{id}: grounding: {buildings} buildings, {floating} floating, {buried} buried");
         assert!(row.buildings > 0 && buildings > 0);
         assert!(row.misplaced <= row.misplaced_table);
         let land = Land::from_sim(&world.sim);
@@ -413,12 +419,18 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
             .filter(|p| p.is_building())
             .filter(|p| {
                 let root = site.tile_center_wpos(p.root_tile());
-                (land.get_alt_approx(root) as i32 - land.get_alt_approx_table(root) as i32).abs() > 2
+                (land.ground_alt_at(root) as i32 - land.get_alt_approx(root) as i32).abs() > 2
             })
             .count();
-        println!("{id}: {table_land_off} buildings would be off by more than 2 blocks on the table");
+        println!(
+            "{id}: {table_land_off} buildings would be off by more than 2 blocks on the table"
+        );
         if id == "bt10_flat" {
-            assert_eq!((floating, buried), (0, 0), "{id}: floating or buried buildings");
+            assert_eq!(
+                (floating, buried),
+                (0, 0),
+                "{id}: floating or buried buildings"
+            );
             assert_eq!(row.misplaced, 0, "{id}: lots off their base on a flat");
         } else {
             // On a slope a building whose door faces downhill is cut into the
@@ -437,12 +449,34 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
             let shift = cells
                 .levelled_exact
                 .par_iter()
-                .map(|p| (sampled_alt(&world, index_ref, *p) as i32 - block).abs())
+                .map(|(p, _)| (sampled_alt(&world, index_ref, *p) as i32 - block).abs())
                 .max()
                 .unwrap_or(0);
             println!("{id}: levelling moves exact columns by at most {shift} block(s)");
-            assert!(shift <= 1, "levelling on a flat moves a lot by {shift} blocks");
+            assert!(
+                shift <= 1,
+                "levelling on a flat moves a lot by {shift} blocks"
+            );
         }
+        // Once the levelled columns are recorded (as world generation does
+        // after the post-civ check), the ground query answers the top block
+        // the column renders on every column levelling moved.
+        world
+            .sim
+            .set_site_levelling(cells.levelled_exact.iter().copied());
+        let off = cells
+            .levelled_exact
+            .par_iter()
+            .filter(|(p, _)| {
+                world.sim.ground_alt_at(*p).map(|a| a as i32)
+                    != Some(sampled_alt(&world, index_ref, *p) as i32)
+            })
+            .count();
+        println!(
+            "{id}: ground_alt_at off the rendered top on {off} of {} levelled column(s)",
+            cells.levelled_exact.len()
+        );
+        assert_eq!(off, 0, "{id}: the ground query ignores plot levelling");
     }
 }
 
@@ -491,7 +525,7 @@ fn lonely_site(world: &World, index: crate::IndexRef) -> (String, Aabr<i32>) {
         .expect("an ordinary site 400 m from every authored site")
 }
 
-/// B-T10 refusals and the site gate (§9.4, D8): a ground region near an
+/// The site gate: a ground region near an
 /// ordinary site that it does not list stops world generation, naming the
 /// site; listing it is accepted; a listed site standing on ring cells is
 /// refused, naming the site and the ring.
@@ -532,7 +566,9 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
     world
         .sim
         .set_authored_rasters_for_test(Some(load_specs(&[spec(&[], whole)]).unwrap()));
-    let err = check_ground_consumers(&world, index_ref, None).unwrap_err().0;
+    let err = check_ground_consumers(&world, index_ref, None)
+        .unwrap_err()
+        .0;
     println!("unlisted: {err}");
     assert!(err.contains(&key) && err.contains("does not list them"));
     // Every site near the region (the chosen one and its procedural
@@ -568,12 +604,14 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
     world
         .sim
         .set_authored_rasters_for_test(Some(load_specs(&[spec(&near, short)]).unwrap()));
-    let err = check_ground_consumers(&world, index_ref, None).unwrap_err().0;
+    let err = check_ground_consumers(&world, index_ref, None)
+        .unwrap_err()
+        .0;
     println!("ring under site: {err}");
     assert!(err.contains(&key) && err.contains("blend (ring)"));
 }
 
-/// B-T11 and B-T14: positions buried by +10 m and +90 m patches are lifted
+/// Positions buried by +10 m and +90 m patches are lifted
 /// to the new surface (free air there, solid ground under it); simulated
 /// NPCs and rtsim spawns stand on the patch; on a dry pit floor at -10 m
 /// (`AuthoredOnly`) the queries have no sea-level clamp, the chunk is dry for
@@ -589,11 +627,21 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
     let (g10, g90) = (before(p10), before(p90));
     let raised = RegionSpec::new("bt11_raised", REGION_MIN, (23328, REGION_MAX.1), 32, vec![
         exact(
-            rect(p10.x as f32, p10.y as f32, (p10.x + 96) as f32, (p10.y + 96) as f32),
+            rect(
+                p10.x as f32,
+                p10.y as f32,
+                (p10.x + 96) as f32,
+                (p10.y + 96) as f32,
+            ),
             (g10 + 10) * 100 + 50,
         ),
         exact(
-            rect(p90.x as f32, p90.y as f32, (p90.x + 96) as f32, (p90.y + 96) as f32),
+            rect(
+                p90.x as f32,
+                p90.y as f32,
+                (p90.x + 96) as f32,
+                (p90.y + 96) as f32,
+            ),
             (g90 + 90) * 100 + 50,
         ),
     ]);
@@ -637,9 +685,14 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
         // Simulated NPCs (per-tick snap) and rtsim spawns.
         assert_eq!(sim.surface_alt_at(c), (block + 1) as f32);
         assert_eq!(sim.ground_alt_at(c), Some(top_block_alt(block)));
-        println!("B-T11 +{}: lifted from z {} to {}", block - old, feet.z, block + 1);
+        println!(
+            "buried +{}: lifted from z {} to {}",
+            block - old,
+            feet.z,
+            block + 1
+        );
     }
-    // B-T14 (a): the pit floor.
+    // The pit floor.
     let c = Vec2::new(pit.0 + 64, pit.1 + 64);
     assert_eq!(sim.ground_alt_at(c), Some(129.5));
     assert_eq!(sim.surface_alt_at(c), 130.0);
@@ -683,9 +736,7 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
             }
         }
     }
-    println!(
-        "B-T14 pit: chunk_water {w:?}; {water} water blocks; {spawns} spawn(s), {aquatic} aquatic"
-    );
+    println!("pit: chunk_water {w:?}; {water} water blocks; {spawns} spawn(s), {aquatic} aquatic");
     assert_eq!(water, 0);
     assert_eq!(aquatic, 0);
 }
@@ -724,7 +775,7 @@ fn wilderness_road_chunk(world: &World, index: &crate::IndexOwned) -> Vec2<i32> 
         .expect("a wilderness road")
 }
 
-/// B-R1: a civ road (planned on the natural table) crossing an exact patch
+/// A civ road (planned on the natural table) crossing an exact patch
 /// with a 5-block cliff: the post-civ report names the steep road columns
 /// (not an error), and the road over the exact cells is painted on the
 /// patch: the top block of every undecorated road column is the authored
@@ -738,23 +789,40 @@ fn br1_a_road_over_an_authored_cliff_is_reported_and_painted_on_the_patch() {
     let base = world.sim.get_alt_approx(c * 32 + 16).unwrap() as i32;
     let (x0, y0) = ((c.x - 1) * 32, (c.y - 1) * 32);
     let split = c.x * 32 + 16;
-    let spec = RegionSpec::new("br1_cliff", ((c.x - 3) * 32, (c.y - 3) * 32), ((c.x + 4) * 32, (c.y + 4) * 32), 32, vec![
-        exact(rect(x0 as f32, y0 as f32, split as f32, (y0 + 96) as f32), base * 100 + 50),
-        exact(rect(split as f32, y0 as f32, (x0 + 96) as f32, (y0 + 96) as f32), (base + 5) * 100 + 50),
-        ring(16),
-    ]);
+    let spec = RegionSpec::new(
+        "br1_cliff",
+        ((c.x - 3) * 32, (c.y - 3) * 32),
+        ((c.x + 4) * 32, (c.y + 4) * 32),
+        32,
+        vec![
+            exact(
+                rect(x0 as f32, y0 as f32, split as f32, (y0 + 96) as f32),
+                base * 100 + 50,
+            ),
+            exact(
+                rect(split as f32, y0 as f32, (x0 + 96) as f32, (y0 + 96) as f32),
+                (base + 5) * 100 + 50,
+            ),
+            ring(16),
+        ],
+    );
     world
         .sim
         .set_authored_rasters_for_test(Some(load_specs(&[spec]).unwrap()));
     let report = road_cliffs(&world);
     println!(
-        "B-R1 at chunk {c:?}: {} road columns on exact cells, {} steep, first {:?}",
+        "road over a cliff at chunk {c:?}: {} road columns on exact cells, {} steep, first {:?}",
         report.road_columns,
         report.steep.len(),
         report.steep.first()
     );
     assert!(report.road_columns > 0);
-    assert!(report.steep.iter().all(|(p, step)| *step == 5 && (p.x - split).abs() <= 1));
+    assert!(
+        report
+            .steep
+            .iter()
+            .all(|(p, step)| *step == 5 && (p.x - split).abs() <= 1)
+    );
     let rasters = world.sim.authored_rasters.as_ref().unwrap();
     let (mut painted, mut exact_top, mut other) = (0, 0, 0);
     let mut cats = std::collections::BTreeMap::<String, usize>::new();
@@ -782,7 +850,12 @@ fn br1_a_road_over_an_authored_cliff_is_reported_and_painted_on_the_patch() {
                         continue;
                     }
                     painted += 1;
-                    let at = |z: i32| chunk.get(Vec3::new(x, y, z)).copied().unwrap_or_else(|_| Block::empty());
+                    let at = |z: i32| {
+                        chunk
+                            .get(Vec3::new(x, y, z))
+                            .copied()
+                            .unwrap_or_else(|_| Block::empty())
+                    };
                     let top = (block - 8..block + 24)
                         .rev()
                         .find(|z| at(*z).is_filled())
@@ -810,7 +883,10 @@ fn br1_a_road_over_an_authored_cliff_is_reported_and_painted_on_the_patch() {
             }
         }
     }
-    println!("B-R1 paint: {painted} road columns on exact cells, top = block (Earth) on {exact_top}, other {other}: {cats:?}");
+    println!(
+        "road paint: {painted} road columns on exact cells, top = block (Earth) on {exact_top}, \
+         other {other}: {cats:?}"
+    );
     assert!(painted > 0);
     assert_eq!(exact_top, painted, "road painted on the patch");
     let _ = TerrainChunkSize::RECT_SIZE;

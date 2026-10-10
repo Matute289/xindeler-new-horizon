@@ -774,7 +774,7 @@ impl Site {
             // `water_level`/`alt` sampling, which belongs with the geometry
             // rather than with the tile claim.
             let apron_hard_alt =
-                land.get_alt_approx(self.tile_center_wpos(shore_aabr_centre(apron))) as i32;
+                land.ground_alt_at(self.tile_center_wpos(shore_aabr_centre(apron))) as i32;
 
             return Ok(ShorePlacement {
                 class,
@@ -965,7 +965,7 @@ impl Site {
                 let a = (along_len * (2 * i + 1)) / (2 * lattice) - along_len / 2;
                 let b = (inland_len * (2 * j + 1)) / (2 * lattice);
                 let tpos = tile.land_tpos + along_axis * a + inland * b;
-                let alt = f64::from(land.get_alt_approx(self.tile_center_wpos(tpos)));
+                let alt = f64::from(land.ground_alt_at(self.tile_center_wpos(tpos)));
                 sum += alt;
                 sum_sq += alt * alt;
                 n += 1;

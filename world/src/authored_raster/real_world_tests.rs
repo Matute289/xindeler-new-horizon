@@ -1025,3 +1025,84 @@ fn a_pond_edited_into_a_natural_river() {
 }
 
 pub use super::ground_real_world_tests::ground_battery_specs;
+
+/// The Stage-1 arena manifest (water and banks, no ground layer) renders and
+/// answers exactly as before the ground consumers existed: a pinned sha256
+/// over every column of the box grown by 64 m (sampled altitude and water
+/// level, `surface_alt_at`, the chunk table altitude), every chunk's
+/// `chunk_water`, and the block classes of every chunk of the box above
+/// z 100 (seeded RNGs; z 100 keeps the deep, unseeded cave decoration out).
+/// The constant was computed with the engine before the ground consumers
+/// (and agrees with it) and must not move while the manifest has no ground
+/// layer. Computed on macOS arm64, like the other committed digests.
+#[test]
+#[ignore]
+fn water_only_arena_output_is_pinned() {
+    const PINNED: &str = "c22e38dbccb521bbf59b65937c92000dd03a397b8b19c060623bcfc47e976df9";
+    let (mut world, index) = generate_world();
+    world
+        .sim
+        .set_authored_rasters_for_test(Some(load_spec(&arena_spec())));
+    let index_ref = index.as_index_ref();
+    let (min, max) = (Vec2::from(REGION_MIN) - 64, Vec2::from(REGION_MAX) + 64);
+    let rows: Vec<Vec<u8>> = (min.y..max.y)
+        .into_par_iter()
+        .map(|y| {
+            let mut out = Vec::new();
+            for x in min.x..max.x {
+                let p = Vec2::new(x, y);
+                let c = world.sample_columns().get((p, index_ref, None)).unwrap();
+                out.extend(c.alt.to_bits().to_le_bytes());
+                out.extend(c.water_level.to_bits().to_le_bytes());
+                out.extend(world.sim.surface_alt_at(p).to_bits().to_le_bytes());
+                out.extend(
+                    world
+                        .sim
+                        .get_alt_approx(p)
+                        .unwrap_or(f32::NAN)
+                        .to_bits()
+                        .to_le_bytes(),
+                );
+            }
+            out
+        })
+        .collect();
+    let (c0, c1) = (min / 32, max / 32);
+    let chunks: Vec<Vec2<i32>> = (c0.y..c1.y)
+        .flat_map(|y| (c0.x..c1.x).map(move |x| Vec2::new(x, y)))
+        .collect();
+    let per_chunk: Vec<Vec<u8>> = chunks
+        .par_iter()
+        .map(|&cpos| {
+            let mut out = Vec::new();
+            let w = world.sim.chunk_water(cpos).unwrap();
+            out.extend([w.river, w.lake, w.ocean, w.underwater, w.near_water].map(u8::from));
+            out.extend(w.water_alt.to_bits().to_le_bytes());
+            out.extend(w.alt.to_bits().to_le_bytes());
+            let chunk = seeded_chunk(&world, index_ref, cpos);
+            let sz = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+            for z in chunk.get_min_z().max(100)..chunk.get_max_z() {
+                for y in 0..sz.y {
+                    for x in 0..sz.x {
+                        let b = chunk
+                            .get(Vec3::new(x, y, z))
+                            .copied()
+                            .unwrap_or_else(|_| Block::empty());
+                        out.extend(block_class(&b).to_le_bytes());
+                    }
+                }
+            }
+            out
+        })
+        .collect();
+    let mut all = Vec::new();
+    rows.iter().for_each(|r| all.extend_from_slice(r));
+    per_chunk.iter().for_each(|c| all.extend_from_slice(c));
+    let digest = super::format::sha256_hex(&all);
+    println!(
+        "water-only arena: {} columns, {} chunks, sha256 {digest}",
+        (max.x - min.x) * (max.y - min.y),
+        chunks.len()
+    );
+    assert_eq!(digest, PINNED);
+}

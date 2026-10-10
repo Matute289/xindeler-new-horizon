@@ -4,11 +4,13 @@
 //! commands.
 //!
 //! The one routing point for the ground is [`WorldSim::ground_alt_at`]:
-//! `Land::get_alt_approx` and `Land::get_gradient_approx` delegate to it, and
-//! [`WorldSim::surface_alt_at`] adds the water on top. `WorldSim::get_alt_approx`
-//! stays the chunk table (the natural map the sim was built from): consumers
-//! whose result reaches beyond the sampled point (the cave graph, caverns,
-//! authored voids) read it through `Land::get_alt_approx_table`.
+//! `Land::ground_alt_at` and `Land::ground_gradient_at` delegate to it, and
+//! [`WorldSim::surface_alt_at`] adds the water on top. The upstream accessors
+//! (`WorldSim::get_alt_approx`, `Land::get_alt_approx`, the gradient and
+//! surface ones) stay the chunk table (the natural map the sim was built
+//! from): consumers whose result reaches beyond the sampled point (the cave
+//! graph, caverns, authored voids) and civ placement read them (see the
+//! `Land` doc for the per-directory rule and its test).
 //!
 //! Inside an authored region these answer from the raster (the water the
 //! player sees); everywhere else they return exactly what the chunk table
@@ -121,33 +123,37 @@ impl WorldSim {
 
     /// The authored-aware ground altitude at a column: the single
     /// implementation every consumer that must stand on the real ground reads
-    /// (`Land::get_alt_approx`, rtsim spawns, LOD objects).
+    /// (`Land::ground_alt_at`, so site and plot generation, rtsim spawns, LOD
+    /// objects).
     ///
     /// * exact ground, bank, wet bed: the authored top block's altitude
     ///   ([`top_block_alt`], the column sampler's convention), with no
-    ///   sea-level clamp (a dry pit below 0 m is its floor);
+    ///   sea-level clamp (a dry pit below 0 m is its floor); on an exact ground
+    ///   column a listed site's plot levelling moves, the levelled altitude the
+    ///   column renders (`AuthoredRasters::site_levelled_alt`);
     /// * blend (ring) ground of weight `w`: `lerp(table, block, w / 255)`. The
-    ///   rendered ring lerps toward the engine column *with* its noise
-    ///   instead, so on ring cells this differs from the blocks by up to the
-    ///   engine's relief times `1 - w` (rings belong outside sites; the
-    ///   post-civ site check refuses one under a listed site);
+    ///   rendered ring lerps toward the engine column *with* its noise instead,
+    ///   so on ring cells this differs from the blocks by up to the engine's
+    ///   relief times `1 - w` (rings belong outside sites; the post-civ site
+    ///   check refuses one under a listed site);
     /// * everything else, and every column outside every region: the chunk
     ///   table ([`Self::get_alt_approx`]), bit for bit.
     ///
     /// `None` outside the map.
     pub fn ground_alt_at(&self, wpos: Vec2<i32>) -> Option<f32> {
-        match self
-            .authored_rasters
-            .as_ref()
-            .and_then(|r| r.cell_at(wpos))
-        {
+        let rasters = self.authored_rasters.as_ref();
+        match rasters.and_then(|r| r.cell_at(wpos)) {
             Some(AuthoredCell::Wet { bed_block, .. } | AuthoredCell::Bank { bed_block }) => {
                 Some(top_block_alt(bed_block))
             },
             Some(AuthoredCell::Ground {
                 block,
                 weight: GROUND_EXACT,
-            }) => Some(top_block_alt(block)),
+            }) => Some(
+                rasters
+                    .and_then(|r| r.site_levelled_alt(wpos))
+                    .unwrap_or_else(|| top_block_alt(block)),
+            ),
             Some(AuthoredCell::Ground { block, weight }) => Some(Lerp::lerp(
                 self.get_alt_approx(wpos)?,
                 top_block_alt(block),
@@ -206,7 +212,7 @@ impl WorldSim {
             Some((AuthoredCell::Wet { surface_block, .. }, ..)) => (surface_block + 1) as f32,
             Some((AuthoredCell::Bank { bed_block }, ..)) => (bed_block + 1) as f32,
             Some((AuthoredCell::Ground { block, weight }, sea_fill, _)) => {
-                let top = (block + 1) as f32;
+                let top = self.exact_ground_top(wpos, block) as f32;
                 let land = if weight == GROUND_EXACT {
                     top
                 } else {
@@ -241,13 +247,36 @@ impl WorldSim {
             AuthoredCell::Ground {
                 block,
                 weight: GROUND_EXACT,
-            } => block + 1,
+            } => self.exact_ground_top(feet.xy(), block),
             AuthoredCell::Ground { .. } => self.ground_alt_at(feet.xy())?.floor() as i32 + 1,
             AuthoredCell::Wet { .. } | AuthoredCell::Bank { .. } | AuthoredCell::None => {
                 return None;
             },
         };
         (z > feet.z).then_some(z)
+    }
+
+    /// The z just above the top block of an exact ground column: the
+    /// authored block, or the levelled one where a listed site's plot
+    /// levelling moves it.
+    fn exact_ground_top(&self, wpos: Vec2<i32>, block: i32) -> i32 {
+        self.authored_rasters
+            .as_ref()
+            .and_then(|r| r.site_levelled_alt(wpos))
+            .map_or(block, |alt| alt.floor() as i32)
+            + 1
+    }
+
+    /// Record the exact ground columns listed sites' plot levelling moves
+    /// (see `AuthoredRasters::set_site_levelling`); a no-op without authored
+    /// rasters.
+    pub(crate) fn set_site_levelling(
+        &mut self,
+        columns: impl IntoIterator<Item = (Vec2<i32>, f32)>,
+    ) {
+        if let Some(r) = self.authored_rasters.as_mut() {
+            r.set_site_levelling(columns);
+        }
     }
 
     /// The water facts of a chunk, authored-aware: inside a region from the

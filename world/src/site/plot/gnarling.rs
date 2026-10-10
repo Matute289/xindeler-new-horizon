@@ -63,7 +63,7 @@ impl GnarlingStructure {
 
 impl GnarlingFortification {
     pub fn generate(wpos: Vec2<i32>, land: &Land, rng: &mut impl Rng) -> Self {
-        let rpos_height = |rpos| land.get_alt_approx(rpos + wpos) as i32;
+        let rpos_height = |rpos| land.ground_alt_at(rpos + wpos) as i32;
 
         let name = NameGen::location(rng).generate_gnarling();
         let seed = rng.random();
@@ -79,7 +79,7 @@ impl GnarlingFortification {
         let radius = wall_radius + 50;
 
         // Tunnels
-        let alt = land.get_alt_approx(wpos) as i32;
+        let alt = land.ground_alt_at(wpos) as i32;
         let start = wpos.with_z(alt);
         let boss_room_shift = rng.random_range(60..110);
         let end_xy = match rng.random_range(0..4) {
@@ -91,7 +91,7 @@ impl GnarlingFortification {
             _ => unreachable!(),
         };
 
-        let is_underground = |pos: Vec3<i32>| land.get_alt_approx(pos.xy()) as i32 - 9 > pos.z;
+        let is_underground = |pos: Vec3<i32>| land.ground_alt_at(pos.xy()) as i32 - 9 > pos.z;
         let is_valid_edge = |p1: Vec3<i32>, p2: Vec3<i32>| {
             let diff = p1 - p2;
             // Check that the new point is underground and the slope is mildish
@@ -558,10 +558,10 @@ impl Structure for GnarlingFortification {
 
                     let start = (start_wpos + 2)
                         .as_()
-                        .with_z(land.get_alt_approx(start_wpos) + 0.0);
+                        .with_z(land.ground_alt_at(start_wpos) + 0.0);
                     let end = (end_wpos + 2)
                         .as_()
-                        .with_z(land.get_alt_approx(end_wpos) + 0.0);
+                        .with_z(land.ground_alt_at(end_wpos) + 0.0);
                     let randstart = start % 10.0 - 5.;
                     let randend = end % 10.0 - 5.0;
                     let mid = (start + end) / 2.0;
@@ -578,8 +578,8 @@ impl Structure for GnarlingFortification {
 
                     let start = start_wpos
                         .as_()
-                        .with_z(land.get_alt_approx(start_wpos) - 2.0);
-                    let end = end_wpos.as_().with_z(land.get_alt_approx(end_wpos) - 2.0);
+                        .with_z(land.ground_alt_at(start_wpos) - 2.0);
+                    let end = end_wpos.as_().with_z(land.ground_alt_at(end_wpos) - 2.0);
                     let randstart = start % 10.0 - 5.;
                     let randend = end % 10.0 - 5.0;
                     let mid = (start + end) / 2.0;
@@ -596,10 +596,10 @@ impl Structure for GnarlingFortification {
 
                     let start = (start_wpos + 3)
                         .as_()
-                        .with_z(land.get_alt_approx(start_wpos) + 0.0);
+                        .with_z(land.ground_alt_at(start_wpos) + 0.0);
                     let end = (end_wpos + 3)
                         .as_()
-                        .with_z(land.get_alt_approx(end_wpos) + 0.0);
+                        .with_z(land.ground_alt_at(end_wpos) + 0.0);
                     let randstart = start % 10.0 - 5.;
                     let randend = end % 10.0 - 5.0;
                     let mid = (start + end) / 2.0;
@@ -614,8 +614,8 @@ impl Structure for GnarlingFortification {
                         painter.cubic_bezier(start, mid + startshift, mid + endshift, end, 2.0);
 
                     let mosstop2 = root2.translate(Vec3::new(0, 0, 1));
-                    let start = start_wpos.as_().with_z(land.get_alt_approx(start_wpos));
-                    let end = end_wpos.as_().with_z(land.get_alt_approx(end_wpos));
+                    let start = start_wpos.as_().with_z(land.ground_alt_at(start_wpos));
+                    let end = end_wpos.as_().with_z(land.ground_alt_at(end_wpos));
 
                     let wall_base_height = 3.0;
                     let wall_mid_thickness = 1.0;
@@ -627,10 +627,10 @@ impl Structure for GnarlingFortification {
 
                     let start = start_wpos
                         .as_()
-                        .with_z(land.get_alt_approx(start_wpos) + wall_mid_height);
+                        .with_z(land.ground_alt_at(start_wpos) + wall_mid_height);
                     let end = end_wpos
                         .as_()
-                        .with_z(land.get_alt_approx(end_wpos) + wall_mid_height);
+                        .with_z(land.ground_alt_at(end_wpos) + wall_mid_height);
 
                     let wall_top_thickness = 2.0;
                     let wall_top_height = 1.0;
@@ -658,13 +658,13 @@ impl Structure for GnarlingFortification {
 
             // Tower base
             let tower_depth = 3;
-            let tower_base_pos = wpos.with_z(land.get_alt_approx(wpos) as i32 - tower_depth);
+            let tower_base_pos = wpos.with_z(land.ground_alt_at(wpos) as i32 - tower_depth);
             let tower_radius = 5.0;
             let tower_height = 30.0;
 
             let randx = wpos.x.abs() % 10;
             let randy = wpos.y.abs() % 10;
-            let randz = (land.get_alt_approx(wpos) as i32).abs() % 10;
+            let randz = (land.ground_alt_at(wpos) as i32).abs() % 10;
             //layers of rings, starting at exterior
             let darkwood = Fill::Brick(BlockKind::Wood, Rgb::new(55, 25, 8), 12);
             let lightwood = Fill::Brick(BlockKind::Wood, Rgb::new(71, 33, 11), 12);
@@ -689,40 +689,40 @@ impl Structure for GnarlingFortification {
 
             let outside = painter
                 .cylinder_with_radius(
-                    wpos.with_z(land.get_alt_approx(wpos) as i32),
+                    wpos.with_z(land.ground_alt_at(wpos) as i32),
                     tower_radius,
                     tower_height,
                 )
                 .without(painter.cylinder_with_radius(
-                    wpos.with_z(land.get_alt_approx(wpos) as i32),
+                    wpos.with_z(land.ground_alt_at(wpos) as i32),
                     tower_radius - 1.0,
                     tower_height,
                 ));
             outside.fill(lightwood.clone());
             painter
                 .cylinder_with_radius(
-                    wpos.with_z(land.get_alt_approx(wpos) as i32),
+                    wpos.with_z(land.ground_alt_at(wpos) as i32),
                     tower_radius - 1.0,
                     tower_height,
                 )
                 .fill(darkwood.clone());
             painter
                 .cylinder_with_radius(
-                    wpos.with_z(land.get_alt_approx(wpos) as i32),
+                    wpos.with_z(land.ground_alt_at(wpos) as i32),
                     tower_radius - 2.0,
                     tower_height,
                 )
                 .fill(lightwood.clone());
             painter
                 .cylinder_with_radius(
-                    wpos.with_z(land.get_alt_approx(wpos) as i32),
+                    wpos.with_z(land.ground_alt_at(wpos) as i32),
                     tower_radius - 3.0,
                     tower_height,
                 )
                 .fill(darkwood);
             painter
                 .cylinder_with_radius(
-                    wpos.with_z(land.get_alt_approx(wpos) as i32),
+                    wpos.with_z(land.ground_alt_at(wpos) as i32),
                     tower_radius - 4.0,
                     tower_height,
                 )
@@ -730,7 +730,7 @@ impl Structure for GnarlingFortification {
             //top layer, green above the tower
             painter
                 .cylinder_with_radius(
-                    wpos.with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32),
+                    wpos.with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32),
                     tower_radius,
                     2.0,
                 )
@@ -738,7 +738,7 @@ impl Structure for GnarlingFortification {
             //standing area one block deeper
             painter
                 .cylinder_with_radius(
-                    wpos.with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 9),
+                    wpos.with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 9),
                     tower_radius - 1.0,
                     1.0,
                 )
@@ -747,7 +747,7 @@ impl Structure for GnarlingFortification {
             painter
                 .sphere_with_radius(
                     Vec2::new(wpos.x - (randy - 5) / 2, wpos.y - (randz - 5) / 2).with_z(
-                        land.get_alt_approx(wpos) as i32 + tower_height as i32 + 6 - randx / 3,
+                        land.ground_alt_at(wpos) as i32 + tower_height as i32 + 6 - randx / 3,
                     ),
                     5.5,
                 )
@@ -756,7 +756,7 @@ impl Structure for GnarlingFortification {
             painter
                 .sphere_with_radius(
                     Vec2::new(wpos.x - (randy - 5) * 2, wpos.y - (randz - 5) * 2)
-                        .with_z(land.get_alt_approx(wpos) as i32 + randx * 2),
+                        .with_z(land.ground_alt_at(wpos) as i32 + randx * 2),
                     7.5,
                 )
                 .intersect(outside)
@@ -765,7 +765,7 @@ impl Structure for GnarlingFortification {
             painter
                 .sphere_with_radius(
                     Vec2::new(wpos.x - (randx - 5) * 2, wpos.y - (randy - 5) * 2)
-                        .with_z(land.get_alt_approx(wpos) as i32 + randz * 2),
+                        .with_z(land.ground_alt_at(wpos) as i32 + randz * 2),
                     5.5,
                 )
                 .intersect(outside)
@@ -775,69 +775,69 @@ impl Structure for GnarlingFortification {
             painter
                 .aabb(Aabb {
                     min: Vec2::new(wpos.x - 3, wpos.y - 10)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 8),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 8),
                     max: Vec2::new(wpos.x + 3, wpos.y + 10)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 3),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 3),
                 })
                 .clear();
             painter
                 .aabb(Aabb {
                     min: Vec2::new(wpos.x - 10, wpos.y - 3)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 8),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 8),
                     max: Vec2::new(wpos.x + 10, wpos.y + 3)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 3),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 3),
                 })
                 .clear();
             painter
                 .aabb(Aabb {
                     min: Vec2::new(wpos.x - 2, wpos.y - 10)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 8),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 8),
                     max: Vec2::new(wpos.x + 2, wpos.y + 10)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 2),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 2),
                 })
                 .clear();
             painter
                 .aabb(Aabb {
                     min: Vec2::new(wpos.x - 10, wpos.y - 2)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 8),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 8),
                     max: Vec2::new(wpos.x + 10, wpos.y + 2)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 2),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 2),
                 })
                 .clear();
             //flags
             painter
                 .aabb(Aabb {
                     min: Vec2::new(wpos.x - 2, wpos.y - tower_radius as i32 - 1)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 16),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 16),
                     max: Vec2::new(wpos.x + 2, wpos.y + tower_radius as i32 + 1)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 10),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 10),
                 })
                 .intersect(outside)
                 .fill(red.clone());
             painter
                 .aabb(Aabb {
                     min: Vec2::new(wpos.x - tower_radius as i32 - 1, wpos.y - 2)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 16),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 16),
                     max: Vec2::new(wpos.x + tower_radius as i32 + 1, wpos.y + 2)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 10),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 10),
                 })
                 .intersect(outside)
                 .fill(red.clone());
             painter
                 .aabb(Aabb {
                     min: Vec2::new(wpos.x - 1, wpos.y - tower_radius as i32 - 1)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 17),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 17),
                     max: Vec2::new(wpos.x + 1, wpos.y + tower_radius as i32 + 1)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 16),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 16),
                 })
                 .intersect(outside)
                 .fill(red.clone());
             painter
                 .aabb(Aabb {
                     min: Vec2::new(wpos.x - tower_radius as i32 - 1, wpos.y - 1)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 17),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 17),
                     max: Vec2::new(wpos.x + tower_radius as i32 + 1, wpos.y + 1)
-                        .with_z(land.get_alt_approx(wpos) as i32 + tower_height as i32 - 16),
+                        .with_z(land.ground_alt_at(wpos) as i32 + tower_height as i32 - 16),
                 })
                 .intersect(outside)
                 .fill(red);
@@ -847,7 +847,7 @@ impl Structure for GnarlingFortification {
             .iter()
             .for_each(|(kind, loc, door_dir)| {
                 let wpos = self.origin + loc.xy();
-                let alt = land.get_alt_approx(wpos) as i32;
+                let alt = land.ground_alt_at(wpos) as i32;
 
                 fn generate_hut(
                     painter: &Painter,
@@ -1236,7 +1236,7 @@ impl Structure for GnarlingFortification {
                         let rand = Vec3::new(
                             wpos.x.abs() % 10,
                             wpos.y.abs() % 10,
-                            (land.get_alt_approx(wpos) as i32).abs() % 10,
+                            (land.ground_alt_at(wpos) as i32).abs() % 10,
                         );
 
                         let length = 14;
@@ -1413,7 +1413,7 @@ impl Structure for GnarlingFortification {
                         let rand = Vec3::new(
                             wpos.x.abs() % 10,
                             wpos.y.abs() % 10,
-                            (land.get_alt_approx(wpos) as i32).abs() % 10,
+                            (land.ground_alt_at(wpos) as i32).abs() % 10,
                         );
 
                         let darkwood = Fill::Brick(BlockKind::Wood, Rgb::new(55, 25, 8), 12);
@@ -1752,7 +1752,7 @@ impl Structure for GnarlingFortification {
         // Create tunnels beneath the fortification
         let wood = Fill::Brick(BlockKind::Wood, Rgb::new(55, 25, 8), 24);
         let dirt = Fill::Brick(BlockKind::Earth, Rgb::new(55, 25, 8), 24);
-        let alt = land.get_alt_approx(self.origin) as i32;
+        let alt = land.ground_alt_at(self.origin) as i32;
         let stump = painter
             .cylinder(Aabb {
                 min: (self.tunnels.start.xy() - 10).with_z(alt - 15),

@@ -70,14 +70,12 @@ pub struct RegionSpec {
     #[serde(default)]
     pub sites_on_patch: Vec<String>,
     /// Passed through to [`RegionManifest::site_levelling`].
-    #[serde(default = "spec_default_true")]
+    #[serde(default = "super::default_true")]
     pub site_levelling: bool,
     /// Passed through to [`RegionManifest::max_exposed_void_columns`].
     #[serde(default)]
     pub max_exposed_void_columns: u32,
 }
-
-fn spec_default_true() -> bool { true }
 
 impl RegionSpec {
     /// A region with the default settings (natural decorations kept, no
