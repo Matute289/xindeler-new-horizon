@@ -55,7 +55,7 @@ settlement:site.hita_post	f5af5d44231fa7e0	1	1	Hita Post
 settlement:site.inebel	0752c41fca3ffa88	91	45	Inebel
 settlement:site.itos_village	486c1ce891b0abd0	42	23	Itos Village
 settlement:site.kalitos	9b8057df9c54be3d	19	10	Kalitos
-settlement:site.kalthis	860a75645d799cda	442	351	Kalthis
+settlement:site.kalthis	38d9c5e235e9dfcc	436	347	Kalthis
 settlement:site.le_pont_dargent	458d2762fb69a3c9	1	1	Le Pont D'argent
 settlement:site.levannois_village	657627410f4d1766	20	11	Levannois Village
 settlement:site.levassi	cd9d41ff48ce202c	42	25	Levassi

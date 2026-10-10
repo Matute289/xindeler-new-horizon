@@ -590,6 +590,7 @@ impl Site {
         self.find_aabr_in(search_pos, area_range, min_dims, layout::Zone::Built)
     }
 
+    // XINDELER: authored settlement footprint hooks (see `layout`).
     /// [`Self::find_aabr`], restricted to the tiles an authored footprint
     /// allows for `zone` (no restriction without a footprint).
     fn find_aabr_in(
@@ -695,12 +696,15 @@ impl Site {
     /// anchor first, where a plot of this size fits beside a road. Draws no
     /// random numbers. Always `None` without a footprint.
     fn fill_roadside_aabr(
-        &self,
+        &mut self,
         area_range: Range<u32>,
         min_dims: Extent2<u32>,
     ) -> Option<(Aabr<i32>, Vec2<i32>, Vec2<i32>, Option<i32>)> {
         let footprint = self.footprint.as_deref()?;
-        footprint.ward_tiles().find_map(|door_pos| {
+        if footprint.fill_exhausted(&area_range, min_dims) {
+            return None;
+        }
+        let found = footprint.ward_tiles().find_map(|door_pos| {
             if !self.tiles.get(door_pos).is_empty() {
                 return None;
             }
@@ -712,7 +716,13 @@ impl Site {
                 door_dir,
                 hard_alt.or(self.road_door_alt(door_pos, door_dir)),
             ))
-        })
+        });
+        if found.is_none()
+            && let Some(footprint) = self.footprint.as_deref_mut()
+        {
+            footprint.note_fill_exhausted(&area_range, min_dims);
+        }
+        found
     }
 
     pub fn find_rural_aabr(
@@ -848,7 +858,7 @@ impl Site {
                     max: center_tile + Vec2::broadcast(plaza_radius + 1),
                 })
                 .filter(|&aabr| {
-                    // An authored footprint replaces the soft reach lottery
+                    // XINDELER: an authored footprint replaces the soft reach lottery
                     // (a plaza is less likely the further it is from the
                     // origin) with its own extent.
                     let within_reach = match self.footprint.as_deref() {
@@ -880,7 +890,7 @@ impl Site {
                 })
         })
         .or_else(|| {
-            // With an authored footprint, a plaza the random walk could not
+            // XINDELER: with an authored footprint, a plaza the random walk could not
             // place is placed deterministically on the network's frontier
             // instead, so a city boxed in by water, hills and routes still
             // grows through its footprint.
@@ -970,7 +980,7 @@ impl Site {
         road_kind: plot::RoadKind,
     ) -> Option<Id<Plot>> {
         generator_stats.attempt(site_name, GenStatPlotKind::InitialPlaza);
-        // An authored footprint puts the main plaza by its anchor instead of
+        // XINDELER: an authored footprint puts the main plaza by its anchor instead of
         // nearest the origin: the clear patch nearest the anchor anywhere in
         // the footprint.
         if let Some(footprint) = self.footprint.as_deref() {
@@ -1048,7 +1058,7 @@ impl Site {
     ) -> Option<Id<Plot>> {
         // The plaza radius can be 1, 2, or 3.
         let plaza_radius = rng.random_range(1..3);
-        // An authored footprint may fix it (the draw above still happens).
+        // XINDELER: an authored footprint may fix it (the draw above still happens).
         let plaza_radius = self
             .footprint
             .as_deref()
@@ -1594,36 +1604,49 @@ impl Site {
         let mut taverns = 0;
         let mut airship_docks = 0;
 
-        // The plot lottery: `size * 200` draws. With an authored footprint
-        // the draws go on until every ward has its building quota, the city
-        // stops growing (no new building in `QUOTA_STALL_DRAWS` draws), or
-        // `QUOTA_DRAWS_PER_BUILDING` draws per target building. Same RNG
-        // stream throughout: a quota run is the ordinary lottery, continued.
+        // XINDELER: the plot lottery is `size * 200` draws. With an authored
+        // footprint the draws go on until every ward has its building quota,
+        // the city stops growing (no new building in `QUOTA_STALL_DRAWS`
+        // draws), or `QUOTA_DRAWS_PER_BUILDING` draws per target building.
+        // Same RNG stream throughout: a quota run is the ordinary lottery,
+        // continued.
         const QUOTA_STALL_DRAWS: usize = 256;
         const QUOTA_DRAWS_PER_BUILDING: usize = 4;
         let base_draws = (size * 200.0) as i32 as usize;
         let max_draws = site.footprint.as_deref().map_or(base_draws, |footprint| {
             base_draws.max(footprint.target_buildings() * QUOTA_DRAWS_PER_BUILDING)
         });
-        // (buildings, the draw at which that count was first seen)
-        let mut quota_progress: Option<(usize, usize)> = None;
+        // (plots, buildings, the draw at which that building count was first
+        // seen); recounted only when the plot count changes.
+        let mut quota_progress: Option<(usize, usize, usize)> = None;
         for draw in 0..max_draws {
             if draw >= base_draws {
                 let Some(footprint) = site.footprint.as_deref() else {
                     break;
                 };
-                let buildings = || site.plots.values().filter(|plot| plot.is_building());
-                if footprint.quota_met(buildings().map(|plot| plot.root_tile)) {
-                    break;
-                }
-                let count = buildings().count();
+                let plots = site.plots.values().len();
                 match quota_progress {
-                    Some((last, since)) if count <= last => {
+                    Some((last_plots, _, since)) if last_plots == plots => {
                         if draw - since >= QUOTA_STALL_DRAWS {
                             break;
                         }
                     },
-                    _ => quota_progress = Some((count, draw)),
+                    _ => {
+                        let buildings = || site.plots.values().filter(|plot| plot.is_building());
+                        if footprint.quota_met(buildings().map(|plot| plot.root_tile)) {
+                            break;
+                        }
+                        let count = buildings().count();
+                        quota_progress = match quota_progress {
+                            Some((_, last, since)) if count <= last => {
+                                if draw - since >= QUOTA_STALL_DRAWS {
+                                    break;
+                                }
+                                Some((plots, last, since))
+                            },
+                            _ => Some((plots, count, draw)),
+                        };
+                    },
                 }
             }
             match *build_chance.choose_seeded(rng.random()) {

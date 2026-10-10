@@ -11,6 +11,10 @@
 // footprint is kept clear automatically; `exclude_sites` adds keep-out
 // circles around other settlements or landmarks.
 //
+// The city generator only evaluates terrain within 94 tiles (564 blocks) of
+// the settlement's pin; ward area beyond that is not used yet, so a ward
+// reaching past it may fall short of its target.
+//
 // The two river-port landmarks are authored with a 26-block footprint but
 // are generated today by the generic citadel stand-in, which builds out to
 // 150 blocks from its pin: their 165-block exclusions keep the cities off

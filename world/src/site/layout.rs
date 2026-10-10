@@ -150,16 +150,26 @@ impl SettlementLayout {
 /// grow with the footprint.
 pub const FOOTPRINT_DOMAIN_TILES: i32 = Site::OBSTACLE_SEARCH_RADIUS as i32 - 2;
 
-/// The radius around a new plaza within which [`Footprint`] tracks the
-/// distance to the nearest plaza, in tiles: the frontier step's upper bound
-/// for the largest plaza spacing `make_plaza` uses (`1.6 * 12.5`).
-const PLAZA_DISTANCE_TRACK_TILES: i32 = 38;
-
 /// The frontier step accepts a site whose nearest plaza is within this
 /// band, in multiples of the plaza spacing: far enough not to crowd it, near
 /// enough to be connected by a short street.
 const FRONTIER_MIN_SPACING: f32 = 0.85;
 const FRONTIER_MAX_SPACING: f32 = 3.0;
+
+/// The largest plaza spacing `Site::make_plaza` uses, in tiles
+/// (`6.5 + 3.0 * plaza_radius` with a radius of at most 2).
+const MAX_PLAZA_SPACING: f32 = 12.5;
+
+/// The radius around a new plaza within which [`Footprint`] tracks the
+/// distance to the nearest plaza, in tiles: the frontier step's upper bound
+/// for the largest plaza spacing.
+const PLAZA_DISTANCE_TRACK_TILES: i32 = 38;
+const _: () =
+    assert!(PLAZA_DISTANCE_TRACK_TILES as f32 >= MAX_PLAZA_SPACING * FRONTIER_MAX_SPACING);
+
+/// Plaza radii the frontier step is asked for (`make_plaza` draws 1 or 2;
+/// an authored main plaza may be up to 3).
+const MAX_PLAZA_RADIUS: usize = 3;
 
 /// Clear ward tiles a new plaza needs on every side, so that plots have
 /// room to front onto it: without it the plaza network fills the footprint's
@@ -199,10 +209,14 @@ pub struct Footprint {
     pub(crate) plaza_radius: Option<u32>,
     fields: FieldPlacement,
     ward_targets: Vec<usize>,
-    /// Set when a frontier search found nothing; cleared by any new plaza
-    /// (only a new plaza can open a new frontier position: plots only take
-    /// space away).
-    frontier_exhausted: bool,
+    /// Per plaza radius: set when a frontier search found nothing; cleared
+    /// by any new plaza (only a new plaza can open a new frontier position:
+    /// plots only take space away).
+    frontier_exhausted: [bool; MAX_PLAZA_RADIUS + 1],
+    /// Plot sizes (`area_range`, `min_dims`) the roadside fill found no room
+    /// for; cleared by any new plaza and its roads, the only things that add
+    /// road frontage.
+    fill_exhausted: Vec<(u32, u32, u32, u32)>,
 }
 
 impl Footprint {
@@ -219,11 +233,20 @@ impl Footprint {
         let tile_centre = |tpos: Vec2<i32>| {
             (site_origin + tpos * TILE_SIZE as i32 + TILE_SIZE as i32 / 2).as_::<f64>()
         };
+        // Only the exclusions that reach the domain.
+        let reach = (FOOTPRINT_DOMAIN_TILES + 1) * TILE_SIZE as i32;
+        let exclusions: Vec<_> = layout
+            .exclusions
+            .iter()
+            .filter(|ex| {
+                (ex.centre_wpos - site_origin).map(i32::abs).reduce_max() < reach + ex.radius
+            })
+            .collect();
         let excluded = |wpos: Vec2<f64>| {
-            layout
-                .exclusions
-                .iter()
-                .any(|ex| wpos.distance_squared(ex.centre_wpos.as_()) < (ex.radius as f64).powi(2))
+            exclusions.iter().any(|ex| {
+                let r = ex.radius as f64;
+                wpos.distance_squared(ex.centre_wpos.as_()) < r * r
+            })
         };
         let mut ward_tiles = Vec::new();
         for y in -FOOTPRINT_DOMAIN_TILES..=FOOTPRINT_DOMAIN_TILES {
@@ -242,7 +265,6 @@ impl Footprint {
         }
         if let FieldPlacement::Ring(width) = layout.fields {
             let width = width as i32;
-            let mut ring = Vec::new();
             for &tpos in &ward_tiles {
                 for dy in -width..=width {
                     for dx in -width..=width {
@@ -251,13 +273,10 @@ impl Footprint {
                             && cells[Self::index(t)] == OUTSIDE
                             && !excluded(tile_centre(t))
                         {
-                            ring.push(t);
+                            cells[Self::index(t)] = RING;
                         }
                     }
                 }
-            }
-            for t in ring {
-                cells[Self::index(t)] = RING;
             }
         }
         let anchor_tile = layout.anchor_tile(site_origin);
@@ -272,7 +291,8 @@ impl Footprint {
             plaza_radius: layout.plaza_radius,
             fields: layout.fields,
             ward_targets: layout.wards.iter().map(|w| w.target_buildings).collect(),
-            frontier_exhausted: false,
+            frontier_exhausted: [false; MAX_PLAZA_RADIUS + 1],
+            fill_exhausted: Vec::new(),
         }
     }
 
@@ -308,7 +328,8 @@ impl Footprint {
     }
 
     /// Whether every tile of a plaza patch lies in the wards.
-    pub(crate) fn allows_patch(&self, aabr: Aabr<i32>) -> bool {
+    #[cfg(test)]
+    fn allows_patch(&self, aabr: Aabr<i32>) -> bool {
         (aabr.min.y..aabr.max.y)
             .all(|y| (aabr.min.x..aabr.max.x).all(|x| self.allows(Vec2::new(x, y), Zone::Built)))
     }
@@ -342,7 +363,8 @@ impl Footprint {
 
     /// Records a new plaza rooted at `root` for the frontier step.
     pub(crate) fn note_plaza(&mut self, root: Vec2<i32>) {
-        self.frontier_exhausted = false;
+        self.frontier_exhausted = [false; MAX_PLAZA_RADIUS + 1];
+        self.fill_exhausted.clear();
         let r = PLAZA_DISTANCE_TRACK_TILES;
         for y in -r..=r {
             for x in -r..=r {
@@ -376,13 +398,15 @@ impl Footprint {
         plaza_dist: f32,
         is_clear: impl Fn(Vec2<i32>) -> bool,
     ) -> Option<Aabr<i32>> {
-        if self.frontier_exhausted {
+        let slot = (plaza_radius.max(0) as usize).min(MAX_PLAZA_RADIUS);
+        if self.frontier_exhausted[slot] {
             return None;
         }
-        let (min2, max2) = (
-            (plaza_dist * FRONTIER_MIN_SPACING).powi(2),
-            (plaza_dist * FRONTIER_MAX_SPACING).powi(2),
+        let (min, max) = (
+            plaza_dist * FRONTIER_MIN_SPACING,
+            plaza_dist * FRONTIER_MAX_SPACING,
         );
+        let (min2, max2) = (min * min, max * max);
         let found = self.nearest_patch_to_anchor(
             plaza_radius,
             |centre| {
@@ -391,8 +415,29 @@ impl Footprint {
             },
             is_clear,
         );
-        self.frontier_exhausted = found.is_none();
+        self.frontier_exhausted[slot] = found.is_none();
         found
+    }
+
+    /// Whether the roadside fill already found no room for this plot size
+    /// since the last new plaza.
+    pub(crate) fn fill_exhausted(
+        &self,
+        area_range: &std::ops::Range<u32>,
+        min_dims: Extent2<u32>,
+    ) -> bool {
+        self.fill_exhausted
+            .contains(&(area_range.start, area_range.end, min_dims.w, min_dims.h))
+    }
+
+    /// Records that the roadside fill found no room for this plot size.
+    pub(crate) fn note_fill_exhausted(
+        &mut self,
+        area_range: &std::ops::Range<u32>,
+        min_dims: Extent2<u32>,
+    ) {
+        self.fill_exhausted
+            .push((area_range.start, area_range.end, min_dims.w, min_dims.h));
     }
 
     /// The first ward patch, in anchor-distance order, whose centre passes
@@ -591,15 +636,17 @@ mod tests {
     fn frontier_grows_from_the_anchor_at_plaza_spacing() {
         let mut fp = Footprint::new(&layout(WaterSide::Right), Vec2::new(1000, 1000));
         // The main plaza: the patch nearest the anchor (2, 5) with a clear
-        // two-tile ring inside the wards (which start at x = 0).
+        // ring of `PLAZA_ROOM_TILES` inside the wards (which start at x = 0).
+        assert_eq!(PLAZA_ROOM_TILES, 1);
         let first = fp.initial_plaza(1, |_| true).unwrap();
-        assert_eq!(first.center(), Vec2::new(3, 5));
+        assert_eq!(first.center(), Vec2::new(2, 5));
         let blocked = fp.initial_plaza(1, |t| t.y > 5).unwrap();
-        assert_eq!(blocked.center(), Vec2::new(3, 9));
+        assert_eq!(blocked.center(), Vec2::new(2, 8));
         fp.note_plaza(first.center());
         let second = fp.frontier_plaza(1, 9.5, |_| true).unwrap();
         let d2 = (second.center() - first.center()).magnitude_squared() as f32;
-        assert!(d2 > (9.5f32 * 0.85).powi(2) && d2 <= (9.5f32 * 1.6).powi(2));
+        let (min, max) = (9.5 * FRONTIER_MIN_SPACING, 9.5 * FRONTIER_MAX_SPACING);
+        assert!(d2 > min * min && d2 <= max * max);
         assert!(fp.allows_patch(second));
         // Nothing clear: exhausted until the next plaza.
         assert_eq!(fp.frontier_plaza(1, 9.5, |_| false), None);
