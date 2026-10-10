@@ -16,8 +16,8 @@ evidencia.
 - `xindeler-new-horizon` es el motor, cliente y servidor públicos;
   `docs/design/` es el repo privado de diseño anidado.
 - `xindeler-open-world` es la fuente canónica de datos autorales. `xindeler-old`
-  es una referencia de laboratorio congelada, nunca un destino de trabajo
-  nuevo.
+  era una referencia de laboratorio congelada; su checkout local se borró el
+  2026-10-04 (respaldo en `~/Documents/xindeler-scratch-backup-2026-10-04/old-repos/`).
 
 ## Skills y agentes existentes
 
