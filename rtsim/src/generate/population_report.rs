@@ -99,6 +99,20 @@ fn cromatolis_population_report() {
             pop.others
         );
     }
+    // Kalthis and Duren are authored at 400 NPCs each; every other
+    // settlement follows its plot count.
+    for (id, plots, npc_count, pop) in &settlements {
+        if matches!(id.as_str(), "site.kalthis" | "site.duren") {
+            assert_eq!((*npc_count, pop.total()), (Some(400), 400), "{id}");
+        } else {
+            assert_eq!(*npc_count, None, "{id}");
+            assert_eq!(
+                *pop,
+                SettlementPopulation::from_plot_count(*plots as u32),
+                "{id}"
+            );
+        }
+    }
     let town_total: u32 = settlements.iter().map(|(.., pop)| pop.total()).sum();
     assert_eq!(
         town_total,
