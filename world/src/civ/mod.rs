@@ -2810,6 +2810,8 @@ impl Civs {
                         wpos,
                         &mut gen_meta,
                     ),
+                    // XINDELER: an authored landmark standing in as a
+                    // citadel may be held to its own footprint.
                     SiteKind::Citadel => WorldSite::generate_citadel_within(
                         &Land::from_sim(ctx.sim),
                         &mut rng,

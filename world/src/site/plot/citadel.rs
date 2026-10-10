@@ -34,6 +34,12 @@ impl Citadel {
         rng: &mut impl Rng,
         radius: i32,
     ) -> Self {
+        // The grid is built in whole cells: a radius under one cell would
+        // build nothing (the landmark caller rounds up with `whole_cells`).
+        debug_assert!(
+            radius >= CELL_SIZE,
+            "citadel radius {radius} under one cell"
+        );
         let alt = land.ground_alt_at(wpos) as i32;
 
         let name = NameGen::location(rng).generate_town();
