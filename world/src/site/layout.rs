@@ -205,7 +205,6 @@ pub struct Footprint {
     /// Every ward tile, nearest the anchor first (ties in a fixed order):
     /// the frontier step's search order.
     ward_tiles_by_anchor_distance: Vec<Vec2<i32>>,
-    pub(crate) anchor_tile: Vec2<i32>,
     pub(crate) plaza_radius: Option<u32>,
     fields: FieldPlacement,
     ward_targets: Vec<usize>,
@@ -287,7 +286,6 @@ impl Footprint {
             cells,
             plaza_dist2: vec![f32::INFINITY; side * side],
             ward_tiles_by_anchor_distance: ward_tiles,
-            anchor_tile,
             plaza_radius: layout.plaza_radius,
             fields: layout.fields,
             ward_targets: layout.wards.iter().map(|w| w.target_buildings).collect(),
@@ -595,13 +593,20 @@ mod tests {
         assert_eq!(fp.ward_of(Vec2::new(12, 2)), Some(1));
         assert_eq!(fp.ward_of(Vec2::new(2, -2)), None);
         assert_eq!(fp.ward_of(Vec2::new(-2, 2)), None);
-        assert_eq!(fp.anchor_tile, Vec2::new(2, 5));
+        let origin = Vec2::new(1000, 1000);
+        assert_eq!(
+            layout(WaterSide::Right).anchor_tile(origin),
+            Vec2::new(2, 5)
+        );
         assert_eq!(fp.target_buildings(), 10);
         // Water on the left (north) mirrors the plan south.
         let fp = Footprint::new(&layout(WaterSide::Left), Vec2::new(1000, 1000));
         assert_eq!(fp.ward_of(Vec2::new(2, -3)), Some(0));
         assert_eq!(fp.ward_of(Vec2::new(2, 2)), None);
-        assert_eq!(fp.anchor_tile, Vec2::new(2, -5));
+        assert_eq!(
+            layout(WaterSide::Left).anchor_tile(origin),
+            Vec2::new(2, -5)
+        );
     }
 
     #[test]
