@@ -803,6 +803,31 @@ mod tests {
     }
 
     #[test]
+    fn frontier_skips_wards_that_have_their_quota() {
+        let mut fp = Footprint::new(&layout(WaterSide::Right), Vec2::new(1000, 1000));
+        let first = fp.initial_plaza(1, |_| true).unwrap();
+        // Only the inner ward (tiles x < 10) is clear.
+        let inner_only = |t: Vec2<i32>| t.x < 10;
+        fp.note_plaza(first.center());
+        let free = fp.frontier_plaza(1, 9.5, inner_only).unwrap();
+        assert_eq!(fp.ward_of(free.center()), Some(0));
+        // The inner ward gets its 7: no frontier plaza may go there now.
+        for _ in 0..7 {
+            fp.note_building(Vec2::new(2, 2));
+        }
+        fp.note_plaza(first.center());
+        assert_eq!(fp.frontier_plaza(1, 9.5, inner_only), None);
+        // (A failed search is cached until the next plaza.)
+        fp.note_plaza(first.center());
+        let steered = fp.frontier_plaza(1, 9.5, |_| true).unwrap();
+        assert_eq!(fp.ward_of(steered.center()), Some(1));
+        // Steering off: the inner ward is open again.
+        fp.stop_steering();
+        fp.note_plaza(first.center());
+        assert!(fp.frontier_plaza(1, 9.5, inner_only).is_some());
+    }
+
+    #[test]
     fn quota_stops_at_the_total_before_every_ward_is_met() {
         let mut fp = Footprint::new(&layout(WaterSide::Right), Vec2::new(1000, 1000));
         // The outer ward (target 3) never gets a building, but the inner one

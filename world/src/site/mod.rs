@@ -661,7 +661,12 @@ impl Site {
             },
         }
         .ok()
-        // A building counts for the ward of its centre: steer by that too.
+        // A building counts for the ward of its root tile (`note_building`),
+        // and every roadside building `generate_city` creates from this aabr
+        // uses `aabr.center()` as that root: steer by exactly that tile. The
+        // naval port (rooted at its hinge) and barns (rural zone) are never
+        // steered; a port whose hinge lies in a ward counts for it, which can
+        // overshoot that ward by one.
         .filter(|aabr: &Aabr<i32>| {
             zone != layout::Zone::Built || footprint.is_none_or(|f| !f.ward_full(aabr.center()))
         })
