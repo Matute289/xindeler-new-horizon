@@ -69,8 +69,8 @@ fn unknown_step_is_rejected_with_line() {
         "        Time(\"noon\"),\n        RunCommand(\"/kill\"),",
     ));
     assert_eq!(e.file, "test.ron");
-    assert_eq!(e.line, Some(6), "{e}");
-    assert!(e.to_string().starts_with("test.ron:6:"), "{e}");
+    assert_eq!(e.line, Some(7), "{e}");
+    assert!(e.to_string().starts_with("test.ron:7:"), "{e}");
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn bad_numbers_are_rejected() {
     let e = err(&script(
         "        Time(\"noon\"),\n        WaitSeconds(0.0),",
     ));
-    assert_eq!(e.line, Some(6), "{e}");
+    assert_eq!(e.line, Some(7), "{e}");
     assert!(e.message.starts_with("step 2 (WaitSeconds)"), "{e}");
     let e = err(&script("Teleport(wpos: (1.0, inf, 3.0))"));
     assert!(e.message.contains("wpos.y"), "{e}");
@@ -152,7 +152,7 @@ fn duplicate_screenshot_names_are_rejected() {
     assert!(e.message.contains("duplicate screenshot name \"a\""), "{e}");
     assert!(e.message.starts_with("step 3 (Screenshot)"), "{e}");
     // The commented-out step is skipped when locating the line.
-    assert_eq!(e.line, Some(8), "{e}");
+    assert_eq!(e.line, Some(9), "{e}");
 }
 
 #[test]

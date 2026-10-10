@@ -154,7 +154,11 @@ impl ShotScript {
 
     /// Parse and validate script source. `file` is only used in errors.
     pub fn parse(src: &str, file: &str) -> Result<Self, ScriptError> {
-        let script: ShotScript = ron::de::from_str(src).map_err(|e| ScriptError {
+        // `implicit_some` lets optional fields be written as plain values
+        // (`radius_chunks: 8`) instead of `Some(8)`.
+        let options = ron::Options::default()
+            .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
+        let script: ShotScript = options.from_str(src).map_err(|e| ScriptError {
             file: file.to_string(),
             line: Some(e.span.start.line),
             col: Some(e.span.start.col),
