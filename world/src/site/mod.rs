@@ -912,8 +912,16 @@ impl Site {
     }
 
     pub fn demarcate_obstacles(&mut self, land: &Land) {
+        self.demarcate_obstacles_within(land, Self::OBSTACLE_SEARCH_RADIUS)
+    }
+
+    // XINDELER: the radius is a parameter so an authored footprint can reach
+    // past `OBSTACLE_SEARCH_RADIUS` (see `generate_city`).
+    /// [`Self::demarcate_obstacles`] over the tiles within `radius` of the
+    /// origin.
+    pub fn demarcate_obstacles_within(&mut self, land: &Land, radius: u32) {
         Spiral2d::new()
-            .take((Self::OBSTACLE_SEARCH_RADIUS * 2 + 1).pow(2) as usize)
+            .take((radius * 2 + 1).pow(2) as usize)
             .for_each(|tile| {
                 let wpos = self.tile_center_wpos(tile);
                 if let Some(kind) = Spiral2d::new()
@@ -1554,8 +1562,19 @@ impl Site {
         };
 
         // place the initial plaza
-        site.demarcate_obstacles(land);
+        // XINDELER: an authored footprint evaluates terrain out to its own
+        // extent ([`layout::SettlementLayout::domain_tiles`]), not just the
+        // fixed radius of an ordinary city.
         site.footprint = layout.map(|layout| Box::new(layout::Footprint::new(layout, origin)));
+        match site
+            .footprint
+            .as_deref()
+            .map(layout::Footprint::domain_tiles)
+        {
+            None => site.demarcate_obstacles(land),
+            Some(domain) => site
+                .demarcate_obstacles_within(land, (domain + layout::DOMAIN_OBSTACLE_MARGIN) as u32),
+        }
         generator_stats.add(site.name(), GenStatSiteKind::City);
         site.make_initial_plaza_default(land, index, &mut rng, generator_stats, &name, road_kind);
 
@@ -1615,11 +1634,11 @@ impl Site {
         let mut airship_docks = 0;
 
         // XINDELER: the plot lottery is `size * 200` draws. With an authored
-        // footprint the draws go on until every ward has its building quota,
-        // the city stops growing (no new building in `QUOTA_STALL_DRAWS`
-        // draws), or `QUOTA_DRAWS_PER_BUILDING` draws per target building.
-        // Same RNG stream throughout: a quota run is the ordinary lottery,
-        // continued.
+        // footprint the draws go on until every ward has its building quota
+        // or the settlement has its total target, the city stops growing (no new
+        // building in `QUOTA_STALL_DRAWS` draws), or `QUOTA_DRAWS_PER_BUILDING`
+        // draws per target building. Same RNG stream throughout: a quota run is
+        // the ordinary lottery, continued.
         const QUOTA_STALL_DRAWS: usize = 256;
         const QUOTA_DRAWS_PER_BUILDING: usize = 4;
         let base_draws = (size * 200.0) as i32 as usize;
@@ -1643,10 +1662,10 @@ impl Site {
                     },
                     _ => {
                         let buildings = || site.plots.values().filter(|plot| plot.is_building());
-                        if footprint.quota_met(buildings().map(|plot| plot.root_tile)) {
+                        let count = buildings().count();
+                        if footprint.quota_done(buildings().map(|plot| plot.root_tile)) {
                             break;
                         }
-                        let count = buildings().count();
                         quota_progress = match quota_progress {
                             Some((_, last, since)) if count <= last => {
                                 if draw - since >= QUOTA_STALL_DRAWS {

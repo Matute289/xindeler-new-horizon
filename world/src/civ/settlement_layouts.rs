@@ -10,8 +10,8 @@
 
 use super::{AuthoredCromatolisLandmarks, AuthoredCromatolisSettlements};
 use crate::site::layout::{
-    FOOTPRINT_DOMAIN_TILES, FieldPlacement, LayoutExclusion, LayoutFrame, LayoutWard, MAX_WARDS,
-    SettlementLayout, WaterSide,
+    FieldPlacement, LayoutExclusion, LayoutFrame, LayoutWard, MAX_WARDS, SettlementLayout,
+    WaterSide,
 };
 use common::{
     assets::{BoxedError, FileAsset, load_ron},
@@ -347,9 +347,13 @@ impl AuthoredSettlementLayouts {
         }
         if !resolved.anchor_in_domain(pin) {
             return Err(format!(
-                "the anchor at world ({:.0}, {:.0}) is more than {FOOTPRINT_DOMAIN_TILES} tiles \
-                 from the settlement's pin ({}, {})",
-                anchor.x, anchor.y, pin.x, pin.y
+                "the anchor at world ({:.0}, {:.0}) is more than {} tiles from the settlement's \
+                 pin ({}, {})",
+                anchor.x,
+                anchor.y,
+                resolved.domain_tiles(pin),
+                pin.x,
+                pin.y
             ));
         }
         Ok(())

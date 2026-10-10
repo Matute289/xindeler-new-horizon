@@ -614,6 +614,15 @@ impl Site {
     /// A land tile with water reachable along two cardinals yields two
     /// candidates, one per normal — deliberately, since the two face different
     /// water.
+    ///
+    /// The fixed radius is intentional even for a settlement whose authored
+    /// layout evaluates a larger domain (`layout::SettlementLayout::
+    /// domain_tiles`): the port search runs right after the main plaza, is
+    /// scored by distance to the streets near the town centre
+    /// ([`RoadDistanceField`], same radius), and the committed berth
+    /// contracts pin where each port lands. Widening it would move ports,
+    /// not let the town reach further; buildings beyond it never consult
+    /// these fields.
     pub(crate) fn shore_frontier(&self) -> Vec<ShoreFrontierTile> {
         let radius = Site::OBSTACLE_SEARCH_RADIUS - SHORE_FRONTIER_MARGIN;
         let mut frontier = Vec::with_capacity(2048);
