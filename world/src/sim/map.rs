@@ -198,6 +198,22 @@ pub fn sample_wpos(config: &MapConfig, sampler: &WorldSim, wpos: Vec2<i32>) -> f
         / gain
 }
 
+/// [`sample_wpos`] for what the server presents (the world map image and
+/// `WorldMapMsg::alt`, which the client's LOD terrain is built from): on an
+/// authored ground cell the patch's ground at this very column so distant
+/// terrain shows the edits at the 32 m sample spacing; elsewhere exactly
+/// [`sample_wpos`]. A ground cell is presented dry: the map altitude is
+/// unsigned above sea level, so a dry pit below 0 m clamps to sea level either
+/// way (signed LOD is Stage 3). Never used by generation.
+pub fn sample_wpos_presented(config: &MapConfig, sampler: &WorldSim, wpos: Vec2<i32>) -> f32 {
+    if !config.is_basement
+        && let Some(alt) = sampler.authored_ground_presentation_alt(wpos)
+    {
+        return (alt - config.focus.z as f32) / config.gain;
+    }
+    sample_wpos(config, sampler, wpos)
+}
+
 /// Samples a MapSample at a chunk.
 ///
 /// You should generally pass a closure over this function into generate

@@ -11,7 +11,7 @@ use self::erosion::Compute;
 pub use self::{
     diffusion::diffusion,
     location::Location,
-    map::{sample_pos, sample_wpos},
+    map::{sample_pos, sample_wpos, sample_wpos_presented},
     util::get_horizon_map,
     way::{Path, Way},
 };
@@ -4073,7 +4073,30 @@ impl WorldSim {
     /// Draw a map of the world based on chunk information.  Returns a buffer of
     /// u32s.
     pub fn get_map(&self, index: IndexRef, calendar: Option<&Calendar>) -> WorldMapMsg {
+        self.get_map_with(index, calendar, true)
+    }
+
+    /// [`Self::get_map`]; `authored_ground` false presents the chunk table
+    /// even on authored ground cells (the table-only map, kept for the identity
+    /// and acceptance tests).
+    pub(crate) fn get_map_with(
+        &self,
+        index: IndexRef,
+        calendar: Option<&Calendar>,
+        authored_ground: bool,
+    ) -> WorldMapMsg {
         prof_span!("WorldSim::get_map");
+        // The altitude presented at a column (map shading and
+        // `WorldMapMsg::alt`, the client's LOD heights) reads authored ground
+        // patches at the sample column itself; identical to `sample_wpos`
+        // outside ground cells.
+        let present_wpos = |map_config: &MapConfig, wpos: Vec2<i32>| {
+            if authored_ground {
+                sample_wpos_presented(map_config, self, wpos)
+            } else {
+                sample_wpos(map_config, self, wpos)
+            }
+        };
         let mut map_config = MapConfig::orthographic(
             self.map_size_lg(),
             core::ops::RangeInclusive::new(CONFIG.sea_level, CONFIG.sea_level + self.max_height),
@@ -4147,13 +4170,12 @@ impl WorldSim {
 
         map_config.generate(
             |pos| sample_pos(&map_config, self, index, Some(&samples_data), pos),
-            |pos| sample_wpos(&map_config, self, pos),
+            |pos| present_wpos(&map_config, pos),
             |pos, (r, g, b, _a)| {
                 // We currently ignore alpha and replace it with the height at pos, scaled to
                 // u8.
-                let alt = sample_wpos(
+                let alt = present_wpos(
                     &map_config,
-                    self,
                     pos.map(|e| e as i32) * TerrainChunkSize::RECT_SIZE.map(|e| e as i32),
                 );
                 let a = 0; //(alt.min(1.0).max(0.0) * 255.0) as u8;
