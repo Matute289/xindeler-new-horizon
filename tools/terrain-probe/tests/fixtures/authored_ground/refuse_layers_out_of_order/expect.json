@@ -1,0 +1,14 @@
+{
+  "message": "[Water], [Ground] or [Water, Ground]",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "27c968a9a7649ec77de76d2deca16454cf35aaa0d5d492842d29c1f7e3b6be3a",
+    "cromatolis_v0_ar_fixture_ground_0_1.bin": "a7d62c7e5bebe20f51eaf69fb4fa0d9d74102a7df7234e2932d1259cb2c98fe7",
+    "cromatolis_v0_ar_fixture_ground_1_0.bin": "8af02d6e2b9b87edfbb773ea5e36578e36edcac4ef8e1c01fb8a33890054efa2",
+    "cromatolis_v0_ar_fixture_ground_1_1.bin": "26f08b514b45b953ee5a3c722f884ba1714981bfee0f1bec48a65d5a12183fc2",
+    "cromatolis_v0_ar_fixture_water_0_0.bin": "6b0c8e47aa7a3dcb415d6382e98d8deed446f90f8d0cd20fe9409dd980cbfc5e",
+    "cromatolis_v0_ar_fixture_water_0_1.bin": "3fd53c17c4d88c4a2ba483fe433aa9548f7fccedac289401662195b2d45c8df0",
+    "cromatolis_v0_ar_fixture_water_1_0.bin": "c1b08deb8e26f704266f08a34138793169d3736d795c4701e35ba1d70f2fb77a",
+    "cromatolis_v0_ar_fixture_water_1_1.bin": "121b4f45235fd97a6d93dc822f9ec4c51d60c663d641dcec209f7bfaab70789f"
+  },
+  "verdict": "refuse"
+}

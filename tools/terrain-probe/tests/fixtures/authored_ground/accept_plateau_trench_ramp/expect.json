@@ -1,0 +1,10 @@
+{
+  "message": null,
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "e31297d52b782397850a8544393761d5d4906fa9570c4c77e0b3b05a1bd82042",
+    "cromatolis_v0_ar_fixture_ground_0_1.bin": "0cd27bcd986f4f4c64dad7b158a22e4d9f657651c7a1fc33d130448371bc013f",
+    "cromatolis_v0_ar_fixture_ground_1_0.bin": "7df62b2b862bdf6775195bcdb0c0356dc95957b01c02d51131930910c7e1e73f",
+    "cromatolis_v0_ar_fixture_ground_1_1.bin": "adcd8ea4c95e40f7e2dda32be8e1873bf5cd6cceb3966387276f617e223b36bf"
+  },
+  "verdict": "accept"
+}

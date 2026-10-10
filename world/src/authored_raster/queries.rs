@@ -9,7 +9,7 @@
 //! columns of a partial chunk are the natural map, so there too the table
 //! answers.
 
-use super::{AuthoredCell, AuthoredColumn, AuthoredWater, SEA_TOP_BLOCK};
+use super::{AuthoredCell, AuthoredColumn, AuthoredWater, SEA_TOP_BLOCK, SeaFill};
 use crate::{World, sim::WorldSim};
 use vek::*;
 
@@ -56,9 +56,11 @@ impl WorldSim {
     /// chunk table (`river_kind.is_some()`, `water_alt`, `alt`). `None`
     /// outside the map.
     pub fn water_at(&self, wpos: Vec2<i32>) -> Option<WaterAt> {
-        if let Some(cell) = self
-            .authored_cell_at(wpos)
-            .filter(|c| !self.natural_unauthored(*c, wpos))
+        if let Some((cell, sea_fill, _)) = self
+            .authored_rasters
+            .as_ref()
+            .and_then(|r| r.cell_detail_at(wpos))
+            .filter(|&(cell, _, partial)| !(partial && cell == AuthoredCell::None))
         {
             return Some(match cell {
                 AuthoredCell::Wet {
@@ -70,11 +72,25 @@ impl WorldSim {
                     bed_alt: Some((bed_block + 1) as f32),
                     source: WaterSource::Authored,
                 },
-                _ => WaterAt {
-                    wet: false,
-                    surface_alt: None,
-                    bed_alt: None,
-                    source: WaterSource::Authored,
+                // A sea floor (`SeaFill::Auto` ground below sea level): the
+                // sea fills it.
+                AuthoredCell::Ground { block, .. }
+                    if sea_fill == SeaFill::Auto && block < SEA_TOP_BLOCK =>
+                {
+                    WaterAt {
+                        wet: true,
+                        surface_alt: Some(crate::CONFIG.sea_level),
+                        bed_alt: Some((block + 1) as f32),
+                        source: WaterSource::Authored,
+                    }
+                },
+                AuthoredCell::Bank { .. } | AuthoredCell::Ground { .. } | AuthoredCell::None => {
+                    WaterAt {
+                        wet: false,
+                        surface_alt: None,
+                        bed_alt: None,
+                        source: WaterSource::Authored,
+                    }
                 },
             });
         }
@@ -102,7 +118,10 @@ impl WorldSim {
         {
             Some(AuthoredCell::Wet { surface_block, .. }) => (surface_block + 1) as f32,
             Some(AuthoredCell::Bank { bed_block }) => (bed_block + 1) as f32,
-            Some(AuthoredCell::None) => self
+            // Not routed to the ground layer yet: consumers keep the table
+            // (the natural map the sim was built from) until the
+            // authored-aware ground query lands; ground cells are dry land.
+            Some(AuthoredCell::Ground { .. } | AuthoredCell::None) => self
                 .get_alt_approx(wpos)
                 .unwrap_or(crate::CONFIG.sea_level)
                 .max(crate::CONFIG.sea_level),
@@ -159,13 +178,13 @@ impl WorldSim {
         } else {
             0
         };
-        let wet = (summary.map_or(0, |s| s.wet_columns) + natural_wet) * 2 >= all;
+        let wet = (summary.map_or(0, |s| s.water_columns()) + natural_wet) * 2 >= all;
         let near_water = (natural && table.near_water)
             || (-1..=1).any(|dy| {
                 (-1..=1).any(|dx| {
                     rasters
                         .chunk_summary(chunk_pos + Vec2::new(dx, dy))
-                        .is_some_and(|s| s.wet_columns > 0)
+                        .is_some_and(|s| s.water_columns() > 0)
                 })
             });
         let (river, lake, ocean) = match (wet, c.river.river_kind) {
@@ -174,7 +193,9 @@ impl WorldSim {
             (true, Some(crate::sim::RiverKind::Lake { .. })) => (false, true, false),
             (true, Some(crate::sim::RiverKind::Ocean)) => (false, false, true),
             (true, None) => {
-                let sea = summary.is_some_and(|s| s.min_surface_block <= SEA_TOP_BLOCK);
+                let sea = summary.is_some_and(|s| {
+                    s.min_surface_block <= SEA_TOP_BLOCK || s.sea_ground_columns > 0
+                });
                 (false, !sea, sea)
             },
         };
@@ -255,7 +276,15 @@ impl WorldSim {
             // The natural water is (part of) this chunk's water.
             w.water_alt - chunk.alt
         } else {
-            summary.map_or(0.0, |s| (s.max_surface_block - s.min_bed_block) as f32)
+            summary.map_or(0.0, |s| {
+                // A sea floor without authored water lies under the sea.
+                let top = if s.wet_columns > 0 {
+                    s.max_surface_block
+                } else {
+                    SEA_TOP_BLOCK
+                };
+                (top - s.min_ground_block()) as f32
+            })
         })
     }
 
@@ -330,12 +359,20 @@ impl ChunkWater {
 
 /// `col.chunk.river.is_ocean()` for a column sample, authored-aware: an
 /// authored column is ocean when it is authored water at the ocean's top
-/// block in a chunk the table does not call lake or river (a sea-level
-/// mountain lake or a river mouth stays fresh water).
+/// block, or exact ground below it (a sea floor, which the sea fills), in a
+/// chunk the table does not call lake or river (a sea-level mountain lake or
+/// a river mouth stays fresh water) and in a [`SeaFill::Auto`] region: in a
+/// [`SeaFill::AuthoredOnly`] region authored water is a lake at any altitude
+/// and ground is dry.
 pub fn column_is_ocean(col: &crate::ColumnSample) -> bool {
     match col.authored {
         Some(a) => {
-            matches!(a.cell, AuthoredCell::Wet { surface_block, .. } if surface_block <= SEA_TOP_BLOCK)
+            let sea = match a.cell {
+                AuthoredCell::Wet { surface_block, .. } => surface_block <= SEA_TOP_BLOCK,
+                AuthoredCell::Ground { block, .. } => block < SEA_TOP_BLOCK,
+                AuthoredCell::Bank { .. } | AuthoredCell::None => false,
+            };
+            sea && a.settings.sea_fill == SeaFill::Auto
                 && !col.chunk.river.is_lake()
                 && !col.chunk.river.is_river()
         },

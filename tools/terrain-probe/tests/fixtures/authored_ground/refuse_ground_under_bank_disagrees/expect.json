@@ -1,0 +1,8 @@
+{
+  "message": "under an authored bank",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "507d0648b374be666159942a915212c701c50a8e3908d953ffa5407e2a9e2cb8",
+    "cromatolis_v0_ar_fixture_water_0_0.bin": "7f3c584e6aa0fc727422ac265987110a6ae6187ebf6523fbfe2a92ae7c3f5a0c"
+  },
+  "verdict": "refuse"
+}

@@ -100,7 +100,11 @@ pub fn safe_ground(
     let here = wpos.xy().as_::<i32>();
     let unsafe_at = |p: Vec2<i32>| match cell(p) {
         Some((AuthoredCell::Wet { .. }, _)) => true,
-        Some((_, dist)) => dist.is_some_and(|d| d < 2.0),
+        // Dry authored or unauthored columns: unsafe only on a bank lip.
+        Some((
+            AuthoredCell::Bank { .. } | AuthoredCell::Ground { .. } | AuthoredCell::None,
+            dist,
+        )) => dist.is_some_and(|d| d < 2.0),
         None => false,
     };
     if !unsafe_at(here) {

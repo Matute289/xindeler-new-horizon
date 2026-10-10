@@ -1,0 +1,14 @@
+{
+  "message": "under authored water",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "04f1fa3257b7d1f7fd01419391bb27989e12189768dd8f5e853e7d3a728e6eb4",
+    "cromatolis_v0_ar_fixture_ground_0_1.bin": "3130cf06e7f2ca4ba0fb6dda90664b28286ac7149c3c3b6c92d976642e16e335",
+    "cromatolis_v0_ar_fixture_ground_1_0.bin": "ae976bacac036dde7b5f58294a6769eaa2ec169e5a517fb2bab5514e19760116",
+    "cromatolis_v0_ar_fixture_ground_1_1.bin": "d2001bc4d83b4e7325f81e16ee95ff1ed371a043f71829044184cb4dd863751f",
+    "cromatolis_v0_ar_fixture_water_0_0.bin": "6b0c8e47aa7a3dcb415d6382e98d8deed446f90f8d0cd20fe9409dd980cbfc5e",
+    "cromatolis_v0_ar_fixture_water_0_1.bin": "3fd53c17c4d88c4a2ba483fe433aa9548f7fccedac289401662195b2d45c8df0",
+    "cromatolis_v0_ar_fixture_water_1_0.bin": "c1b08deb8e26f704266f08a34138793169d3736d795c4701e35ba1d70f2fb77a",
+    "cromatolis_v0_ar_fixture_water_1_1.bin": "121b4f45235fd97a6d93dc822f9ec4c51d60c663d641dcec209f7bfaab70789f"
+  },
+  "verdict": "refuse"
+}

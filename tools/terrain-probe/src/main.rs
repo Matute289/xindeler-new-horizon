@@ -5,6 +5,7 @@
 mod client_dump;
 mod diff;
 mod format;
+#[cfg(test)] mod ground_fixtures;
 mod legacy;
 mod login_check;
 mod probe;
@@ -277,10 +278,33 @@ enum Cmd {
         #[arg(long = "box")]
         bbox: Option<String>,
         /// Raw dump of the box: per column (rows from the south, `x` fastest)
-        /// three little-endian `i32`: kind (0 none, 1 bank, 2 wet), top water
-        /// block (0 unless wet), top ground block (0 if none).
+        /// three little-endian `i32`: kind (0 none, 1 bank, 2 wet, 3 ground),
+        /// top water block (wet) or ground weight (ground; 255 = exact), else
+        /// 0, and top ground block (0 if none).
         #[arg(long)]
         cells_out: Option<PathBuf>,
+    },
+    /// Check a fast-path dump against an authored raster manifest: on every
+    /// column of the dump that the manifest fixes exactly (exact ground cell,
+    /// bank, wet bed), the topmost natural ground block must be the authored
+    /// block. Columns where a structure (or, in a `--keep-sprites` dump, a
+    /// sprite) sits at or below the authored block are counted, not judged.
+    /// Prints a JSON report; exit 1 on any mismatch.
+    AwCheck {
+        /// The dump (`dump --box ...` of a world generated with the
+        /// manifest in its asset root).
+        #[arg(long = "in")]
+        input: PathBuf,
+        /// Directory holding `<stem>_authored_rasters.ron` and the tiles.
+        #[arg(long)]
+        map_dir: PathBuf,
+        #[arg(long, default_value = "cromatolis_v0")]
+        stem: String,
+        #[arg(long, default_value_t = 32768)]
+        map_size: i32,
+        /// Print this many example mismatches.
+        #[arg(long, default_value_t = 10)]
+        show: usize,
     },
 }
 
@@ -678,6 +702,13 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             })
         },
         Cmd::AwWrite { spec, map_dir } => aw_write(spec, map_dir),
+        Cmd::AwCheck {
+            input,
+            map_dir,
+            stem,
+            map_size,
+            show,
+        } => aw_check(input, map_dir, stem, *map_size, *show),
         Cmd::AwRead {
             map_dir,
             stem,
@@ -722,14 +753,19 @@ fn aw_write(spec_path: &Path, map_dir: &Path) -> Res<ExitCode> {
     let base = spec_path.parent().unwrap_or(Path::new("."));
     for region in &mut spec.regions {
         for op in &mut region.ops {
-            if let PaintOp::Raster {
-                surface_file,
-                bed_file,
-                ..
-            } = op
-            {
-                *surface_file = base.join(&*surface_file);
-                *bed_file = base.join(&*bed_file);
+            match op {
+                PaintOp::Raster {
+                    surface_file,
+                    bed_file,
+                    ..
+                } => {
+                    *surface_file = base.join(&*surface_file);
+                    *bed_file = base.join(&*bed_file);
+                },
+                PaintOp::GroundRaster { ground_file, .. } => {
+                    *ground_file = base.join(&*ground_file);
+                },
+                _ => {},
             }
         }
     }
@@ -740,19 +776,13 @@ fn aw_write(spec_path: &Path, map_dir: &Path) -> Res<ExitCode> {
         .collect::<Result<Vec<_>, _>>()?;
     // Validate with the engine's own loader before writing anything (the
     // map size only matters for the rim check; Cromatolis is 32768 m).
-    let files: std::collections::HashMap<(String, i32, i32), Vec<u8>> = built
-        .iter()
-        .flat_map(|r| {
-            r.tiles
-                .iter()
-                .map(|((tx, ty), b)| ((r.manifest.id.clone(), *tx, *ty), b.clone()))
-        })
-        .collect();
-    let fetch = |id: &str, _: world::authored_raster::format::LayerKind, tx: i32, ty: i32| {
-        files
-            .get(&(id.to_string(), tx, ty))
-            .cloned()
-            .ok_or_else(|| format!("missing tile {id} {tx} {ty}"))
+    let fetch = |id: &str, layer: world::authored_raster::format::LayerKind, tx: i32, ty: i32| {
+        built
+            .iter()
+            .find(|r| r.manifest.id == id)
+            .and_then(|r| r.tile(layer, tx, ty))
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| format!("missing {layer:?} tile {id} {tx} {ty}"))
     };
     let loaded = AuthoredRasters::from_manifest(
         writer::manifest(&built),
@@ -765,10 +795,11 @@ fn aw_write(spec_path: &Path, map_dir: &Path) -> Res<ExitCode> {
     for (id, b) in loaded.regions() {
         let r = built.iter().find(|r| r.manifest.id == id).expect("built");
         eprintln!(
-            "region {id}: box {:?}..{:?}, {} tile(s)",
+            "region {id}: box {:?}..{:?}, {} water tile(s), {} ground tile(s)",
             b.min,
             b.max,
-            r.tiles.len()
+            r.tiles.len(),
+            r.ground_tiles.len()
         );
     }
     for p in written {
@@ -785,27 +816,9 @@ fn aw_read(
     bbox: Option<&str>,
     cells_out: Option<&Path>,
 ) -> Res<ExitCode> {
-    use world::authored_raster::{
-        self, AuthoredCell, AuthoredRasters, Manifest, format::LayerKind,
-    };
+    use world::authored_raster::{self, AuthoredCell};
     let manifest_path = map_dir.join(format!("{stem}_authored_rasters.ron"));
-    let text = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-    let manifest: Manifest =
-        ron::from_str(&text).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-    let fetch = |id: &str, layer: LayerKind, tx: i32, ty: i32| {
-        let p = map_dir.join(format!(
-            "{stem}_ar_{id}_{}_{tx}_{ty}.bin",
-            layer.asset_name()
-        ));
-        std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))
-    };
-    let loaded = match AuthoredRasters::from_manifest(
-        manifest,
-        Vec2::broadcast(map_size),
-        &manifest_path.display().to_string(),
-        &fetch,
-    ) {
+    let loaded = match load_manifest_dir(map_dir, stem, map_size)? {
         Ok(l) => l,
         Err(e) => {
             eprintln!("{e}");
@@ -839,9 +852,11 @@ fn aw_read(
                         "cy": cy,
                         "authored_columns": s.authored_columns,
                         "wet_columns": s.wet_columns,
+                        "ground_columns": s.ground_columns,
                         "min_surface_block": s.min_surface_block,
                         "max_surface_block": s.max_surface_block,
                         "min_bed_block": s.min_bed_block,
+                        "min_ground_cell_block": s.min_ground_cell_block,
                     }));
                 }
             }
@@ -860,6 +875,7 @@ fn aw_read(
                         bed_block,
                     }) => (2i32, surface_block, bed_block),
                     Some(AuthoredCell::Bank { bed_block }) => (1, 0, bed_block),
+                    Some(AuthoredCell::Ground { block, weight }) => (3, weight as i32, block),
                     Some(AuthoredCell::None) | None => (0, 0, 0),
                 };
                 for v in [kind, sb, gb] {
@@ -881,7 +897,16 @@ fn aw_read(
         "region_margin_m": authored_raster::REGION_MARGIN_M,
         "resident_budget_bytes": authored_raster::RESIDENT_BUDGET_BYTES,
         "global_resident_cap_bytes": authored_raster::GLOBAL_RESIDENT_CAP_BYTES,
+        "global_resident_hard_cap_bytes": authored_raster::GLOBAL_RESIDENT_HARD_CAP_BYTES,
         "max_offset_cm": authored_raster::format::MAX_OFFSET_CM,
+        "ground_block_min": *authored_raster::format::GROUND_BLOCK_RANGE.start(),
+        "ground_block_max": *authored_raster::format::GROUND_BLOCK_RANGE.end(),
+        "ground_exact_weight": authored_raster::format::GROUND_EXACT,
+        "water_tile_resident_bytes":
+            authored_raster::format::resident_tile_bytes(authored_raster::format::LayerKind::Water),
+        "ground_tile_resident_bytes":
+            authored_raster::format::resident_tile_bytes(authored_raster::format::LayerKind::Ground),
+        "dist_tile_resident_bytes": authored_raster::format::TILE_CELLS,
     });
     let report = serde_json::json!({
         "manifest": manifest_path.display().to_string(),
@@ -892,6 +917,150 @@ fn aw_read(
     });
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(ExitCode::SUCCESS)
+}
+
+/// Load `<stem>_authored_rasters.ron` and its tiles from `map_dir` with the
+/// engine's own loader. The outer error is I/O or parsing of the manifest
+/// file; the inner one is the loader's verdict (world generation would stop).
+fn load_manifest_dir(
+    map_dir: &Path,
+    stem: &str,
+    map_size: i32,
+) -> Res<Result<world::authored_raster::AuthoredRasters, String>> {
+    use world::authored_raster::{AuthoredRasters, Manifest, format::LayerKind};
+    let manifest_path = map_dir.join(format!("{stem}_authored_rasters.ron"));
+    let text = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    let manifest: Manifest =
+        ron::from_str(&text).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    let fetch = |id: &str, layer: LayerKind, tx: i32, ty: i32| {
+        let p = map_dir.join(format!(
+            "{stem}_ar_{id}_{}_{tx}_{ty}.bin",
+            layer.asset_name()
+        ));
+        std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))
+    };
+    Ok(AuthoredRasters::from_manifest(
+        manifest,
+        Vec2::broadcast(map_size),
+        &manifest_path.display().to_string(),
+        &fetch,
+    )
+    .map_err(|e| e.to_string()))
+}
+
+/// `terrain-probe aw-check`: see [`Cmd::AwCheck`].
+fn aw_check(input: &Path, map_dir: &Path, stem: &str, map_size: i32, show: usize) -> Res<ExitCode> {
+    let loaded = match load_manifest_dir(map_dir, stem, map_size)? {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("{e}");
+            return Ok(ExitCode::from(1));
+        },
+    };
+    let d = Dump::read_file(input)?;
+    let report = check_exact_ground(&d, &loaded, show);
+    println!("{}", serde_json::to_string_pretty(&report.json)?);
+    Ok(if report.mismatches == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
+}
+
+struct ExactGroundReport {
+    mismatches: u64,
+    json: serde_json::Value,
+}
+
+/// Per kind of exactly fixed column (exact ground, bank, wet bed): how many
+/// columns, how many a structure or sprite occupies (counted, not judged),
+/// how many of the rest have their natural ground top at the authored block.
+fn check_exact_ground(
+    d: &Dump,
+    rasters: &world::authored_raster::AuthoredRasters,
+    show: usize,
+) -> ExactGroundReport {
+    use world::authored_raster::AuthoredCell;
+    #[derive(Default)]
+    struct Count {
+        columns: u64,
+        decorated: u64,
+        exact: u64,
+        mismatches: u64,
+    }
+    let [x0, y0, x1, y1] = d.header.box_xy;
+    let off = d.run_offsets();
+    let mut counts: [Count; 3] = Default::default();
+    let mut examples = Vec::new();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let Some(cell) = rasters.cell_at(Vec2::new(x, y)) else {
+                continue;
+            };
+            let Some(block) = cell.exact_ground_block() else {
+                continue;
+            };
+            let kind = match cell {
+                AuthoredCell::Ground { .. } => 0,
+                AuthoredCell::Bank { .. } => 1,
+                _ => 2,
+            };
+            let Some(idx) = d.col_index(x, y) else {
+                continue;
+            };
+            let c = &mut counts[kind];
+            c.columns += 1;
+            // Decorated: a structure (or a kept sprite) at or below the
+            // authored top block, in place of ground; canopies and trunks
+            // above it do not touch the ground.
+            let mut z = d.header.zmin;
+            let replaced = d.runs_at(&off, idx).any(|(cl, n)| {
+                let hit =
+                    z <= block && (cl == format::class::STRUCTURE || cl == format::class::SPRITE);
+                z += i32::from(n);
+                hit
+            });
+            if replaced {
+                c.decorated += 1;
+                continue;
+            }
+            let top = d.ground_top[idx];
+            if top as i32 == block {
+                c.exact += 1;
+            } else {
+                c.mismatches += 1;
+                if examples.len() < show {
+                    let kind = ["ground", "bank", "wet_bed"][kind];
+                    examples.push(serde_json::json!({
+                        "x": x, "y": y, "authored_block": block,
+                        "ground_top": if top == format::NO_Z { None } else { Some(top) },
+                        "kind": kind,
+                    }));
+                }
+            }
+        }
+    }
+    let row = |c: &Count| {
+        serde_json::json!({
+            "columns": c.columns,
+            "decorated": c.decorated,
+            "undecorated_exact": c.exact,
+            "undecorated_mismatch": c.mismatches,
+        })
+    };
+    let mismatches = counts.iter().map(|c| c.mismatches).sum();
+    ExactGroundReport {
+        mismatches,
+        json: serde_json::json!({
+            "box": d.header.box_xy,
+            "digest": rasters.digest(),
+            "ground": row(&counts[0]),
+            "bank": row(&counts[1]),
+            "wet_bed": row(&counts[2]),
+            "examples": examples,
+        }),
+    }
 }
 
 fn flag_letters(f: u8) -> String {
@@ -1115,6 +1284,75 @@ mod aw_read_tests {
         writer::write_assets(&dir, "cromatolis_v0", &[built]).unwrap();
         let code = aw_read(&dir, "cromatolis_v0", 32768, None, None).unwrap();
         assert_eq!(code, ExitCode::from(1));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A ground region written by the engine's writer is read back cell for
+    /// cell by `aw-read` (kind 3, weight, block), and `aw-check` judges a dump
+    /// against it: exact columns pass, a column one block lower fails, a
+    /// decorated column is counted, not judged.
+    #[test]
+    fn aw_read_and_aw_check_cover_the_ground_layer() {
+        use crate::format::{class, edge_tests::dump_from_columns};
+        let dir = scratch("ground");
+        let spec = RegionSpec::new("arena", (2048, 2048), (2560, 2560), 32, vec![
+            PaintOp::Ground {
+                shape: Shape::Rect {
+                    x0: 2200.0,
+                    y0: 2290.0,
+                    x1: 2210.0,
+                    y1: 2300.0,
+                },
+                ground_cm: 23_950,
+                weight: 255,
+            },
+        ]);
+        let built = writer::build_region(&spec).unwrap();
+        writer::write_assets(&dir, "cromatolis_v0", &[built]).unwrap();
+        let cells = dir.join("cells.bin");
+        let code = aw_read(
+            &dir,
+            "cromatolis_v0",
+            32768,
+            Some("2199,2290,2201,2291"),
+            Some(&cells),
+        )
+        .unwrap();
+        assert_eq!(code, ExitCode::SUCCESS);
+        let bytes = std::fs::read(&cells).unwrap();
+        let v = |k: usize, o: usize| {
+            i32::from_le_bytes(bytes[k * 12 + o..k * 12 + o + 4].try_into().unwrap())
+        };
+        assert_eq!((v(0, 0), v(0, 4), v(0, 8)), (0, 0, 0), "not authored");
+        assert_eq!(
+            (v(1, 0), v(1, 4), v(1, 8)),
+            (3, 255, 239),
+            "exact ground 239"
+        );
+        // A 3-column dump over (2200..2203, 2290): exact, one block low,
+        // and decorated (a structure block at the top).
+        let col = |top: i32, deco: bool| {
+            let mut c = vec![class::GROUND; (top - 200 + 1) as usize];
+            c.extend(vec![class::AIR; (250 - top - 1) as usize]);
+            if deco {
+                c[(top - 200) as usize] = class::STRUCTURE;
+            }
+            c
+        };
+        let d = dump_from_columns([2200, 2290, 2203, 2291], 200, &[
+            col(239, false),
+            col(238, false),
+            col(239, true),
+        ]);
+        let rasters = load_manifest_dir(&dir, "cromatolis_v0", 32768)
+            .unwrap()
+            .unwrap();
+        let r = check_exact_ground(&d, &rasters, 5);
+        assert_eq!(r.mismatches, 1, "{}", r.json);
+        assert_eq!(r.json["ground"]["columns"], 3);
+        assert_eq!(r.json["ground"]["undecorated_exact"], 1);
+        assert_eq!(r.json["ground"]["decorated"], 1);
+        assert_eq!(r.json["examples"][0]["x"], 2201);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
