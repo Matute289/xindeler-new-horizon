@@ -39,7 +39,7 @@ impl Cultist {
             max: site.tile_wpos(tile_aabr.max),
         };
         let center = bounds.center();
-        let base = land.get_alt_approx(center) as i32;
+        let base = land.ground_alt_at(center) as i32;
         let room_size = 30;
         let mut room_data = vec![];
 
@@ -84,7 +84,7 @@ impl Cultist {
 
         Self {
             bounds,
-            alt: land.get_alt_approx(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
+            alt: land.ground_alt_at(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
                 as i32
                 + 2,
             base,

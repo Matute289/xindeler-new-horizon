@@ -52,7 +52,7 @@ impl CliffTower {
         Self {
             door_tile: door_tile_pos,
             bounds,
-            alt: alt.unwrap_or_else(|| land.get_alt_approx(door_tile_pos) as i32),
+            alt: alt.unwrap_or_else(|| land.ground_alt_at(door_tile_pos) as i32),
             campfire,
             door_dir,
             surface_color,

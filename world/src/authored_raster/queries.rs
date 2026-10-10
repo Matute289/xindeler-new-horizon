@@ -4,12 +4,13 @@
 //! commands.
 //!
 //! The one routing point for the ground is [`WorldSim::ground_alt_at`]:
-//! `Land::get_alt_approx` and `Land::get_gradient_approx` delegate to it, and
-//! [`WorldSim::surface_alt_at`] adds the water on top.
-//! `WorldSim::get_alt_approx` stays the chunk table (the natural map the sim
-//! was built from): consumers whose result reaches beyond the sampled point
-//! (the cave graph, caverns, authored voids) read it through
-//! `Land::get_alt_approx_table`.
+//! `Land::ground_alt_at` and `Land::ground_gradient_at` delegate to it, and
+//! [`WorldSim::surface_alt_at`] adds the water on top. The upstream accessors
+//! (`WorldSim::get_alt_approx`, `Land::get_alt_approx`, the gradient and
+//! surface ones) stay the chunk table (the natural map the sim was built
+//! from): consumers whose result reaches beyond the sampled point (the cave
+//! graph, caverns, authored voids) and civ placement read them (see the
+//! `Land` doc for the per-directory rule and its test).
 //!
 //! Inside an authored region these answer from the raster (the water the
 //! player sees); everywhere else they return exactly what the chunk table
@@ -122,7 +123,8 @@ impl WorldSim {
 
     /// The authored-aware ground altitude at a column: the single
     /// implementation every consumer that must stand on the real ground reads
-    /// (`Land::get_alt_approx`, rtsim spawns, LOD objects).
+    /// (`Land::ground_alt_at`, so site and plot generation, rtsim spawns, LOD
+    /// objects).
     ///
     /// * exact ground, bank, wet bed: the authored top block's altitude
     ///   ([`top_block_alt`], the column sampler's convention), with no

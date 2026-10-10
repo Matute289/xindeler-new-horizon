@@ -1814,7 +1814,7 @@ fn site_levelling_applies_on_ground_cells_only_when_the_region_levels() {
     let mut col = ground_col(exact, SeaFill::Auto);
     col.settings.site_levelling = false;
     assert_eq!(col.resolve(engine(), with_pref((248.1, 1.0))).alt, 251.5);
-    // Banks keep the Stage-1 behaviour (no levelling).
+    // Banks keep their behaviour (no levelling).
     let bank = ground_col(AuthoredCell::Bank { bed_block: 251 }, SeaFill::Auto)
         .resolve(engine(), with_pref((248.1, 1.0)));
     assert_eq!(bank.alt, 251.5);
@@ -1958,25 +1958,37 @@ fn buried_positions_are_lifted_to_the_authored_ground() {
     assert_eq!(sim.surface_alt_at(p(0).xy()), 251.0);
 }
 
-/// Everything under `world/src/layer/` reads the chunk table through `Land`
-/// (`*_table` accessors): a routed (authored-aware) altitude or gradient
-/// call there would move spatially extended features (the cave graph,
-/// caverns, authored voids) outside the regions. A new call must use a table
-/// accessor or be added to the allow-list below with its reason.
+/// The layering rule of the ground queries (see the `Land` doc), per
+/// directory of the `world` crate:
+///
+/// * `layer/` reads the chunk table (`Land::get_alt_approx`,
+///   `get_gradient_approx`): an authored-aware read there would move
+///   spatially extended features (the cave graph, caverns, authored voids)
+///   outside the regions;
+/// * `site/` reads the authored-aware ground (`Land::ground_alt_at`,
+///   `ground_gradient_at`, `surface_alt_at`): plots stand on the authored
+///   ground, and a table read would float or bury them on a patch;
+/// * `civ/` and `sim/` place sites and build the sim on the natural table and
+///   never read the authored ground layer.
+///
+/// Re-run after every upstream merge: a new call it reports gets the
+/// accessor its directory needs, or an allow-list entry with its reason.
 #[test]
-fn layers_read_the_chunk_table() {
-    // (file, trimmed line): `WorldSim` receivers, which are the table.
-    const ALLOWED: &[(&str, &str)] = &[
-        // `world` is the `WorldSim`: `get_gradient_approx` is the table.
-        ("spot.rs", ".get_gradient_approx(pos)"),
-    ];
-    const ROUTED: &[&str] = &[
+fn ground_reads_follow_the_layering_rule() {
+    const TABLE: &[&str] = &[
         ".get_alt_approx(",
         ".get_surface_alt_approx(",
         ".get_gradient_approx(",
-        ".surface_alt_at(",
-        ".ground_alt_at(",
-        ".ground_gradient_at(",
+    ];
+    const AUTHORED: &[&str] = &[".ground_alt_at(", ".ground_gradient_at(", ".surface_alt_at("];
+    const GROUND_LAYER: &[&str] = &[".ground_alt_at(", ".ground_gradient_at("];
+    // (directory, forbidden calls, allowed (file, trimmed line) with reason).
+    type Rule = (&'static str, &'static [&'static str], &'static [(&'static str, &'static str)]);
+    const RULES: &[Rule] = &[
+        ("src/layer", AUTHORED, &[]),
+        ("src/site", TABLE, &[]),
+        ("src/civ", GROUND_LAYER, &[]),
+        ("src/sim", GROUND_LAYER, &[]),
     ];
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap().flatten() {
@@ -1988,36 +2000,39 @@ fn layers_read_the_chunk_table() {
             }
         }
     }
-    let mut files = Vec::new();
-    walk(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/layer"),
-        &mut files,
-    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut bad = Vec::new();
-    for f in &files {
-        let name = f.file_name().unwrap().to_string_lossy().into_owned();
-        for (i, line) in std::fs::read_to_string(f).unwrap().lines().enumerate() {
-            let t = line.trim();
-            if ROUTED.iter().any(|r| t.contains(r))
-                && !ALLOWED.iter().any(|(af, al)| *af == name && t == *al)
-            {
-                bad.push(format!("{name}:{}: {t}", i + 1));
+    for (dir, forbidden, allowed) in RULES {
+        let mut files = Vec::new();
+        walk(&root.join(dir), &mut files);
+        assert!(!files.is_empty(), "{dir} holds no source file");
+        for f in &files {
+            let name = f.file_name().unwrap().to_string_lossy().into_owned();
+            for (i, line) in std::fs::read_to_string(f).unwrap().lines().enumerate() {
+                let t = line.trim();
+                if t.starts_with("//") {
+                    continue;
+                }
+                if forbidden.iter().any(|r| t.contains(r))
+                    && !allowed.iter().any(|(af, al)| *af == name && t == *al)
+                {
+                    bad.push(format!("{dir}/{name}:{}: {t}", i + 1));
+                }
             }
         }
     }
     assert!(
         bad.is_empty(),
-        "authored-aware ground reads under world/src/layer (use the *_table accessors): {bad:#?}"
+        "ground reads that break the layering rule (see the `Land` doc): {bad:#?}"
     );
 }
 
-/// B-K1 / §9.6: an authored void under a patch that comes within the
-/// tolerance of the ground is exposed (a start-up error at the default
-/// tolerance 0, allowed when the region raises it); a declared mouth is
-/// exempt; a declared wet mouth must not hold more water than it declares.
+/// An authored void under a patch that comes within the tolerance of the
+/// ground is exposed: a start-up error at the default allowance 0, accepted
+/// when the region raises it.
 #[test]
-fn voids_exposed_by_a_patch_are_counted_and_mouths_are_exempt() {
-    use super::post_civ::{VoidMouth, void_exposure};
+fn voids_exposed_by_a_patch_are_counted() {
+    use super::post_civ::void_exposure;
     use crate::layer::{
         authored_voids::{AuthoredVoidsBuilder, DiscShape, ProceduralContact},
         traversal::AccommodationTier,
@@ -2097,39 +2112,19 @@ fn voids_exposed_by_a_patch_are_counted_and_mouths_are_exempt() {
         .sim
         .set_authored_rasters_for_test(Some(load(&[build_region(&spec(0)).unwrap()]).unwrap()));
     // Ceiling 10 blocks under the ground: covered.
-    let r = void_exposure(&world, Some(&voids(240)), &[]);
+    let r = void_exposure(&world, Some(&voids(240)));
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].exposed, 0);
     assert!(!r[0].is_error());
     // Ceiling 2 blocks under the ground: exposed on the disc's columns.
-    let r = void_exposure(&world, Some(&voids(248)), &[]);
+    let r = void_exposure(&world, Some(&voids(248)));
     let exposed = r[0].exposed;
     assert!(exposed > 0 && r[0].is_error(), "{r:?}");
     assert_eq!(r[0].features[0].0, "test_cave");
-    // A declared mouth is exempt.
-    let mouth = VoidMouth {
-        column: r[0].features[0].2,
-        max_water_depth_blocks: None,
-    };
-    let r = void_exposure(&world, Some(&voids(248)), &[mouth]);
-    assert_eq!(r[0].exposed, exposed - 1);
-    // A wet mouth on the water: 6 blocks of water against 2 declared.
-    let wet = VoidMouth {
-        column: Vec2::new(1205, 1150),
-        max_water_depth_blocks: Some(2),
-    };
-    let r = void_exposure(&world, Some(&voids(240)), &[wet]);
-    assert_eq!(r[0].flooded_mouths, vec![(Vec2::new(1205, 1150), 6)]);
-    assert!(r[0].is_error());
-    let r = void_exposure(&world, Some(&voids(240)), &[VoidMouth {
-        max_water_depth_blocks: Some(6),
-        ..wet
-    }]);
-    assert!(!r[0].is_error());
     // The region allows the opening.
     world.sim.set_authored_rasters_for_test(Some(
         load(&[build_region(&spec(exposed as u32)).unwrap()]).unwrap(),
     ));
-    let r = void_exposure(&world, Some(&voids(248)), &[]);
+    let r = void_exposure(&world, Some(&voids(248)));
     assert!(!r[0].is_error(), "{r:?}");
 }

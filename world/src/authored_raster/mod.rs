@@ -261,6 +261,17 @@ pub struct Manifest {
     pub regions: Vec<RegionManifest>,
 }
 
+/// One region of the manifest.
+///
+/// **Digest contract.** A region's digest ([`RegionEntry::digest`]) is the
+/// sha256 of `ron::ser::to_string` of this struct, and the manifest digest
+/// hashes the whole file, so terrain persistence and the rtsim water pass
+/// compare serialisations. Any field added here MUST be
+/// `#[serde(default, skip_serializing_if = "<is its default>")]`: a new
+/// field serialised at its default would change the digest of every existing
+/// region (persistence would refuse to start over persisted edits, the rtsim
+/// pass would re-run). `region_digest_is_pinned` in the tests pins one
+/// fixed region's digest to catch exactly that.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RegionManifest {
@@ -327,14 +338,16 @@ pub struct RegionManifest {
     pub site_levelling: bool,
     /// How many columns of authored voids (caves, interiors) may come within
     /// [`VOID_EXPOSURE_TOLERANCE_BLOCKS`] of this region's ground (or rise
-    /// above it) outside a declared mouth before world generation stops.
-    /// Default 0: a patch must not open or truncate an authored void unless
-    /// the region says so.
+    /// above it) before world generation stops. Default 0: a patch must not
+    /// open or truncate an authored void unless the region says so. Keep it
+    /// to the opening actually intended (tens of columns): the check
+    /// collects every exposed column at start-up, so a huge allowance hides
+    /// accidental exposures and pays for them in memory.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub max_exposed_void_columns: u32,
 }
 
-fn default_true() -> bool { true }
+pub(crate) fn default_true() -> bool { true }
 
 fn is_true(v: &bool) -> bool { *v }
 
@@ -631,8 +644,8 @@ impl AuthoredColumn {
                     riverless_alt: top_block_alt(bed_block),
                 }
             },
-            // A bank fixes the column's ground and nothing else (Stage 1: no
-            // site levelling on it).
+            // A bank fixes the column's ground and nothing else (no site
+            // levelling on it).
             AuthoredCell::Bank { bed_block } => {
                 let alt = top_block_alt(bed_block);
                 EngineColumn {

@@ -67,7 +67,7 @@ fn node_at(cell: Vec2<i32>, level: u32, land: &Land) -> Option<Node> {
                     // XINDELER: authored-aware (authored water regions).
                     && !land.near_water_at(wpos).unwrap_or_else(|| chunk.river.near_water())
                     && chunk.sites.is_empty()
-                    && land.get_gradient_approx_table(wpos) < 0.75)
+                    && land.get_gradient_approx(wpos) < 0.75)
             {
                 Some(Node { wpos, depth })
             } else {
@@ -165,7 +165,7 @@ impl Tunnel {
                 MIN_RADIUS as f64,
                 MAX_RADIUS as f64,
                 (info.index().noise.cave_fbm_nz.get(
-                    (closest.with_z(info.land().get_alt_approx_table(self.a.wpos) as f64) / 256.0)
+                    (closest.with_z(info.land().get_alt_approx(self.a.wpos) as f64) / 256.0)
                         .into_array(),
                 ) + 0.5)
                     .clamped(0.0, 1.0)
@@ -175,7 +175,7 @@ impl Tunnel {
                 MIN_RADIUS as f64,
                 MAX_RADIUS as f64,
                 (info.index().noise.cave_fbm_nz.get(
-                    (closest.with_z(info.land().get_alt_approx_table(self.b.wpos) as f64) / 256.0)
+                    (closest.with_z(info.land().get_alt_approx(self.b.wpos) as f64) / 256.0)
                         .into_array(),
                 ) + 0.5)
                     .clamped(0.0, 1.0)
@@ -191,7 +191,7 @@ impl Tunnel {
                     .get((wposf / 512.0).into_array())
                     * 96.0
                     * ((1.0 - (t - 0.5).abs() * 2.0) * 8.0).min(1.0);
-                let alt_here = info.land().get_alt_approx_table(closest.map(|e| e as i32));
+                let alt_here = info.land().get_alt_approx(closest.map(|e| e as i32));
                 let base = (Lerp::lerp_unclamped(
                     alt_here as f64 - self.a.depth as f64,
                     alt_here as f64 - self.b.depth as f64,

@@ -12,9 +12,10 @@
 //! * **Voids** ([`void_exposure`]): an authored void (cave, interior) whose
 //!   authored top comes within [`VOID_EXPOSURE_TOLERANCE_BLOCKS`] of the ground
 //!   over it is exposed by the patch; more such columns than the region allows
-//!   (`max_exposed_void_columns`, default 0) stop world generation. Declared
-//!   mouths are exempt; a declared *wet* mouth must not hold more water than it
-//!   declares.
+//!   (`max_exposed_void_columns`, default 0) stop world generation. The
+//!   authored-void data has no way to declare a mouth (a column where a void
+//!   is meant to meet the surface or the water) yet, so every column counts;
+//!   a region where an opening is intended raises its allowance.
 //! * **Roads** ([`road_cliffs`]): civ roads are planned on the natural chunk
 //!   table, so one can cross an authored cliff. Every road column on an exact
 //!   ground cell that steps more than [`ROAD_CLIMB_LIMIT_BLOCKS`] to an
@@ -31,6 +32,7 @@ use super::{
 };
 use crate::{IndexRef, Land, World, layer::authored_voids::AuthoredVoids, site::SpawnRules};
 use rayon::prelude::*;
+use std::collections::BTreeMap;
 use tracing::{info, warn};
 use vek::*;
 
@@ -208,19 +210,6 @@ pub fn site_patch_report(world: &World, index: IndexRef) -> SitePatchReport {
     report
 }
 
-/// A declared mouth of an authored void: a column where the void is meant
-/// to meet the surface (or the water over it). The authored-void data has no
-/// format for mouths yet, so no shipped map declares one; the rule and its
-/// fixture are ready for it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct VoidMouth {
-    pub column: Vec2<i32>,
-    /// A wet mouth (the void meets authored or natural water here): the
-    /// deepest water, in blocks, the mouth's column may hold. The water then
-    /// ends at the mouth: a curtain at the entrance, the cave behind it dry.
-    pub max_water_depth_blocks: Option<i32>,
-}
-
 /// One region's result of [`void_exposure`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RegionVoidExposure {
@@ -228,30 +217,24 @@ pub struct RegionVoidExposure {
     pub bounds: Aabr<i32>,
     /// `max_exposed_void_columns` of the region.
     pub allowed: u32,
-    /// Exposed void columns (outside declared mouths).
+    /// Exposed void columns.
     pub exposed: usize,
     /// Per authored feature: exposed columns and the first one, by `(y, x)`.
     pub features: Vec<(String, usize, Vec2<i32>)>,
-    /// Declared wet mouths holding more water than they declare.
-    pub flooded_mouths: Vec<(Vec2<i32>, i32)>,
 }
 
 impl RegionVoidExposure {
-    pub fn is_error(&self) -> bool {
-        self.exposed > self.allowed as usize || !self.flooded_mouths.is_empty()
-    }
+    pub fn is_error(&self) -> bool { self.exposed > self.allowed as usize }
 }
 
 /// The void check (see the module doc), per ground region.
 pub(crate) fn void_exposure(
     world: &World,
     voids: Option<&AuthoredVoids>,
-    mouths: &[VoidMouth],
 ) -> Vec<RegionVoidExposure> {
     let (Some(rasters), Some(voids)) = (world.sim.authored_rasters.as_ref(), voids) else {
         return Vec::new();
     };
-    let is_mouth = |p: Vec2<i32>| mouths.iter().any(|m| m.column == p);
     rasters
         .region_entries()
         .filter(|r| r.has_ground)
@@ -261,10 +244,12 @@ pub(crate) fn void_exposure(
                 .into_iter()
                 .filter(|c| !voids.in_chunk(*c * CHUNK).is_empty())
                 .collect();
-            let mut hits: Vec<(Vec2<i32>, String)> = chunks
+            // `(column, feature index)`: no name is cloned per hit.
+            let mut hits: Vec<(Vec2<i32>, u16)> = chunks
                 .par_iter()
                 .flat_map_iter(|&c| {
                     let origin = c * CHUNK;
+                    let bucket = voids.in_chunk(origin);
                     let mut out = Vec::new();
                     for y in 0..CHUNK {
                         for x in 0..CHUNK {
@@ -282,41 +267,32 @@ pub(crate) fn void_exposure(
                                 },
                                 _ => continue,
                             };
-                            if is_mouth(wpos) {
-                                continue;
-                            }
-                            for (top, feature) in voids.authored_tops_at_column(wpos) {
+                            bucket.for_each_authored_top(wpos, |top, feature| {
                                 if top.ceil() as i32 + VOID_EXPOSURE_TOLERANCE_BLOCKS >= ground_top
                                 {
-                                    out.push((wpos, feature.to_string()));
+                                    out.push((wpos, feature));
                                 }
-                            }
+                            });
                         }
                     }
                     out
                 })
                 .collect();
-            hits.sort_unstable_by(|a, b| (a.0.y, a.0.x, &a.1).cmp(&(b.0.y, b.0.x, &b.1)));
+            hits.sort_unstable_by_key(|&(p, f)| (p.y, p.x, f));
             hits.dedup();
             let mut columns: Vec<Vec2<i32>> = hits.iter().map(|h| h.0).collect();
             columns.dedup();
-            let mut features: Vec<(String, usize, Vec2<i32>)> = Vec::new();
-            for (wpos, feature) in &hits {
-                match features.iter_mut().find(|f| &f.0 == feature) {
-                    Some(f) => f.1 += 1,
-                    None => features.push((feature.clone(), 1, *wpos)),
-                }
+            // Per feature: count and first column (hits are sorted by column).
+            let mut per_feature: BTreeMap<&str, (usize, Vec2<i32>)> = BTreeMap::new();
+            for &(wpos, feature) in &hits {
+                per_feature
+                    .entry(voids.feature_name(feature))
+                    .or_insert((0, wpos))
+                    .0 += 1;
             }
-            features.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-            let flooded_mouths = mouths
-                .iter()
-                .filter(|m| r.bounds.contains_point(m.column))
-                .filter_map(|m| {
-                    let max = m.max_water_depth_blocks?;
-                    let w = world.sim.water_at(m.column)?;
-                    let depth = (w.surface_alt? - w.bed_alt?).round() as i32;
-                    (depth > max).then_some((m.column, depth))
-                })
+            let features = per_feature
+                .into_iter()
+                .map(|(name, (n, first))| (name.to_string(), n, first))
                 .collect();
             RegionVoidExposure {
                 region: r.id.to_string(),
@@ -324,7 +300,6 @@ pub(crate) fn void_exposure(
                 allowed: r.max_exposed_void_columns,
                 exposed: columns.len(),
                 features,
-                flooded_mouths,
             }
         })
         .collect()
@@ -422,8 +397,8 @@ pub struct GroundConsumerReport {
 }
 
 /// The three checks as start-up rules: an unlisted site near a ground
-/// region, a listed site on ring cells, more exposed void columns than a
-/// region allows, or a flooded wet mouth stop world generation; moved exact
+/// region, a listed site on ring cells, or more exposed void columns than a
+/// region allows stop world generation; moved exact
 /// cells, stale listings and roads over authored cliffs are logged.
 pub(crate) fn check_ground_consumers(
     world: &World,
@@ -440,8 +415,7 @@ pub(crate) fn check_ground_consumers(
     }
     let report = GroundConsumerReport {
         sites: site_patch_report(world, index),
-        // No authored-void format declares mouths yet.
-        voids: void_exposure(world, voids, &[]),
+        voids: void_exposure(world, voids),
         roads: road_cliffs(world),
     };
     for s in &report.sites.levelled_exact {
@@ -514,26 +488,18 @@ pub(crate) fn check_ground_consumers(
             .take(10)
             .map(|(f, n, p)| format!("{f} ({n} column(s), e.g. {p:?})"))
             .collect();
-        if v.exposed > v.allowed as usize {
-            errors.push(format!(
-                "region '{}' (box {:?}..{:?}): the ground comes within \
-                 {VOID_EXPOSURE_TOLERANCE_BLOCKS} block(s) of authored voids on {} column(s) \
-                 (max_exposed_void_columns {}): {}. Raise the ground over them, move the void, or \
-                 raise the region's max_exposed_void_columns where an opening is intended",
-                v.region,
-                v.bounds.min,
-                v.bounds.max,
-                v.exposed,
-                v.allowed,
-                features.join(", ")
-            ));
-        }
-        if !v.flooded_mouths.is_empty() {
-            errors.push(format!(
-                "region '{}': declared wet void mouth(s) hold more water than declared: {:?}",
-                v.region, v.flooded_mouths
-            ));
-        }
+        errors.push(format!(
+            "region '{}' (box {:?}..{:?}): the ground comes within \
+             {VOID_EXPOSURE_TOLERANCE_BLOCKS} block(s) of authored voids on {} column(s) \
+             (max_exposed_void_columns {}): {}. Raise the ground over them, move the void, or \
+             raise the region's max_exposed_void_columns where an opening is intended",
+            v.region,
+            v.bounds.min,
+            v.bounds.max,
+            v.exposed,
+            v.allowed,
+            features.join(", ")
+        ));
     }
     if errors.is_empty() {
         let listed = report.sites.listed.len();

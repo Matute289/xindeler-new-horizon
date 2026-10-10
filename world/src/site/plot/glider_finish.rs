@@ -20,7 +20,7 @@ impl GliderFinish {
     pub fn generate(land: &Land, _rng: &mut impl Rng, _site: &Site, wpos: Vec2<i32>) -> Self {
         Self {
             center: wpos,
-            alt: land.get_alt_approx(wpos) as i32,
+            alt: land.ground_alt_at(wpos) as i32,
             tile_width: 2,
             radius: 10,
         }
