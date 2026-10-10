@@ -269,5 +269,8 @@ fn map_image_is_byte_identical_with_only_auto_regions() {
         .count();
     println!("Auto regions only: authored dry chunks {dry}");
     assert_eq!(dry, 0);
-    assert!(new.rgba == old.rgba, "map image changed with Auto regions");
+    assert!(
+        new.rgba.raw() == old.rgba.raw(),
+        "map image changed with Auto regions"
+    );
 }
