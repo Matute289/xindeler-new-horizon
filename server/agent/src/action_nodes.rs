@@ -323,7 +323,8 @@ impl AgentData<'_> {
                                             - read_data
                                                 .world
                                                 .sim()
-                                                .get_alt_approx(
+                                                // XINDELER: authored-aware ground.
+                                                .ground_alt_at(
                                                     self.pos.0.xy().map(|x: f32| x as i32),
                                                 )
                                                 .unwrap_or(0.0);
@@ -474,7 +475,8 @@ impl AgentData<'_> {
                             let terrain_alt = read_data
                                 .world
                                 .sim()
-                                .get_alt_approx(
+                                // XINDELER: authored-aware ground.
+                                .ground_alt_at(
                                     (self.pos.0.xy()
                                         + controller.inputs.look_dir.to_vec().xy() * dist)
                                         .map(|x: f32| x as i32),

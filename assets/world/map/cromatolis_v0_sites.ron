@@ -11,6 +11,7 @@
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins, Dhampirs],
+                npc_count: Some(400),
             ),
             center: (x: 0.22877, y: 0.16553),
             requires_capital_castle: true,
@@ -583,6 +584,7 @@
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins, Dhampirs],
+                npc_count: Some(400),
             ),
             center: (x: 0.22669, y: 0.16960),
             requires_capital_castle: false,

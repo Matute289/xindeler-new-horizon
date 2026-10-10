@@ -1,0 +1,10 @@
+{
+  "message": "is empty or listed twice",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "94148f4d0b9d71d94a03edce5d37cedcda6667b7841eadd0408c723471449fde",
+    "cromatolis_v0_ar_fixture_ground_0_1.bin": "bd033b011fb63584011737a5b87316600e82e7d30f1d3e310f9b4c1f854e7f23",
+    "cromatolis_v0_ar_fixture_ground_1_0.bin": "c2642de60f0e511628f78f1e7f4064f4e5a37219e612a8d371444e4f32336649",
+    "cromatolis_v0_ar_fixture_ground_1_1.bin": "96e278646f16457840c760f6053f2a5fa0452a55c782b5da21b45d8fa57d58e7"
+  },
+  "verdict": "refuse"
+}

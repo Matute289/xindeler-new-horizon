@@ -401,6 +401,26 @@ pub(crate) fn chunk_voids_at<'a>(
 }
 
 impl ChunkVoids<'_> {
+    /// Calls `f(top, feature)` for every shape's authored top at this column
+    /// -- the ceiling of an air void, the surface of a liquid one -- as
+    /// authored, *before* the surface cap lowers it under shallow terrain,
+    /// with the index of the feature it belongs to
+    /// ([`AuthoredVoids::feature_name`]). What the authored ground layer's
+    /// exposure check compares with the patch over it. Allocation-free:
+    /// resolve the bucket once per chunk and call this per column.
+    pub(crate) fn for_each_authored_top(&self, wpos2d: Vec2<i32>, mut f: impl FnMut(f32, u16)) {
+        for &idx in self.shapes {
+            let shape = &self.voids.shapes[idx as usize];
+            // The cheap reject of `AuthoredVoids::carved_bands_at_column`.
+            if !aabr_contains(&dilated(&shape.aabr, 1), wpos2d) {
+                continue;
+            }
+            if let Some(band) = band_dilated_by(&shape.geom, 0.0, wpos2d, f32::INFINITY) {
+                f(*band.end(), shape.feature);
+            }
+        }
+    }
+
     /// Whether no authored shape can reach any column of this chunk. When
     /// true, [`Self::contact_at_column`] is guaranteed to return `None` and
     /// can be skipped entirely.
@@ -791,6 +811,10 @@ impl AuthoredVoids {
         inert.sort_unstable();
         inert
     }
+
+    /// The name of feature `index` (see
+    /// [`ChunkVoids::for_each_authored_top`]).
+    pub(crate) fn feature_name(&self, index: u16) -> &str { &self.features[index as usize] }
 
     /// [`Self::carved_bands_at_column`] paired with each shape's policy.
     #[cfg(test)]

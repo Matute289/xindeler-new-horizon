@@ -18,7 +18,7 @@ pub struct Death {
     pub faction: Option<FactionId>,
 }
 
-#[derive(enum_map::Enum)]
+#[derive(enum_map::Enum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrackedPopulation {
     Adventurers,
     Merchants,
@@ -123,6 +123,54 @@ impl Population {
     }
 
     pub fn add(&mut self, pop: TrackedPopulation, amount: u32) { self.populations[pop] += amount; }
+
+    pub fn get(&self, pop: TrackedPopulation) -> u32 { self.populations[pop] }
+
+    /// The population summed by role group (NH-171's budget breakdown).
+    pub fn groups(&self) -> PopulationGroups {
+        let mut groups = PopulationGroups::default();
+        for (pop, n) in self.iter() {
+            *match pop {
+                TrackedPopulation::Adventurers
+                | TrackedPopulation::Merchants
+                | TrackedPopulation::Guards
+                | TrackedPopulation::Captains
+                | TrackedPopulation::OtherTownNpcs => &mut groups.civilians,
+                TrackedPopulation::PirateCaptains | TrackedPopulation::Pirates => {
+                    &mut groups.pirates
+                },
+                TrackedPopulation::Cultists => &mut groups.cultists,
+                TrackedPopulation::GigasFrost
+                | TrackedPopulation::GigasFire
+                | TrackedPopulation::OtherMonsters => &mut groups.monsters,
+                TrackedPopulation::CloudWyvern
+                | TrackedPopulation::FrostWyvern
+                | TrackedPopulation::SeaWyvern
+                | TrackedPopulation::FlameWyvern
+                | TrackedPopulation::WealdWyvern
+                | TrackedPopulation::Phoenix
+                | TrackedPopulation::Roc
+                | TrackedPopulation::Cockatrice => &mut groups.wild,
+                TrackedPopulation::Other => &mut groups.other,
+            } += n;
+        }
+        groups
+    }
+}
+
+/// A [`Population`] summed by role group.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PopulationGroups {
+    /// Town NPCs: guards, adventurers, merchants, captains and the other
+    /// professions.
+    pub civilians: u32,
+    pub pirates: u32,
+    pub cultists: u32,
+    /// Roaming `Role::Monster` bipeds (gigas, ogres, trolls, ...).
+    pub monsters: u32,
+    /// `Role::Wild` large birds (wyverns, phoenixes, rocs, cockatrices).
+    pub wild: u32,
+    pub other: u32,
 }
 
 /// The architect has the responsibility of making sure the game keeps working.

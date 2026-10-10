@@ -26,7 +26,7 @@ impl JungleRuin {
         };
         Self {
             bounds,
-            alt: land.get_alt_approx(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
+            alt: land.ground_alt_at(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
                 as i32
                 + 2,
         }
@@ -42,7 +42,7 @@ impl Structure for JungleRuin {
 
     fn render_inner(&self, _site: &Site, land: &Land, painter: &Painter) {
         let center = self.bounds.center();
-        let plot_base = land.get_alt_approx(center) as i32;
+        let plot_base = land.ground_alt_at(center) as i32;
         let mut rng = rand::rng();
         let stone = Fill::Sampling(stone_color(BlockKind::Rock));
         let weak_stone = Fill::Sampling(stone_color(BlockKind::WeakRock));
@@ -75,7 +75,7 @@ impl Structure for JungleRuin {
                 center.x + (radius as f32 * ((n as f32 * phi).cos())) as i32,
                 center.y + (radius as f32 * ((n as f32 * phi).sin())) as i32,
             );
-            let base = land.get_alt_approx(pos) as i32;
+            let base = land.ground_alt_at(pos) as i32;
             let ground_sink = RandomField::new(0).get(pos.with_z(base)) as i32 % 4;
             let ruin_pos = pos.with_z(base - 8 - ground_sink);
             ruin_positions.push(ruin_pos);

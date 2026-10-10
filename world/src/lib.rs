@@ -224,7 +224,7 @@ impl World {
             // the first chunk that queries it. See `layer::authored_regions`.
             layer::authored_regions::warm(&index, &sim);
 
-            let world = Self { sim, civs };
+            let mut world = Self { sim, civs };
             let index = IndexOwned::new(index);
             // XINDELER: authored ground meeting natural water is checked once
             // the column sampler is final (sites placed). See
@@ -235,6 +235,17 @@ impl World {
                 calendar.as_ref(),
             ) {
                 panic!("{err}");
+            }
+            // XINDELER: sites, authored voids and roads on authored ground
+            // (`authored_raster::post_civ`); the ground queries then answer
+            // the levelled height where listed sites level exact columns.
+            match authored_raster::post_civ::check_ground_consumers(
+                &world,
+                index.as_index_ref(),
+                layer::authored_regions::authored_voids(&index, &world.sim),
+            ) {
+                Ok(report) => world.sim.set_site_levelling(report.sites.levelled_columns),
+                Err(err) => panic!("{err}"),
             }
             (world, index)
         })
@@ -1106,7 +1117,7 @@ impl World {
                     kind: model,
                     pos: (wpos2d - min_wpos)
                         .map(|e| e as i16)
-                        .with_z(self.sim().get_alt_approx(wpos2d).unwrap_or(0.0) as i16),
+                        .with_z(self.sim().ground_alt_at(wpos2d).unwrap_or(0.0) as i16),
                     flags: if column.snow_cover {
                         lod::InstFlags::SNOW_COVERED
                     } else {

@@ -170,6 +170,33 @@ fn layout_settlements_stay_in_their_footprint_and_clear_of_other_sites() {
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
+/// Steering on, a settlement with a ward it cannot fill still reaches its
+/// total: with steering every other ward stops at its own quota, so a total
+/// at target while a ward is short proves the fill stalled, turned steering
+/// off and went on. Kalthis's riverside wards are mostly inside the
+/// river-port keep-out today, so it takes that path on its world seed.
+#[test]
+#[ignore]
+fn a_layout_with_an_unreachable_ward_still_reaches_its_total() {
+    let (world, index) = generate_cromatolis(None);
+    let site = generated_site(&world, &index, "site.kalthis");
+    let (_, layout) =
+        generate_authored_city_with_seed(&world, index.as_index_ref(), "site.kalthis", None, true);
+    let layout = layout.unwrap();
+    let footprint = Footprint::new(&layout, site.origin);
+    let per_ward = footprint.buildings_per_ward(building_roots(site));
+    let short: Vec<_> = layout
+        .wards
+        .iter()
+        .zip(&per_ward)
+        .filter(|(ward, count)| **count < ward.target_buildings)
+        .map(|(ward, count)| format!("{} {count}/{}", ward.id, ward.target_buildings))
+        .collect();
+    println!("Kalthis per ward {per_ward:?}; short: {short:?}");
+    assert!(!short.is_empty(), "premise: a ward Kalthis cannot fill");
+    assert!(per_ward.iter().sum::<usize>() >= layout.target_buildings());
+}
+
 fn percentile(sorted: &[usize], p: f64) -> usize {
     sorted[((sorted.len() - 1) as f64 * p).round() as usize]
 }

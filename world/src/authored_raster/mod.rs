@@ -95,6 +95,7 @@
 //!   `TerrainPersistence::check_authored_rasters_digest`).
 
 pub mod format;
+pub mod post_civ;
 pub mod queries;
 #[cfg(any(test, feature = "tools"))]
 pub mod writer;
@@ -231,6 +232,18 @@ pub const FLOOR_MARGIN_BLOCKS: i32 = 16;
 /// every authored cell must lie at least this far inside the box edge (a
 /// load error otherwise).
 pub const REGION_MARGIN_M: i32 = 16;
+/// A site whose bounds come within this many metres of a ground region
+/// (site generation samples the terrain beyond its final footprint: the
+/// glider course 32 m and 64 m out) must be listed in the region's
+/// [`RegionManifest::sites_on_patch`].
+pub const SITE_PATCH_MARGIN_M: i32 = 64;
+/// An authored void whose ceiling comes within this many blocks of the
+/// ground over it (or rises above it) counts as exposed by the patch.
+pub const VOID_EXPOSURE_TOLERANCE_BLOCKS: i32 = 2;
+/// Steepest step a civ road may make between two adjacent exact ground
+/// columns (blocks) before the post-civ road report names it: NPCs walk up 1
+/// block and jump 2.
+pub const ROAD_CLIMB_LIMIT_BLOCKS: i32 = 2;
 
 const BYTES_PER_DIST_TILE: usize = TILE_CELLS;
 const NO_DIST: u8 = u8::MAX;
@@ -248,6 +261,17 @@ pub struct Manifest {
     pub regions: Vec<RegionManifest>,
 }
 
+/// One region of the manifest.
+///
+/// **Digest contract.** A region's digest ([`RegionEntry::digest`]) is the
+/// sha256 of `ron::ser::to_string` of this struct, and the manifest digest
+/// hashes the whole file, so terrain persistence and the rtsim water pass
+/// compare serialisations. Any field added here MUST be
+/// `#[serde(default, skip_serializing_if = "<is its default>")]`: a new
+/// field serialised at its default would change the digest of every existing
+/// region (persistence would refuse to start over persisted edits, the rtsim
+/// pass would re-run). `region_digest_is_pinned` in the tests pins one
+/// fixed region's digest to catch exactly that.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RegionManifest {
@@ -297,7 +321,44 @@ pub struct RegionManifest {
     /// rtsim water pass would re-run).
     #[serde(default, skip_serializing_if = "SeaFill::is_auto")]
     pub sea_fill: SeaFill,
+    /// Ordinary sites allowed to stand on (or within
+    /// [`SITE_PATCH_MARGIN_M`] of) this region's ground layer, by their
+    /// stable site key (`settlement:<id>`, `procedural:<kind>:<x>,<y>`, ...,
+    /// the keys of the site-layout digests). Any other site that close to a
+    /// ground region stops world generation: its layout would change with
+    /// every patch edit. Listing a site is the reviewed act that re-blesses
+    /// its layout digest. Default empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sites_on_patch: Vec<String>,
+    /// Site plots level their lots on ground cells too (default **true**):
+    /// a plot's preferred altitude is blended over the patch as over engine
+    /// terrain (a no-op on a prepared flat). `false`: the patch wins over
+    /// plot levelling.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub site_levelling: bool,
+    /// How many columns of authored voids (caves, interiors) may come within
+    /// [`VOID_EXPOSURE_TOLERANCE_BLOCKS`] of this region's ground (or rise
+    /// above it) before world generation stops. Default 0: a patch must not
+    /// open or truncate an authored void unless the region says so. Keep it
+    /// to the opening actually intended (tens of columns): the check
+    /// collects every exposed column at start-up, so a huge allowance hides
+    /// accidental exposures and pays for them in memory.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub max_exposed_void_columns: u32,
 }
+
+/// The digest of one region's manifest entry ([`RegionEntry::digest`]): the
+/// sha256 of its RON serialisation (see the digest contract on
+/// [`RegionManifest`]).
+pub fn region_digest(rm: &RegionManifest) -> Result<String, ron::Error> {
+    Ok(format::sha256_hex(ron::ser::to_string(rm)?.as_bytes()))
+}
+
+pub(crate) fn default_true() -> bool { true }
+
+fn is_true(v: &bool) -> bool { *v }
+
+fn is_zero(v: &u32) -> bool { *v == 0 }
 
 /// Where water below sea level comes from inside a region.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -402,6 +463,14 @@ pub enum AuthoredCell {
 impl AuthoredCell {
     pub fn is_wet(&self) -> bool { matches!(self, AuthoredCell::Wet { .. }) }
 
+    /// An exact cell of the ground layer (weight [`GROUND_EXACT`]).
+    pub fn is_exact_ground_layer_cell(&self) -> bool {
+        matches!(self, AuthoredCell::Ground {
+            weight: GROUND_EXACT,
+            ..
+        })
+    }
+
     /// The top ground block this cell fixes, if it fixes one exactly (a wet
     /// bed, a bank, an exact ground cell).
     pub fn exact_ground_block(&self) -> Option<i32> {
@@ -455,6 +524,8 @@ pub struct RegionSettings {
     pub exclude_procedural_margin_m: f32,
     pub(crate) aquatic_profile: Option<AquaticEcologyProfileId>,
     pub sea_fill: SeaFill,
+    /// [`RegionManifest::site_levelling`].
+    pub site_levelling: bool,
 }
 
 /// What the column sampler needs to know about one column inside a region.
@@ -500,6 +571,10 @@ pub struct DryTerrain {
     pub warp: f32,
     pub max_warp: f32,
     pub base_sea_level: f32,
+    /// The sites' preferred altitude here and its blend factor
+    /// (`SpawnRules::get_preferred_alt`): plot levelling, which ground cells
+    /// apply on top of the patch when the region levels sites.
+    pub site_prefer_alt: (f32, f32),
 }
 
 /// The column sampler's hook: replace `engine` by the authored result when
@@ -530,6 +605,22 @@ pub fn apply(
 }
 
 impl AuthoredColumn {
+    /// The column holds water over its authored ground: an authored wet
+    /// cell, or a dry authored cell (bank, exact or blend ground) of a
+    /// [`SeaFill::Auto`] region whose top block lies below the sea's top
+    /// block, which the sea fills (`ground_water_level`). On a blend cell the
+    /// authored block stands for the rendered top. Standing on such a column
+    /// means standing on a bed, under water.
+    pub fn is_flooded(&self) -> bool {
+        match self.cell {
+            AuthoredCell::Wet { .. } => true,
+            AuthoredCell::Bank { bed_block: b } | AuthoredCell::Ground { block: b, .. } => {
+                self.settings.sea_fill == SeaFill::Auto && b < SEA_TOP_BLOCK
+            },
+            AuthoredCell::None => false,
+        }
+    }
+
     /// Replace the engine's results for this column:
     ///
     /// * wet: bed and surface exact, no warp/cliff carving; `riverless_alt` is
@@ -576,14 +667,10 @@ impl AuthoredColumn {
                     riverless_alt: top_block_alt(bed_block),
                 }
             },
-            // Exact ground is a bank without water beside it: both fix the
-            // column's ground and nothing else.
-            AuthoredCell::Bank { bed_block: block }
-            | AuthoredCell::Ground {
-                block,
-                weight: GROUND_EXACT,
-            } => {
-                let alt = top_block_alt(block);
+            // A bank fixes the column's ground and nothing else (no site
+            // levelling on it).
+            AuthoredCell::Bank { bed_block } => {
+                let alt = top_block_alt(bed_block);
                 EngineColumn {
                     alt,
                     water_level: self.ground_water_level(alt, dry.base_sea_level),
@@ -593,31 +680,71 @@ impl AuthoredColumn {
                     riverless_alt: alt,
                 }
             },
-            // A blend cell of the ring around a patch: from the terrain the
-            // region renders here without the ground layer (`e`) toward the
-            // authored block, by `weight / 255`. Water as on exact ground
-            // (the ring is authored land; the load-time containment rule keeps
-            // it away from authored water).
+            // Exact ground is a bank without water beside it. A blend cell of
+            // the ring around a patch goes from the terrain the region renders
+            // here without the ground layer (`e`) toward the authored block,
+            // by `weight / 255`. Water as on a bank (the ring is authored
+            // land; the load-time containment rule keeps it away from
+            // authored water). Site plots then level their lots on top, as
+            // they do on engine terrain, unless the region opts out.
             AuthoredCell::Ground { block, weight } => {
-                let e = if self.natural {
-                    engine
-                } else {
-                    self.unauthored(engine, dry)
-                };
-                let w = weight as f32 / GROUND_EXACT as f32;
                 let g = top_block_alt(block);
-                let alt = Lerp::lerp(e.alt, g, w);
+                let r = if weight == GROUND_EXACT {
+                    EngineColumn {
+                        alt: g,
+                        water_level: 0.0,
+                        water_dist: self.water_dist,
+                        warp_factor: 0.0,
+                        cliff_offset: 0.0,
+                        riverless_alt: g,
+                    }
+                } else {
+                    let e = if self.natural {
+                        engine
+                    } else {
+                        self.unauthored(engine, dry)
+                    };
+                    let w = weight as f32 / GROUND_EXACT as f32;
+                    EngineColumn {
+                        alt: Lerp::lerp(e.alt, g, w),
+                        water_level: 0.0,
+                        water_dist: e.water_dist,
+                        warp_factor: Lerp::lerp(e.warp_factor, 0.0, w),
+                        cliff_offset: e.cliff_offset * (1.0 - w),
+                        riverless_alt: Lerp::lerp(e.riverless_alt, g, w),
+                    }
+                };
+                let alt = self.levelled(r.alt, dry.site_prefer_alt);
                 EngineColumn {
                     alt,
                     water_level: self.ground_water_level(alt, dry.base_sea_level),
-                    water_dist: e.water_dist,
-                    warp_factor: Lerp::lerp(e.warp_factor, 0.0, w),
-                    cliff_offset: e.cliff_offset * (1.0 - w),
-                    riverless_alt: Lerp::lerp(e.riverless_alt, g, w),
+                    riverless_alt: self.levelled(r.riverless_alt, dry.site_prefer_alt),
+                    ..r
                 }
             },
             AuthoredCell::None if self.natural => engine,
             AuthoredCell::None => self.unauthored(engine, dry),
+        }
+    }
+
+    /// Site plot levelling on a ground cell (the column sampler's own
+    /// `alt + (pref - alt) * factor`), when the region levels sites.
+    ///
+    /// The rendered top of a ground cell under a site therefore depends on
+    /// the site layout too, which no region digest covers: an engine change
+    /// that moves a plot (or this rule) changes those columns without a
+    /// manifest change, so neither terrain persistence nor the rtsim pass
+    /// notices. That is accepted while no deployed manifest has a ground
+    /// layer (none does when this was written); once one does, such an
+    /// engine change belongs in the release notes like a manifest change
+    /// (review persisted chunks under listed sites). The listed sites'
+    /// layout digests do cover the layouts themselves.
+    #[inline]
+    pub fn levelled(&self, alt: f32, (pref, factor): (f32, f32)) -> f32 {
+        if self.settings.site_levelling && factor > 0.0 {
+            alt + (pref - alt) * factor.clamped(0.0, 1.0)
+        } else {
+            alt
         }
     }
 
@@ -711,6 +838,26 @@ impl AuthoredColumn {
     }
 }
 
+/// One region of a loaded manifest ([`AuthoredRasters::region_entries`]).
+#[derive(Clone, Copy, Debug)]
+pub struct RegionEntry<'a> {
+    pub id: &'a str,
+    /// The region box (min inclusive, max exclusive), wpos.
+    pub bounds: Aabr<i32>,
+    /// sha256 of the region's canonical manifest entry (box, layers, every
+    /// setting, tile sha256s): it changes whenever anything about the region
+    /// changes, growing its box included.
+    pub digest: &'a str,
+    /// The region lists at least one ground-layer tile.
+    pub has_ground: bool,
+    /// [`RegionManifest::sites_on_patch`].
+    pub sites_on_patch: &'a [String],
+    /// [`RegionManifest::max_exposed_void_columns`].
+    pub max_exposed_void_columns: u32,
+    /// [`RegionManifest::site_levelling`].
+    pub site_levelling: bool,
+}
+
 /// Per-chunk summary of the authored cells (water, banks and ground),
 /// computed once at load.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -731,6 +878,14 @@ pub struct ChunkWaterSummary {
     /// Lowest ground-layer block (`i32::MAX` when the chunk has no ground
     /// cell): the below-sea-level rule of [`SeaFill::Auto`] reads it.
     pub min_ground_cell_block: i32,
+    /// Blend (ring) cells of a [`SeaFill::Auto`] region, at most half
+    /// authored (weight <= 127), whose block is at or above the ocean's top:
+    /// they are mostly the terrain around them, so in a partial chunk they
+    /// count as wet as the natural map there.
+    pub fading_blend_columns: u32,
+    /// The chunk belongs to a [`SeaFill::AuthoredOnly`] region: its authored
+    /// water is a lake at any altitude and its ground is dry.
+    pub authored_only: bool,
 }
 
 impl Default for ChunkWaterSummary {
@@ -744,6 +899,8 @@ impl Default for ChunkWaterSummary {
             max_surface_block: i32::MIN,
             min_bed_block: i32::MAX,
             min_ground_cell_block: i32::MAX,
+            fading_blend_columns: 0,
+            authored_only: false,
         }
     }
 }
@@ -758,6 +915,8 @@ impl ChunkWaterSummary {
         self.max_surface_block = self.max_surface_block.max(o.max_surface_block);
         self.min_bed_block = self.min_bed_block.min(o.min_bed_block);
         self.min_ground_cell_block = self.min_ground_cell_block.min(o.min_ground_cell_block);
+        self.fading_blend_columns += o.fading_blend_columns;
+        self.authored_only |= o.authored_only;
     }
 
     /// Lowest authored ground block of any kind: wet bed, bank or ground
@@ -778,6 +937,14 @@ impl ChunkWaterSummary {
 
 struct Region {
     id: String,
+    /// sha256 of this region's canonical manifest entry (box, layers, every
+    /// setting, tile sha256s): what terrain persistence and rtsim compare
+    /// per region.
+    digest: String,
+    /// [`RegionManifest::sites_on_patch`].
+    sites_on_patch: Vec<String>,
+    /// [`RegionManifest::max_exposed_void_columns`].
+    max_exposed_void_columns: u32,
     min: Vec2<i32>,
     max: Vec2<i32>,
     feather: i32,
@@ -1101,6 +1268,14 @@ pub struct AuthoredRasters {
     chunk_summary: HashMap<Vec2<i32>, ChunkWaterSummary>,
     /// sha256 of the canonical manifest (it pins every tile by sha256).
     digest: String,
+    /// Some region lists a ground-layer tile (computed once at load: per-tick
+    /// consumers read it).
+    has_ground_layer: bool,
+    /// Exact ground columns that a listed site's plot levelling moves, with
+    /// the levelled altitude the column sampler renders there (set once
+    /// after civ generation, see [`Self::set_site_levelling`]; empty without
+    /// a ground layer).
+    site_levelled: HashMap<Vec2<i32>, f32>,
     /// What this manifest adds to the process-wide counter (released on
     /// drop).
     resident_bytes: usize,
@@ -1280,6 +1455,8 @@ impl AuthoredRasters {
         let mut chunk_summary: HashMap<Vec2<i32>, ChunkWaterSummary> = HashMap::new();
         for rm in manifest.regions {
             let id = rm.id.clone();
+            let region_digest = region_digest(&rm)
+                .map_err(|e| err(format!("region '{id}' does not serialise: {e}")))?;
             let rerr = |msg: String| err(format!("region '{id}': {msg}"));
             if id.is_empty()
                 || id.len() > 48
@@ -1306,6 +1483,27 @@ impl AuthoredRasters {
                     "layers {:?}: this engine supports [Water], [Ground] or [Water, Ground] (in \
                      that order)",
                     rm.layers
+                )));
+            }
+            if !rm.layers.contains(&LayerKind::Ground)
+                && (!rm.sites_on_patch.is_empty()
+                    || !rm.site_levelling
+                    || rm.max_exposed_void_columns > 0)
+            {
+                return Err(rerr(
+                    "sites_on_patch, site_levelling and max_exposed_void_columns configure the \
+                     ground layer, and the region does not declare Ground"
+                        .into(),
+                ));
+            }
+            if let Some((i, key)) = rm
+                .sites_on_patch
+                .iter()
+                .enumerate()
+                .find(|(i, k)| k.is_empty() || rm.sites_on_patch[..*i].contains(k))
+            {
+                return Err(rerr(format!(
+                    "sites_on_patch[{i}] {key:?} is empty or listed twice"
                 )));
             }
             let min: Vec2<i32> = Vec2::from(rm.min);
@@ -1522,6 +1720,9 @@ impl AuthoredRasters {
             }
             regions.push(Region {
                 id: id.clone(),
+                digest: region_digest,
+                sites_on_patch: rm.sites_on_patch,
+                max_exposed_void_columns: rm.max_exposed_void_columns,
                 min,
                 max,
                 feather: rm.feather_m,
@@ -1531,6 +1732,7 @@ impl AuthoredRasters {
                     exclude_procedural_margin_m: rm.exclude_procedural_margin_m as f32,
                     aquatic_profile,
                     sea_fill: rm.sea_fill,
+                    site_levelling: rm.site_levelling,
                 },
                 budget: rm.consistency,
                 partial,
@@ -1549,12 +1751,15 @@ impl AuthoredRasters {
             .expect("at least one region");
         let index =
             (regions.len() > LINEAR_SCAN_MAX_REGIONS).then(|| RegionIndex::new(&regions, bounds));
+        let has_ground_layer = regions.iter().any(|r| r.ground.iter().any(Option::is_some));
         Ok(Self {
             regions,
             bounds,
             index,
             chunk_summary,
             digest,
+            has_ground_layer,
+            site_levelled: HashMap::new(),
             resident_bytes: reserved.keep(),
         })
     }
@@ -1653,6 +1858,74 @@ impl AuthoredRasters {
                 max: r.max,
             })
         })
+    }
+
+    /// Record the exact ground columns that listed sites' plot levelling
+    /// moves (`post_civ::SitePatchReport::levelled_columns`), so the ground
+    /// queries answer the levelled height the column renders there.
+    pub(crate) fn set_site_levelling(
+        &mut self,
+        columns: impl IntoIterator<Item = (Vec2<i32>, f32)>,
+    ) {
+        self.site_levelled.extend(columns);
+    }
+
+    /// The levelled altitude of an exact ground column under a listed site,
+    /// if its plot levelling moves it ([`Self::set_site_levelling`]).
+    #[inline]
+    pub fn site_levelled_alt(&self, wpos: Vec2<i32>) -> Option<f32> {
+        if self.site_levelled.is_empty() {
+            None
+        } else {
+            self.site_levelled.get(&wpos).copied()
+        }
+    }
+
+    /// Some region of this manifest has a ground layer
+    /// ([`RegionEntry::has_ground`] of any region), cached at load.
+    pub fn has_ground_layer(&self) -> bool { self.has_ground_layer }
+
+    /// Every region with the settings the post-civ checks, terrain
+    /// persistence and rtsim read, in manifest order.
+    pub fn region_entries(&self) -> impl Iterator<Item = RegionEntry<'_>> {
+        self.regions.iter().map(|r| RegionEntry {
+            id: &r.id,
+            bounds: Aabr {
+                min: r.min,
+                max: r.max,
+            },
+            digest: &r.digest,
+            has_ground: r.ground.iter().any(Option::is_some),
+            sites_on_patch: &r.sites_on_patch,
+            max_exposed_void_columns: r.max_exposed_void_columns,
+            site_levelling: r.settings.site_levelling,
+        })
+    }
+
+    /// Per region id, the sha256 of its canonical manifest entry (see
+    /// [`RegionEntry::digest`]).
+    pub fn region_digests(&self) -> std::collections::BTreeMap<String, String> {
+        self.regions
+            .iter()
+            .map(|r| (r.id.clone(), r.digest.clone()))
+            .collect()
+    }
+
+    /// The chunks of region `id` that hold ground-layer cells, sorted by
+    /// `(y, x)`.
+    pub fn ground_chunks(&self, id: &str) -> Vec<Vec2<i32>> {
+        let Some(r) = self.regions.iter().find(|r| r.id == id) else {
+            return Vec::new();
+        };
+        let (c0, c1) = (r.min / CHUNK, r.max / CHUNK);
+        (c0.y..c1.y)
+            .flat_map(|cy| (c0.x..c1.x).map(move |cx| Vec2::new(cx, cy)))
+            .filter(|c| {
+                self.chunk_summary
+                    .get(c)
+                    .is_some_and(|s| s.ground_columns > 0)
+            })
+            .collect()
     }
 
     /// Per-chunk summary (chunks with any authored cell only).
@@ -2049,6 +2322,7 @@ fn validate_region(
                     });
                     let entry = &mut r.local[((j / CHUNK) * CHUNKS_PER_TILE + i / CHUNK) as usize];
                     entry.authored_columns += 1;
+                    entry.authored_only = authored_only;
                     match cell_of(w, g, k) {
                         AuthoredCell::Wet {
                             surface_block,
@@ -2138,10 +2412,14 @@ fn validate_region(
                                 ));
                             }
                         },
-                        AuthoredCell::Ground { block, .. } => {
+                        AuthoredCell::Ground { block, weight } => {
                             entry.ground_columns += 1;
                             entry.sea_ground_columns +=
                                 (!authored_only && block < SEA_TOP_BLOCK) as u32;
+                            entry.fading_blend_columns += (!authored_only
+                                && weight <= GROUND_EXACT / 2
+                                && block >= SEA_TOP_BLOCK)
+                                as u32;
                             entry.min_ground_cell_block = entry.min_ground_cell_block.min(block);
                         },
                         AuthoredCell::None => {
@@ -2180,7 +2458,9 @@ fn validate_region(
     Ok((bounds, natural_seams))
 }
 
+#[cfg(test)] mod ground_consumer_real_world_tests;
 #[cfg(test)] mod ground_real_world_tests;
 #[cfg(test)] mod ground_seam_real_world_tests;
+#[cfg(test)] mod presentation_real_world_tests;
 #[cfg(test)] mod real_world_tests;
 #[cfg(test)] mod tests;

@@ -11,7 +11,7 @@ use self::erosion::Compute;
 pub use self::{
     diffusion::diffusion,
     location::Location,
-    map::{sample_pos, sample_wpos},
+    map::{pack_map_alt, sample_pos, sample_pos_with, sample_wpos, sample_wpos_presented},
     util::get_horizon_map,
     way::{Path, Way},
 };
@@ -3943,6 +3943,17 @@ impl WorldSim {
         self.authored_rasters = rasters;
     }
 
+    /// [`Self::empty`] grown to `map_size_lg`, every chunk a copy of the
+    /// empty world's only chunk: a table for asset-free tests of queries
+    /// that read chunks far from the origin.
+    #[cfg(test)]
+    pub(crate) fn empty_with_size_for_test(map_size_lg: MapSizeLg) -> Self {
+        let mut sim = Self::empty();
+        sim.chunks = vec![sim.chunks[0].clone(); map_size_lg.chunks_len()];
+        sim.map_size_lg = map_size_lg;
+        sim
+    }
+
     pub fn get_size(&self) -> Vec2<u32> { self.map_size_lg().chunks().map(u32::from) }
 
     /// Which purely-procedural voxel layers still run in this world.
@@ -4073,6 +4084,20 @@ impl WorldSim {
     /// Draw a map of the world based on chunk information.  Returns a buffer of
     /// u32s.
     pub fn get_map(&self, index: IndexRef, calendar: Option<&Calendar>) -> WorldMapMsg {
+        self.get_map_with(index, calendar, true)
+    }
+
+    /// Test seam of [`Self::get_map`] (which passes `true`): with
+    /// `authored_ground` false the map presents the chunk table even on
+    /// authored ground cells and colours authored dry ground below sea level
+    /// as water, the map as it was before ground patches were presented.
+    /// Only the identity and acceptance tests pass `false`.
+    pub(crate) fn get_map_with(
+        &self,
+        index: IndexRef,
+        calendar: Option<&Calendar>,
+        authored_ground: bool,
+    ) -> WorldMapMsg {
         prof_span!("WorldSim::get_map");
         let mut map_config = MapConfig::orthographic(
             self.map_size_lg(),
@@ -4145,15 +4170,47 @@ impl WorldSim {
         // TODO: Parallelize again.
         map_config.is_shaded = false;
 
+        // The altitude presented at a column (map shading and
+        // `WorldMapMsg::alt`, the client's LOD heights): on an authored
+        // ground cell at a chunk's sample column, the column sample already
+        // rendered there (`samples_data`, authored-aware); identical to
+        // `sample_wpos` everywhere else.
+        let present_wpos = |map_config: &MapConfig, wpos: Vec2<i32>| {
+            if !authored_ground {
+                return sample_wpos(map_config, self, wpos);
+            }
+            sample_wpos_presented(map_config, self, wpos, || {
+                let chunk = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+                if wpos.map2(chunk, |e, c| e.rem_euclid(c)) != Vec2::zero() {
+                    return None;
+                }
+                let pos = wpos.map2(chunk, |e, c| e.div_euclid(c));
+                let size = self.map_size_lg().chunks().map(|e| e as i32);
+                if pos.x < 0 || pos.y < 0 || pos.x >= size.x || pos.y >= size.y {
+                    return None;
+                }
+                samples_data[vec2_as_uniform_idx(self.map_size_lg(), pos)]
+                    .as_ref()
+                    .map(|s| s.alt)
+            })
+        };
         map_config.generate(
-            |pos| sample_pos(&map_config, self, index, Some(&samples_data), pos),
-            |pos| sample_wpos(&map_config, self, pos),
+            |pos| {
+                sample_pos_with(
+                    &map_config,
+                    self,
+                    index,
+                    Some(&samples_data),
+                    pos,
+                    authored_ground,
+                )
+            },
+            |pos| present_wpos(&map_config, pos),
             |pos, (r, g, b, _a)| {
                 // We currently ignore alpha and replace it with the height at pos, scaled to
                 // u8.
-                let alt = sample_wpos(
+                let alt = present_wpos(
                     &map_config,
-                    self,
                     pos.map(|e| e as i32) * TerrainChunkSize::RECT_SIZE.map(|e| e as i32),
                 );
                 let a = 0; //(alt.min(1.0).max(0.0) * 255.0) as u8;
@@ -4161,7 +4218,7 @@ impl WorldSim {
                 // NOTE: Safe by invariants on map_size_lg.
                 let posi = (pos.y << self.map_size_lg().vec().x) | pos.x;
                 v[posi] = u32::from_le_bytes([r, g, b, a]);
-                alts[posi] = (((alt.clamp(0.0, 1.0) * 8191.0) as u32) & 0x1FFF) << 3;
+                alts[posi] = pack_map_alt(alt);
             },
         );
         WorldMapMsg {
@@ -4190,6 +4247,8 @@ impl WorldSim {
             let mut cliffs = DHashSet::default();
             let mut cliff_path = Vec::new();
 
+            // XINDELER: the chunk table by design (the sim is built from the
+            // natural map, never from the authored ground layer).
             for _ in 0..64 {
                 if self.get_gradient_approx(pos).is_some_and(|g| g > 1.5) {
                     if !cliffs.insert(pos) {

@@ -11,6 +11,23 @@ use vek::*;
 
 /// A wrapper type that may contain a reference to a generated world. If not,
 /// default values will be provided.
+///
+/// XINDELER: the upstream accessors (`get_alt_approx`,
+/// `get_surface_alt_approx`, `get_gradient_approx`) keep their upstream
+/// meaning, the sim chunk table. The authored-aware views of the ground
+/// (inside authored regions they read the authored ground and water layers,
+/// see `WorldSim::ground_alt_at`) are the additive [`Self::ground_alt_at`],
+/// [`Self::ground_gradient_at`] and [`Self::surface_alt_at`]; outside every
+/// region, and on a world without an authored manifest, they return exactly
+/// the table. Site and plot generation (`world/src/site/`) reads the
+/// authored-aware ones, so plots stand on the authored ground; spatially
+/// extended features (`world/src/layer/`: the cave graph, caverns, authored
+/// voids) and civ placement (`world/src/civ/`, `world/src/sim/`) read the
+/// table. The test
+/// `authored_raster::tests::ground_reads_follow_the_layering_rule`
+/// enforces this split per directory: re-run it after every upstream merge, and
+/// give each new call it reports the accessor its directory needs (or an
+/// allow-list entry with the reason).
 pub struct Land<'a> {
     sim: Option<&'a sim::WorldSim>,
 }
@@ -69,6 +86,23 @@ impl<'a> Land<'a> {
     /// `WorldSim::surface_alt_at`).
     pub fn surface_alt_at(&self, wpos: Vec2<i32>) -> f32 {
         self.sim.map(|sim| sim.surface_alt_at(wpos)).unwrap_or(0.0)
+    }
+
+    /// XINDELER: [`Self::get_alt_approx`] made authored-aware (see
+    /// `WorldSim::ground_alt_at`): the authored ground inside authored
+    /// regions, the chunk table everywhere else.
+    pub fn ground_alt_at(&self, wpos: Vec2<i32>) -> f32 {
+        self.sim
+            .and_then(|sim| sim.ground_alt_at(wpos))
+            .unwrap_or(0.0)
+    }
+
+    /// XINDELER: [`Self::get_gradient_approx`] made authored-aware (see
+    /// `WorldSim::ground_gradient_at`).
+    pub fn ground_gradient_at(&self, wpos: Vec2<i32>) -> f32 {
+        self.sim
+            .and_then(|sim| sim.ground_gradient_at(wpos))
+            .unwrap_or(0.0)
     }
 
     /// XINDELER: the number of water blocks of an authored wet column at
