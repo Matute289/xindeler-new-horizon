@@ -1536,7 +1536,7 @@ fn region_digest_is_pinned() {
     };
     assert_eq!(
         region_digest(&rm).unwrap(),
-        "PLACEHOLDER",
+        "7987cf0fedb2503b3b08d46895d3af63c8fb41db0dd318dfe9a0eb173e5d6203",
         "{}",
         ron::ser::to_string(&rm).unwrap()
     );
