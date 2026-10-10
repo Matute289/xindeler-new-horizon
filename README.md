@@ -4,8 +4,8 @@
 > Development briefly moved to a from-scratch port on the [Bevy](https://bevy.org) engine
 > (`Matute289/xindeler`), but on 2026-07-24 the project reverted to this Veloren-derived engine
 > after an engine-strategy investigation found it the more viable path. The Bevy port is
-> superseded but kept as reference; the original frozen source this repo was cloned from lives in
-> a separate `xindeler-old` checkout. All new work happens in this repository.
+> superseded but kept as reference; the original frozen source this repo was cloned from was the
+> `xindeler-old` checkout (deleted locally on 2026-10-04; its Cromatolis work lives here now). All new work happens in this repository.
 
 <!-- SPDX-SnippetBegin -->
 <!-- SPDX-SnippetCopyrightText: 2025 Hrom -->
