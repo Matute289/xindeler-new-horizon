@@ -31,6 +31,8 @@ pub mod run;
 pub mod scene;
 pub mod session;
 pub mod settings;
+#[cfg(feature = "shot-script")]
+pub mod shot_script;
 #[cfg(feature = "singleplayer")]
 pub mod singleplayer;
 pub mod window;
