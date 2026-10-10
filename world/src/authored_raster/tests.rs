@@ -2237,3 +2237,103 @@ fn voids_exposed_by_a_patch_are_counted() {
     let r = void_exposure(&world, Some(&voids(248)));
     assert!(!r[0].is_error(), "{r:?}");
 }
+
+/// The map/LOD presentation of a column: the rendered column altitude on
+/// ground cells only (exact cells, across the patch's edge), the original
+/// table path on water, bank, unpainted cells and outside every region, and
+/// ground below sea level clamps to sea level in the packed altitude.
+#[test]
+fn map_presentation_reads_the_rendered_column_only_on_ground_cells() {
+    use crate::{
+        CONFIG,
+        sim::{pack_map_alt, sample_wpos, sample_wpos_presented},
+    };
+    use common::terrain::map::MapConfig;
+
+    let ground = region("present", (2048, 1024), (2560, 1280), 32, vec![
+        PaintOp::Ground {
+            shape: Shape::Rect {
+                x0: 2100.0,
+                y0: 1100.0,
+                x1: 2200.0,
+                y1: 1200.0,
+            },
+            ground_cm: 25_050,
+            weight: GROUND_EXACT,
+        },
+    ]);
+    let mut sim = crate::sim::WorldSim::empty();
+    sim.set_authored_rasters_for_test(Some(
+        load(&[
+            build_region(&river_spec()).unwrap(),
+            build_region(&ground).unwrap(),
+        ])
+        .unwrap(),
+    ));
+    let config = MapConfig::orthographic(
+        sim.map_size_lg(),
+        CONFIG.sea_level..=CONFIG.sea_level + 1000.0,
+    );
+    let rendered = 300.0;
+    let presented =
+        |wpos: Vec2<i32>, alt: f32| sample_wpos_presented(&config, &sim, wpos, || Some(alt));
+    let table = |wpos: Vec2<i32>| sample_wpos(&config, &sim, wpos);
+    let cell = |wpos: Vec2<i32>| sim.authored_rasters.as_ref().unwrap().cell_at(wpos);
+    let as_map = |alt: f32| (alt - CONFIG.sea_level) / 1000.0;
+
+    // Across the patch's west and east edges: the rendered column exactly
+    // where the cell is ground, the table path everywhere else.
+    let (mut on, mut off) = (0, 0);
+    for x in 2060..2240 {
+        let p = Vec2::new(x, 1150);
+        if matches!(cell(p), Some(AuthoredCell::Ground { .. })) {
+            on += 1;
+            assert_eq!(presented(p, rendered), as_map(rendered), "at {p:?}");
+        } else {
+            off += 1;
+            assert_eq!(
+                presented(p, rendered).to_bits(),
+                table(p).to_bits(),
+                "at {p:?}"
+            );
+        }
+    }
+    assert!(
+        on >= 100 && off > 0,
+        "the line crosses the patch ({on} on, {off} off)"
+    );
+
+    // Water, bank, an unpainted cell of a region and a column outside every
+    // region: the original path, the rendered value is never read.
+    for (p, expect) in [
+        (Vec2::new(1200, 1110), "water"),
+        (Vec2::new(1200, 1121), "bank"),
+        (Vec2::new(1200, 1180), "none"),
+        (Vec2::new(5000, 5000), "outside"),
+    ] {
+        let kind = match cell(p) {
+            Some(AuthoredCell::Wet { .. }) => "water",
+            Some(AuthoredCell::Bank { .. }) => "bank",
+            Some(AuthoredCell::None) => "none",
+            None => "outside",
+            Some(AuthoredCell::Ground { .. }) => "ground",
+        };
+        assert_eq!(kind, expect, "fixture at {p:?}");
+        let got = sample_wpos_presented(&config, &sim, p, || panic!("read at {p:?}"));
+        assert_eq!(got.to_bits(), table(p).to_bits(), "at {p:?}");
+    }
+
+    // No rendered column (not a sample column): the table path.
+    let p = Vec2::new(2150, 1150);
+    assert_eq!(
+        sample_wpos_presented(&config, &sim, p, || None).to_bits(),
+        table(p).to_bits()
+    );
+    // Dry ground below sea level: negative here, sea level once packed.
+    assert!(presented(p, CONFIG.sea_level - 30.0) < 0.0);
+    assert_eq!(pack_map_alt(presented(p, CONFIG.sea_level - 30.0)), 0);
+    assert_eq!(
+        pack_map_alt(presented(p, CONFIG.sea_level + 1000.0)),
+        8191 << 3
+    );
+}

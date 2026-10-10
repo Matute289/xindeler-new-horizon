@@ -2461,5 +2461,6 @@ fn validate_region(
 #[cfg(test)] mod ground_consumer_real_world_tests;
 #[cfg(test)] mod ground_real_world_tests;
 #[cfg(test)] mod ground_seam_real_world_tests;
+#[cfg(test)] mod presentation_real_world_tests;
 #[cfg(test)] mod real_world_tests;
 #[cfg(test)] mod tests;
