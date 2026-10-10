@@ -639,6 +639,7 @@ impl AuthoredColumn {
     /// terrain blended by the feather weight from the engine's (with the sim
     /// water's carving) to the engine's *dry* terrain (same noise and warp,
     /// faded by the distance to the authored water instead of the sim's).
+    #[inline]
     fn unauthored(&self, engine: EngineColumn, dry: DryTerrain) -> EngineColumn {
         let w = self.weight;
         let dry_wf = self
