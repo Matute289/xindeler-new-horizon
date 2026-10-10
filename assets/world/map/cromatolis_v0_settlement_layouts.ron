@@ -1,0 +1,69 @@
+// Authored settlement layouts for Cromatolis: where a settlement may build,
+// where its main plaza goes and how many buildings each ward must reach.
+// A settlement without an entry here generates procedurally, as before.
+//
+// Coordinates are world blocks (x east, y north). `frame` sets the origin,
+// the bank direction (`along_deg`, degrees counter-clockwise from east) and
+// the side the water lies on; a ward is a rectangle in frame coordinates:
+// `a` = blocks toward the water, `b` = blocks along the bank, half-open
+// ranges [min, max). Ward targets must add up to the settlement's own
+// `target_buildings` in cromatolis_v0_sites.ron. Every authored landmark's
+// footprint is kept clear automatically; `exclude_sites` adds keep-out
+// circles around other settlements or landmarks.
+//
+// The city generator only evaluates terrain within 94 tiles (564 blocks) of
+// the settlement's pin; ward area beyond that is not used yet, so a ward
+// reaching past it may fall short of its target.
+//
+// The two river-port landmarks are authored with a 26-block footprint but
+// are generated today by the generic citadel stand-in, which builds out to
+// 150 blocks from its pin: their 165-block exclusions keep the cities off
+// what is actually built there. Shrink them when the river ports get their
+// own generator.
+//
+// Kalthis: the 13-ward plan measured in the settlement suitability analysis
+// (wards on the plateau north-east of the river; 650 buildings split by each
+// ward's buildable area). Duren is its twin: the same plan in Duren's own
+// frame with the water on the other side, i.e. mirrored across the river.
+(
+    schema: "xindeler.settlement_layouts.v1",
+    layouts: [
+        (
+            site_id: "site.kalthis",
+            frame: (origin: Wpos(7696, 27664), along_deg: -29.78, water_side: Right),
+            plan: Wards((
+                anchor: (a: 40.0, b: 55.0),
+                plaza_radius: Some(2),
+                fields: Ring(4),
+                wards: [
+                    (id: "coronet_quarter", a: (-40.0, 120.0), b: (-40.0, 150.0), target_buildings: 29),
+                    (id: "hallowmark", a: (-40.0, 120.0), b: (-150.0, -40.0), target_buildings: 13),
+                    (id: "larkspire", a: (-330.0, -40.0), b: (-150.0, -20.0), target_buildings: 28),
+                    (id: "highglass_row", a: (-330.0, -40.0), b: (-20.0, 130.0), target_buildings: 41),
+                    (id: "amberlane", a: (-330.0, -40.0), b: (130.0, 330.0), target_buildings: 55),
+                    (id: "millhaven", a: (120.0, 250.0), b: (-20.0, 200.0), target_buildings: 26),
+                    (id: "guildyards", a: (120.0, 250.0), b: (-150.0, -20.0), target_buildings: 14),
+                    (id: "harborfront", a: (250.0, 480.0), b: (-150.0, 10.0), target_buildings: 15),
+                    (id: "saltrow", a: (250.0, 480.0), b: (10.0, 150.0), target_buildings: 12),
+                    (id: "emberrow", a: (250.0, 480.0), b: (150.0, 300.0), target_buildings: 10),
+                    (id: "driftmarket", a: (120.0, 250.0), b: (200.0, 420.0), target_buildings: 10),
+                    (id: "garrison_district", a: (-760.0, -330.0), b: (-150.0, 420.0), target_buildings: 232),
+                    (id: "restfields", a: (-330.0, 120.0), b: (330.0, 760.0), target_buildings: 165),
+                ],
+            )),
+            exclude_sites: [
+                (site_id: "site.portland", radius_blocks: 310),
+                (site_id: "site.kalthis_river_port", radius_blocks: 165),
+            ],
+        ),
+        (
+            site_id: "site.duren",
+            frame: (origin: Wpos(7248, 26864), along_deg: -29.78, water_side: Left),
+            plan: MirrorOf("site.kalthis"),
+            exclude_sites: [
+                (site_id: "site.portland", radius_blocks: 310),
+                (site_id: "site.duren_river_port", radius_blocks: 165),
+            ],
+        ),
+    ],
+)

@@ -113,6 +113,15 @@ pub struct Plot {
 }
 
 impl Plot {
+    /// Whether this plot counts as a building in a settlement's size: every
+    /// plot but plazas, roads, farm fields and bridges.
+    pub fn is_building(&self) -> bool {
+        !matches!(
+            self.kind,
+            PlotKind::Plaza(_) | PlotKind::Road(_) | PlotKind::FarmField(_) | PlotKind::Bridge(_)
+        )
+    }
+
     pub fn find_bounds(&self) -> Aabr<i32> {
         self.tiles
             .iter()
