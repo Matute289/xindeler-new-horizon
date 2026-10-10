@@ -1182,6 +1182,20 @@ pub(crate) fn generate_authored_city_with_seed(
     seed: Option<[u8; 32]>,
     with_layout: bool,
 ) -> (WorldSite, Option<site::layout::SettlementLayout>) {
+    generate_authored_city_with_edited_layout(world, index, site_id, seed, with_layout, |_| {})
+}
+
+/// [`generate_authored_city_with_seed`], with `edit` applied to the layout
+/// first (e.g. a test exclusion that makes a ward unreachable).
+#[cfg(test)]
+pub(crate) fn generate_authored_city_with_edited_layout(
+    world: &crate::World,
+    index: IndexRef,
+    site_id: &str,
+    seed: Option<[u8; 32]>,
+    with_layout: bool,
+    edit: impl FnOnce(&mut site::layout::SettlementLayout),
+) -> (WorldSite, Option<site::layout::SettlementLayout>) {
     let map_size = world.sim().map_size_lg();
     let settlements =
         AuthoredCromatolisSettlements::load_owned("world.map.cromatolis_v0_sites").unwrap();
@@ -1206,9 +1220,12 @@ pub(crate) fn generate_authored_city_with_seed(
     let wpos = sim_site.center.cpos_to_wpos_center();
     let naval_port = resolve_naval_port(Some(authored), Some(&maritime_routes))
         .map(|class| NavalPortRequest::new(class, &exclusions));
-    let layout = with_layout
+    let mut layout = with_layout
         .then(|| resolved.get(site_id).cloned())
         .flatten();
+    if let Some(layout) = layout.as_mut() {
+        edit(layout);
+    }
     let seed = seed.unwrap_or_else(|| {
         seeds::CivSeedPolicy::new(0, true)
             .site_seed(sim_site)
@@ -2793,9 +2810,14 @@ impl Civs {
                         wpos,
                         &mut gen_meta,
                     ),
-                    SiteKind::Citadel => {
-                        WorldSite::generate_citadel(&Land::from_sim(ctx.sim), &mut rng, wpos)
-                    },
+                    // XINDELER: an authored landmark standing in as a
+                    // citadel may be held to its own footprint.
+                    SiteKind::Citadel => WorldSite::generate_citadel_within(
+                        &Land::from_sim(ctx.sim),
+                        &mut rng,
+                        wpos,
+                        sim_site.landmark_stand_in_radius(),
+                    ),
                     SiteKind::Bridge(a, b) => {
                         let mut bridge_site = WorldSite::generate_bridge(
                             &Land::from_sim(ctx.sim),
@@ -4930,6 +4952,19 @@ impl Site {
                 settlement.size.contract_key(),
             )
         })
+    }
+
+    /// How far (blocks) the generic generator standing in for this
+    /// authored landmark may build, when that is the landmark's own authored
+    /// footprint rather than the generator's natural size. Today: a harbour
+    /// (the Kalthis and Duren river ports), authored 26 blocks across but
+    /// standing in as a citadel that would otherwise build out to 150 and
+    /// take the neighbouring riverside wards. `None` for every other site,
+    /// which generates as before.
+    pub(crate) fn landmark_stand_in_radius(&self) -> Option<i32> {
+        let profile = self.authored_landmark.as_ref()?.profile.as_ref()?;
+        (profile.physical_template == AuthoredLandmarkPhysicalTemplate::Harbour)
+            .then_some(profile.footprint_radius)
     }
 
     /// The authored name for this site, if it was established from an
