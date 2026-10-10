@@ -372,7 +372,11 @@ impl WorldSim {
 
     /// Whether the chunk is authored dry ground of a [`SeaFill::AuthoredOnly`]
     /// region: it holds authored cells of such a region and
-    /// [`Self::chunk_water`] calls it dry. Its ground is dry at any
+    /// [`Self::chunk_water`] calls it dry. Per chunk, by that query's
+    /// majority-of-columns rule: the chunk is *mostly* dry, so a chunk a dry
+    /// patch covers only partly stays water while water (authored, or the
+    /// table's natural water in its unauthored columns) holds at least half
+    /// of its columns. Its ground is dry at any
     /// altitude, below sea level included, whatever the chunk table's
     /// (frozen, natural) water says. `false` everywhere else, and always
     /// without authored rasters.

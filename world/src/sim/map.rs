@@ -401,7 +401,21 @@ pub fn sample_pos_with(
         column_data.map_or(alt, |(_, alt, _, _, _, _)| alt)
     };
 
+    // Per chunk, not per column: a chunk is authored dry when its authored
+    // columns make it mostly dry by `chunk_water`'s majority-of-columns rule,
+    // so a chunk only partly covered by a dry patch keeps the table's water
+    // when the water still holds at least half of it.
     let authored_dry = authored_ground && !is_basement && sampler.chunk_is_authored_dry(pos);
+    // A mostly dry chunk the patch does not cover entirely keeps the table's
+    // river link to its downhill chunk: the natural river still runs through
+    // its unauthored columns, and dropping the link would leave a stub
+    // upstream. Only a fully authored dry chunk drops it.
+    let authored_fully_dry = authored_dry
+        && sampler
+            .authored_rasters
+            .as_ref()
+            .and_then(|r| r.chunk_summary(pos))
+            .is_some_and(|s| s.authored_columns == TerrainChunkSize::RECT_SIZE.product());
     let depth_m = (alt.max(water_alt) - alt).max(0.0) as f64;
     let true_water_alt = (alt.max(water_alt) as f64 - focus.z) / gain as f64;
     let true_alt = (alt as f64 - focus.z) / gain as f64;
@@ -430,7 +444,8 @@ pub fn sample_pos_with(
     let mut has_connections = false;
     // TODO: Support non-river connections.
     // TODO: Support multiple connections.
-    let river_width = colour_river_kind.map(|river| match river {
+    let connection_river_kind = if authored_fully_dry { None } else { river_kind };
+    let river_width = connection_river_kind.map(|river| match river {
         RiverKind::River { cross_section } => cross_section.x,
         RiverKind::Lake { .. } | RiverKind::Ocean => TerrainChunkSize::RECT_SIZE.x as f32,
     });
@@ -450,6 +465,7 @@ pub fn sample_pos_with(
             });
     };
     let rgb = if is_water
+        && !authored_dry
         && is_ice
         && column_data.is_some_and(|(_, _, ice_depth, _, _, _)| ice_depth > 0.0)
     {
@@ -612,6 +628,12 @@ pub fn sample_pos_with(
 
     MapSample {
         rgb: Rgb::new(rgb.r, rgb.g, rgb.b),
+        // The shading altitude: on authored dry ground the raw column
+        // altitude, below sea level on a dry pit, with no water surface over
+        // it. Only the colour decisions above treat such ground as if at sea
+        // level (so it is not painted as water); shading keeps the real
+        // relief. `WorldMapMsg::alt` is packed separately and clamps at sea
+        // level.
         alt: if is_water && !authored_dry {
             true_alt.max(true_water_alt)
         } else {

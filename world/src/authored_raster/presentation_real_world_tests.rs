@@ -248,3 +248,26 @@ fn world_map_colours_dry_ground_below_sea_level_as_ground() {
     assert_eq!(changed_not_dry, 0, "only authored dry chunks change colour");
     assert!(water > 1000, "the natural sea keeps its water colour");
 }
+
+/// With only `Auto` regions (the battery's `Auto` half over the arena) no
+/// chunk is authored dry and the world map image is byte-identical to the
+/// table-only one: the dry-ground colour rule never reaches them.
+#[test]
+#[ignore]
+fn map_image_is_byte_identical_with_only_auto_regions() {
+    let (mut world, index) = generate_world();
+    let mut specs = super::ground_real_world_tests::ground_battery_specs();
+    specs.retain(|s| s.sea_fill == super::SeaFill::Auto);
+    assert_eq!(specs.len(), 1);
+    world
+        .sim
+        .set_authored_rasters_for_test(Some(load_specs(&specs).unwrap()));
+    let (new, old) = both_maps(&world, index.as_index_ref());
+    let sim = world.sim();
+    let dry = (0..sim.map_size_lg().chunks_len())
+        .filter(|&i| sim.chunk_is_authored_dry(uniform_idx_as_vec2(sim.map_size_lg(), i)))
+        .count();
+    println!("Auto regions only: authored dry chunks {dry}");
+    assert_eq!(dry, 0);
+    assert!(new.rgba == old.rgba, "map image changed with Auto regions");
+}
