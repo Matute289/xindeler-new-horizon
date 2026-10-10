@@ -334,9 +334,7 @@ fn authored_spawn_ok(world: &World, wpos: Vec2<i32>, aquatic: Option<bool>) -> b
 fn site_spawn_alt(world: &World, wpos: Vec2<i32>, body: &Body) -> f32 {
     let sim = world.sim();
     if body_aquatic(body) != Some(true)
-        && sim
-            .authored_column_at(wpos)
-            .is_some_and(|c| c.is_flooded())
+        && sim.authored_column_at(wpos).is_some_and(|c| c.is_flooded())
     {
         sim.surface_alt_at(wpos)
     } else {
@@ -416,9 +414,7 @@ fn spawn_at_plot(
         .choose(rng)
     {
         let wpos = site.tile_center_wpos(plot.root_tile());
-        let wpos = wpos
-            .as_()
-            .with_z(site_spawn_alt(world, wpos, &body));
+        let wpos = wpos.as_().with_z(site_spawn_alt(world, wpos, &body));
         let mut npc = Actor::new_npc(rng.random(), wpos, body, death.role.clone())
             .with_personality(personality)
             .with_home(id);
@@ -496,9 +492,7 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
             .choose(&mut rng)
         {
             let wpos = site.wpos;
-            let wpos = wpos
-                .as_()
-                .with_z(site_spawn_alt(world, wpos, &body));
+            let wpos = wpos.as_().with_z(site_spawn_alt(world, wpos, &body));
             data.spawn_actor(
                 Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                     .with_personality(personality)
@@ -564,9 +558,7 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                     .choose(&mut rng)
                 {
                     let wpos = site.wpos;
-                    let wpos = wpos
-                        .as_()
-                        .with_z(site_spawn_alt(world, wpos, &body));
+                    let wpos = wpos.as_().with_z(site_spawn_alt(world, wpos, &body));
                     data.spawn_actor(
                         Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                             .with_personality(personality)

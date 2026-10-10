@@ -128,9 +128,9 @@ impl WorldSim {
     ///
     /// * exact ground, bank, wet bed: the authored top block's altitude
     ///   ([`top_block_alt`], the column sampler's convention), with no
-    ///   sea-level clamp (a dry pit below 0 m is its floor); on an exact
-    ///   ground column a listed site's plot levelling moves, the levelled
-    ///   altitude the column renders (`AuthoredRasters::site_levelled_alt`);
+    ///   sea-level clamp (a dry pit below 0 m is its floor); on an exact ground
+    ///   column a listed site's plot levelling moves, the levelled altitude the
+    ///   column renders (`AuthoredRasters::site_levelled_alt`);
     /// * blend (ring) ground of weight `w`: `lerp(table, block, w / 255)`. The
     ///   rendered ring lerps toward the engine column *with* its noise instead,
     ///   so on ring cells this differs from the blocks by up to the engine's

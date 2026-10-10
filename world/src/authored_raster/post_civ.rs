@@ -8,18 +8,17 @@
 //!   reviewed act that re-blesses its layout digest); a listed site must not
 //!   stand on ring cells (the authored-aware ground query only approximates
 //!   them); and every exact ground column a listed site's plot levelling moves
-//!   is counted (reported, not refused: houses level their lots) and handed
-//!   to the ground queries ([`SitePatchReport::levelled_columns`], applied by
-//!   `WorldSim::set_site_levelling`), so
-//!   `WorldSim::ground_alt_at` there answers the levelled height the column
-//!   renders, not the patch under it.
+//!   is counted (reported, not refused: houses level their lots) and handed to
+//!   the ground queries ([`SitePatchReport::levelled_columns`], applied by
+//!   `WorldSim::set_site_levelling`), so `WorldSim::ground_alt_at` there
+//!   answers the levelled height the column renders, not the patch under it.
 //! * **Voids** ([`void_exposure`]): an authored void (cave, interior) whose
 //!   authored top comes within [`VOID_EXPOSURE_TOLERANCE_BLOCKS`] of the ground
 //!   over it is exposed by the patch; more such columns than the region allows
 //!   (`max_exposed_void_columns`, default 0) stop world generation. The
-//!   authored-void data has no way to declare a mouth (a column where a void
-//!   is meant to meet the surface or the water) yet, so every column counts;
-//!   a region where an opening is intended raises its allowance.
+//!   authored-void data has no way to declare a mouth (a column where a void is
+//!   meant to meet the surface or the water) yet, so every column counts; a
+//!   region where an opening is intended raises its allowance.
 //! * **Roads** ([`road_cliffs`]): civ roads are planned on the natural chunk
 //!   table, so one can cross an authored cliff. Every road column on an exact
 //!   ground cell that steps more than [`ROAD_CLIMB_LIMIT_BLOCKS`] to an

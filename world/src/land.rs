@@ -23,7 +23,8 @@ use vek::*;
 /// authored-aware ones, so plots stand on the authored ground; spatially
 /// extended features (`world/src/layer/`: the cave graph, caverns, authored
 /// voids) and civ placement (`world/src/civ/`, `world/src/sim/`) read the
-/// table. The test `authored_raster::tests::ground_reads_follow_the_layering_rule`
+/// table. The test
+/// `authored_raster::tests::ground_reads_follow_the_layering_rule`
 /// enforces this split per directory: re-run it after every upstream merge, and
 /// give each new call it reports the accessor its directory needs (or an
 /// allow-list entry with the reason).

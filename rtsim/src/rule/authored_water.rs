@@ -151,13 +151,12 @@ pub fn safe_ground(
 /// sea's top block, so [`safe_ground`] moves land NPCs off it.
 pub fn standing_cell(cell: AuthoredCell, flooded: bool) -> AuthoredCell {
     match cell {
-        AuthoredCell::Bank { bed_block } | AuthoredCell::Ground { block: bed_block, .. }
-            if flooded =>
-        {
-            AuthoredCell::Wet {
-                surface_block: SEA_TOP_BLOCK,
-                bed_block,
-            }
+        AuthoredCell::Bank { bed_block }
+        | AuthoredCell::Ground {
+            block: bed_block, ..
+        } if flooded => AuthoredCell::Wet {
+            surface_block: SEA_TOP_BLOCK,
+            bed_block,
         },
         cell => cell,
     }
@@ -546,24 +545,54 @@ mod tests {
         actors.create_actor(npc(human(), Vec3::new(60.5, 5.5, 150.0)));
         // Ground cells everywhere but x in 15..25.
         let on_ground = |p: Vec2<i32>| !(15..25).contains(&p.x);
-        let v1 = [("a", "a1", region_box(0, 50)), ("b", "b1", region_box(50, 100))];
+        let v1 = [
+            ("a", "a1", region_box(0, 50)),
+            ("b", "b1", region_box(50, 100)),
+        ];
         let mut stored = BTreeMap::new();
         // Migration: the old single digest equals the manifest's.
-        let n = ground_region_changes(&actors, Some("m1"), &mut stored, Some(("m1", &v1)), &on_ground);
+        let n = ground_region_changes(
+            &actors,
+            Some("m1"),
+            &mut stored,
+            Some(("m1", &v1)),
+            &on_ground,
+        );
         assert_eq!(n, 0);
         assert_eq!(stored.get("a").map(String::as_str), Some("a1"));
         // The same with a changed manifest digest: every region is new.
         let mut fresh = BTreeMap::new();
-        let n = ground_region_changes(&actors, Some("m0"), &mut fresh, Some(("m1", &v1)), &on_ground);
+        let n = ground_region_changes(
+            &actors,
+            Some("m0"),
+            &mut fresh,
+            Some(("m1", &v1)),
+            &on_ground,
+        );
         assert_eq!(n, 2, "the NPCs at x 10 and 60 stand on ground cells");
         // Region a changes, b does not: one NPC on a's ground (x 20 is not).
-        let v2 = [("a", "a2", region_box(0, 50)), ("b", "b1", region_box(50, 100))];
-        let n = ground_region_changes(&actors, Some("m1"), &mut stored, Some(("m2", &v2)), &on_ground);
+        let v2 = [
+            ("a", "a2", region_box(0, 50)),
+            ("b", "b1", region_box(50, 100)),
+        ];
+        let n = ground_region_changes(
+            &actors,
+            Some("m1"),
+            &mut stored,
+            Some(("m2", &v2)),
+            &on_ground,
+        );
         assert_eq!(n, 1);
         assert_eq!(stored.get("a").map(String::as_str), Some("a2"));
         // Region b removed: pruned; nothing changed, nothing counted.
         let v3 = [("a", "a2", region_box(0, 50))];
-        let n = ground_region_changes(&actors, Some("m2"), &mut stored, Some(("m3", &v3)), &on_ground);
+        let n = ground_region_changes(
+            &actors,
+            Some("m2"),
+            &mut stored,
+            Some(("m3", &v3)),
+            &on_ground,
+        );
         assert_eq!(n, 0);
         assert_eq!(stored.len(), 1);
         // No rasters: the record is cleared.
@@ -584,7 +613,10 @@ mod tests {
         let resolve = src
             .find("authored_water::resolve_npcs(")
             .expect("the migration runs the water pass");
-        assert!(note < resolve, "note_ground_region_changes must run before resolve_npcs");
+        assert!(
+            note < resolve,
+            "note_ground_region_changes must run before resolve_npcs"
+        );
     }
 
     #[test]

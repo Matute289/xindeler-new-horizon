@@ -1044,7 +1044,11 @@ fn flooded_columns_are_wet_cells_and_sea_filled_dry_cells() {
         (low_bank, true, false),
         (AuthoredCell::None, false, false),
     ] {
-        assert_eq!(ground_col(cell, SeaFill::Auto).is_flooded(), auto, "{cell:?} Auto");
+        assert_eq!(
+            ground_col(cell, SeaFill::Auto).is_flooded(),
+            auto,
+            "{cell:?} Auto"
+        );
         assert_eq!(
             ground_col(cell, SeaFill::AuthoredOnly).is_flooded(),
             authored_only,
@@ -2059,9 +2063,9 @@ fn buried_positions_are_lifted_to_the_authored_ground() {
 /// directory of the `world` crate:
 ///
 /// * `layer/` reads the chunk table (`Land::get_alt_approx`,
-///   `get_gradient_approx`): an authored-aware read there would move
-///   spatially extended features (the cave graph, caverns, authored voids)
-///   outside the regions;
+///   `get_gradient_approx`): an authored-aware read there would move spatially
+///   extended features (the cave graph, caverns, authored voids) outside the
+///   regions;
 /// * `site/` reads the authored-aware ground (`Land::ground_alt_at`,
 ///   `ground_gradient_at`, `surface_alt_at`): plots stand on the authored
 ///   ground, and a table read would float or bury them on a patch;
@@ -2077,10 +2081,18 @@ fn ground_reads_follow_the_layering_rule() {
         ".get_surface_alt_approx(",
         ".get_gradient_approx(",
     ];
-    const AUTHORED: &[&str] = &[".ground_alt_at(", ".ground_gradient_at(", ".surface_alt_at("];
+    const AUTHORED: &[&str] = &[
+        ".ground_alt_at(",
+        ".ground_gradient_at(",
+        ".surface_alt_at(",
+    ];
     const GROUND_LAYER: &[&str] = &[".ground_alt_at(", ".ground_gradient_at("];
     // (directory, forbidden calls, allowed (file, trimmed line) with reason).
-    type Rule = (&'static str, &'static [&'static str], &'static [(&'static str, &'static str)]);
+    type Rule = (
+        &'static str,
+        &'static [&'static str],
+        &'static [(&'static str, &'static str)],
+    );
     const RULES: &[Rule] = &[
         ("src/layer", AUTHORED, &[]),
         ("src/site", TABLE, &[]),

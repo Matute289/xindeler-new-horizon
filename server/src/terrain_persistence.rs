@@ -154,8 +154,8 @@ impl TerrainPersistence {
     /// regions are pruned from the record. A record that exists but cannot
     /// be read or parsed counts every region as changed (never as a
     /// migration). Both files are written atomically. Nothing is recorded
-    /// while a refusal stands. Without the `persistent_world` feature nothing is
-    /// persisted, so there is nothing to guard.
+    /// while a refusal stands. Without the `persistent_world` feature nothing
+    /// is persisted, so there is nothing to guard.
     pub fn check_authored_rasters_digest(
         &self,
         digest: Option<&str>,
@@ -765,7 +765,11 @@ mod authored_digest_tests {
     fn an_unparseable_record_counts_every_region_as_changed() {
         let p = persistence("corrupt");
         p.check_authored_rasters_digest(Some("m1"), &[region("a", "a1", (0, 0), (10, 10))]);
-        std::fs::write(p.path.join(AUTHORED_DIGESTS_FILE), "(manifest: \"m1\", regi").unwrap();
+        std::fs::write(
+            p.path.join(AUTHORED_DIGESTS_FILE),
+            "(manifest: \"m1\", regi",
+        )
+        .unwrap();
         std::fs::write(p.path.join("chunk_5_5.dat"), b"x").unwrap();
         p.check_authored_rasters_digest(Some("m1"), &[region("a", "a1", (0, 0), (10, 10))]);
     }

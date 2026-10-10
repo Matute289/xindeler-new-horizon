@@ -4,8 +4,8 @@
 //! and on a slope (a site on a ring and an unlisted site refused), buried
 //! players and simulated NPCs on raised patches, rtsim, spawns and wildlife
 //! on a dry pit floor below 0 m, a quay beside an authored basin, and a civ
-//! road over an authored cliff. Synthetic manifests only: the calibration arena, or a wilderness
-//! site / road found far from every other site.
+//! road over an authored cliff. Synthetic manifests only: the calibration
+//! arena, or a wilderness site / road found far from every other site.
 //!
 //! ```text
 //! VELOREN_ASSETS=$PWD/assets cargo test -p xindeler-world --release --features tools \
@@ -120,8 +120,7 @@ fn ground_queries_are_the_table_outside_and_the_patch_inside() {
             sim.ground_alt_at(p).map(f32::to_bits) != sim.get_alt_approx(p).map(f32::to_bits)
                 || sim.surface_alt_at(p).to_bits() != sim.get_surface_alt_approx(p).to_bits()
                 || land.ground_alt_at(p).to_bits() != land.get_alt_approx(p).to_bits()
-                || land.ground_gradient_at(p).to_bits()
-                    != land.get_gradient_approx(p).to_bits()
+                || land.ground_gradient_at(p).to_bits() != land.get_gradient_approx(p).to_bits()
         })
         .count();
     println!("outside: {} columns compared, {bad} differ", points.len());
@@ -420,8 +419,7 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
             .filter(|p| p.is_building())
             .filter(|p| {
                 let root = site.tile_center_wpos(p.root_tile());
-                (land.ground_alt_at(root) as i32 - land.get_alt_approx(root) as i32).abs()
-                    > 2
+                (land.ground_alt_at(root) as i32 - land.get_alt_approx(root) as i32).abs() > 2
             })
             .count();
         println!(
@@ -738,9 +736,7 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
             }
         }
     }
-    println!(
-        "pit: chunk_water {w:?}; {water} water blocks; {spawns} spawn(s), {aquatic} aquatic"
-    );
+    println!("pit: chunk_water {w:?}; {water} water blocks; {spawns} spawn(s), {aquatic} aquatic");
     assert_eq!(water, 0);
     assert_eq!(aquatic, 0);
 }

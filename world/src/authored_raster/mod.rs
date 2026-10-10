@@ -1863,7 +1863,10 @@ impl AuthoredRasters {
     /// Record the exact ground columns that listed sites' plot levelling
     /// moves (`post_civ::SitePatchReport::levelled_columns`), so the ground
     /// queries answer the levelled height the column renders there.
-    pub(crate) fn set_site_levelling(&mut self, columns: impl IntoIterator<Item = (Vec2<i32>, f32)>) {
+    pub(crate) fn set_site_levelling(
+        &mut self,
+        columns: impl IntoIterator<Item = (Vec2<i32>, f32)>,
+    ) {
         self.site_levelled.extend(columns);
     }
 

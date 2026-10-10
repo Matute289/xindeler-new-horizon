@@ -1044,10 +1044,7 @@ fn water_only_arena_output_is_pinned() {
         .sim
         .set_authored_rasters_for_test(Some(load_spec(&arena_spec())));
     let index_ref = index.as_index_ref();
-    let (min, max) = (
-        Vec2::from(REGION_MIN) - 64,
-        Vec2::from(REGION_MAX) + 64,
-    );
+    let (min, max) = (Vec2::from(REGION_MIN) - 64, Vec2::from(REGION_MAX) + 64);
     let rows: Vec<Vec<u8>> = (min.y..max.y)
         .into_par_iter()
         .map(|y| {
