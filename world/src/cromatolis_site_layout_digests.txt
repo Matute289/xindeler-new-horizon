@@ -37,7 +37,7 @@ settlement:site.cutstone_city	b8cfa93a779404d2	86	55	Cutstone City
 settlement:site.cutwood_town	ebf82cc3ad574e0e	50	32	Cutwood Town
 settlement:site.dove_city	0eda20290ab052b2	71	42	Dove City
 settlement:site.dromos_city	ab20590df1b5af16	79	44	Dromos City
-settlement:site.duren	26efdaedc4a0a8e1	70	45	Duren
+settlement:site.duren	3845719976159a80	133	77	Duren
 settlement:site.el_ojo_de_luna	eccce4e2b5dfdb69	1	1	El Ojo de Luna
 settlement:site.elynshara	f836cb287b1e76d0	40	29	Elynshara
 settlement:site.evercross	1b033c8a109dd2f4	44	25	Evercross
@@ -50,19 +50,19 @@ settlement:site.garens_town	abfc45497f5a2df2	17	12	Garens Town
 settlement:site.giva	ab241005cacda12a	17	11	Giva
 settlement:site.gloomshear	63949cf2465ba327	17	9	Gloomshear
 settlement:site.green_post	6ad2626dc8b9b0d6	1	1	Green Post
-settlement:site.hita	5abf745d11b8403e	18	14	Hita
+settlement:site.hita	11bec7a8eee26d7c	69	40	Hita
 settlement:site.hita_post	f5af5d44231fa7e0	1	1	Hita Post
 settlement:site.inebel	0752c41fca3ffa88	91	45	Inebel
-settlement:site.itos_village	549b5c157df5de1a	15	10	Itos Village
-settlement:site.kalitos	85b51d80f7271803	42	24	Kalitos
+settlement:site.itos_village	486c1ce891b0abd0	42	23	Itos Village
+settlement:site.kalitos	9b8057df9c54be3d	19	10	Kalitos
 settlement:site.kalthis	684751b6d4892c45	116	55	Kalthis
 settlement:site.le_pont_dargent	458d2762fb69a3c9	1	1	Le Pont D'argent
 settlement:site.levannois_village	657627410f4d1766	20	11	Levannois Village
 settlement:site.levassi	cd9d41ff48ce202c	42	25	Levassi
 settlement:site.lighthill	0be8b9297563ef20	37	28	Lighthill
 settlement:site.maistra	227d8d4779f3009d	13	11	Maistra
-settlement:site.malicious_haven.alice.zha_lloig_rhaz	2a89eabcfcbcec9c	14	7	Zha’Lloig-Rhaz
-settlement:site.malicious_haven.elena.vhorr_azhal	5764c279ba79eef2	14	9	Vhôrr-Azhal
+settlement:site.malicious_haven.alice.zha_lloig_rhaz	7866eba7da311ae6	81	48	Zha’Lloig-Rhaz
+settlement:site.malicious_haven.elena.vhorr_azhal	d3651bc8b46da8c0	47	28	Vhôrr-Azhal
 settlement:site.malicious_haven.merid.gha_rrul_uth	aaf4a373f6a1dc5c	22	15	Gha’rrul-Uth
 settlement:site.malicious_haven.susy.thlug_nyarr	4c3e5340e1f8ccd2	13	7	Thlûg-Nyarr
 settlement:site.mazon_town	55c0bab28e75b910	45	24	Mazon Town
@@ -73,9 +73,9 @@ settlement:site.naville	2669a23fa51e8b4f	12	8	Naville
 settlement:site.neoland	93eadee113f6c29e	92	55	Neoland
 settlement:site.nugget_field_mines	e9681d2f57a0a9de	16	11	Nugget Field Mines
 settlement:site.ourez	283435a456db3148	40	32	Ourez
-settlement:site.portland	e31553fda7db72ff	46	24	Portland
-settlement:site.ravenfair	1b95e252583da8e3	16	13	Ravenfair
-settlement:site.rios_port	0cc706ae9af10ec5	42	24	Rios Port
+settlement:site.portland	5bb0bfc6f72764e3	75	41	Portland
+settlement:site.ravenfair	fb9b8c6390909334	46	28	Ravenfair
+settlement:site.rios_port	ef1ca8e13307d4e7	88	45	Rios Port
 settlement:site.rivermore_town	9309504a3a27503b	16	12	Rivermore Town
 settlement:site.rosemire	f9f874eb2111f547	16	11	Rosemire
 settlement:site.sutar_town	50a7310535b02fe3	39	23	Sutar Town

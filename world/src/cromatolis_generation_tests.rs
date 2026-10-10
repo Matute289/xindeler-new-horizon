@@ -1082,9 +1082,10 @@ const EXPECTED_NAVAL_PORTS: &[(&str, PortClass)] = &[
     ("site.mazon_town", PortClass::Pier),
     ("site.portland", PortClass::Pier),
     ("site.rios_port", PortClass::Pier),
+    // Hita is Town/Large since NH-167 T40 (was Village/Small = Jetty).
+    ("site.hita", PortClass::Pier),
     ("site.andiran", PortClass::Jetty),
     ("site.garens_town", PortClass::Jetty),
-    ("site.hita", PortClass::Jetty),
     ("site.timos", PortClass::Jetty),
 ];
 
@@ -1520,12 +1521,7 @@ const EXPECTED_BERTH_CLASS_OVERRIDES: &[(&str, &[BerthClass])] = &[
 /// The settlements whose `Jetty` berth is small enough that the hull-cap
 /// table (spec §4.4) depends on an anchorage existing for their routes to
 /// take a `Galleon` at all.
-const EXPECTED_JETTY_VILLAGES: &[&str] = &[
-    "site.andiran",
-    "site.garens_town",
-    "site.hita",
-    "site.timos",
-];
+const EXPECTED_JETTY_VILLAGES: &[&str] = &["site.andiran", "site.garens_town", "site.timos"];
 
 /// The villages whose waterfront is too shallow/narrow for any anchorage
 /// (spec §11.2, measured independently): their routes are expected to stay
@@ -1553,7 +1549,10 @@ const EXPECTED_JETTY_VILLAGES: &[&str] = &[
 /// already documented for its berth. All three are real, verified terrain
 /// limits -- not an artifact of the lane-berth fix, which only supplied the
 /// tender berth the search needs to run at all.
-const EXPECTED_ANCHORAGE_EXCEPTIONS: &[&str] = &["site.andiran", "site.hita", "site.timos"];
+///
+/// `site.hita` was the third exception until NH-167 T40 made it Town/Large: it
+/// is a `Pier` port now, outside this Jetty-village contract.
+const EXPECTED_ANCHORAGE_EXCEPTIONS: &[&str] = &["site.andiran", "site.timos"];
 
 /// **The berth contract, against the real authored region.**
 ///

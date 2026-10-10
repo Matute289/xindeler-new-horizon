@@ -338,9 +338,22 @@ pub(crate) const MIN_BUILDINGS_BY_SIZE: &[(&str, usize)] = &[
     ("minimal", 1),
 ];
 /// Settlement categories the bands apply to. Inns and posts are single
-/// structures and are never re-drawn.
+/// structures and are never re-drawn. `aldea` is banded by its own table
+/// ([`MIN_BUILDINGS_ALDEA_BY_SIZE`]).
 pub(crate) const SIZE_BANDED_CATEGORIES: &[&str] =
-    &["capital", "city", "town", "village", "hamlet"];
+    &["capital", "city", "town", "village", "aldea", "hamlet"];
+/// The band of an `aldea` of each authored size. An aldea is a Villa-sized
+/// settlement (its decided targets are 25 / 18 / 12 buildings), so it must
+/// not inherit the town-sized [`MIN_BUILDINGS_BY_SIZE`] floors (large 40):
+/// those sit above its target and would exhaust every re-draw.
+pub(crate) const MIN_BUILDINGS_ALDEA_BY_SIZE: &[(&str, usize)] = &[
+    // No aldea is that large (nor decided): same floor as `large`.
+    ("very_large", 20),
+    ("large", 20),
+    ("medium", 14),
+    ("small", 6),
+    ("minimal", 1),
+];
 /// Upper bound on re-draws per settlement, so a site whose terrain can't fit
 /// its band costs a bounded amount of generation time.
 pub(crate) const MAX_LAYOUT_RETRIES: u32 = 16;
@@ -350,10 +363,12 @@ pub(crate) fn min_buildings_for(category: &str, size: &str) -> Option<usize> {
     if !SIZE_BANDED_CATEGORIES.contains(&category) {
         return None;
     }
-    MIN_BUILDINGS_BY_SIZE
-        .iter()
-        .find(|(s, _)| *s == size)
-        .map(|(_, n)| *n)
+    let table = if category == "aldea" {
+        MIN_BUILDINGS_ALDEA_BY_SIZE
+    } else {
+        MIN_BUILDINGS_BY_SIZE
+    };
+    table.iter().find(|(s, _)| *s == size).map(|(_, n)| *n)
 }
 
 /// Plots that are buildings: everything but plazas, roads, farm fields and
@@ -454,6 +469,8 @@ mod tests {
             name: id.to_string(),
             category: AuthoredSettlementCategory::Town,
             size: AuthoredSettlementSize::Medium,
+            target_buildings: 100,
+            architectural_direction: None,
             population: AuthoredSettlementPopulation {
                 tag: AuthoredSettlementPopulationTag::Human,
                 peoples: vec![AuthoredSettlementPeople::Human],
@@ -597,6 +614,9 @@ mod tests {
         assert_eq!(min_buildings_for("capital", "very_large"), Some(45));
         assert_eq!(min_buildings_for("inn", "minimal"), None);
         assert_eq!(min_buildings_for("post", "minimal"), None);
+        assert_eq!(min_buildings_for("aldea", "large"), Some(20));
+        assert_eq!(min_buildings_for("aldea", "medium"), Some(14));
+        assert_eq!(min_buildings_for("aldea", "small"), Some(6));
         for &category in SIZE_BANDED_CATEGORIES {
             for size in ["very_large", "large", "medium", "small", "minimal"] {
                 assert!(min_buildings_for(category, size).is_some());
