@@ -33,9 +33,7 @@ pub fn wanted_population(world: &World, index: IndexRef) -> Population {
         // TODO: Stupid. Only find site towns
         .filter(|(_, site)| site.meta().is_some_and(|m| matches!(m, common::terrain::SiteKindMeta::Settlement(_))))
     {
-        // XINDELER: `population_plots` is the town's plot count, except for a
-        // settlement whose authored layout must not grow its population.
-        let town_pop = site.population_plots() as u32;
+        let town_pop = site.plots().len() as u32;
         let guards = town_pop / 4;
         let adventurers = town_pop / 5;
         let others = town_pop.saturating_sub(guards + adventurers);

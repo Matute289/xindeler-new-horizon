@@ -2668,8 +2668,7 @@ impl Civs {
                         // never reaches the world either: an authored
                         // settlement is renamed to its authored name right
                         // after this match (`authored_name`).
-                        let generate = |rng: &mut ChaChaRng,
-                                        layout: Option<&site::layout::SettlementLayout>| {
+                        let generate = |rng: &mut ChaChaRng| {
                             let mut meta = SitesGenMeta::new(seed);
                             let site = WorldSite::generate_city(
                                 &Land::from_sim(ctx.sim),
@@ -2684,37 +2683,20 @@ impl Civs {
                             );
                             (site, meta)
                         };
-                        let within_band = |first, layout| {
-                            seeds::keep_layout_within_band(
-                                first,
-                                seed_policy.layout_band(sim_site),
-                                |(site, _): &(WorldSite, SitesGenMeta)| seeds::building_count(site),
-                                || seeds::site_seed_key(sim_site),
-                                |attempt| {
-                                    generate(
-                                        &mut ChaChaRng::from_seed(
-                                            seed_policy.layout_retry_seed(sim_site, attempt),
-                                        ),
-                                        layout,
-                                    )
-                                },
-                            )
-                        };
-                        // XINDELER: a settlement with an authored layout
-                        // keeps the rtsim population of the layout it would
-                        // have generated without one (same seed, same
-                        // re-draws), so a larger authored town does not
-                        // bring more NPCs. Temporary: population is to be
-                        // decoupled from the town's plots properly.
-                        let population_plots = layout.map(|_| {
-                            let (reference, _) =
-                                within_band(generate(&mut rng.clone(), None), None);
-                            reference.plots().len()
-                        });
-                        let first = generate(&mut rng, layout);
-                        let (site, meta) = within_band(first, layout);
+                        let first = generate(&mut rng);
+                        let (site, meta) = seeds::keep_layout_within_band(
+                            first,
+                            seed_policy.layout_band(sim_site),
+                            |(site, _)| seeds::building_count(site),
+                            || seeds::site_seed_key(sim_site),
+                            |attempt| {
+                                generate(&mut ChaChaRng::from_seed(
+                                    seed_policy.layout_retry_seed(sim_site, attempt),
+                                ))
+                            },
+                        );
                         gen_meta.absorb(meta);
-                        site.with_population_plots(population_plots)
+                        site
                     },
                     SiteKind::GliderCourse => WorldSite::generate_glider_course(
                         &Land::from_sim(ctx.sim),
