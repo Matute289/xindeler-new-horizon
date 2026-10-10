@@ -16,21 +16,21 @@ fn parse_features(manifest: &str) -> BTreeMap<String, Vec<String>> {
     for raw in manifest.lines() {
         // Feature entries never contain '#', so cutting at '#' is safe.
         let line = raw.split('#').next().unwrap_or("").trim();
-        if current.is_none() {
-            if line.starts_with('[') {
-                in_features = line == "[features]";
-                continue;
-            }
-            if !in_features || line.is_empty() {
-                continue;
-            }
-            let (name, rest) = line
-                .split_once('=')
-                .unwrap_or_else(|| panic!("unexpected line in [features]: {raw:?}"));
-            current = Some((name.trim().trim_matches('"').to_string(), String::new()));
-            current.as_mut().unwrap().1.push_str(rest);
-        } else {
-            current.as_mut().unwrap().1.push_str(line);
+        match current.as_mut() {
+            Some((_, body)) => body.push_str(line),
+            None => {
+                if line.starts_with('[') {
+                    in_features = line == "[features]";
+                    continue;
+                }
+                if !in_features || line.is_empty() {
+                    continue;
+                }
+                let (name, rest) = line
+                    .split_once('=')
+                    .unwrap_or_else(|| panic!("unexpected line in [features]: {raw:?}"));
+                current = Some((name.trim().trim_matches('"').to_string(), rest.to_string()));
+            },
         }
         if let Some((_, body)) = &current
             && body.contains(']')
