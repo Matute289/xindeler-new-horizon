@@ -311,6 +311,10 @@ pub struct Site {
     /// kind" -- see `rtsim::data::Site::generate`'s `good_or_evil`
     /// classifier for the motivating case.
     pub is_authored_settlement: bool,
+    /// The settlement's authored rtsim NPC count (NH-171), when its data
+    /// sets one. `None` keeps rtsim's plot-count rule. Read by
+    /// `rtsim::generate::settlement_population`; generation never reads it.
+    pub npc_count: Option<u32>,
     /// The waterfront footprint claimed for this settlement's naval port, if
     /// one was placed: apron, deck, hinge, entrance tile and shore normal.
     ///
@@ -1098,6 +1102,12 @@ impl Site {
     /// needed even though `kind` is also set.
     pub fn with_authored_settlement(mut self, is_authored_settlement: bool) -> Self {
         self.is_authored_settlement = is_authored_settlement;
+        self
+    }
+
+    /// Sets the settlement's authored rtsim NPC count (see `npc_count`).
+    pub fn with_npc_count(mut self, npc_count: Option<u32>) -> Self {
+        self.npc_count = npc_count;
         self
     }
 
