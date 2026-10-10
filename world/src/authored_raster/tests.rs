@@ -2400,15 +2400,7 @@ fn map_colour_of_authored_dry_ground_below_sea_level_is_not_water() {
     );
     let index = IndexOwned::new(Index::new(0));
     let rgb = |chunk: Vec2<i32>, presented: bool| {
-        sample_pos_with(
-            &config,
-            &sim,
-            index.as_index_ref(),
-            None,
-            chunk,
-            presented,
-        )
-        .rgb
+        sample_pos_with(&config, &sim, index.as_index_ref(), None, chunk, presented).rgb
     };
     let is_water_colour = |c: Rgb<u8>| c.r == 0 && c.b > c.g / 2 && c.b >= 0x52;
     let chunk_of = |x: i32, y: i32| Vec2::new(x, y) / CHUNK;

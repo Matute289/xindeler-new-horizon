@@ -455,7 +455,10 @@ pub fn sample_pos_with(
     {
         CONFIG.ice_color
     } else {
-        match (colour_river_kind, (is_water, colour_true_alt >= true_sea_level)) {
+        match (
+            colour_river_kind,
+            (is_water, colour_true_alt >= true_sea_level),
+        ) {
             (_, (false, _)) | (None, (_, true)) | (Some(RiverKind::River { .. }), _) => {
                 let (r, g, b) = (
                     (column_rgb.r
@@ -492,8 +495,7 @@ pub fn sample_pos_with(
         .filter(|sample| sample.authored_cromatolis_v0)
         .filter(|_| {
             authored_map_post_processing_applies(colour_river_kind, colour_true_alt, true_sea_level)
-        })
-    {
+        }) {
         let altitude = ((sample.alt - CONFIG.sea_level) as f64 / 1050.0).clamp(0.0, 1.0);
         let vegetation = sample.tree_density.clamp(0.0, 1.0) as f64;
         let is_physical_water = authored_map_cell_is_physical_water(

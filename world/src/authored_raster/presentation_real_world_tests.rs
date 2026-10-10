@@ -165,3 +165,86 @@ fn lod_altitude_follows_the_ground_patch_at_the_sample_columns() {
     assert!(ring_err <= 1.0, "ring LOD sample error {ring_err} m > 1 m");
     assert_eq!(other_changed, 0);
 }
+
+/// The base water colours of the world map, shallow to deep.
+const WATER_RGB: [[u8; 3]; 7] = [
+    [0, 0xa8, 0xc9],
+    [0, 0x91, 0xbd],
+    [0, 0x78, 0xab],
+    [0, 0x61, 0x99],
+    [0, 0x4b, 0x82],
+    [0, 0x36, 0x6b],
+    [0, 0x22, 0x52],
+];
+
+fn map_rgb(msg: &WorldMapMsg, pos: Vec2<i32>) -> [u8; 3] {
+    let [r, g, b, _] = msg.rgba.get(pos).copied().unwrap().to_le_bytes();
+    [r, g, b]
+}
+
+/// The ground battery over the arena (an `Auto` half and a
+/// `sea_fill: AuthoredOnly` half, never a real settlement): the dry pit at
+/// -10 m and the dry depression at -1500 m are not coloured as water on the
+/// world map (the table-only map paints them as water), the lake whose
+/// surface is 20 m below sea level keeps its water colour, and no other chunk
+/// of the map changes colour, natural sea and the `Auto` region included.
+#[test]
+#[ignore]
+fn world_map_colours_dry_ground_below_sea_level_as_ground() {
+    let (mut world, index) = generate_world();
+    let index = index.as_index_ref();
+    world.sim.set_authored_rasters_for_test(Some(
+        load_specs(&super::ground_real_world_tests::ground_battery_specs()).unwrap(),
+    ));
+    let (new, old) = both_maps(&world, index);
+    let sim = world.sim();
+    let chunk = |x: i32, y: i32| Vec2::new(x, y) / TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+    let is_water = |rgb: [u8; 3]| WATER_RGB.contains(&rgb);
+
+    for (pos, what) in [
+        (chunk(23488, 24736), "dry pit -10 m"),
+        (chunk(23616, 24704), "dry depression -1500 m"),
+    ] {
+        let wpos = pos * TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+        let col = world
+            .sample_columns()
+            .get((wpos, index, None))
+            .expect("column on the map");
+        println!(
+            "{what}: column alt {:.1} m, map colour {:?} (table only {:?})",
+            col.alt - CONFIG.sea_level,
+            map_rgb(&new, pos),
+            map_rgb(&old, pos)
+        );
+        assert!(col.alt < CONFIG.sea_level, "{what} lies below sea level");
+        assert!(sim.chunk_is_authored_dry(pos), "{what} is authored dry");
+        assert!(
+            is_water(map_rgb(&old, pos)),
+            "{what}: the table paints water"
+        );
+        assert!(!is_water(map_rgb(&new, pos)), "{what}: still water colour");
+    }
+
+    let lake = chunk(23488, 24928);
+    println!("lake -20 m: map colour {:?}", map_rgb(&new, lake));
+    assert!(!sim.chunk_is_authored_dry(lake));
+    assert!(is_water(map_rgb(&new, lake)), "the lake keeps water colour");
+    assert_eq!(map_rgb(&new, lake), map_rgb(&old, lake));
+
+    let (mut changed, mut changed_not_dry, mut water) = (0, 0, 0);
+    for posi in 0..sim.map_size_lg().chunks_len() {
+        let pos = uniform_idx_as_vec2(sim.map_size_lg(), posi);
+        water += usize::from(is_water(map_rgb(&new, pos)));
+        if new.rgba.get(pos) != old.rgba.get(pos) {
+            changed += 1;
+            changed_not_dry += usize::from(!sim.chunk_is_authored_dry(pos));
+        }
+    }
+    println!(
+        "chunks recoloured: {changed} (not authored dry: {changed_not_dry}); water-coloured \
+         chunks: {water}"
+    );
+    assert!(changed >= 2, "the pit and the depression are recoloured");
+    assert_eq!(changed_not_dry, 0, "only authored dry chunks change colour");
+    assert!(water > 1000, "the natural sea keeps its water colour");
+}
