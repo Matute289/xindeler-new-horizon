@@ -231,6 +231,13 @@ impl IndexOwned {
         })
     }
 
+    /// The index itself, mutably, for a test that adds a site to an already
+    /// generated world. Panics if the index is shared.
+    #[cfg(test)]
+    pub(crate) fn index_mut_for_test(&mut self) -> &mut Index {
+        Arc::get_mut(&mut self.index).expect("the index is not shared in tests")
+    }
+
     pub fn as_index_ref(&self) -> IndexRef<'_> {
         IndexRef {
             colors: &self.colors,

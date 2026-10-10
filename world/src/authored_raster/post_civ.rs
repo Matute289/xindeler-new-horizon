@@ -90,6 +90,59 @@ fn columns(a: Aabr<i32>, b: Aabr<i32>) -> Vec<Vec2<i32>> {
         .collect()
 }
 
+/// The ground cells under one site's footprint.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SiteGroundCells {
+    /// Blend (ring) cells, by `(y, x)`.
+    pub ring: Vec<Vec2<i32>>,
+    /// Exact cells whose top block the sites' plot levelling moves (only
+    /// when the region levels sites), by `(y, x)`.
+    pub levelled_exact: Vec<Vec2<i32>>,
+}
+
+/// The ground cells of region `r` under `bounds` (a site's footprint): its
+/// ring cells, and the exact cells whose top block the plot levelling of the
+/// sites in their chunk moves -- the column sampler's own rule
+/// (`alt + (pref - alt) * factor`, `SpawnRules` of every site of the chunk).
+pub fn site_ground_cells(
+    world: &World,
+    index: IndexRef,
+    bounds: Aabr<i32>,
+    r: &RegionEntry,
+) -> SiteGroundCells {
+    let Some(rasters) = world.sim.authored_rasters.as_ref() else {
+        return SiteGroundCells::default();
+    };
+    let land = Land::from_sim(&world.sim);
+    let counted: Vec<(Vec2<i32>, bool)> = columns(bounds, r.bounds)
+        .par_iter()
+        .filter_map(|&wpos| {
+            let AuthoredCell::Ground { block, weight } = rasters.cell_at(wpos)? else {
+                return None;
+            };
+            if weight != GROUND_EXACT {
+                return Some((wpos, true));
+            }
+            if !r.site_levelling {
+                return None;
+            }
+            let chunk = world.sim.get_wpos(wpos)?;
+            let mut rules = SpawnRules::default();
+            for s in &chunk.sites {
+                index.sites[*s].spawn_rules(&mut rules, &land, wpos);
+            }
+            let (pref, factor) = rules.get_preferred_alt();
+            let alt = top_block_alt(block);
+            let levelled = alt + (pref - alt) * factor.clamped(0.0, 1.0);
+            (factor > 0.0 && levelled as i32 != alt as i32).then_some((wpos, false))
+        })
+        .collect();
+    SiteGroundCells {
+        ring: counted.iter().filter(|c| c.1).map(|c| c.0).collect(),
+        levelled_exact: counted.iter().filter(|c| !c.1).map(|c| c.0).collect(),
+    }
+}
+
 /// The site check (see the module doc). Ordered by site key, then region.
 pub fn site_patch_report(world: &World, index: IndexRef) -> SitePatchReport {
     let mut report = SitePatchReport::default();
@@ -100,7 +153,6 @@ pub fn site_patch_report(world: &World, index: IndexRef) -> SitePatchReport {
     if regions.is_empty() {
         return report;
     }
-    let land = Land::from_sim(&world.sim);
     let mut sites: Vec<(String, Aabr<i32>)> = world
         .civs
         .sites
@@ -127,46 +179,17 @@ pub fn site_patch_report(world: &World, index: IndexRef) -> SitePatchReport {
                 report.unlisted.push(near);
                 continue;
             }
-            let cols = columns(*bounds, r.bounds);
-            // Ring cells under the site, and exact cells its levelling moves.
-            let counted: Vec<(Vec2<i32>, bool, bool)> = cols
-                .par_iter()
-                .filter_map(|&wpos| {
-                    let AuthoredCell::Ground { block, weight } = rasters.cell_at(wpos)? else {
-                        return None;
-                    };
-                    if weight != GROUND_EXACT {
-                        return Some((wpos, true, false));
-                    }
-                    if !r.site_levelling {
-                        return None;
-                    }
-                    let chunk = world.sim.get_wpos(wpos)?;
-                    let mut rules = SpawnRules::default();
-                    for s in &chunk.sites {
-                        index.sites[*s].spawn_rules(&mut rules, &land, wpos);
-                    }
-                    let (pref, factor) = rules.get_preferred_alt();
-                    let alt = top_block_alt(block);
-                    let levelled = alt + (pref - alt) * factor.clamped(0.0, 1.0);
-                    (factor > 0.0 && levelled as i32 != alt as i32).then_some((wpos, false, true))
-                })
-                .collect();
-            let tally = |pick: fn(&(Vec2<i32>, bool, bool)) -> bool| {
-                let hits: Vec<Vec2<i32>> = counted.iter().filter(|c| pick(c)).map(|c| c.0).collect();
-                SiteOnPatch {
-                    cells: hits.len(),
-                    example: hits.first().copied(),
-                    ..near.clone()
-                }
+            let cells = site_ground_cells(world, index, *bounds, r);
+            let tally = |hits: &[Vec2<i32>]| SiteOnPatch {
+                cells: hits.len(),
+                example: hits.first().copied(),
+                ..near.clone()
             };
-            let ring = tally(|c| c.1);
-            if ring.cells > 0 {
-                report.ring_under_site.push(ring);
+            if !cells.ring.is_empty() {
+                report.ring_under_site.push(tally(&cells.ring));
             }
-            let moved = tally(|c| c.2);
-            if moved.cells > 0 {
-                report.levelled_exact.push(moved);
+            if !cells.levelled_exact.is_empty() {
+                report.levelled_exact.push(tally(&cells.levelled_exact));
             }
             report.listed.push(near);
         }
