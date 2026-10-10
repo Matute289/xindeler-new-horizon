@@ -1663,16 +1663,7 @@ impl Site {
                     _ => {
                         let buildings = || site.plots.values().filter(|plot| plot.is_building());
                         let count = buildings().count();
-                        // Stop at the settlement's total too (buildings in
-                        // its wards; barns in the field ring and the naval
-                        // port do not count): a ward that cannot reach its
-                        // own quota must not keep the lottery running until
-                        // the others overshoot theirs.
-                        let per_ward =
-                            footprint.buildings_per_ward(buildings().map(|plot| plot.root_tile));
-                        if per_ward.iter().sum::<usize>() >= footprint.target_buildings()
-                            || footprint.quota_met(buildings().map(|plot| plot.root_tile))
-                        {
+                        if footprint.quota_done(buildings().map(|plot| plot.root_tile)) {
                             break;
                         }
                         quota_progress = match quota_progress {

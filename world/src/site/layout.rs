@@ -538,12 +538,19 @@ impl Footprint {
         counts
     }
 
-    /// Whether every ward has reached its building target.
-    pub(crate) fn quota_met(&self, building_roots: impl Iterator<Item = Vec2<i32>>) -> bool {
-        self.buildings_per_ward(building_roots)
-            .iter()
-            .zip(&self.ward_targets)
-            .all(|(count, target)| count >= target)
+    /// Whether the quota fill may stop: every ward has reached its
+    /// building target, or the wards together hold the settlement's total
+    /// (buildings outside every ward, such as barns in the field ring or the
+    /// naval port, do not count). The total stop matters when a ward cannot
+    /// reach its own target: without it the lottery runs on until the other
+    /// wards overshoot theirs.
+    pub(crate) fn quota_done(&self, building_roots: impl Iterator<Item = Vec2<i32>>) -> bool {
+        let per_ward = self.buildings_per_ward(building_roots);
+        per_ward.iter().sum::<usize>() >= self.target_buildings()
+            || per_ward
+                .iter()
+                .zip(&self.ward_targets)
+                .all(|(count, target)| count >= target)
     }
 
     pub fn target_buildings(&self) -> usize { self.ward_targets.iter().sum() }
@@ -724,9 +731,57 @@ mod tests {
         let fp = Footprint::new(&layout(WaterSide::Right), Vec2::new(1000, 1000));
         let inner = std::iter::repeat_n(Vec2::new(2, 2), 7);
         let outer = std::iter::repeat_n(Vec2::new(12, 2), 3);
-        assert!(fp.quota_met(inner.clone().chain(outer.clone())));
-        assert!(!fp.quota_met(inner.clone().chain(outer.clone().take(2))));
+        assert!(fp.quota_done(inner.clone().chain(outer.clone())));
+        assert!(!fp.quota_done(inner.clone().chain(outer.clone().take(2))));
         // Buildings outside every ward count for none.
-        assert!(!fp.quota_met(inner.chain(std::iter::repeat_n(Vec2::new(-5, -5), 9))));
+        assert!(!fp.quota_done(inner.chain(std::iter::repeat_n(Vec2::new(-5, -5), 9))));
+    }
+
+    #[test]
+    fn quota_stops_at_the_total_before_every_ward_is_met() {
+        let fp = Footprint::new(&layout(WaterSide::Right), Vec2::new(1000, 1000));
+        // The outer ward (target 3) never gets a building, but the inner one
+        // holds the settlement's whole target of 10: the fill stops anyway.
+        let inner = std::iter::repeat_n(Vec2::new(2, 2), 10);
+        assert_eq!(fp.buildings_per_ward(inner.clone()), vec![10, 0]);
+        assert!(fp.quota_done(inner));
+        // One short of the total, with a ward short too: it goes on.
+        assert!(!fp.quota_done(std::iter::repeat_n(Vec2::new(2, 2), 9)));
+    }
+
+    /// The obstacle pass covers the radius it is given: with an empty
+    /// `Land` every column reads as water, so a tile is a hazard exactly
+    /// where the pass looked.
+    #[test]
+    fn demarcate_obstacles_within_reaches_past_the_ordinary_radius() {
+        use crate::{Land, site::tile::TileKind};
+        let hazard =
+            |site: &Site, t: Vec2<i32>| matches!(site.tiles.get(t).kind, TileKind::Hazard(_));
+        let far = Vec2::new(140, 0);
+        let mut ordinary = Site::default();
+        ordinary.demarcate_obstacles(&Land::empty());
+        assert!(hazard(&ordinary, Vec2::new(90, 0)));
+        assert!(!hazard(&ordinary, far));
+
+        let mut wide = Site::default();
+        wide.demarcate_obstacles_within(&Land::empty(), 150);
+        assert!(hazard(&wide, far));
+        assert!(hazard(&wide, Vec2::new(-148, 147)));
+    }
+
+    #[test]
+    fn a_large_layout_keeps_its_anchor_in_its_own_domain() {
+        let mut l = layout(WaterSide::Right);
+        let origin = Vec2::new(1000, 1000);
+        // A ward out to 900 blocks along the bank, the anchor at 800: past
+        // the minimum domain (94 tiles = 564 blocks) but inside this one.
+        l.wards[1].b = (60.0, 900.0);
+        l.anchor = Vec2::new(-30.0, 800.0);
+        assert!(l.anchor_tile(origin).x > MIN_FOOTPRINT_DOMAIN_TILES);
+        assert!(l.anchor_in_domain(origin));
+        // Past the maximum domain the anchor is out, however large the ward.
+        l.wards[1].b = (60.0, 1.0e6);
+        l.anchor = Vec2::new(-30.0, 1500.0);
+        assert!(!l.anchor_in_domain(origin));
     }
 }
