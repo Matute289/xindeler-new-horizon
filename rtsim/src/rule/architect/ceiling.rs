@@ -157,6 +157,7 @@ mod tests {
             time_of_day: TimeOfDay(10.0 * MIN_SPAWN_DELAY),
             should_purge: false,
             authored_rasters_digest: None,
+            authored_region_digests: Default::default(),
             airship_sim: Default::default(),
         };
         for i in 0..npcs {
