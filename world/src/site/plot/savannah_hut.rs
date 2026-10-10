@@ -38,7 +38,7 @@ impl SavannahHut {
             bounds,
             door_tile: door_tile_pos,
             alt: alt.unwrap_or_else(|| {
-                land.get_alt_approx(site.tile_center_wpos(door_tile + door_dir)) as i32
+                land.ground_alt_at(site.tile_center_wpos(door_tile + door_dir)) as i32
             }) + 2,
         }
     }

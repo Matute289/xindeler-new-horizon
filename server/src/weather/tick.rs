@@ -163,6 +163,8 @@ impl<'a> System<'a> for Sys {
             let wpos = cell_pos.map(|e| {
                 (e as f32 + rng.random_range(0.0..1.0)) * common::weather::CELL_SIZE as f32
             });
+            // XINDELER: the chunk table by design (a cosmetic strike
+            // point), not the authored ground (`WorldSim::ground_alt_at`).
             outcome_emitter.emit(Outcome::Lightning {
                 pos: wpos.with_z(world.sim().get_alt_approx(wpos.as_()).unwrap_or(0.0)),
             });

@@ -503,7 +503,7 @@ pub fn apply_caverns_to<R: Rng>(canvas: &mut Canvas, dynamic_rng: &mut R) {
 
     // Get cavern attributes at a position
     let cavern_at = |wpos2d| {
-        let alt = info.land().get_alt_approx_table(wpos2d);
+        let alt = info.land().get_alt_approx(wpos2d);
 
         // Range of heights for the caverns
         let height_range = 16.0..250.0;

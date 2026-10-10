@@ -958,6 +958,9 @@ pub const NO_POSITION_FILES: &[&str] = &[
     "cromatolis_v0_interior_places.ron",
     "cromatolis_v0_map_ecology.ron",
     "cromatolis_v0_procedural_layers.ron",
+    // Ward rectangles in each settlement's own frame; the settlements
+    // themselves are positioned (and guarded) through `cromatolis_v0_sites.ron`.
+    "cromatolis_v0_settlement_layouts.ron",
     "cromatolis_v0_tree_candidate_policy.ron",
 ];
 

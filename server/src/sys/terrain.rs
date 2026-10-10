@@ -354,7 +354,7 @@ impl<'a> System<'a> for Sys {
             .world
             .sim()
             .authored_rasters()
-            .is_some_and(|r| r.region_entries().any(|e| e.has_ground));
+            .is_some_and(|r| r.has_ground_layer());
         let repositioned = (&data.entities, &mut data.positions, (&mut data.forced_updates).maybe(), &data.reposition_entities)
             // TODO: Consider using par_bridge() because Rayon has very poor work splitting for
             // sparse joins.
@@ -367,42 +367,28 @@ impl<'a> System<'a> for Sys {
                 // from having just logged in), reposition them.
                 let chunk_pos = TerrainGrid::chunk_key(entity_pos);
                 let chunk = data.terrain.get_key(chunk_pos)?;
-                // XINDELER: spawn-fix for a position buried by an authored
-                // ground patch: search from the new surface (both branches),
-                // never from inside the ground (a cave below would win, or
-                // the ground would be out of the search's reach).
+                // XINDELER: the search (and the spawn-fix for a position
+                // buried by an authored ground patch) lives in
+                // `reposition_target`, so it can be tested without an ECS.
                 #[cfg(feature = "worldgen")]
-                let entity_pos = if ground_layer {
-                    let solid = common::vol::ReadVol::get(&*data.terrain, entity_pos)
-                        .is_ok_and(|b| b.is_solid());
-                    match data.world.sim().buried_ground_lift(entity_pos, solid) {
-                        Some(z) => {
-                            tracing::info!(
-                                ?entity_pos,
-                                to_z = z,
-                                "Repositioning an entity buried by an authored ground patch: \
-                                 searching from the new surface"
-                            );
-                            entity_pos.with_z(z)
-                        },
-                        None => entity_pos,
-                    }
-                } else {
-                    entity_pos
-                };
-                let new_pos = if reposition.needs_ground {
-                    // XINDELER: on a world with authored water, a position
-                    // saved on old land can now be inside an authored
-                    // channel; stand on the nearest dry ground instead of
-                    // the bed. Other worlds keep the plain search.
-                    if avoid_liquid {
-                        data.terrain.try_find_dry_ground(entity_pos, DRY_GROUND_SEARCH_RADIUS)
+                let lift = |feet: Vec3<i32>, solid: bool| {
+                    if ground_layer {
+                        data.world.sim().buried_ground_lift(feet, solid)
                     } else {
-                        data.terrain.try_find_ground(entity_pos)
+                        None
                     }
-                } else {
-                    data.terrain.try_find_space(entity_pos)
-                }.map(|x| x.as_::<f32>()).unwrap_or_else(|| chunk.find_accessible_pos(entity_pos.xy(), false));
+                };
+                #[cfg(not(feature = "worldgen"))]
+                let lift = |_: Vec3<i32>, _: bool| None;
+                let new_pos = reposition_target(
+                    &data.terrain,
+                    entity_pos,
+                    reposition.needs_ground,
+                    avoid_liquid,
+                    lift,
+                )
+                .map(|x| x.as_::<f32>())
+                .unwrap_or_else(|| chunk.find_accessible_pos(entity_pos.xy(), false));
                 pos.0 = new_pos;
                 force_update.map(|force_update| force_update.update());
                 Some((entity, new_pos, reposition.modify_waypoints))
@@ -981,6 +967,49 @@ pub fn chunk_in_vd(player_chunk_pos: Vec2<i16>, player_vd_sqr: i32, chunk_pos: V
     adjusted_dist_sqr <= player_vd_sqr
 }
 
+/// XINDELER: where a repositioned entity (a login, a respawn) lands: the
+/// ground search (`needs_ground`, liquid-aware when `avoid_liquid`) or the
+/// free-space search from `entity_pos`. On a world with an authored ground
+/// layer `lift(feet, solid)` is `WorldSim::buried_ground_lift`: a position a
+/// patch has buried (feet inside solid terrain in a ground-cell column) is
+/// searched from one block above the authored ground instead, never from
+/// inside the ground, where a cave below would win or the surface would be
+/// beyond the search's reach. `None` when the search finds nothing (the
+/// caller falls back to the chunk's accessible position).
+pub(crate) fn reposition_target(
+    terrain: &TerrainGrid,
+    entity_pos: Vec3<i32>,
+    needs_ground: bool,
+    avoid_liquid: bool,
+    lift: impl Fn(Vec3<i32>, bool) -> Option<i32>,
+) -> Option<Vec3<i32>> {
+    let solid = common::vol::ReadVol::get(terrain, entity_pos).is_ok_and(|b| b.is_solid());
+    let start = match lift(entity_pos, solid) {
+        Some(z) => {
+            tracing::info!(
+                ?entity_pos,
+                to_z = z,
+                "Repositioning an entity buried by an authored ground patch: searching from the \
+                 new surface"
+            );
+            entity_pos.with_z(z)
+        },
+        None => entity_pos,
+    };
+    if needs_ground {
+        // XINDELER: on a world with authored water, a position saved on old
+        // land can now be inside an authored channel; stand on the nearest
+        // dry ground instead of the bed. Other worlds keep the plain search.
+        if avoid_liquid {
+            terrain.try_find_dry_ground(start, DRY_GROUND_SEARCH_RADIUS)
+        } else {
+            terrain.try_find_ground(start)
+        }
+    } else {
+        terrain.try_find_space(start)
+    }
+}
+
 #[cfg(test)]
 mod creature_kind_override_tests {
     use super::*;
@@ -1124,5 +1153,76 @@ mod banishment_suppression_tests {
             Some(CreatureKind::Celestial)
         ));
         assert!(!take_suppression(&mut suppressed, None));
+    }
+}
+
+#[cfg(test)]
+mod reposition_tests {
+    use super::*;
+    use common::{
+        terrain::{Block, BlockKind, MapSizeLg, SpriteKind, TerrainChunk, TerrainChunkMeta},
+        vol::WriteVol,
+    };
+    use std::sync::Arc;
+
+    /// One chunk: stone up to z = 100 (top block 100), with a cave (air) at
+    /// z in 10..14 under every column.
+    fn grid() -> TerrainGrid {
+        let air = Block::air(SpriteKind::Empty);
+        let stone = Block::new(BlockKind::Rock, Rgb::zero());
+        let mut chunk = TerrainChunk::new(0, stone, air, TerrainChunkMeta::void());
+        for y in 0..32 {
+            for x in 0..32 {
+                for z in 0..130 {
+                    let b = if (10..14).contains(&z) || z > 100 {
+                        air
+                    } else {
+                        stone
+                    };
+                    let _ = chunk.set(Vec3::new(x, y, z), b);
+                }
+            }
+        }
+        let mut grid = TerrainGrid::new(
+            MapSizeLg::new(Vec2::new(5, 5)).unwrap(),
+            Arc::new(chunk.clone()),
+        )
+        .unwrap();
+        grid.insert(Vec2::zero(), Arc::new(chunk));
+        grid
+    }
+
+    /// A position saved at z = 20, before a patch raised the ground to block
+    /// 100: the plain search finds the cave under it; with the lift (what
+    /// `WorldSim::buried_ground_lift` returns on a ground cell) both branches
+    /// search from the new surface. The lift only ever sees the real
+    /// solidity of the feet.
+    #[test]
+    fn a_buried_position_is_searched_from_the_lifted_surface() {
+        let g = grid();
+        let feet = Vec3::new(5, 5, 20);
+        let none = |_: Vec3<i32>, _: bool| None;
+        assert_eq!(
+            reposition_target(&g, feet, true, false, none),
+            Some(Vec3::new(5, 5, 10)),
+            "without the lift the nearest ground is the cave floor"
+        );
+        let lift = |p: Vec3<i32>, solid: bool| solid.then_some(101).filter(|z| *z > p.z);
+        for avoid_liquid in [false, true] {
+            assert_eq!(
+                reposition_target(&g, feet, true, avoid_liquid, lift),
+                Some(Vec3::new(5, 5, 101))
+            );
+        }
+        assert_eq!(
+            reposition_target(&g, feet, false, false, lift),
+            Some(Vec3::new(5, 5, 101))
+        );
+        // Feet in free space (inside the cave): not lifted, they stay.
+        let in_cave = Vec3::new(5, 5, 11);
+        assert_eq!(
+            reposition_target(&g, in_cave, true, false, lift),
+            Some(Vec3::new(5, 5, 10))
+        );
     }
 }

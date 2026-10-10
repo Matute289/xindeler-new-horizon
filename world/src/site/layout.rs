@@ -586,6 +586,16 @@ impl Footprint {
             .all(|(count, target)| count >= target)
     }
 
+    /// Whether the quota fill may stop: every ward has reached its
+    /// building target, or the wards together hold the settlement's total
+    /// (buildings outside every ward, such as barns in the field ring or the
+    /// naval port, do not count). The total stop matters when a ward cannot
+    /// reach its own target: without it the lottery runs on until the other
+    /// wards overshoot theirs.
+    pub(crate) fn quota_done(&self) -> bool {
+        self.buildings_in_wards() >= self.target_buildings() || self.quota_met()
+    }
+
     pub fn target_buildings(&self) -> usize { self.ward_targets.iter().sum() }
 }
 
@@ -790,5 +800,58 @@ mod tests {
         fp.stop_steering();
         assert!(!fp.steering());
         assert!(!fp.ward_full(inner));
+    }
+
+    #[test]
+    fn quota_stops_at_the_total_before_every_ward_is_met() {
+        let mut fp = Footprint::new(&layout(WaterSide::Right), Vec2::new(1000, 1000));
+        // The outer ward (target 3) never gets a building, but the inner one
+        // ends up holding the settlement's whole target of 10 (steering off,
+        // as after a stall): the fill stops anyway.
+        fp.stop_steering();
+        for _ in 0..9 {
+            fp.note_building(Vec2::new(2, 2));
+        }
+        // One short of the total, with a ward short too: it goes on.
+        assert!(!fp.quota_done());
+        fp.note_building(Vec2::new(2, 2));
+        assert!(!fp.quota_met());
+        assert!(fp.quota_done());
+    }
+
+    /// The obstacle pass covers the radius it is given: with an empty
+    /// `Land` every column reads as water, so a tile is a hazard exactly
+    /// where the pass looked.
+    #[test]
+    fn demarcate_obstacles_within_reaches_past_the_ordinary_radius() {
+        use crate::{Land, site::tile::TileKind};
+        let hazard =
+            |site: &Site, t: Vec2<i32>| matches!(site.tiles.get(t).kind, TileKind::Hazard(_));
+        let far = Vec2::new(140, 0);
+        let mut ordinary = Site::default();
+        ordinary.demarcate_obstacles(&Land::empty());
+        assert!(hazard(&ordinary, Vec2::new(90, 0)));
+        assert!(!hazard(&ordinary, far));
+
+        let mut wide = Site::default();
+        wide.demarcate_obstacles_within(&Land::empty(), 150);
+        assert!(hazard(&wide, far));
+        assert!(hazard(&wide, Vec2::new(-148, 147)));
+    }
+
+    #[test]
+    fn a_large_layout_keeps_its_anchor_in_its_own_domain() {
+        let mut l = layout(WaterSide::Right);
+        let origin = Vec2::new(1000, 1000);
+        // A ward out to 900 blocks along the bank, the anchor at 800: past
+        // the minimum domain (94 tiles = 564 blocks) but inside this one.
+        l.wards[1].b = (60.0, 900.0);
+        l.anchor = Vec2::new(-30.0, 800.0);
+        assert!(l.anchor_tile(origin).x > MIN_FOOTPRINT_DOMAIN_TILES);
+        assert!(l.anchor_in_domain(origin));
+        // Past the maximum domain the anchor is out, however large the ward.
+        l.wards[1].b = (60.0, 1.0e6);
+        l.anchor = Vec2::new(-30.0, 1500.0);
+        assert!(!l.anchor_in_domain(origin));
     }
 }
