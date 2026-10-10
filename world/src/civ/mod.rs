@@ -4949,6 +4949,8 @@ impl SiteKind {
                 false
             }
         };
+        // XINDELER: the chunk table by design: civ places sites on the
+        // natural map, never on the authored ground layer.
         let on_flat_terrain = || -> bool {
             sim.get_gradient_approx(loc)
                 .map(|grad| grad < 1.0)

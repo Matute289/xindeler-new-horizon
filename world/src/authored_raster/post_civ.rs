@@ -8,7 +8,11 @@
 //!   reviewed act that re-blesses its layout digest); a listed site must not
 //!   stand on ring cells (the authored-aware ground query only approximates
 //!   them); and every exact ground column a listed site's plot levelling moves
-//!   is counted (reported, not refused: houses level their lots).
+//!   is counted (reported, not refused: houses level their lots) and handed
+//!   to the ground queries ([`SitePatchReport::levelled_columns`], applied by
+//!   `WorldSim::set_site_levelling`), so
+//!   `WorldSim::ground_alt_at` there answers the levelled height the column
+//!   renders, not the patch under it.
 //! * **Voids** ([`void_exposure`]): an authored void (cave, interior) whose
 //!   authored top comes within [`VOID_EXPOSURE_TOLERANCE_BLOCKS`] of the ground
 //!   over it is exposed by the patch; more such columns than the region allows
@@ -25,6 +29,15 @@
 //! Each check enumerates its columns once, samples them in parallel and
 //! sorts the result, so its output does not depend on the thread count.
 //! Without a manifest, or without a ground layer, nothing runs.
+//!
+//! What the engine does **not** check: whether NPCs can reach and walk the
+//! patch. The road report above only logs; reachability (a flood fill over
+//! the rendered blocks) and climbability belong to the offline terrain
+//! verifier, which gates a patch before it ships. Loaded NPCs path over the
+//! real blocks, so they climb what the patch builds; rtsim's long-range
+//! movement and civ's routes use the chunk table and site data, not the
+//! authored ground, so an authored cliff across a civ road is a content
+//! fix (a ramp in the patch, or an authored route), not an engine one.
 
 use super::{
     AuthoredCell, LoadError, ROAD_CLIMB_LIMIT_BLOCKS, RegionEntry, SITE_PATCH_MARGIN_M,
@@ -54,7 +67,7 @@ pub struct SiteOnPatch {
 }
 
 /// What [`site_patch_report`] found.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SitePatchReport {
     /// Listed sites near their region's ground.
     pub listed: Vec<SiteOnPatch>,
@@ -65,6 +78,10 @@ pub struct SitePatchReport {
     /// Listed sites whose plot levelling moves exact ground columns
     /// (reported).
     pub levelled_exact: Vec<SiteOnPatch>,
+    /// Every exact ground column the listed sites' levelling moves, with the
+    /// levelled altitude the column sampler renders there, by site then
+    /// `(y, x)`.
+    pub levelled_columns: Vec<(Vec2<i32>, f32)>,
     /// `(region, key)` listings that name no site near the region (stale
     /// pins): reported.
     pub stale_listings: Vec<(String, String)>,
@@ -92,13 +109,13 @@ fn columns(a: Aabr<i32>, b: Aabr<i32>) -> Vec<Vec2<i32>> {
 }
 
 /// The ground cells under one site's footprint.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SiteGroundCells {
     /// Blend (ring) cells, by `(y, x)`.
     pub ring: Vec<Vec2<i32>>,
     /// Exact cells whose top block the sites' plot levelling moves (only
-    /// when the region levels sites), by `(y, x)`.
-    pub levelled_exact: Vec<Vec2<i32>>,
+    /// when the region levels sites), with the levelled altitude, by `(y, x)`.
+    pub levelled_exact: Vec<(Vec2<i32>, f32)>,
 }
 
 /// The ground cells of region `r` under `bounds` (a site's footprint): its
@@ -115,14 +132,15 @@ pub fn site_ground_cells(
         return SiteGroundCells::default();
     };
     let land = Land::from_sim(&world.sim);
-    let counted: Vec<(Vec2<i32>, bool)> = columns(bounds, r.bounds)
+    // `(column, levelled altitude)`; `None` for a ring cell.
+    let counted: Vec<(Vec2<i32>, Option<f32>)> = columns(bounds, r.bounds)
         .par_iter()
         .filter_map(|&wpos| {
             let AuthoredCell::Ground { block, weight } = rasters.cell_at(wpos)? else {
                 return None;
             };
             if weight != GROUND_EXACT {
-                return Some((wpos, true));
+                return Some((wpos, None));
             }
             if !r.site_levelling {
                 return None;
@@ -135,13 +153,17 @@ pub fn site_ground_cells(
             let (pref, factor) = rules.get_preferred_alt();
             let alt = top_block_alt(block);
             let levelled = alt + (pref - alt) * factor.clamped(0.0, 1.0);
-            (factor > 0.0 && levelled as i32 != alt as i32).then_some((wpos, false))
+            (factor > 0.0 && levelled as i32 != alt as i32).then_some((wpos, Some(levelled)))
         })
         .collect();
-    SiteGroundCells {
-        ring: counted.iter().filter(|c| c.1).map(|c| c.0).collect(),
-        levelled_exact: counted.iter().filter(|c| !c.1).map(|c| c.0).collect(),
+    let mut cells = SiteGroundCells::default();
+    for (p, levelled) in counted {
+        match levelled {
+            None => cells.ring.push(p),
+            Some(alt) => cells.levelled_exact.push((p, alt)),
+        }
     }
+    cells
 }
 
 /// The site check (see the module doc). Ordered by site key, then region.
@@ -193,7 +215,9 @@ pub fn site_patch_report(world: &World, index: IndexRef) -> SitePatchReport {
                 report.ring_under_site.push(tally(&cells.ring));
             }
             if !cells.levelled_exact.is_empty() {
-                report.levelled_exact.push(tally(&cells.levelled_exact));
+                let moved: Vec<Vec2<i32>> = cells.levelled_exact.iter().map(|c| c.0).collect();
+                report.levelled_exact.push(tally(&moved));
+                report.levelled_columns.extend(cells.levelled_exact);
             }
             report.listed.push(near);
         }
@@ -389,7 +413,7 @@ pub fn road_cliffs(world: &World) -> RoadCliffReport {
 }
 
 /// Everything the post-civ ground checks found.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct GroundConsumerReport {
     pub sites: SitePatchReport,
     pub voids: Vec<RegionVoidExposure>,
@@ -409,7 +433,7 @@ pub(crate) fn check_ground_consumers(
         .sim
         .authored_rasters
         .as_ref()
-        .is_some_and(|r| r.region_entries().any(|e| e.has_ground));
+        .is_some_and(|r| r.has_ground_layer());
     if !has_ground {
         return Ok(GroundConsumerReport::default());
     }

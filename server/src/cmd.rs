@@ -5976,6 +5976,8 @@ fn handle_debug_column(
         let chunk_pos = wpos.wpos_to_cpos();
         let chunk = sim.get(chunk_pos)?;
         let col = sampler.get((wpos, server.index.as_index_ref(), Some(calendar)))?;
+        // XINDELER: the chunk table's gradient by design (debug output next
+        // to the sampled column), not `WorldSim::ground_gradient_at`.
         let gradient = sim.get_gradient_approx(chunk_pos)?;
         let downhill = chunk.downhill;
         let river = &chunk.river;

@@ -1013,6 +1013,46 @@ fn ground_col(cell: AuthoredCell, sea_fill: SeaFill) -> AuthoredColumn {
     }
 }
 
+/// Which authored columns hold water over their ground (what rtsim spawns
+/// and its water pass treat as water for land bodies).
+#[test]
+fn flooded_columns_are_wet_cells_and_sea_filled_dry_cells() {
+    let wet = AuthoredCell::Wet {
+        surface_block: 145,
+        bed_block: 140,
+    };
+    let pit = AuthoredCell::Ground {
+        block: SEA_TOP_BLOCK - 10,
+        weight: GROUND_EXACT,
+    };
+    let ring_pit = AuthoredCell::Ground {
+        block: SEA_TOP_BLOCK - 1,
+        weight: 100,
+    };
+    let at_sea_top = AuthoredCell::Ground {
+        block: SEA_TOP_BLOCK,
+        weight: GROUND_EXACT,
+    };
+    let low_bank = AuthoredCell::Bank {
+        bed_block: SEA_TOP_BLOCK - 3,
+    };
+    for (cell, auto, authored_only) in [
+        (wet, true, true),
+        (pit, true, false),
+        (ring_pit, true, false),
+        (at_sea_top, false, false),
+        (low_bank, true, false),
+        (AuthoredCell::None, false, false),
+    ] {
+        assert_eq!(ground_col(cell, SeaFill::Auto).is_flooded(), auto, "{cell:?} Auto");
+        assert_eq!(
+            ground_col(cell, SeaFill::AuthoredOnly).is_flooded(),
+            authored_only,
+            "{cell:?} AuthoredOnly"
+        );
+    }
+}
+
 #[test]
 fn ground_cells_are_read_exactly() {
     let built = build_region(&plateau_spec()).unwrap();
@@ -1451,6 +1491,55 @@ fn new_manifest_fields_at_their_defaults_do_not_change_the_digest() {
     let t = ron::ser::to_string(&own).unwrap();
     assert!(t.contains("sea_fill:AuthoredOnly"), "{t}");
     assert_eq!(ron::from_str::<Manifest>(&t).unwrap(), own);
+}
+
+/// Pins the digest of one fixed region (see the digest contract on
+/// [`RegionManifest`]): a field added to the manifest without
+/// `skip_serializing_if` at its default, or any change to how a region
+/// serialises, changes it -- and with it the digest of every deployed
+/// region, so persistence would refuse to start and the rtsim water pass
+/// would re-run. Update the constant only together with a release note.
+#[test]
+fn region_digest_is_pinned() {
+    let rm = RegionManifest {
+        id: "pinned".into(),
+        min: (1024, 1024),
+        max: (1536, 1280),
+        feather_m: 32,
+        tile_size_m: 256,
+        cell_size_m: 1,
+        layers: vec![LayerKind::Water, LayerKind::Ground],
+        tiles: vec![
+            TileManifest {
+                layer: LayerKind::Water,
+                tx: 0,
+                ty: 0,
+                sha256: "ab".repeat(32),
+            },
+            TileManifest {
+                layer: LayerKind::Ground,
+                tx: 1,
+                ty: 0,
+                sha256: "cd".repeat(32),
+            },
+        ],
+        suppress_procedural_in_water: true,
+        exclude_procedural_margin_m: 4,
+        allow_partial: false,
+        allow_partial_chunks: vec![(33, 33)],
+        aquatic_ecology_profile: None,
+        consistency: ConsistencyBudget::default(),
+        sea_fill: SeaFill::Auto,
+        sites_on_patch: vec![],
+        site_levelling: true,
+        max_exposed_void_columns: 0,
+    };
+    assert_eq!(
+        region_digest(&rm).unwrap(),
+        "PLACEHOLDER",
+        "{}",
+        ron::ser::to_string(&rm).unwrap()
+    );
 }
 
 #[test]
@@ -1956,6 +2045,14 @@ fn buried_positions_are_lifted_to_the_authored_ground() {
     // The ground and surface queries on the exact cell, with no clamp.
     assert_eq!(sim.ground_alt_at(p(0).xy()), Some(250.5));
     assert_eq!(sim.surface_alt_at(p(0).xy()), 251.0);
+    // A listed site's plot levelling lowers this column to 247.1: the
+    // queries and the lift follow the levelled top; its neighbour does not
+    // move.
+    sim.set_site_levelling([(Vec2::new(1150, 1150), 247.1)]);
+    assert_eq!(sim.ground_alt_at(p(0).xy()), Some(247.1));
+    assert_eq!(sim.surface_alt_at(p(0).xy()), 248.0);
+    assert_eq!(sim.buried_ground_lift(p(240), true), Some(248));
+    assert_eq!(sim.ground_alt_at(Vec2::new(1151, 1150)), Some(250.5));
 }
 
 /// The layering rule of the ground queries (see the `Land` doc), per

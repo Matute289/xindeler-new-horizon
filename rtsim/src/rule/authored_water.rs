@@ -5,9 +5,12 @@
 //! new revision of one. NPCs saved before that may then stand inside an
 //! authored channel, lake or bank wall. At startup (the last step of the
 //! `Migrate` rule), when the manifest digest stored in the save differs from
-//! the world's, every land NPC standing in an authored wet column (or on a
-//! bank lip within 2 m of authored water) is moved to the nearest dry column,
-//! at its ground height. Left alone:
+//! the world's, every land NPC standing in an authored wet column, in a pit
+//! of authored ground the sea fills (a dry authored cell of a
+//! `SeaFill::Auto` region below the sea's top, see
+//! `AuthoredColumn::is_flooded`), or on a bank lip within 2 m of authored
+//! water, is moved to the nearest dry column, at its ground height. Left
+//! alone:
 //!
 //! * water-bound and amphibious bodies ([`stays_in_water`]: fish, crustaceans,
 //!   boats, crocodiles, sahagin, kappa, kelpies, frogs, seals...) and airborne
@@ -31,9 +34,14 @@ use crate::data::{
 use common::comp::{
     self, Body, biped_large, biped_small, quadruped_low, quadruped_medium, quadruped_small,
 };
+use std::collections::BTreeMap;
 use tracing::{info, warn};
 use vek::*;
-use world::{IndexRef, World, authored_raster::AuthoredCell, site::plot::PlotKind};
+use world::{
+    IndexRef, World,
+    authored_raster::{AuthoredCell, SEA_TOP_BLOCK},
+    site::plot::PlotKind,
+};
 
 /// How far (m) to look for dry ground around an NPC standing in water.
 pub const SEARCH_RADIUS_M: i32 = 64;
@@ -138,6 +146,23 @@ pub fn safe_ground(
     Err(())
 }
 
+/// The authored cell as a standing NPC sees it: a dry authored cell the sea
+/// floods (`flooded`, see `AuthoredColumn::is_flooded`) is water up to the
+/// sea's top block, so [`safe_ground`] moves land NPCs off it.
+pub fn standing_cell(cell: AuthoredCell, flooded: bool) -> AuthoredCell {
+    match cell {
+        AuthoredCell::Bank { bed_block } | AuthoredCell::Ground { block: bed_block, .. }
+            if flooded =>
+        {
+            AuthoredCell::Wet {
+                surface_block: SEA_TOP_BLOCK,
+                bed_block,
+            }
+        },
+        cell => cell,
+    }
+}
+
 /// Whether `wpos` lies on a bridge or naval-port plot (piers, decks,
 /// causeways), where standing above water is intended.
 fn on_water_structure(index: IndexRef, wpos: Vec2<i32>) -> bool {
@@ -163,38 +188,75 @@ fn on_water_structure(index: IndexRef, wpos: Vec2<i32>) -> bool {
 /// record the current digests (removed regions are pruned). A save that only
 /// knew the manifest digest is migrated without a report when that digest is
 /// unchanged. Returns the count logged.
+///
+/// Must run **before** [`resolve_npcs`], which records the current manifest
+/// digest: run after it, every save without per-region digests would look
+/// migrated and a changed region would go unreported.
 pub fn note_ground_region_changes(
     actors: &Actors,
     stored_manifest: Option<&str>,
-    stored_regions: &mut std::collections::BTreeMap<String, String>,
+    stored_regions: &mut BTreeMap<String, String>,
     world: &World,
 ) -> usize {
     let Some(rasters) = world.sim().authored_rasters() else {
+        return ground_region_changes(actors, stored_manifest, stored_regions, None, &|_| false);
+    };
+    let regions: Vec<(&str, &str, Aabr<i32>)> = rasters
+        .region_entries()
+        .map(|r| (r.id, r.digest, r.bounds))
+        .collect();
+    ground_region_changes(
+        actors,
+        stored_manifest,
+        stored_regions,
+        Some((rasters.digest(), &regions)),
+        &|p| matches!(rasters.cell_at(p), Some(AuthoredCell::Ground { .. })),
+    )
+}
+
+/// [`note_ground_region_changes`] with the world abstracted, for tests:
+/// `current` is the manifest digest and every region's `(id, digest, box)`
+/// (`None` for a world without authored rasters: the record is cleared), and
+/// `on_ground(p)` whether `p` is a ground-layer cell.
+pub fn ground_region_changes(
+    actors: &Actors,
+    stored_manifest: Option<&str>,
+    stored_regions: &mut BTreeMap<String, String>,
+    current: Option<(&str, &[(&str, &str, Aabr<i32>)])>,
+    on_ground: &dyn Fn(Vec2<i32>) -> bool,
+) -> usize {
+    let Some((manifest, regions)) = current else {
         stored_regions.clear();
         return 0;
     };
-    let migrated = stored_regions.is_empty() && stored_manifest == Some(rasters.digest());
-    let changed: Vec<world::authored_raster::RegionEntry> = rasters
-        .region_entries()
-        .filter(|r| !migrated && stored_regions.get(r.id).map(String::as_str) != Some(r.digest))
+    let migrated = stored_regions.is_empty() && stored_manifest == Some(manifest);
+    let changed: Vec<&(&str, &str, Aabr<i32>)> = regions
+        .iter()
+        .filter(|(id, digest, _)| {
+            !migrated && stored_regions.get(*id).map(String::as_str) != Some(*digest)
+        })
         .collect();
-    let on_ground = |p: Vec2<i32>| {
-        changed.iter().any(|r| r.bounds.contains_point(p))
-            && matches!(rasters.cell_at(p), Some(AuthoredCell::Ground { .. }))
-    };
     let count = actors
         .values()
-        .filter(|a| matches!(a.kind, ActorKind::Npc(_)) && on_ground(a.wpos.xy().as_()))
+        .filter(|a| {
+            let p = a.wpos.xy().as_();
+            matches!(a.kind, ActorKind::Npc(_))
+                && changed.iter().any(|r| r.2.contains_point(p))
+                && on_ground(p)
+        })
         .count();
     if !changed.is_empty() {
         info!(
-            regions = ?changed.iter().map(|r| r.id).collect::<Vec<_>>(),
+            regions = ?changed.iter().map(|r| r.0).collect::<Vec<_>>(),
             npcs_on_ground_cells = count,
             "Authored regions changed since this rtsim save; NPCs on their ground layer follow the \
              patch through the per-tick surface snap"
         );
     }
-    *stored_regions = rasters.region_digests();
+    *stored_regions = regions
+        .iter()
+        .map(|(id, digest, _)| (id.to_string(), digest.to_string()))
+        .collect();
     count
 }
 
@@ -272,7 +334,10 @@ pub fn resolve_npcs(
     let out = if current.is_some() {
         resolve_with(
             actors,
-            &|p| sim.authored_column_at(p).map(|c| (c.cell, c.water_dist)),
+            &|p| {
+                sim.authored_column_at(p)
+                    .map(|c| (standing_cell(c.cell, c.is_flooded()), c.water_dist))
+            },
             &|p| sim.surface_alt_at(p) - 1.0,
             &|p| on_water_structure(index, p),
         )
@@ -412,6 +477,114 @@ mod tests {
         assert_eq!(actors[mount].wpos, Vec3::new(21.5, 7.5, 202.0));
         // The rider moved by the mount's offset, not on its own.
         assert_eq!(actors[rider].wpos, Vec3::new(21.5, 7.5, 204.0));
+    }
+
+    /// A pit of authored ground the sea fills is water for a land NPC: it is
+    /// moved to the nearest dry column; the same cell above the sea's top is
+    /// dry ground and it stays.
+    #[test]
+    fn npcs_in_a_sea_filled_pit_move_to_dry_ground() {
+        // Ground cells at x in 0..100; a pit (block 129) at x in 10..20.
+        let pit = |flooded: bool| {
+            move |p: Vec2<i32>| -> Option<(AuthoredCell, Option<f32>)> {
+                (0..100).contains(&p.x).then(|| {
+                    let cell = if (10..20).contains(&p.x) {
+                        AuthoredCell::Ground {
+                            block: 129,
+                            weight: 255,
+                        }
+                    } else {
+                        AuthoredCell::Ground {
+                            block: 145,
+                            weight: 255,
+                        }
+                    };
+                    let flooded = flooded && (10..20).contains(&p.x);
+                    (standing_cell(cell, flooded), None)
+                })
+            }
+        };
+        let ground = |_: Vec2<i32>| 145.0;
+        assert_eq!(
+            safe_ground(Vec3::new(12.5, 5.5, 130.0), &pit(true), &ground),
+            Ok(Some(Vec3::new(9.5, 5.5, 146.0)))
+        );
+        assert_eq!(
+            safe_ground(Vec3::new(12.5, 5.5, 130.0), &pit(false), &ground),
+            Ok(None)
+        );
+        // Unflooded cells pass through unchanged.
+        let bank = AuthoredCell::Bank { bed_block: 150 };
+        assert_eq!(standing_cell(bank, false), bank);
+        assert_eq!(
+            standing_cell(AuthoredCell::Bank { bed_block: 120 }, true),
+            AuthoredCell::Wet {
+                surface_block: SEA_TOP_BLOCK,
+                bed_block: 120
+            }
+        );
+    }
+
+    fn region_box(x0: i32, x1: i32) -> Aabr<i32> {
+        Aabr {
+            min: Vec2::new(x0, 0),
+            max: Vec2::new(x1, 100),
+        }
+    }
+
+    /// The per-region digest record: a migrated save (no region digests, the
+    /// manifest digest unchanged) reports nothing; a changed region counts
+    /// the NPCs on its ground cells (not those in an unchanged region, nor
+    /// off the ground layer); removed regions are pruned; a world without
+    /// rasters clears the record.
+    #[test]
+    fn ground_region_changes_migrate_count_and_prune() {
+        let human = || Body::Humanoid(humanoid::Body::random());
+        let mut actors = Actors::default();
+        actors.create_actor(npc(human(), Vec3::new(10.5, 5.5, 150.0)));
+        actors.create_actor(npc(human(), Vec3::new(20.5, 5.5, 150.0)));
+        actors.create_actor(npc(human(), Vec3::new(60.5, 5.5, 150.0)));
+        // Ground cells everywhere but x in 15..25.
+        let on_ground = |p: Vec2<i32>| !(15..25).contains(&p.x);
+        let v1 = [("a", "a1", region_box(0, 50)), ("b", "b1", region_box(50, 100))];
+        let mut stored = BTreeMap::new();
+        // Migration: the old single digest equals the manifest's.
+        let n = ground_region_changes(&actors, Some("m1"), &mut stored, Some(("m1", &v1)), &on_ground);
+        assert_eq!(n, 0);
+        assert_eq!(stored.get("a").map(String::as_str), Some("a1"));
+        // The same with a changed manifest digest: every region is new.
+        let mut fresh = BTreeMap::new();
+        let n = ground_region_changes(&actors, Some("m0"), &mut fresh, Some(("m1", &v1)), &on_ground);
+        assert_eq!(n, 2, "the NPCs at x 10 and 60 stand on ground cells");
+        // Region a changes, b does not: one NPC on a's ground (x 20 is not).
+        let v2 = [("a", "a2", region_box(0, 50)), ("b", "b1", region_box(50, 100))];
+        let n = ground_region_changes(&actors, Some("m1"), &mut stored, Some(("m2", &v2)), &on_ground);
+        assert_eq!(n, 1);
+        assert_eq!(stored.get("a").map(String::as_str), Some("a2"));
+        // Region b removed: pruned; nothing changed, nothing counted.
+        let v3 = [("a", "a2", region_box(0, 50))];
+        let n = ground_region_changes(&actors, Some("m2"), &mut stored, Some(("m3", &v3)), &on_ground);
+        assert_eq!(n, 0);
+        assert_eq!(stored.len(), 1);
+        // No rasters: the record is cleared.
+        let n = ground_region_changes(&actors, Some("m3"), &mut stored, None, &on_ground);
+        assert_eq!(n, 0);
+        assert!(stored.is_empty());
+    }
+
+    /// `note_ground_region_changes` reads the manifest digest the save last
+    /// saw, which `resolve_npcs` overwrites: the startup migration must call
+    /// it first.
+    #[test]
+    fn the_region_note_runs_before_the_water_pass() {
+        let src = include_str!("migrate.rs");
+        let note = src
+            .find("authored_water::note_ground_region_changes(")
+            .expect("the migration notes ground region changes");
+        let resolve = src
+            .find("authored_water::resolve_npcs(")
+            .expect("the migration runs the water pass");
+        assert!(note < resolve, "note_ground_region_changes must run before resolve_npcs");
     }
 
     #[test]

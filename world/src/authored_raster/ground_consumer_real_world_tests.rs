@@ -451,7 +451,7 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
             let shift = cells
                 .levelled_exact
                 .par_iter()
-                .map(|p| (sampled_alt(&world, index_ref, *p) as i32 - block).abs())
+                .map(|(p, _)| (sampled_alt(&world, index_ref, *p) as i32 - block).abs())
                 .max()
                 .unwrap_or(0);
             println!("{id}: levelling moves exact columns by at most {shift} block(s)");
@@ -460,6 +460,25 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
                 "levelling on a flat moves a lot by {shift} blocks"
             );
         }
+        // Once the levelled columns are recorded (as world generation does
+        // after the post-civ check), the ground query answers the top block
+        // the column renders on every column levelling moved.
+        world
+            .sim
+            .set_site_levelling(cells.levelled_exact.iter().copied());
+        let off = cells
+            .levelled_exact
+            .par_iter()
+            .filter(|(p, _)| {
+                world.sim.ground_alt_at(*p).map(|a| a as i32)
+                    != Some(sampled_alt(&world, index_ref, *p) as i32)
+            })
+            .count();
+        println!(
+            "{id}: ground_alt_at off the rendered top on {off} of {} levelled column(s)",
+            cells.levelled_exact.len()
+        );
+        assert_eq!(off, 0, "{id}: the ground query ignores plot levelling");
     }
 }
 
