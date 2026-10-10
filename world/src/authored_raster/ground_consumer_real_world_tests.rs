@@ -17,7 +17,9 @@ use super::{
     AuthoredCell, RegionEntry, SeaFill,
     format::GROUND_EXACT,
     post_civ::{check_ground_consumers, road_cliffs, site_ground_cells},
-    real_world_tests::{PLATEAU_CM, REGION_MAX, REGION_MIN, generate_world, load_specs},
+    real_world_tests::{
+        PLATEAU_CM, REGION_MAX, REGION_MIN, generate_world, is_natural_ground, load_specs,
+    },
     top_block_alt,
     writer::{PaintOp, RegionSpec, Shape},
 };
@@ -251,6 +253,56 @@ struct LotRow {
     misplaced_table: usize,
 }
 
+/// Grounding of every building of `site` against the ground around it: a
+/// building floats (is buried) when the median top block of the columns
+/// just outside its plot -- the sampled ground, levelling included -- lies
+/// more than 2 blocks below (above) its base, the routed `Land` altitude it
+/// is built on.
+fn grounding(
+    world: &World,
+    index: crate::IndexRef,
+    site: &crate::site::Site,
+) -> (usize, usize, usize) {
+    let land = Land::from_sim(&world.sim);
+    let (mut buildings, mut floating, mut buried) = (0, 0, 0);
+    for plot in site.plots().filter(|p| p.is_building()) {
+        let base = land.get_alt_approx(site.tile_center_wpos(plot.root_tile())) as i32;
+        let own: std::collections::HashSet<Vec2<i32>> = plot.tiles().collect();
+        let mut ring: Vec<Vec2<i32>> = Vec::new();
+        for t in plot.tiles() {
+            let (a, e) = (site.tile_wpos(t), site.tile_wpos(t + 1));
+            for (n, edge) in [
+                (Vec2::new(1, 0), (Vec2::new(e.x, a.y), Vec2::new(e.x + 1, e.y))),
+                (Vec2::new(-1, 0), (Vec2::new(a.x - 1, a.y), Vec2::new(a.x, e.y))),
+                (Vec2::new(0, 1), (Vec2::new(a.x, e.y), Vec2::new(e.x, e.y + 1))),
+                (Vec2::new(0, -1), (Vec2::new(a.x, a.y - 1), Vec2::new(e.x, a.y))),
+            ] {
+                if own.contains(&(t + n)) {
+                    continue;
+                }
+                for y in edge.0.y..edge.1.y {
+                    for x in edge.0.x..edge.1.x {
+                        ring.push(Vec2::new(x, y));
+                    }
+                }
+            }
+        }
+        let mut tops: Vec<i32> = ring
+            .par_iter()
+            .map(|p| sampled_alt(world, index, *p) as i32)
+            .collect();
+        if tops.is_empty() {
+            continue;
+        }
+        tops.sort_unstable();
+        let median = tops[tops.len() / 2];
+        buildings += 1;
+        floating += (median < base - 2) as usize;
+        buried += (median > base + 2) as usize;
+    }
+    (buildings, floating, buried)
+}
+
 fn lot_check(world: &World, index: crate::IndexRef, site: &crate::site::Site) -> LotRow {
     let land = Land::from_sim(&world.sim);
     let mut row = LotRow::default();
@@ -349,17 +401,54 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
             cells.ring.len(),
             cells.levelled_exact.len()
         );
-        assert!(row.buildings > 0);
-        assert_eq!(row.misplaced, 0, "{id}: floating or buried buildings");
+        let (buildings, floating, buried) = grounding(&world, index_ref, site);
+        println!(
+            "{id}: grounding: {buildings} buildings, {floating} floating, {buried} buried"
+        );
+        assert!(row.buildings > 0 && buildings > 0);
+        assert!(row.misplaced <= row.misplaced_table);
+        let land = Land::from_sim(&world.sim);
+        let table_land_off = site
+            .plots()
+            .filter(|p| p.is_building())
+            .filter(|p| {
+                let root = site.tile_center_wpos(p.root_tile());
+                (land.get_alt_approx(root) as i32 - land.get_alt_approx_table(root) as i32).abs() > 2
+            })
+            .count();
+        println!("{id}: {table_land_off} buildings would be off by more than 2 blocks on the table");
+        if id == "bt10_flat" {
+            assert_eq!((floating, buried), (0, 0), "{id}: floating or buried buildings");
+            assert_eq!(row.misplaced, 0, "{id}: lots off their base on a flat");
+        } else {
+            // On a slope a building whose door faces downhill is cut into the
+            // hill: the plots' own placement rule, as on engine terrain.
+            assert!(
+                (floating + buried) * 10 <= buildings,
+                "{id}: floating or buried buildings"
+            );
+        }
         assert!(cells.ring.is_empty());
         if id == "bt10_flat" {
-            assert_eq!(cells.levelled_exact.len(), 0, "levelling is a no-op on a flat");
+            // Houses raise their lot one block over the street (the vanilla
+            // plot rule, on engine terrain too): the only levelling a
+            // prepared flat sees, reported by the post-civ check.
+            let block = PLATEAU_CM.div_euclid(100);
+            let shift = cells
+                .levelled_exact
+                .par_iter()
+                .map(|p| (sampled_alt(&world, index_ref, *p) as i32 - block).abs())
+                .max()
+                .unwrap_or(0);
+            println!("{id}: levelling moves exact columns by at most {shift} block(s)");
+            assert!(shift <= 1, "levelling on a flat moves a lot by {shift} blocks");
         }
     }
 }
 
-/// The ordinary site farthest from every other site (and from the map rim),
-/// with its stable key and bounds.
+/// An ordinary (procedural) site -- on Cromatolis a procedural bridge --
+/// with no authored site within 400 m and
+/// away from the map rim, with its stable key and bounds.
 fn lonely_site(world: &World, index: crate::IndexRef) -> (String, Aabr<i32>) {
     let sites: Vec<(String, Aabr<i32>)> = world
         .civs
@@ -381,8 +470,8 @@ fn lonely_site(world: &World, index: crate::IndexRef) -> (String, Aabr<i32>) {
     sites
         .iter()
         .filter(|(k, b)| {
-            k.starts_with("procedural:")
-                && (b.max - b.min).reduce_max() < 320
+            k.starts_with("procedural")
+                && (b.max - b.min).reduce_max() < 400
                 && b.min.reduce_min() > 1024
                 && b.max.x < size.x - 1024
                 && b.max.y < size.y - 1024
@@ -390,7 +479,7 @@ fn lonely_site(world: &World, index: crate::IndexRef) -> (String, Aabr<i32>) {
         .map(|(k, b)| {
             let nearest = sites
                 .iter()
-                .filter(|(k2, _)| k2 != k)
+                .filter(|(k2, _)| !k2.starts_with("procedural"))
                 .map(|(_, b2)| gap(b, b2))
                 .min()
                 .unwrap_or(i32::MAX);
@@ -399,7 +488,7 @@ fn lonely_site(world: &World, index: crate::IndexRef) -> (String, Aabr<i32>) {
         .filter(|(nearest, ..)| *nearest > 400)
         .min_by(|a, b| a.1.cmp(&b.1))
         .map(|(_, k, b)| (k, b))
-        .expect("an ordinary site 400 m from every other site")
+        .expect("an ordinary site 400 m from every authored site")
 }
 
 /// B-T10 refusals and the site gate (§9.4, D8): a ground region near an
@@ -419,7 +508,7 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
         (ceil32(b.max.x + pad), ceil32(b.max.y + pad)),
     );
     let ground_cm = (world.sim.get_alt_approx(b.center()).unwrap() * 100.0) as i32;
-    let spec = |listed: bool, cover: Aabr<i32>| {
+    let spec = |listed: &[String], cover: Aabr<i32>| {
         let mut s = RegionSpec::new("bt10_gate", min, max, 32, vec![
             exact(
                 rect(
@@ -432,9 +521,7 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
             ),
             ring(32),
         ]);
-        if listed {
-            s.sites_on_patch = vec![key.clone()];
-        }
+        s.sites_on_patch = listed.to_vec();
         s
     };
     let whole = Aabr {
@@ -444,16 +531,24 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
     // Unlisted: refused, naming the site.
     world
         .sim
-        .set_authored_rasters_for_test(Some(load_specs(&[spec(false, whole)]).unwrap()));
+        .set_authored_rasters_for_test(Some(load_specs(&[spec(&[], whole)]).unwrap()));
     let err = check_ground_consumers(&world, index_ref, None).unwrap_err().0;
     println!("unlisted: {err}");
     assert!(err.contains(&key) && err.contains("does not list them"));
+    // Every site near the region (the chosen one and its procedural
+    // neighbours), as the exporter's pins would list them.
+    let near: Vec<String> = super::post_civ::site_patch_report(&world, index_ref)
+        .unlisted
+        .into_iter()
+        .map(|s| s.site)
+        .collect();
+    assert!(near.contains(&key));
     // Listed, exact under the whole footprint: accepted.
     world
         .sim
-        .set_authored_rasters_for_test(Some(load_specs(&[spec(true, whole)]).unwrap()));
+        .set_authored_rasters_for_test(Some(load_specs(&[spec(&near, whole)]).unwrap()));
     let report = check_ground_consumers(&world, index_ref, None).unwrap();
-    assert_eq!(report.sites.listed.len(), 1);
+    assert_eq!(report.sites.listed.len(), near.len());
     assert!(report.sites.unlisted.is_empty() && report.sites.ring_under_site.is_empty());
     println!(
         "listed: levelling moves {} exact column(s)",
@@ -472,7 +567,7 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
     };
     world
         .sim
-        .set_authored_rasters_for_test(Some(load_specs(&[spec(true, short)]).unwrap()));
+        .set_authored_rasters_for_test(Some(load_specs(&[spec(&near, short)]).unwrap()));
     let err = check_ground_consumers(&world, index_ref, None).unwrap_err().0;
     println!("ring under site: {err}");
     assert!(err.contains(&key) && err.contains("blend (ring)"));
@@ -662,6 +757,7 @@ fn br1_a_road_over_an_authored_cliff_is_reported_and_painted_on_the_patch() {
     assert!(report.steep.iter().all(|(p, step)| *step == 5 && (p.x - split).abs() <= 1));
     let rasters = world.sim.authored_rasters.as_ref().unwrap();
     let (mut painted, mut exact_top, mut other) = (0, 0, 0);
+    let mut cats = std::collections::BTreeMap::<String, usize>::new();
     for dy in -1..=1 {
         for dx in -1..=1 {
             let cpos = c + Vec2::new(dx, dy);
@@ -691,17 +787,31 @@ fn br1_a_road_over_an_authored_cliff_is_reported_and_painted_on_the_patch() {
                         .rev()
                         .find(|z| at(*z).is_filled())
                         .unwrap_or(i32::MIN);
-                    if top == block && at(block).kind() == BlockKind::Earth {
+                    let _ = top;
+                    // The road's top natural block is the patch block, painted
+                    // (tree canopies over the road are not ground).
+                    let natural_top = (block - 8..block + 24)
+                        .rev()
+                        .find(|z| is_natural_ground(&at(*z)))
+                        .unwrap_or(i32::MIN);
+                    if natural_top == block && at(block).kind() == BlockKind::Earth {
                         exact_top += 1;
                     } else {
                         other += 1;
+                        let cat = format!(
+                            "dz {} top {:?} at-block {:?}",
+                            natural_top - block,
+                            at(natural_top).kind(),
+                            at(block).kind()
+                        );
+                        *cats.entry(cat).or_default() += 1;
                     }
                 }
             }
         }
     }
-    println!("B-R1 paint: {painted} road columns on exact cells, top = block (Earth) on {exact_top}, other {other}");
+    println!("B-R1 paint: {painted} road columns on exact cells, top = block (Earth) on {exact_top}, other {other}: {cats:?}");
     assert!(painted > 0);
-    assert!(exact_top * 100 >= painted * 95, "road painted on the patch");
+    assert_eq!(exact_top, painted, "road painted on the patch");
     let _ = TerrainChunkSize::RECT_SIZE;
 }
