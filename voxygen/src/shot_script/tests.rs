@@ -65,7 +65,9 @@ fn every_step_kind_parses() {
 
 #[test]
 fn unknown_step_is_rejected_with_line() {
-    let e = err(&script("        Time(\"noon\"),\n        RunCommand(\"/kill\"),"));
+    let e = err(&script(
+        "        Time(\"noon\"),\n        RunCommand(\"/kill\"),",
+    ));
     assert_eq!(e.file, "test.ron");
     assert_eq!(e.line, Some(6), "{e}");
     assert!(e.to_string().starts_with("test.ron:6:"), "{e}");
@@ -86,23 +88,33 @@ fn bad_numbers_are_rejected() {
     let e = err(&script("WaitSeconds(\"five\")"));
     assert!(e.line.is_some(), "{e}");
     // Negative into an unsigned field.
-    let e = err(&script("CromatolisTeleport(px: -1, py: 2, z_above_ground: 2.0)"));
+    let e = err(&script(
+        "CromatolisTeleport(px: -1, py: 2, z_above_ground: 2.0)",
+    ));
     assert!(e.line.is_some(), "{e}");
     // Parsed but out of range: validation names step and line.
-    let e = err(&script("        Time(\"noon\"),\n        WaitSeconds(0.0),"));
+    let e = err(&script(
+        "        Time(\"noon\"),\n        WaitSeconds(0.0),",
+    ));
     assert_eq!(e.line, Some(6), "{e}");
     assert!(e.message.starts_with("step 2 (WaitSeconds)"), "{e}");
     let e = err(&script("Teleport(wpos: (1.0, inf, 3.0))"));
     assert!(e.message.contains("wpos.y"), "{e}");
-    let e = err(&script("Camera(yaw_deg: 0.0, pitch_deg: 91.0, distance: 1.0)"));
+    let e = err(&script(
+        "Camera(yaw_deg: 0.0, pitch_deg: 91.0, distance: 1.0)",
+    ));
     assert!(e.message.contains("pitch_deg"), "{e}");
-    let e = err(&script("Camera(yaw_deg: 0.0, pitch_deg: 0.0, distance: -1.0)"));
+    let e = err(&script(
+        "Camera(yaw_deg: 0.0, pitch_deg: 0.0, distance: -1.0)",
+    ));
     assert!(e.message.contains("distance"), "{e}");
     let e = err(&script("WaitForTerrain(radius_chunks: 0)"));
     assert!(e.message.contains("radius_chunks"), "{e}");
     let e = err(&script("Time(\"noon\")").replace("(1920, 1080)", "(0, 1080)"));
     assert!(e.message.contains("window"), "{e}");
-    let e = err(&script("Time(\"noon\")").replace("terrain_timeout_s: 180.0", "terrain_timeout_s: -1.0"));
+    let e =
+        err(&script("Time(\"noon\")")
+            .replace("terrain_timeout_s: 180.0", "terrain_timeout_s: -1.0"));
     assert!(e.message.contains("terrain_timeout_s"), "{e}");
 }
 
@@ -199,7 +211,9 @@ fn feature_is_in_no_default_set() {
         .next()
         .unwrap();
     assert!(
-        features.lines().any(|l| l.trim_start().starts_with("shot-script =")),
+        features
+            .lines()
+            .any(|l| l.trim_start().starts_with("shot-script =")),
         "shot-script feature must exist"
     );
     for set in ["default", "default-publish"] {

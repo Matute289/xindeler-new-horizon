@@ -32,5 +32,4 @@ pub fn load_from_env() -> Option<Result<ShotScript, ScriptError>> {
     script_path_from_env().map(|path| ShotScript::load(&path))
 }
 
-#[cfg(test)]
-mod tests;
+#[cfg(test)] mod tests;

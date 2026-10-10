@@ -191,7 +191,9 @@ impl ShotScript {
             return Err(top("defaults.view_distance must be at least 1".into()));
         }
         if d.terrain_radius_chunks == 0 {
-            return Err(top("defaults.terrain_radius_chunks must be at least 1".into()));
+            return Err(top(
+                "defaults.terrain_radius_chunks must be at least 1".into()
+            ));
         }
         positive("defaults.terrain_timeout_s", d.terrain_timeout_s).map_err(top)?;
         if self.steps.is_empty() {
@@ -317,7 +319,9 @@ pub fn check_name(what: &str, name: &str) -> Result<(), String> {
         return Err(format!("{what} must not be empty"));
     }
     if name.len() > MAX_NAME_LEN {
-        return Err(format!("{what} {name:?} is longer than {MAX_NAME_LEN} bytes"));
+        return Err(format!(
+            "{what} {name:?} is longer than {MAX_NAME_LEN} bytes"
+        ));
     }
     if name.contains('\0') {
         return Err(format!("{what} {name:?} contains a NUL byte"));
