@@ -2358,6 +2358,7 @@ fn validate_region(
     Ok((bounds, natural_seams))
 }
 
+#[cfg(test)] mod ground_consumer_real_world_tests;
 #[cfg(test)] mod ground_real_world_tests;
 #[cfg(test)] mod ground_seam_real_world_tests;
 #[cfg(test)] mod real_world_tests;
