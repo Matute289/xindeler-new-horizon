@@ -249,7 +249,7 @@ pub fn ensure_evercross_guard(state: &mut State, world: &World) -> bool {
     let pos = Vec3::new(
         anchor.x as f32,
         anchor.y as f32,
-        land.get_alt_approx(anchor) + 1.0,
+        land.ground_alt_at(anchor) + 1.0,
     );
 
     let Some(home_chunk) = terrain_home_chunk(state, pos) else {
@@ -622,7 +622,7 @@ mod tests {
         let pos = Vec3::new(
             anchor.x as f32,
             anchor.y as f32,
-            land.get_alt_approx(anchor) + 1.0,
+            land.ground_alt_at(anchor) + 1.0,
         );
 
         let mut state = setup();

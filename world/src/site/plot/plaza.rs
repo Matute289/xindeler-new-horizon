@@ -121,10 +121,10 @@ impl Plaza {
             .collect();
 
         let any_water = center.water() || corner_meta.values().any(|c| c.water());
-        let alt = land.get_alt_approx(aabr.center()) as i32;
+        let alt = land.ground_alt_at(aabr.center()) as i32;
 
         let hard_alt = if any_water {
-            Some((land.get_alt_approx(aabr.center()) as i32).max(center.water_alt + 1))
+            Some((land.ground_alt_at(aabr.center()) as i32).max(center.water_alt + 1))
         } else {
             None
         };
@@ -138,7 +138,7 @@ impl Plaza {
 
         let min_size = aabr.size().reduce_min();
         // For now only generate plaza structures in woodland villages
-        let decoration = if land.get_gradient_approx(aabr.center()) < 1.5
+        let decoration = if land.ground_gradient_at(aabr.center()) < 1.5
             && min_size >= TILE_SIZE as i32 * 5
             && matches!(site.kind, Some(SiteKind::Refactor))
         {
@@ -256,7 +256,7 @@ impl Plaza {
                                 side.scale(size * 10) + facing.scale(rng.random_range(1..4))
                             };
                             let is_even = aabr_corners(stand_aabr)
-                                .map(|p| land.get_alt_approx(p) as i32)
+                                .map(|p| land.ground_alt_at(p) as i32)
                                 .iter()
                                 .all_equal();
                             (is_even
@@ -268,7 +268,7 @@ impl Plaza {
                                 aabr: stand_aabr,
                                 facing,
                                 alt: hard_alt.unwrap_or_else(|| {
-                                    land.get_alt_approx(stand_aabr.center()) as i32
+                                    land.ground_alt_at(stand_aabr.center()) as i32
                                 }),
                                 roof_color: *roof_colors
                                     .choose(rng)
@@ -501,7 +501,7 @@ impl Structure for Plaza {
                 } => {
                     let aabr = shrink_aabr(self.aabr, 6);
                     let center = aabr.center();
-                    let alt = land.get_alt_approx(center) as i32;
+                    let alt = land.ground_alt_at(center) as i32;
 
                     painter
                         .aabb(aabr_with_z(aabr, alt..alt + 2))
@@ -551,7 +551,7 @@ impl Structure for Plaza {
                 } => {
                     let roof_fill = Fill::Brick(BlockKind::Wood, roof_color, 8);
                     let height = 5;
-                    let alt = land.get_alt_approx(aabr.center()) as i32;
+                    let alt = land.ground_alt_at(aabr.center()) as i32;
                     let stage_alt = alt + 2;
                     let side = facing.orthogonal();
                     let main_aabr = if closed {
@@ -643,7 +643,7 @@ impl Structure for Plaza {
                     center_deco,
                     stands,
                 } => {
-                    let center_alt = land.get_alt_approx(center.center()) as i32;
+                    let center_alt = land.ground_alt_at(center.center()) as i32;
                     if let Some(center_deco) = center_deco {
                         match center_deco {
                             TownCenterDecoration::Gazebo { roof, roof_color } => {

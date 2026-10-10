@@ -261,6 +261,17 @@ pub struct Manifest {
     pub regions: Vec<RegionManifest>,
 }
 
+/// One region of the manifest.
+///
+/// **Digest contract.** A region's digest ([`RegionEntry::digest`]) is the
+/// sha256 of `ron::ser::to_string` of this struct, and the manifest digest
+/// hashes the whole file, so terrain persistence and the rtsim water pass
+/// compare serialisations. Any field added here MUST be
+/// `#[serde(default, skip_serializing_if = "<is its default>")]`: a new
+/// field serialised at its default would change the digest of every existing
+/// region (persistence would refuse to start over persisted edits, the rtsim
+/// pass would re-run). `region_digest_is_pinned` in the tests pins one
+/// fixed region's digest to catch exactly that.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RegionManifest {
@@ -327,14 +338,23 @@ pub struct RegionManifest {
     pub site_levelling: bool,
     /// How many columns of authored voids (caves, interiors) may come within
     /// [`VOID_EXPOSURE_TOLERANCE_BLOCKS`] of this region's ground (or rise
-    /// above it) outside a declared mouth before world generation stops.
-    /// Default 0: a patch must not open or truncate an authored void unless
-    /// the region says so.
+    /// above it) before world generation stops. Default 0: a patch must not
+    /// open or truncate an authored void unless the region says so. Keep it
+    /// to the opening actually intended (tens of columns): the check
+    /// collects every exposed column at start-up, so a huge allowance hides
+    /// accidental exposures and pays for them in memory.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub max_exposed_void_columns: u32,
 }
 
-fn default_true() -> bool { true }
+/// The digest of one region's manifest entry ([`RegionEntry::digest`]): the
+/// sha256 of its RON serialisation (see the digest contract on
+/// [`RegionManifest`]).
+pub fn region_digest(rm: &RegionManifest) -> Result<String, ron::Error> {
+    Ok(format::sha256_hex(ron::ser::to_string(rm)?.as_bytes()))
+}
+
+pub(crate) fn default_true() -> bool { true }
 
 fn is_true(v: &bool) -> bool { *v }
 
@@ -585,6 +605,22 @@ pub fn apply(
 }
 
 impl AuthoredColumn {
+    /// The column holds water over its authored ground: an authored wet
+    /// cell, or a dry authored cell (bank, exact or blend ground) of a
+    /// [`SeaFill::Auto`] region whose top block lies below the sea's top
+    /// block, which the sea fills (`ground_water_level`). On a blend cell the
+    /// authored block stands for the rendered top. Standing on such a column
+    /// means standing on a bed, under water.
+    pub fn is_flooded(&self) -> bool {
+        match self.cell {
+            AuthoredCell::Wet { .. } => true,
+            AuthoredCell::Bank { bed_block: b } | AuthoredCell::Ground { block: b, .. } => {
+                self.settings.sea_fill == SeaFill::Auto && b < SEA_TOP_BLOCK
+            },
+            AuthoredCell::None => false,
+        }
+    }
+
     /// Replace the engine's results for this column:
     ///
     /// * wet: bed and surface exact, no warp/cliff carving; `riverless_alt` is
@@ -631,8 +667,8 @@ impl AuthoredColumn {
                     riverless_alt: top_block_alt(bed_block),
                 }
             },
-            // A bank fixes the column's ground and nothing else (Stage 1: no
-            // site levelling on it).
+            // A bank fixes the column's ground and nothing else (no site
+            // levelling on it).
             AuthoredCell::Bank { bed_block } => {
                 let alt = top_block_alt(bed_block);
                 EngineColumn {
@@ -693,6 +729,16 @@ impl AuthoredColumn {
 
     /// Site plot levelling on a ground cell (the column sampler's own
     /// `alt + (pref - alt) * factor`), when the region levels sites.
+    ///
+    /// The rendered top of a ground cell under a site therefore depends on
+    /// the site layout too, which no region digest covers: an engine change
+    /// that moves a plot (or this rule) changes those columns without a
+    /// manifest change, so neither terrain persistence nor the rtsim pass
+    /// notices. That is accepted while no deployed manifest has a ground
+    /// layer (none does when this was written); once one does, such an
+    /// engine change belongs in the release notes like a manifest change
+    /// (review persisted chunks under listed sites). The listed sites'
+    /// layout digests do cover the layouts themselves.
     #[inline]
     pub fn levelled(&self, alt: f32, (pref, factor): (f32, f32)) -> f32 {
         if self.settings.site_levelling && factor > 0.0 {
@@ -1222,6 +1268,14 @@ pub struct AuthoredRasters {
     chunk_summary: HashMap<Vec2<i32>, ChunkWaterSummary>,
     /// sha256 of the canonical manifest (it pins every tile by sha256).
     digest: String,
+    /// Some region lists a ground-layer tile (computed once at load: per-tick
+    /// consumers read it).
+    has_ground_layer: bool,
+    /// Exact ground columns that a listed site's plot levelling moves, with
+    /// the levelled altitude the column sampler renders there (set once
+    /// after civ generation, see [`Self::set_site_levelling`]; empty without
+    /// a ground layer).
+    site_levelled: HashMap<Vec2<i32>, f32>,
     /// What this manifest adds to the process-wide counter (released on
     /// drop).
     resident_bytes: usize,
@@ -1401,11 +1455,8 @@ impl AuthoredRasters {
         let mut chunk_summary: HashMap<Vec2<i32>, ChunkWaterSummary> = HashMap::new();
         for rm in manifest.regions {
             let id = rm.id.clone();
-            let region_digest = format::sha256_hex(
-                ron::ser::to_string(&rm)
-                    .map_err(|e| err(format!("region '{id}' does not serialise: {e}")))?
-                    .as_bytes(),
-            );
+            let region_digest = region_digest(&rm)
+                .map_err(|e| err(format!("region '{id}' does not serialise: {e}")))?;
             let rerr = |msg: String| err(format!("region '{id}': {msg}"));
             if id.is_empty()
                 || id.len() > 48
@@ -1700,12 +1751,15 @@ impl AuthoredRasters {
             .expect("at least one region");
         let index =
             (regions.len() > LINEAR_SCAN_MAX_REGIONS).then(|| RegionIndex::new(&regions, bounds));
+        let has_ground_layer = regions.iter().any(|r| r.ground.iter().any(Option::is_some));
         Ok(Self {
             regions,
             bounds,
             index,
             chunk_summary,
             digest,
+            has_ground_layer,
+            site_levelled: HashMap::new(),
             resident_bytes: reserved.keep(),
         })
     }
@@ -1805,6 +1859,31 @@ impl AuthoredRasters {
             })
         })
     }
+
+    /// Record the exact ground columns that listed sites' plot levelling
+    /// moves (`post_civ::SitePatchReport::levelled_columns`), so the ground
+    /// queries answer the levelled height the column renders there.
+    pub(crate) fn set_site_levelling(
+        &mut self,
+        columns: impl IntoIterator<Item = (Vec2<i32>, f32)>,
+    ) {
+        self.site_levelled.extend(columns);
+    }
+
+    /// The levelled altitude of an exact ground column under a listed site,
+    /// if its plot levelling moves it ([`Self::set_site_levelling`]).
+    #[inline]
+    pub fn site_levelled_alt(&self, wpos: Vec2<i32>) -> Option<f32> {
+        if self.site_levelled.is_empty() {
+            None
+        } else {
+            self.site_levelled.get(&wpos).copied()
+        }
+    }
+
+    /// Some region of this manifest has a ground layer
+    /// ([`RegionEntry::has_ground`] of any region), cached at load.
+    pub fn has_ground_layer(&self) -> bool { self.has_ground_layer }
 
     /// Every region with the settings the post-civ checks, terrain
     /// persistence and rtsim read, in manifest order.

@@ -48,7 +48,7 @@ impl Barn {
         Self {
             door_tile: door_tile_pos,
             bounds,
-            alt: land.get_alt_approx(site.tile_center_wpos(door_tile + door_dir)) as i32 + 2,
+            alt: land.ground_alt_at(site.tile_center_wpos(door_tile + door_dir)) as i32 + 2,
             is_desert,
             surface_color,
             sub_surface_color,

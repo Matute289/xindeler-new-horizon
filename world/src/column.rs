@@ -1077,7 +1077,12 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                 warp,
                 max_warp: spawn_rules.max_warp,
                 base_sea_level,
-                site_prefer_alt: spawn_rules.get_preferred_alt(),
+                // Only an authored column reads it.
+                site_prefer_alt: if authored.is_some() {
+                    spawn_rules.get_preferred_alt()
+                } else {
+                    (0.0, 0.0)
+                },
             },
             |level| flooded_water_level(level, biome_profile),
         );

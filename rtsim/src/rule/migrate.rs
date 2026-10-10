@@ -201,7 +201,10 @@ impl Rule for Migrate {
             }
 
             // XINDELER: once per authored water manifest change, move land
-            // NPCs out of authored water (see `rule::authored_water`).
+            // NPCs out of authored water (see `rule::authored_water`). The
+            // per-region note reads the manifest digest the save last saw,
+            // which `resolve_npcs` overwrites: keep it first (pinned by a
+            // test in `rule::authored_water`).
             let Data {
                 actors,
                 authored_rasters_digest,

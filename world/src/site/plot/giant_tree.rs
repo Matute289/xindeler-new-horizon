@@ -29,7 +29,7 @@ impl GiantTree {
         Self {
             name: format!("Tree of {}", NameGen::location(rng).generate()),
             // Get the tree's altitude
-            wpos: wpos.with_z(land.get_alt_approx(wpos) as i32),
+            wpos: wpos.with_z(land.ground_alt_at(wpos) as i32),
             tree: {
                 let config = TreeConfig::giant(rng, 4.0, true);
                 ProceduralTree::generate(config, rng)

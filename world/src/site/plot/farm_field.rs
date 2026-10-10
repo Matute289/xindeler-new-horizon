@@ -149,7 +149,7 @@ impl FarmField {
         };
 
         // Stepped terrain, but only on slopes
-        let center_grad = land.get_gradient_approx(bounds.center());
+        let center_grad = land.ground_gradient_at(bounds.center());
         let step_size = if center_grad > 0.25 {
             Some((center_grad * 8.0).clamped(3.0, 12.0))
         } else {
@@ -158,7 +158,7 @@ impl FarmField {
 
         Self {
             bounds,
-            alt: land.get_alt_approx(site.tile_center_wpos(door_tile + door_dir)) as i32,
+            alt: land.ground_alt_at(site.tile_center_wpos(door_tile + door_dir)) as i32,
             ori: {
                 let norm = land
                     .get_approx_chunk_terrain_normal(bounds.center())
@@ -205,7 +205,7 @@ impl Structure for FarmField {
         wpos: Vec2<i32>,
         weight: f32,
     ) {
-        if let Some((_, step_alt)) = self.step(land.get_alt_approx(wpos)) {
+        if let Some((_, step_alt)) = self.step(land.ground_alt_at(wpos)) {
             spawn_rules.prefer_alt(step_alt, weight);
         }
     }

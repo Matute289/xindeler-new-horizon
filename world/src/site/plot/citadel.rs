@@ -21,7 +21,7 @@ pub struct Citadel {
 
 impl Citadel {
     pub fn generate(wpos: Vec2<i32>, land: &Land, rng: &mut impl Rng) -> Self {
-        let alt = land.get_alt_approx(wpos) as i32;
+        let alt = land.ground_alt_at(wpos) as i32;
 
         let name = NameGen::location(rng).generate_town();
         let seed = rng.random();
@@ -41,7 +41,7 @@ impl Citadel {
                 let level_height = 32.0;
                 Some(Cell {
                     alt: land
-                        .get_alt_approx(wpos + rpos * CELL_SIZE + CELL_SIZE / 2)
+                        .ground_alt_at(wpos + rpos * CELL_SIZE + CELL_SIZE / 2)
                         .add(height)
                         .div(level_height)
                         .floor()
@@ -127,7 +127,7 @@ impl Structure for Citadel {
                     .clear();
 
                 let mut prim = painter.aabb(Aabb {
-                    min: wpos.with_z(land.get_alt_approx(wpos + CELL_SIZE / 2) as i32 - 32),
+                    min: wpos.with_z(land.ground_alt_at(wpos + CELL_SIZE / 2) as i32 - 32),
                     max: (wpos + CELL_SIZE).with_z(cell.alt),
                 });
 

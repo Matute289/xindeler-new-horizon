@@ -26,6 +26,21 @@ const MAX_BLOCK_CACHE: usize = 64_000_000;
 /// persisted chunks (see `TerrainPersistence::check_authored_rasters_digest`).
 const AUTHORED_DIGESTS_FILE: &str = "authored_rasters.digests.ron";
 
+/// XINDELER: the single manifest digest of older engines. Still written (an
+/// older engine started on this save reads it) and read (to migrate a save
+/// that has no per-region record yet). Both uses can be dropped, with the
+/// migration branch of `check_authored_rasters_digest`, once no engine older
+/// than the per-region record runs against any deployed save.
+const LEGACY_AUTHORED_DIGEST_FILE: &str = "authored_rasters.digest";
+
+/// XINDELER: write `contents` to `path` atomically (a temporary file, then a
+/// rename, as the chunk files are written), so a crash mid-write never leaves
+/// a truncated digest record behind.
+fn write_atomic(path: PathBuf, contents: &str) -> Result<(), atomicwrites::Error<io::Error>> {
+    AtomicFile::new(path, OverwriteBehavior::AllowOverwrite)
+        .write(|file| file.write_all(contents.as_bytes()))
+}
+
 /// XINDELER: one authored region as terrain persistence guards it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthoredRegionDigest {
@@ -136,20 +151,47 @@ impl TerrainPersistence {
     /// it equals the current manifest digest, every region digest is recorded
     /// without a check; when it differs (or nothing was recorded but persisted
     /// chunks exist), every region counts as changed (the old rule). Removed
-    /// regions are pruned from the record. Nothing is recorded while a
-    /// refusal stands. Without the `persistent_world` feature nothing is
-    /// persisted, so there is nothing to guard.
+    /// regions are pruned from the record. A record that exists but cannot
+    /// be read or parsed counts every region as changed (never as a
+    /// migration). Both files are written atomically. Nothing is recorded
+    /// while a refusal stands. Without the `persistent_world` feature nothing
+    /// is persisted, so there is nothing to guard.
     pub fn check_authored_rasters_digest(
         &self,
         digest: Option<&str>,
         regions: &[AuthoredRegionDigest],
     ) {
         let record_path = self.path.join(AUTHORED_DIGESTS_FILE);
-        let old_path = self.path.join("authored_rasters.digest");
+        let old_path = self.path.join(LEGACY_AUTHORED_DIGEST_FILE);
         let current = digest.unwrap_or("none");
-        let recorded: Option<AuthoredDigestRecord> = std::fs::read_to_string(&record_path)
-            .ok()
-            .and_then(|text| ron::from_str(&text).ok());
+        // A record that exists but does not parse (truncated, edited by
+        // hand) proves nothing about any region: every region counts as
+        // changed, never as a migration from the single digest.
+        let (recorded, unreadable): (Option<AuthoredDigestRecord>, bool) =
+            match std::fs::read_to_string(&record_path) {
+                Ok(text) => match ron::from_str(&text) {
+                    Ok(r) => (Some(r), false),
+                    Err(e) => {
+                        warn!(
+                            ?e,
+                            ?record_path,
+                            "The authored raster digest record does not parse: every authored \
+                             region counts as changed"
+                        );
+                        (None, true)
+                    },
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, false),
+                Err(e) => {
+                    warn!(
+                        ?e,
+                        ?record_path,
+                        "The authored raster digest record cannot be read: every authored region \
+                         counts as changed"
+                    );
+                    (None, true)
+                },
+            };
         let old = std::fs::read_to_string(&old_path)
             .ok()
             .map(|s| s.trim().to_string());
@@ -162,6 +204,7 @@ impl TerrainPersistence {
                 .iter()
                 .filter(|g| r.regions.get(&g.id) != Some(&g.digest))
                 .collect(),
+            None if unreadable => regions.iter().collect(),
             // Migration: an unchanged single digest means no region changed.
             None if old.as_deref() == Some(current) => Vec::new(),
             None => regions.iter().collect(),
@@ -230,13 +273,13 @@ impl TerrainPersistence {
         }
         match ron::ser::to_string_pretty(&record, ron::ser::PrettyConfig::default()) {
             Ok(text) => {
-                if let Err(e) = std::fs::write(&record_path, text) {
+                if let Err(e) = write_atomic(record_path, &text) {
                     warn!(?e, "Could not record the authored raster digests");
                 }
             },
             Err(e) => warn!(?e, "Could not serialise the authored raster digests"),
         }
-        if let Err(e) = std::fs::write(&old_path, current) {
+        if let Err(e) = write_atomic(old_path, current) {
             warn!(?e, "Could not record the authored raster digest");
         }
     }
@@ -712,6 +755,41 @@ mod authored_digest_tests {
         std::fs::write(p.path.join("chunk_5_5.dat"), b"x").unwrap();
         p.check_authored_rasters_digest(Some("m1"), &[region("a", "a1", (0, 0), (10, 10))]);
         assert_eq!(record(&p).regions.get("a").map(String::as_str), Some("a1"));
+    }
+
+    /// A record that exists but does not parse is not a migration, even
+    /// when the single digest beside it is unchanged: every region counts as
+    /// changed.
+    #[test]
+    #[should_panic(expected = "Refusing to start")]
+    fn an_unparseable_record_counts_every_region_as_changed() {
+        let p = persistence("corrupt");
+        p.check_authored_rasters_digest(Some("m1"), &[region("a", "a1", (0, 0), (10, 10))]);
+        std::fs::write(
+            p.path.join(AUTHORED_DIGESTS_FILE),
+            "(manifest: \"m1\", regi",
+        )
+        .unwrap();
+        std::fs::write(p.path.join("chunk_5_5.dat"), b"x").unwrap();
+        p.check_authored_rasters_digest(Some("m1"), &[region("a", "a1", (0, 0), (10, 10))]);
+    }
+
+    /// With no persisted chunk inside a region, an unparseable record is
+    /// simply rewritten (atomically, no temporary file left behind).
+    #[test]
+    fn an_unparseable_record_without_edits_is_rewritten() {
+        let p = persistence("corrupt-rewrite");
+        std::fs::write(p.path.join(AUTHORED_DIGESTS_FILE), "garbage").unwrap();
+        std::fs::write(p.path.join("chunk_50_50.dat"), b"x").unwrap();
+        p.check_authored_rasters_digest(Some("m1"), &[region("a", "a1", (0, 0), (10, 10))]);
+        assert_eq!(record(&p).regions.get("a").map(String::as_str), Some("a1"));
+        let leftovers: Vec<_> = std::fs::read_dir(&p.path)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.starts_with("chunk_") && !n.starts_with("authored_rasters.digest"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
     #[test]
