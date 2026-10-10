@@ -252,6 +252,14 @@ pub struct Footprint {
     pub(crate) plaza_radius: Option<u32>,
     fields: FieldPlacement,
     ward_targets: Vec<usize>,
+    /// Buildings per ward so far, by the ward of each building's root tile
+    /// ([`Self::note_building`]).
+    ward_counts: Vec<usize>,
+    /// While set, a building may not go to a ward that already has its
+    /// quota, so growth is steered toward the wards still short
+    /// ([`Self::ward_full`]). Cleared once that stalls (the short wards have
+    /// no room left), so the rest of the target can still be built.
+    steering: bool,
     /// Per plaza radius: set when a frontier search found nothing; cleared
     /// by any new plaza (only a new plaza can open a new frontier position:
     /// plots only take space away).
@@ -335,6 +343,8 @@ impl Footprint {
             plaza_radius: layout.plaza_radius,
             fields: layout.fields,
             ward_targets: layout.wards.iter().map(|w| w.target_buildings).collect(),
+            ward_counts: vec![0; layout.wards.len()],
+            steering: true,
             frontier_exhausted: [false; MAX_PLAZA_RADIUS + 1],
             fill_exhausted: Vec::new(),
         }
@@ -403,6 +413,35 @@ impl Footprint {
         })
     }
 
+    /// Counts a new building rooted at `root` toward its ward's quota.
+    pub(crate) fn note_building(&mut self, root: Vec2<i32>) {
+        if let Some(ward) = self.ward_of(root) {
+            self.ward_counts[ward] += 1;
+        }
+    }
+
+    /// Whether, while steering, the ward of `tpos` already has its quota (a
+    /// building there would be turned away). Always false outside the wards
+    /// and once steering has stopped.
+    pub(crate) fn ward_full(&self, tpos: Vec2<i32>) -> bool {
+        self.steering
+            && self
+                .ward_of(tpos)
+                .is_some_and(|ward| self.ward_counts[ward] >= self.ward_targets[ward])
+    }
+
+    pub(crate) fn steering(&self) -> bool { self.steering }
+
+    /// Lets buildings go to any ward again: the short wards are out of room.
+    pub(crate) fn stop_steering(&mut self) {
+        self.steering = false;
+        // Sizes the fill found no room for may fit in the wards it skipped.
+        self.fill_exhausted.clear();
+    }
+
+    /// Buildings in the wards so far.
+    pub(crate) fn buildings_in_wards(&self) -> usize { self.ward_counts.iter().sum() }
+
     /// Every ward tile, nearest the anchor first.
     pub(crate) fn ward_tiles(&self) -> impl Iterator<Item = Vec2<i32>> + '_ {
         self.ward_tiles_by_anchor_distance.iter().copied()
@@ -438,7 +477,8 @@ impl Footprint {
 
     /// The deterministic frontier step: the clear plaza patch nearest the
     /// anchor whose nearest plaza is between [`FRONTIER_MIN_SPACING`] and
-    /// [`FRONTIER_MAX_SPACING`] times `plaza_dist` away. Draws no random
+    /// [`FRONTIER_MAX_SPACING`] times `plaza_dist` away, and, while
+    /// steering, not in a ward that already has its quota. Draws no random
     /// numbers.
     pub(crate) fn frontier_plaza(
         &mut self,
@@ -459,7 +499,7 @@ impl Footprint {
             plaza_radius,
             |centre| {
                 let d2 = self.plaza_dist2[self.index(centre)];
-                d2 > min2 && d2 <= max2
+                d2 > min2 && d2 <= max2 && !self.ward_full(centre)
             },
             is_clear,
         );
@@ -538,19 +578,22 @@ impl Footprint {
         counts
     }
 
+    /// Whether every ward has reached its building target.
+    pub(crate) fn quota_met(&self) -> bool {
+        self.ward_counts
+            .iter()
+            .zip(&self.ward_targets)
+            .all(|(count, target)| count >= target)
+    }
+
     /// Whether the quota fill may stop: every ward has reached its
     /// building target, or the wards together hold the settlement's total
     /// (buildings outside every ward, such as barns in the field ring or the
     /// naval port, do not count). The total stop matters when a ward cannot
     /// reach its own target: without it the lottery runs on until the other
     /// wards overshoot theirs.
-    pub(crate) fn quota_done(&self, building_roots: impl Iterator<Item = Vec2<i32>>) -> bool {
-        let per_ward = self.buildings_per_ward(building_roots);
-        per_ward.iter().sum::<usize>() >= self.target_buildings()
-            || per_ward
-                .iter()
-                .zip(&self.ward_targets)
-                .all(|(count, target)| count >= target)
+    pub(crate) fn quota_done(&self) -> bool {
+        self.buildings_in_wards() >= self.target_buildings() || self.quota_met()
     }
 
     pub fn target_buildings(&self) -> usize { self.ward_targets.iter().sum() }
@@ -727,26 +770,78 @@ mod tests {
     }
 
     #[test]
-    fn quota_counts_buildings_per_ward() {
-        let fp = Footprint::new(&layout(WaterSide::Right), Vec2::new(1000, 1000));
-        let inner = std::iter::repeat_n(Vec2::new(2, 2), 7);
-        let outer = std::iter::repeat_n(Vec2::new(12, 2), 3);
-        assert!(fp.quota_done(inner.clone().chain(outer.clone())));
-        assert!(!fp.quota_done(inner.clone().chain(outer.clone().take(2))));
+    fn quota_counts_buildings_per_ward_and_steers_to_short_wards() {
+        let mut fp = Footprint::new(&layout(WaterSide::Right), Vec2::new(1000, 1000));
+        let (inner, outer) = (Vec2::new(2, 2), Vec2::new(12, 2));
         // Buildings outside every ward count for none.
-        assert!(!fp.quota_done(inner.chain(std::iter::repeat_n(Vec2::new(-5, -5), 9))));
+        for _ in 0..9 {
+            fp.note_building(Vec2::new(-5, -5));
+        }
+        assert_eq!(fp.buildings_in_wards(), 0);
+        for _ in 0..7 {
+            assert!(!fp.ward_full(inner));
+            fp.note_building(inner);
+        }
+        // The inner ward has its 7: steered away from, the outer is not.
+        assert!(fp.ward_full(inner));
+        assert!(!fp.ward_full(outer));
+        assert!(!fp.ward_full(Vec2::new(-5, -5)));
+        assert!(!fp.quota_met());
+        for _ in 0..3 {
+            fp.note_building(outer);
+        }
+        assert!(fp.quota_met());
+        assert_eq!(fp.buildings_in_wards(), 10);
+        assert_eq!(
+            fp.buildings_per_ward([inner, inner, outer].into_iter()),
+            vec![2, 1]
+        );
+        // Once steering stops, nothing is full.
+        fp.stop_steering();
+        assert!(!fp.steering());
+        assert!(!fp.ward_full(inner));
+    }
+
+    #[test]
+    fn frontier_skips_wards_that_have_their_quota() {
+        let mut fp = Footprint::new(&layout(WaterSide::Right), Vec2::new(1000, 1000));
+        let first = fp.initial_plaza(1, |_| true).unwrap();
+        // Only the inner ward (tiles x < 10) is clear.
+        let inner_only = |t: Vec2<i32>| t.x < 10;
+        fp.note_plaza(first.center());
+        let free = fp.frontier_plaza(1, 9.5, inner_only).unwrap();
+        assert_eq!(fp.ward_of(free.center()), Some(0));
+        // The inner ward gets its 7: no frontier plaza may go there now.
+        for _ in 0..7 {
+            fp.note_building(Vec2::new(2, 2));
+        }
+        fp.note_plaza(first.center());
+        assert_eq!(fp.frontier_plaza(1, 9.5, inner_only), None);
+        // (A failed search is cached until the next plaza.)
+        fp.note_plaza(first.center());
+        let steered = fp.frontier_plaza(1, 9.5, |_| true).unwrap();
+        assert_eq!(fp.ward_of(steered.center()), Some(1));
+        // Steering off: the inner ward is open again.
+        fp.stop_steering();
+        fp.note_plaza(first.center());
+        assert!(fp.frontier_plaza(1, 9.5, inner_only).is_some());
     }
 
     #[test]
     fn quota_stops_at_the_total_before_every_ward_is_met() {
-        let fp = Footprint::new(&layout(WaterSide::Right), Vec2::new(1000, 1000));
+        let mut fp = Footprint::new(&layout(WaterSide::Right), Vec2::new(1000, 1000));
         // The outer ward (target 3) never gets a building, but the inner one
-        // holds the settlement's whole target of 10: the fill stops anyway.
-        let inner = std::iter::repeat_n(Vec2::new(2, 2), 10);
-        assert_eq!(fp.buildings_per_ward(inner.clone()), vec![10, 0]);
-        assert!(fp.quota_done(inner));
+        // ends up holding the settlement's whole target of 10 (steering off,
+        // as after a stall): the fill stops anyway.
+        fp.stop_steering();
+        for _ in 0..9 {
+            fp.note_building(Vec2::new(2, 2));
+        }
         // One short of the total, with a ward short too: it goes on.
-        assert!(!fp.quota_done(std::iter::repeat_n(Vec2::new(2, 2), 9)));
+        assert!(!fp.quota_done());
+        fp.note_building(Vec2::new(2, 2));
+        assert!(!fp.quota_met());
+        assert!(fp.quota_done());
     }
 
     /// The obstacle pass covers the radius it is given: with an empty

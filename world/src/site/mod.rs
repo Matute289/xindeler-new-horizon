@@ -459,7 +459,16 @@ impl Site {
         self.plazas.iter().copied()
     }
 
-    pub fn create_plot(&mut self, plot: Plot) -> Id<Plot> { self.plots.insert(plot) }
+    pub fn create_plot(&mut self, plot: Plot) -> Id<Plot> {
+        // XINDELER: an authored footprint counts buildings toward its ward
+        // quotas (see `layout`).
+        if plot.is_building()
+            && let Some(footprint) = self.footprint.as_deref_mut()
+        {
+            footprint.note_building(plot.root_tile);
+        }
+        self.plots.insert(plot)
+    }
 
     pub fn blit_aabr(&mut self, aabr: Aabr<i32>, tile: Tile) {
         for y in 0..aabr.size().h {
@@ -623,7 +632,8 @@ impl Site {
     ) -> Option<(Aabr<i32>, Vec2<i32>, Option<i32>)> {
         let footprint = self.footprint.as_deref();
         if let Some(footprint) = footprint
-            && !footprint.allows(center, zone)
+            && (!footprint.allows(center, zone)
+                || (zone == layout::Zone::Built && footprint.ward_full(center)))
         {
             return None;
         }
@@ -651,6 +661,15 @@ impl Site {
             },
         }
         .ok()
+        // A building counts for the ward of its root tile (`note_building`),
+        // and every roadside building `generate_city` creates from this aabr
+        // uses `aabr.center()` as that root: steer by exactly that tile. The
+        // naval port (rooted at its hinge) and barns (rural zone) are never
+        // steered; a port whose hinge lies in a ward counts for it, which can
+        // overshoot that ward by one.
+        .filter(|aabr: &Aabr<i32>| {
+            zone != layout::Zone::Built || footprint.is_none_or(|f| !f.ward_full(aabr.center()))
+        })
         .map(|aabr| (aabr, *dir, hard_alt))
     }
 
@@ -869,8 +888,14 @@ impl Site {
                         None => {
                             rng.random_range(0..48) > aabr.center().map(|e| e.abs()).reduce_max()
                         },
-                        Some(footprint) => footprint
-                            .has_room_for_plaza(aabr, |tile| self.tiles.get(tile).is_empty()),
+                        // While steering, the network only grows into
+                        // wards still short of their quota.
+                        Some(footprint) => {
+                            !footprint.ward_full(aabr.center())
+                                && footprint.has_room_for_plaza(aabr, |tile| {
+                                    self.tiles.get(tile).is_empty()
+                                })
+                        },
                     };
                     within_reach && aabr_tiles(aabr).all(|tile| !self.tiles.get(tile).is_obstacle())
                 })
@@ -1635,47 +1660,43 @@ impl Site {
 
         // XINDELER: the plot lottery is `size * 200` draws. With an authored
         // footprint the draws go on until every ward has its building quota
-        // or the settlement has its total target, the city stops growing (no new
-        // building in `QUOTA_STALL_DRAWS` draws), or `QUOTA_DRAWS_PER_BUILDING`
-        // draws per target building. Same RNG stream throughout: a quota run is
-        // the ordinary lottery, continued.
+        // or the wards hold the settlement's total target, or
+        // `QUOTA_DRAWS_PER_BUILDING` draws per target building. While any
+        // ward is short, buildings are steered away from wards that already
+        // have their quota; when the wards stop growing for
+        // `QUOTA_STALL_DRAWS` draws (the short wards have no room left),
+        // steering stops so the total can still be reached, and a second
+        // stall ends the fill. Same RNG stream throughout: a quota run is the
+        // ordinary lottery, continued.
         const QUOTA_STALL_DRAWS: usize = 256;
         const QUOTA_DRAWS_PER_BUILDING: usize = 4;
         let base_draws = (size * 200.0) as i32 as usize;
         let max_draws = site.footprint.as_deref().map_or(base_draws, |footprint| {
             base_draws.max(footprint.target_buildings() * QUOTA_DRAWS_PER_BUILDING)
         });
-        // (plots, buildings, the draw at which that building count was first
-        // seen); recounted only when the plot count changes.
-        let mut quota_progress: Option<(usize, usize, usize)> = None;
+        // (buildings in the wards, the draw at which that count was first
+        // seen).
+        let mut quota_progress: Option<(usize, usize)> = None;
         for draw in 0..max_draws {
             if draw >= base_draws {
-                let Some(footprint) = site.footprint.as_deref() else {
+                let Some(footprint) = site.footprint.as_deref_mut() else {
                     break;
                 };
-                let plots = site.plots.values().len();
+                let in_wards = footprint.buildings_in_wards();
+                if footprint.quota_done() {
+                    break;
+                }
                 match quota_progress {
-                    Some((last_plots, _, since)) if last_plots == plots => {
+                    Some((last, since)) if in_wards <= last => {
                         if draw - since >= QUOTA_STALL_DRAWS {
-                            break;
+                            if !footprint.steering() {
+                                break;
+                            }
+                            footprint.stop_steering();
+                            quota_progress = Some((in_wards, draw));
                         }
                     },
-                    _ => {
-                        let buildings = || site.plots.values().filter(|plot| plot.is_building());
-                        let count = buildings().count();
-                        if footprint.quota_done(buildings().map(|plot| plot.root_tile)) {
-                            break;
-                        }
-                        quota_progress = match quota_progress {
-                            Some((_, last, since)) if count <= last => {
-                                if draw - since >= QUOTA_STALL_DRAWS {
-                                    break;
-                                }
-                                Some((plots, last, since))
-                            },
-                            _ => Some((plots, count, draw)),
-                        };
-                    },
+                    _ => quota_progress = Some((in_wards, draw)),
                 }
             }
             match *build_chance.choose_seeded(rng.random()) {
