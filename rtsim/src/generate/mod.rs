@@ -107,6 +107,7 @@ impl Data {
             time_of_day: TimeOfDay(settings.start_time),
             should_purge: false,
             authored_rasters_digest: None,
+            authored_region_digests: Default::default(),
         };
 
         let initial_factions = (0..16)

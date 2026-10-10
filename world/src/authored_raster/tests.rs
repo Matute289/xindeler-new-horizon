@@ -163,6 +163,7 @@ const SETTINGS: RegionSettings = RegionSettings {
     exclude_procedural_margin_m: 0.0,
     aquatic_profile: None,
     sea_fill: SeaFill::Auto,
+    site_levelling: true,
 };
 
 fn engine() -> EngineColumn {
@@ -183,6 +184,7 @@ fn dry() -> DryTerrain {
         warp: 1.5,
         max_warp: 1.0,
         base_sea_level: 139.01,
+        site_prefer_alt: (0.1, f32::NEG_INFINITY),
     }
 }
 
@@ -688,6 +690,7 @@ fn procedural_suppression_follows_the_region_settings() {
             exclude_procedural_margin_m: margin,
             aquatic_profile: None,
             sea_fill: SeaFill::Auto,
+            site_levelling: true,
         },
         weight: 1.0,
         cell,
@@ -1425,6 +1428,9 @@ fn new_manifest_fields_at_their_defaults_do_not_change_the_digest() {
             aquatic_ecology_profile: None,
             consistency: ConsistencyBudget::default(),
             sea_fill: SeaFill::Auto,
+            sites_on_patch: vec![],
+            site_levelling: true,
+            max_exposed_void_columns: 0,
         }],
     };
     let text = ron::ser::to_string(&m).unwrap();

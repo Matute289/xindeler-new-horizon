@@ -156,6 +156,48 @@ fn on_water_structure(index: IndexRef, wpos: Vec2<i32>) -> bool {
     })
 }
 
+/// Per-region digests (the authored ground layer): compare each region's
+/// digest with the one this save last saw, log how many NPCs stand on the
+/// ground layer of the regions that changed (simulated NPCs need no move:
+/// every tick snaps them to `surface_alt_at`, which reads the patch), and
+/// record the current digests (removed regions are pruned). A save that only
+/// knew the manifest digest is migrated without a report when that digest is
+/// unchanged. Returns the count logged.
+pub fn note_ground_region_changes(
+    actors: &Actors,
+    stored_manifest: Option<&str>,
+    stored_regions: &mut std::collections::BTreeMap<String, String>,
+    world: &World,
+) -> usize {
+    let Some(rasters) = world.sim().authored_rasters() else {
+        stored_regions.clear();
+        return 0;
+    };
+    let migrated = stored_regions.is_empty() && stored_manifest == Some(rasters.digest());
+    let changed: Vec<world::authored_raster::RegionEntry> = rasters
+        .region_entries()
+        .filter(|r| !migrated && stored_regions.get(r.id).map(String::as_str) != Some(r.digest))
+        .collect();
+    let on_ground = |p: Vec2<i32>| {
+        changed.iter().any(|r| r.bounds.contains_point(p))
+            && matches!(rasters.cell_at(p), Some(AuthoredCell::Ground { .. }))
+    };
+    let count = actors
+        .values()
+        .filter(|a| matches!(a.kind, ActorKind::Npc(_)) && on_ground(a.wpos.xy().as_()))
+        .count();
+    if !changed.is_empty() {
+        info!(
+            regions = ?changed.iter().map(|r| r.id).collect::<Vec<_>>(),
+            npcs_on_ground_cells = count,
+            "Authored regions changed since this rtsim save; NPCs on their ground layer follow the \
+             patch through the per-tick surface snap"
+        );
+    }
+    *stored_regions = rasters.region_digests();
+    count
+}
+
 /// What the pass did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Outcome {

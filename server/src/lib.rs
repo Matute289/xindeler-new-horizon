@@ -571,8 +571,13 @@ impl Server {
                         .sim()
                         .authored_rasters()
                         .map(|r| {
-                            r.regions()
-                                .map(|(_, b)| (b.min / 32, b.max / 32))
+                            r.region_entries()
+                                .map(|e| crate::terrain_persistence::AuthoredRegionDigest {
+                                    id: e.id.to_string(),
+                                    digest: e.digest.to_string(),
+                                    min_chunk: e.bounds.min / 32,
+                                    max_chunk: e.bounds.max / 32,
+                                })
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default(),

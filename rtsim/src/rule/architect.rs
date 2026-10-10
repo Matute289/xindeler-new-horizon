@@ -398,7 +398,7 @@ fn spawn_at_plot(
         let wpos = site.tile_center_wpos(plot.root_tile());
         let wpos = wpos
             .as_()
-            .with_z(world.sim().get_alt_approx(wpos).unwrap_or(0.0));
+            .with_z(world.sim().ground_alt_at(wpos).unwrap_or(0.0));
         let mut npc = Actor::new_npc(rng.random(), wpos, body, death.role.clone())
             .with_personality(personality)
             .with_home(id);
@@ -478,7 +478,7 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
             let wpos = site.wpos;
             let wpos = wpos
                 .as_()
-                .with_z(world.sim().get_alt_approx(wpos).unwrap_or(0.0));
+                .with_z(world.sim().ground_alt_at(wpos).unwrap_or(0.0));
             data.spawn_actor(
                 Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                     .with_personality(personality)
@@ -546,7 +546,7 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                     let wpos = site.wpos;
                     let wpos = wpos
                         .as_()
-                        .with_z(world.sim().get_alt_approx(wpos).unwrap_or(0.0));
+                        .with_z(world.sim().ground_alt_at(wpos).unwrap_or(0.0));
                     data.spawn_actor(
                         Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                             .with_personality(personality)
