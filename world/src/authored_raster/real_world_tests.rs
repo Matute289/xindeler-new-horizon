@@ -127,7 +127,11 @@ pub fn load_specs(specs: &[RegionSpec]) -> Result<AuthoredRasters, super::LoadEr
 }
 
 /// Every numeric/colour output of a column, as bits.
-fn column_bits(world: &World, index: crate::IndexRef, wpos: Vec2<i32>) -> Option<Vec<u32>> {
+pub(super) fn column_bits(
+    world: &World,
+    index: crate::IndexRef,
+    wpos: Vec2<i32>,
+) -> Option<Vec<u32>> {
     let c = world.sample_columns().get((wpos, index, None))?;
     let mut v = vec![
         c.alt.to_bits(),
@@ -228,7 +232,7 @@ fn ground_layer_leaves_everything_outside_its_boxes_identical() {
 /// around the box, and every block of 10 000 random chunks plus every chunk
 /// 1..=3 chunks outside the box. `inside` must be a column the rasters
 /// author (or this proves nothing).
-fn assert_identical_outside(
+pub(super) fn assert_identical_outside(
     rasters: AuthoredRasters,
     rmin: (i32, i32),
     rmax: (i32, i32),

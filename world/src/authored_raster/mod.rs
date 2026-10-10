@@ -15,12 +15,17 @@
 //! engine's terrain terms (chunk spline, undulation, `small_nz` relief,
 //! cliffs, warp, mesa, bank pull, the -16 m registration). Precedence: a
 //! water cell wins and a ground cell under it must agree with its bed or
-//! bank, checked at load. Blend weights (1..=254, the ring toward the engine
-//! terrain) are carried by the tile format but refused by this engine until
-//! the blend ring lands. Water below 0 m is a per-region parameter
-//! ([`SeaFill`]). The sim chunk table stays the natural map; the
-//! authored-aware ground queries for sites and rtsim are not routed to the
-//! ground layer yet (they read the table, as before).
+//! bank, checked at load. A *blend* cell (weight 1..=254) lerps from the
+//! terrain the region would render without the ground layer toward its
+//! authored block by `weight / 255`: the exporter writes these as a ring
+//! around every exact patch, so patches meet the engine's terrain without a
+//! step. Ground cells in partial chunks meet natural columns directly; where
+//! natural water would stand as a wall beside one, world generation stops
+//! ([`queries::check_ground_seams`], after civ generation). Water below 0 m
+//! is a per-region parameter ([`SeaFill`]). The sim chunk table stays the
+//! natural map (the exporter builds it from the master as it was before the
+//! patch); the authored-aware ground queries for sites and rtsim are not
+//! routed to the ground layer yet (they read the table, as before).
 //!
 //! # What it does
 //!
@@ -532,6 +537,10 @@ impl AuthoredColumn {
     /// * bank, exact ground: ground exact, no warp/cliff carving, no water
     ///   above sea level ([`SeaFill::Auto`]: below it the sea fills the column)
     ///   or no water at all ([`SeaFill::AuthoredOnly`]);
+    /// * blend ground (weight `w` of 255): altitude, warp, cliff and
+    ///   `riverless_alt` lerped from the column this region gives without the
+    ///   ground layer (the unauthored result below, or the natural column in a
+    ///   partial chunk) toward the authored block; water as on exact ground;
     /// * none: no water above sea level; terrain blended by the feather weight
     ///   from the engine's (with the sim water's carving) to the engine's *dry*
     ///   terrain (same noise and warp, faded by the distance to the authored
@@ -568,69 +577,114 @@ impl AuthoredColumn {
                 }
             },
             // Exact ground is a bank without water beside it: both fix the
-            // column's ground and nothing else. Blend weights (the ring toward
-            // the engine terrain) are refused at load by this engine, so every
-            // ground cell reaching the sampler is exact.
-            AuthoredCell::Bank { bed_block: block } | AuthoredCell::Ground { block, .. } => {
-                debug_assert!(
-                    !matches!(self.cell, AuthoredCell::Ground { weight, .. } if weight != GROUND_EXACT),
-                    "blend ground weights are refused at load"
-                );
+            // column's ground and nothing else.
+            AuthoredCell::Bank { bed_block: block }
+            | AuthoredCell::Ground {
+                block,
+                weight: GROUND_EXACT,
+            } => {
                 let alt = top_block_alt(block);
                 EngineColumn {
                     alt,
-                    // `AuthoredOnly`: a water level at the ground itself, so
-                    // the column fill writes no water (not a NaN/MIN
-                    // sentinel: `get_z_limits` takes a max over it).
-                    water_level: match self.settings.sea_fill {
-                        SeaFill::Auto => dry.base_sea_level,
-                        SeaFill::AuthoredOnly => alt,
-                    },
+                    water_level: self.ground_water_level(alt, dry.base_sea_level),
                     water_dist: self.water_dist,
                     warp_factor: 0.0,
                     cliff_offset: 0.0,
                     riverless_alt: alt,
                 }
             },
-            AuthoredCell::None if self.natural => engine,
-            AuthoredCell::None => {
-                let w = self.weight;
-                let dry_wf = self
-                    .water_dist
-                    .map_or(1.0, |d| (d / DIST_CAP_M as f32).clamped(0.0, 1.0))
-                    * dry.max_warp;
-                let dry_alt = dry.riverless_alt.max(dry.base_sea_level + 0.5)
-                    + Lerp::lerp(0.0, dry.riverless_alt_delta, dry_wf)
-                    + dry.warp * dry_wf;
-                let water_dist = if w >= 1.0 {
-                    self.water_dist
+            // A blend cell of the ring around a patch: from the terrain the
+            // region renders here without the ground layer (`e`) toward the
+            // authored block, by `weight / 255`. Water as on exact ground
+            // (the ring is authored land; the load-time containment rule keeps
+            // it away from authored water).
+            AuthoredCell::Ground { block, weight } => {
+                let e = if self.natural {
+                    engine
                 } else {
-                    match (engine.water_dist, self.water_dist) {
-                        (Some(a), Some(b)) => Some(a.min(b)),
-                        (a, b) => a.or(b),
-                    }
+                    self.unauthored(engine, dry)
                 };
+                let w = weight as f32 / GROUND_EXACT as f32;
+                let g = top_block_alt(block);
+                let alt = Lerp::lerp(e.alt, g, w);
                 EngineColumn {
-                    alt: Lerp::lerp(engine.alt, dry_alt, w),
-                    water_level: dry.base_sea_level,
-                    water_dist,
-                    warp_factor: Lerp::lerp(engine.warp_factor, dry_wf, w),
-                    cliff_offset: engine.cliff_offset,
-                    riverless_alt: engine.riverless_alt,
+                    alt,
+                    water_level: self.ground_water_level(alt, dry.base_sea_level),
+                    water_dist: e.water_dist,
+                    warp_factor: Lerp::lerp(e.warp_factor, 0.0, w),
+                    cliff_offset: e.cliff_offset * (1.0 - w),
+                    riverless_alt: Lerp::lerp(e.riverless_alt, g, w),
                 }
             },
+            AuthoredCell::None if self.natural => engine,
+            AuthoredCell::None => self.unauthored(engine, dry),
         }
     }
 
-    /// Whether this is an exact ground-layer cell: the column sampler then
-    /// adds no snow height on top of it (the top block may still be snow).
-    /// Banks keep the Stage-1 behaviour (one block of snow may lie on them).
+    /// The water level of a dry authored column (bank, exact or blend
+    /// ground) whose altitude is `alt`: the sea's in [`SeaFill::Auto`] (below
+    /// sea level the sea fills it), the ground itself in
+    /// [`SeaFill::AuthoredOnly`] -- a level at the ground, so the column fill
+    /// writes no water (not a NaN/MIN sentinel: `get_z_limits` takes a max
+    /// over it).
     #[inline]
-    pub fn ground_is_exact(&self) -> bool {
-        matches!(self.cell, AuthoredCell::Ground {
-            weight: GROUND_EXACT,
-            ..
-        })
+    fn ground_water_level(&self, alt: f32, base_sea_level: f32) -> f32 {
+        match self.settings.sea_fill {
+            SeaFill::Auto => base_sea_level,
+            SeaFill::AuthoredOnly => alt,
+        }
+    }
+
+    /// An unauthored column of an owned chunk: no water above sea level;
+    /// terrain blended by the feather weight from the engine's (with the sim
+    /// water's carving) to the engine's *dry* terrain (same noise and warp,
+    /// faded by the distance to the authored water instead of the sim's).
+    fn unauthored(&self, engine: EngineColumn, dry: DryTerrain) -> EngineColumn {
+        let w = self.weight;
+        let dry_wf = self
+            .water_dist
+            .map_or(1.0, |d| (d / DIST_CAP_M as f32).clamped(0.0, 1.0))
+            * dry.max_warp;
+        let dry_alt = dry.riverless_alt.max(dry.base_sea_level + 0.5)
+            + Lerp::lerp(0.0, dry.riverless_alt_delta, dry_wf)
+            + dry.warp * dry_wf;
+        let water_dist = if w >= 1.0 {
+            self.water_dist
+        } else {
+            match (engine.water_dist, self.water_dist) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        };
+        EngineColumn {
+            alt: Lerp::lerp(engine.alt, dry_alt, w),
+            water_level: dry.base_sea_level,
+            water_dist,
+            warp_factor: Lerp::lerp(engine.warp_factor, dry_wf, w),
+            cliff_offset: engine.cliff_offset,
+            riverless_alt: engine.riverless_alt,
+        }
+    }
+
+    /// The snow height the column sampler adds on top of this column's
+    /// ground: none on an exact ground cell (the top block turns to snow, it
+    /// does not grow one), faded by the weight on a blend cell, unchanged
+    /// everywhere else (banks keep the Stage-1 behaviour: one block of snow
+    /// may lie on them).
+    #[inline]
+    pub fn ground_snow_height(&self, snow_height: f32) -> f32 {
+        match self.cell {
+            AuthoredCell::Ground {
+                weight: GROUND_EXACT,
+                ..
+            } => 0.0,
+            AuthoredCell::Ground { weight, .. } => {
+                snow_height * (1.0 - weight as f32 / GROUND_EXACT as f32)
+            },
+            AuthoredCell::Wet { .. } | AuthoredCell::Bank { .. } | AuthoredCell::None => {
+                snow_height
+            },
+        }
     }
 
     /// Whether procedural boulders, trees and sprites must not be rooted in
@@ -792,6 +846,64 @@ impl Region {
             .min(self.max.y - 1 - wpos.y);
         let t = ((d as f32 + 0.5) / self.feather as f32).clamped(0.0, 1.0);
         t * t * (3.0 - 2.0 * t)
+    }
+
+    /// The 4-neighbours of this region's ground cells (exact or blend)
+    /// whose water the post-civ seam check must compare with the cell
+    /// ([`queries::check_ground_seams`]): unauthored columns of partial
+    /// chunks (the natural map, rivers and sea included), and, around
+    /// [`SeaFill::AuthoredOnly`] ground below the ocean's top block, every
+    /// unauthored column (the feather can bring the sea into an owned one).
+    /// Pairs `(ground cell, neighbour)`, in tile order.
+    fn ground_seam_pairs(&self) -> Vec<(Vec2<i32>, Vec2<i32>)> {
+        let authored_only = self.settings.sea_fill == SeaFill::AuthoredOnly;
+        if !authored_only && !self.partial.iter().any(|&p| p) {
+            return Vec::new();
+        }
+        use rayon::prelude::*;
+        let per_tile = |idx: usize| {
+            let mut out = Vec::new();
+            let Some(g) = self.ground[idx].as_ref() else {
+                return out;
+            };
+            let t = Vec2::new(idx as i32 % self.tiles.x, idx as i32 / self.tiles.x);
+            let origin = self.origin(t);
+            for j in 0..TILE_SIZE {
+                for i in 0..TILE_SIZE {
+                    let wpos = origin + Vec2::new(i, j);
+                    let Some((block, _)) = g.get(cell_index(i, j)) else {
+                        continue;
+                    };
+                    // A water cell wins over the ground under it.
+                    if !self.contains(wpos)
+                        || !matches!(self.cell(wpos), AuthoredCell::Ground { .. })
+                    {
+                        continue;
+                    }
+                    let low_dry = authored_only && block < SEA_TOP_BLOCK;
+                    for d in [
+                        Vec2::new(1, 0),
+                        Vec2::new(-1, 0),
+                        Vec2::new(0, 1),
+                        Vec2::new(0, -1),
+                    ] {
+                        let n = wpos + d;
+                        if self.contains(n)
+                            && self.cell(n) == AuthoredCell::None
+                            && (low_dry || self.partial_at(n))
+                        {
+                            out.push((wpos, n));
+                        }
+                    }
+                }
+            }
+            out
+        };
+        (0..self.ground.len())
+            .into_par_iter()
+            .map(per_tile)
+            .collect::<Vec<_>>()
+            .concat()
     }
 
     fn dist_field(&self, idx: usize) -> Option<&[u8]> {
@@ -1559,6 +1671,17 @@ impl AuthoredRasters {
             .map(|s| s.min_ground_block() - FLOOR_MARGIN_BLOCKS)
     }
 
+    /// Every ground cell's 4-neighbour whose water the post-civ seam check
+    /// compares with it (see [`queries::check_ground_seams`]), as `(ground
+    /// cell, neighbour)` pairs in region and tile order. Empty when no
+    /// region has a partial chunk or a [`SeaFill::AuthoredOnly`] setting.
+    pub fn ground_seam_pairs(&self) -> Vec<(Vec2<i32>, Vec2<i32>)> {
+        self.regions
+            .iter()
+            .flat_map(Region::ground_seam_pairs)
+            .collect()
+    }
+
     /// Build every distance field now (in parallel on the current rayon
     /// pool) so no chunk-generation worker stalls on one later.
     pub fn prewarm(&self) {
@@ -1787,10 +1910,12 @@ impl Problems {
 /// (`water`: the region's water tile at the same index, if listed):
 ///
 /// * the top block lies in [`format::GROUND_BLOCK_RANGE`];
-/// * the weight is [`GROUND_EXACT`] (blend weights, the ring toward the engine
-///   terrain, are not supported by this engine yet);
 /// * under an authored wet cell the ground equals the bed, under a bank it
-///   equals the bank (one truth per column: a disagreement is a stale pin).
+///   equals the bank, and is exact there (one truth per column: a disagreement
+///   is a stale pin).
+///
+/// Any weight 1..=255 is valid elsewhere: [`GROUND_EXACT`] is exact, lower
+/// weights are the blend ring toward the engine terrain.
 fn validate_ground_tile(g: &GroundTileCm, water: Option<&WaterTile>) -> Problems {
     let mut p = Problems::default();
     for j in 0..TILE_SIZE {
@@ -1807,13 +1932,6 @@ fn validate_ground_tile(g: &GroundTileCm, water: Option<&WaterTile>) -> Problems
                     "{wpos:?}: ground {cm} cm (block {block}) is outside the blocks {:?} the \
                      engine can hold",
                     format::GROUND_BLOCK_RANGE
-                ));
-            }
-            if weight != GROUND_EXACT {
-                p.report(format!(
-                    "{wpos:?}: ground weight {weight}: this engine reads exact ground cells only \
-                     (weight {GROUND_EXACT}); blend weights need the blend ring support of a \
-                     newer engine"
                 ));
             }
             let Some(w) = water else {
@@ -2062,5 +2180,6 @@ fn validate_region(
 }
 
 #[cfg(test)] mod ground_real_world_tests;
+#[cfg(test)] mod ground_seam_real_world_tests;
 #[cfg(test)] mod real_world_tests;
 #[cfg(test)] mod tests;

@@ -161,8 +161,7 @@ pub enum PaintOp {
     Ground {
         shape: Shape,
         ground_cm: i32,
-        /// [`GROUND_EXACT`] unless given (a blend weight, which this engine
-        /// refuses at load: for refusal tests).
+        /// [`GROUND_EXACT`] unless given (1..=254 is a blend weight).
         #[serde(default = "exact_weight")]
         weight: u8,
     },
@@ -177,6 +176,17 @@ pub enum PaintOp {
     },
     /// Clear the ground layer only.
     ClearGround { shape: Shape },
+    /// The blend ring around the exact ground cells (weight
+    /// [`GROUND_EXACT`]): every cell no layer authors whose chamfer (3-4)
+    /// distance to the nearest exact cell is below `width_m` becomes a blend
+    /// cell of weight [`ring_weight`], at `ground_cm` if given, else at the
+    /// ground of that nearest exact cell (a master that continues the patch's
+    /// edge flat). The exporter's ring follows the same weight rule.
+    GroundRing {
+        width_m: i32,
+        #[serde(default)]
+        ground_cm: Option<i32>,
+    },
     /// Import a raw ground raster: `i32` little-endian centimetres, rows from
     /// the south, `i32::MIN` = not authored; exact cells.
     GroundRaster {
@@ -195,6 +205,26 @@ pub enum PaintOp {
 }
 
 fn exact_weight() -> u8 { GROUND_EXACT }
+
+/// The blend weight of a ring cell at chamfer (3-4) distance `d3` (in thirds
+/// of a metre) from the nearest footprint cell, for a ring `blend_m` wide:
+/// `round(255 * smoothstep(1 - d / blend_m))` in integer arithmetic (so the
+/// exporter's mirror gives the same bytes), at most 254 (a ring cell is never
+/// exact); `None` at the footprint itself (`d3 == 0`), at or beyond the
+/// ring's outer edge, or where the weight rounds to 0.
+pub fn ring_weight(d3: u32, blend_m: u32) -> Option<u8> {
+    let d = 3 * u64::from(blend_m);
+    let d3 = u64::from(d3);
+    if d3 == 0 || d3 >= d {
+        return None;
+    }
+    let u = d - d3;
+    // smoothstep(u / d) = u^2 (3d - 2u) / d^3, rounded half up.
+    let num = 255 * u * u * (3 * d - 2 * u);
+    let den = d * d * d;
+    let w = (2 * num + den) / (2 * den);
+    (w > 0).then(|| w.min(u64::from(GROUND_EXACT) - 1) as u8)
+}
 
 fn read_i32_raster(p: &Path, size: (i32, i32)) -> Result<Vec<i32>, String> {
     let b = std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -321,6 +351,7 @@ impl RegionRaster {
                 }
             },
             PaintOp::BankRing { width_m, bed_cm } => self.bank_ring(*width_m, *bed_cm),
+            PaintOp::GroundRing { width_m, ground_cm } => self.ground_ring(*width_m, *ground_cm)?,
             PaintOp::Raster {
                 origin,
                 size,
@@ -378,6 +409,57 @@ impl RegionRaster {
             }
         }
         self.cells = out;
+    }
+
+    fn ground_ring(&mut self, width: i32, ground_cm: Option<i32>) -> Result<(), String> {
+        if !(1..=256).contains(&width) {
+            return Err(format!("ground ring width {width} m must be 1..=256"));
+        }
+        let (w, h) = (self.size.x, self.size.y);
+        // Chamfer (3-4) distance to the nearest exact cell, carrying that
+        // cell's ground; two raster passes, integer only.
+        let mut dist = vec![(u32::MAX, 0i32); self.cells.len()];
+        for (k, c) in self.cells.iter().enumerate() {
+            if let Some((g, GROUND_EXACT)) = c.ground {
+                dist[k] = (0, g);
+            }
+        }
+        let relax = |dist: &mut Vec<(u32, i32)>, x: i32, y: i32, nx: i32, ny: i32, step: u32| {
+            if nx >= 0 && ny >= 0 && nx < w && ny < h {
+                let (nd, ng) = dist[(ny * w + nx) as usize];
+                let v = nd.saturating_add(step);
+                let k = (y * w + x) as usize;
+                if v < dist[k].0 {
+                    dist[k] = (v, ng);
+                }
+            }
+        };
+        for y in 0..h {
+            for x in 0..w {
+                relax(&mut dist, x, y, x - 1, y, 3);
+                relax(&mut dist, x, y, x, y - 1, 3);
+                relax(&mut dist, x, y, x - 1, y - 1, 4);
+                relax(&mut dist, x, y, x + 1, y - 1, 4);
+            }
+        }
+        for y in (0..h).rev() {
+            for x in (0..w).rev() {
+                relax(&mut dist, x, y, x + 1, y, 3);
+                relax(&mut dist, x, y, x, y + 1, 3);
+                relax(&mut dist, x, y, x + 1, y + 1, 4);
+                relax(&mut dist, x, y, x - 1, y + 1, 4);
+            }
+        }
+        for (k, c) in self.cells.iter_mut().enumerate() {
+            if *c != CellCm::default() {
+                continue;
+            }
+            let (d3, g) = dist[k];
+            if let Some(weight) = ring_weight(d3, width as u32) {
+                c.ground = Some((ground_cm.unwrap_or(g), weight));
+            }
+        }
+        Ok(())
     }
 
     /// Encode every tile that holds any authored cell, per layer.

@@ -1228,7 +1228,7 @@ fn water_next_to_lower_ground_is_a_wall_and_refused() {
 }
 
 #[test]
-fn ground_rules_refuse_blend_weights_and_out_of_range_blocks() {
+fn ground_rules_accept_blend_weights_and_refuse_out_of_range_blocks() {
     let rect = Shape::Rect {
         x0: 1100.0,
         y0: 1100.0,
@@ -1242,10 +1242,14 @@ fn ground_rules_refuse_blend_weights_and_out_of_range_blocks() {
             weight,
         }])
     };
-    expect_error(
-        vec![build_region(&spec(24_000, 128)).unwrap()],
-        "blend weights",
-    );
+    // Every weight 1..=255 loads: below 255 a blend cell of the ring.
+    for weight in [1, 128, 254, GROUND_EXACT] {
+        let ar = load(&[build_region(&spec(24_000, weight)).unwrap()]).unwrap();
+        assert_eq!(
+            ar.cell_at(Vec2::new(1105, 1105)),
+            Some(AuthoredCell::Ground { block: 240, weight })
+        );
+    }
     expect_error(
         vec![build_region(&spec(819_200, GROUND_EXACT)).unwrap()],
         "outside the blocks",
@@ -1525,4 +1529,252 @@ fn many_regions_use_the_index_and_answer_like_the_scan() {
             assert_eq!(found, scan.map(|i| ar.regions[i].id.clone()), "{p:?}");
         }
     }
+}
+
+// --------------------------------------------------------------------------
+// Stage 2b: the blend ring, seams
+// --------------------------------------------------------------------------
+
+#[test]
+fn resolve_blend_ground_lerps_from_the_region_terrain_toward_the_block() {
+    let blend = |weight| AuthoredCell::Ground { block: 251, weight };
+    // Weight 255 is exact; weight w lerps from the column the region gives
+    // without the ground layer (here the unauthored result) toward 251.5.
+    let base = ground_col(AuthoredCell::None, SeaFill::Auto).resolve(engine(), dry());
+    for weight in [1u8, 64, 128, 200, 254] {
+        let w = weight as f32 / 255.0;
+        let r = ground_col(blend(weight), SeaFill::Auto).resolve(engine(), dry());
+        assert_eq!(r.alt, Lerp::lerp(base.alt, 251.5, w), "weight {weight}");
+        assert_eq!(r.riverless_alt, Lerp::lerp(base.riverless_alt, 251.5, w));
+        assert_eq!(r.warp_factor, Lerp::lerp(base.warp_factor, 0.0, w));
+        assert_eq!(r.cliff_offset, base.cliff_offset * (1.0 - w));
+        assert_eq!(r.water_dist, base.water_dist);
+        assert_eq!(r.water_level, 139.01, "Auto: the sea's level, no sim water");
+        let own = ground_col(blend(weight), SeaFill::AuthoredOnly).resolve(engine(), dry());
+        assert_eq!(own.water_level, own.alt, "AuthoredOnly: no fill");
+    }
+    // The weight is monotone: a higher weight is closer to the block.
+    let alts: Vec<f32> = (1..=255u8)
+        .map(|w| {
+            ground_col(blend(w), SeaFill::Auto)
+                .resolve(engine(), dry())
+                .alt
+        })
+        .collect();
+    assert!(
+        alts.windows(2).all(|p| p[0] <= p[1]),
+        "monotone toward 251.5"
+    );
+    assert_eq!(*alts.last().unwrap(), 251.5);
+    // In a partial chunk the blend starts from the natural engine column.
+    let mut natural = ground_col(blend(128), SeaFill::Auto);
+    natural.natural = true;
+    let r = apply(Some(natural), engine(), dry(), |l| l);
+    let w = 128.0 / 255.0;
+    assert_eq!(r.alt, Lerp::lerp(engine().alt, 251.5, w));
+    assert_eq!(r.cliff_offset, engine().cliff_offset * (1.0 - w));
+    assert_eq!(r.water_dist, engine().water_dist);
+    // The natural river level does not survive on authored land.
+    assert_eq!(r.water_level, 139.01);
+}
+
+#[test]
+fn snow_height_is_dropped_on_exact_and_faded_on_blend_cells() {
+    let col = |cell| ground_col(cell, SeaFill::Auto);
+    let exact = col(AuthoredCell::Ground {
+        block: 251,
+        weight: GROUND_EXACT,
+    });
+    assert_eq!(exact.ground_snow_height(1.2), 0.0);
+    let half = col(AuthoredCell::Ground {
+        block: 251,
+        weight: 51,
+    });
+    assert_eq!(half.ground_snow_height(1.0), 1.0 - 51.0 / 255.0);
+    for cell in [
+        AuthoredCell::None,
+        AuthoredCell::Bank { bed_block: 240 },
+        AuthoredCell::Wet {
+            surface_block: 240,
+            bed_block: 230,
+        },
+    ] {
+        assert_eq!(col(cell).ground_snow_height(1.2), 1.2, "{cell:?}");
+    }
+}
+
+#[test]
+fn ring_weights_fall_smoothly_from_254_to_nothing() {
+    use writer::ring_weight;
+    for blend in [8u32, 16, 32, 64] {
+        let d = 3 * blend;
+        assert_eq!(ring_weight(0, blend), None, "the footprint is exact");
+        assert_eq!(ring_weight(d, blend), None, "the outer edge is engine");
+        assert_eq!(ring_weight(d + 7, blend), None);
+        let ws: Vec<u8> = (1..d).filter_map(|k| ring_weight(k, blend)).collect();
+        assert!(ws.windows(2).all(|p| p[0] >= p[1]), "non-increasing");
+        assert_eq!(ws[0], 254, "never exact");
+        assert!(*ws.last().unwrap() >= 1);
+        // Halfway: smoothstep(0.5) = 0.5 -> 127.5, rounded half up.
+        assert_eq!(ring_weight(d / 2, blend), Some(128), "blend {blend}");
+    }
+    // Literal values pin the exporter's mirror (integer arithmetic).
+    assert_eq!(ring_weight(3, 32), Some(254));
+    assert_eq!(ring_weight(24, 32), Some(215));
+    assert_eq!(ring_weight(72, 32), Some(40));
+    assert_eq!(ring_weight(92, 32), Some(1));
+    assert_eq!(ring_weight(95, 32), None, "rounds to 0");
+}
+
+#[test]
+fn the_ground_ring_op_paints_blend_cells_around_exact_ground() {
+    let spec = region("ring", (1024, 1024), (1536, 1280), 32, vec![
+        PaintOp::Ground {
+            shape: Shape::Rect {
+                x0: 1200.0,
+                y0: 1100.0,
+                x1: 1300.0,
+                y1: 1200.0,
+            },
+            ground_cm: 25_137,
+            weight: GROUND_EXACT,
+        },
+        PaintOp::GroundRing {
+            width_m: 32,
+            ground_cm: None,
+        },
+    ]);
+    let ar = load(&[build_region(&spec).unwrap()]).unwrap();
+    let cell = |x, y| ar.cell_at(Vec2::new(x, y)).unwrap();
+    assert_eq!(cell(1250, 1150), AuthoredCell::Ground {
+        block: 251,
+        weight: GROUND_EXACT
+    });
+    // 1 m out: chamfer 3 -> 254; 8 m out: chamfer 24 -> 215.
+    assert_eq!(cell(1300, 1150), AuthoredCell::Ground {
+        block: 251,
+        weight: 254
+    });
+    assert_eq!(cell(1307, 1150), AuthoredCell::Ground {
+        block: 251,
+        weight: 215
+    });
+    assert_eq!(cell(1331, 1150), AuthoredCell::None, "beyond the ring");
+    let w = |x| match cell(x, 1150) {
+        AuthoredCell::Ground { weight, .. } => weight,
+        _ => 0,
+    };
+    let profile: Vec<u8> = (1300..1340).map(w).collect();
+    assert!(profile.windows(2).all(|p| p[0] >= p[1]), "{profile:?}");
+    // A ring cell counts as a ground column of the chunk summary.
+    let s = ar.chunk_summary(Vec2::new(1310 / 32, 1150 / 32)).unwrap();
+    assert!(s.ground_columns > 0);
+}
+
+#[test]
+fn blend_ground_never_holds_or_lies_under_water() {
+    // Under a wet cell: refused (ground there must be exact and the bed).
+    let under = region("u", (1024, 1024), (1536, 1216), 32, vec![
+        PaintOp::Ground {
+            shape: Shape::Rect {
+                x0: 1100.0,
+                y0: 1100.0,
+                x1: 1200.0,
+                y1: 1150.0,
+            },
+            ground_cm: 23_268,
+            weight: 200,
+        },
+        PaintOp::Water {
+            shape: Shape::Rect {
+                x0: 1120.0,
+                y0: 1120.0,
+                x1: 1140.0,
+                y1: 1130.0,
+            },
+            surface_cm: 23_868,
+            bed_cm: 23_268,
+        },
+    ]);
+    expect_error(vec![build_region(&under).unwrap()], "must be exact");
+    // Beside a wet cell: a blend cell is never a wall that holds water.
+    let beside = region("b", (1024, 1024), (1536, 1216), 32, vec![
+        PaintOp::Ground {
+            shape: Shape::Rect {
+                x0: 1100.0,
+                y0: 1100.0,
+                x1: 1200.0,
+                y1: 1150.0,
+            },
+            ground_cm: 24_000,
+            weight: 200,
+        },
+        PaintOp::ClearGround {
+            shape: Shape::Rect {
+                x0: 1120.0,
+                y0: 1120.0,
+                x1: 1140.0,
+                y1: 1130.0,
+            },
+        },
+        PaintOp::Water {
+            shape: Shape::Rect {
+                x0: 1120.0,
+                y0: 1120.0,
+                x1: 1140.0,
+                y1: 1130.0,
+            },
+            surface_cm: 23_868,
+            bed_cm: 23_268,
+        },
+    ]);
+    expect_error(vec![build_region(&beside).unwrap()], "or not exact");
+}
+
+#[test]
+fn seam_pairs_are_ground_cells_meeting_the_natural_map() {
+    let patch = |partial: bool, sea_fill: SeaFill, ground_cm: i32| {
+        let mut s = region("seam", (1024, 1024), (1536, 1216), 32, vec![
+            PaintOp::Ground {
+                shape: Shape::Rect {
+                    x0: 1100.0,
+                    y0: 1100.0,
+                    x1: 1103.0,
+                    y1: 1103.0,
+                },
+                ground_cm,
+                weight: GROUND_EXACT,
+            },
+        ]);
+        s.allow_partial = partial;
+        s.sea_fill = sea_fill;
+        load(&[build_region(&s).unwrap()]).unwrap()
+    };
+    // An owned box above sea level: nothing meets the natural map.
+    assert!(
+        patch(false, SeaFill::Auto, 24_000)
+            .ground_seam_pairs()
+            .is_empty()
+    );
+    // A 3 x 3 patch in a partial chunk: its 12 outer edges.
+    let pairs = patch(true, SeaFill::Auto, 24_000).ground_seam_pairs();
+    assert_eq!(pairs.len(), 12, "{pairs:?}");
+    assert!(pairs.iter().all(|(g, n)| {
+        (g - n).map(i32::abs).sum() == 1
+            && (1100..1103).contains(&g.x)
+            && (1100..1103).contains(&g.y)
+    }));
+    // AuthoredOnly ground below the ocean's top block: every unauthored
+    // neighbour, owned chunk or not; above it, none in an owned box.
+    assert_eq!(
+        patch(false, SeaFill::AuthoredOnly, 13_050)
+            .ground_seam_pairs()
+            .len(),
+        12
+    );
+    assert!(
+        patch(false, SeaFill::AuthoredOnly, 24_000)
+            .ground_seam_pairs()
+            .is_empty()
+    );
 }
