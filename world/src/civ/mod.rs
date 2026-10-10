@@ -2767,9 +2767,12 @@ impl Civs {
                         wpos,
                         &mut gen_meta,
                     ),
-                    SiteKind::Citadel => {
-                        WorldSite::generate_citadel(&Land::from_sim(ctx.sim), &mut rng, wpos)
-                    },
+                    SiteKind::Citadel => WorldSite::generate_citadel_within(
+                        &Land::from_sim(ctx.sim),
+                        &mut rng,
+                        wpos,
+                        sim_site.landmark_stand_in_radius(),
+                    ),
                     SiteKind::Bridge(a, b) => {
                         let mut bridge_site = WorldSite::generate_bridge(
                             &Land::from_sim(ctx.sim),
@@ -4893,6 +4896,19 @@ impl Site {
                 settlement.size.contract_key(),
             )
         })
+    }
+
+    /// How far (blocks) the generic generator standing in for this
+    /// authored landmark may build, when that is the landmark's own authored
+    /// footprint rather than the generator's natural size. Today: a harbour
+    /// (the Kalthis and Duren river ports), authored 26 blocks across but
+    /// standing in as a citadel that would otherwise build out to 150 and
+    /// take the neighbouring riverside wards. `None` for every other site,
+    /// which generates as before.
+    pub(crate) fn landmark_stand_in_radius(&self) -> Option<i32> {
+        let profile = self.authored_landmark.as_ref()?.profile.as_ref()?;
+        (profile.physical_template == AuthoredLandmarkPhysicalTemplate::Harbour)
+            .then_some(profile.footprint_radius)
     }
 
     /// The authored name for this site, if it was established from an

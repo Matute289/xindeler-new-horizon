@@ -1165,6 +1165,17 @@ impl Site {
     }
 
     pub fn generate_citadel(land: &Land, rng: &mut impl Rng, origin: Vec2<i32>) -> Self {
+        Self::generate_citadel_within(land, rng, origin, None)
+    }
+
+    // XINDELER: see `plot::Citadel::generate_with_radius`.
+    /// [`Self::generate_citadel`], built within `radius` blocks when given.
+    pub fn generate_citadel_within(
+        land: &Land,
+        rng: &mut impl Rng,
+        origin: Vec2<i32>,
+        radius: Option<i32>,
+    ) -> Self {
         let mut rng = reseed(rng);
         let mut site = Site {
             origin,
@@ -1172,7 +1183,15 @@ impl Site {
             ..Site::default()
         };
         site.demarcate_obstacles(land);
-        let citadel = plot::Citadel::generate(origin, land, &mut rng);
+        let citadel = match radius {
+            None => plot::Citadel::generate(origin, land, &mut rng),
+            Some(radius) => plot::Citadel::generate_with_radius(
+                origin,
+                land,
+                &mut rng,
+                plot::Citadel::whole_cells(radius),
+            ),
+        };
         site.name = Some(citadel.name().to_string());
         let size = citadel.radius() / tile::TILE_SIZE as i32;
         let aabr = Aabr {
