@@ -86,9 +86,9 @@ fn map_message_is_byte_identical_without_a_ground_layer_cromatolis() {
 
 /// A synthetic ground patch over the arena: a raised plateau, a step, a
 /// lowered basin (all above sea level) and a 32 m ring. At every chunk
-/// sample column on an exact ground cell the presented LOD altitude is
-/// within 1 m of the top block the column sampler renders there; samples off
-/// the ground layer are unchanged.
+/// sample column on a ground cell (exact or ring) the presented LOD
+/// altitude is within 1 m of the top block the column sampler renders there;
+/// samples off the ground layer are unchanged.
 #[test]
 #[ignore]
 fn lod_altitude_follows_the_ground_patch_at_the_sample_columns() {
@@ -134,6 +134,8 @@ fn lod_altitude_follows_the_ground_patch_at_the_sample_columns() {
                 let top = col.alt.floor();
                 let err = (decoded_alt(&new, pos) - top).abs();
                 if weight == GROUND_EXACT {
+                    // The rendered column is the authored top block.
+                    assert_eq!(Some(col.alt), sim.ground_alt_at(wpos), "at {wpos:?}");
                     exact_n += 1;
                     exact_err = exact_err.max(err);
                     exact_err_old = exact_err_old.max((decoded_alt(&old, pos) - top).abs());
@@ -159,5 +161,7 @@ fn lod_altitude_follows_the_ground_patch_at_the_sample_columns() {
         exact_err_old > 10.0,
         "the table really differs on the patch"
     );
+    assert!(ring_n > 10, "the ring covers sample columns");
+    assert!(ring_err <= 1.0, "ring LOD sample error {ring_err} m > 1 m");
     assert_eq!(other_changed, 0);
 }

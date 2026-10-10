@@ -1,5 +1,6 @@
 use crate::{
     CONFIG, IndexRef,
+    authored_raster::AuthoredCell,
     column::ColumnSample,
     sim::{
         AuthoredEcologyZone, AuthoredGroundCoverProfile, AuthoredMapEcologyProfile,
@@ -199,20 +200,43 @@ pub fn sample_wpos(config: &MapConfig, sampler: &WorldSim, wpos: Vec2<i32>) -> f
 }
 
 /// [`sample_wpos`] for what the server presents (the world map image and
-/// `WorldMapMsg::alt`, which the client's LOD terrain is built from): on an
-/// authored ground cell the patch's ground at this very column so distant
-/// terrain shows the edits at the 32 m sample spacing; elsewhere exactly
-/// [`sample_wpos`]. A ground cell is presented dry: the map altitude is
-/// unsigned above sea level, so a dry pit below 0 m clamps to sea level either
-/// way (signed LOD is Stage 3). Never used by generation.
-pub fn sample_wpos_presented(config: &MapConfig, sampler: &WorldSim, wpos: Vec2<i32>) -> f32 {
+/// `WorldMapMsg::alt`, which the client's LOD terrain is built from). On an
+/// authored ground cell (exact or ring) it is `rendered`, the altitude the
+/// column sampler renders at this very column, so distant terrain shows the
+/// edits at the 32 m sample spacing and agrees with the blocks; elsewhere,
+/// or when `rendered` is `None`, exactly [`sample_wpos`]. Never used by
+/// generation.
+///
+/// A ground cell is presented dry: unlike [`sample_wpos`] there is no
+/// `.max(water_alt)` with the chunk table's water, which inside a region is
+/// the frozen natural water and would paint a lowered patch as a lake.
+/// Ground below sea level is not representable in the unsigned map
+/// altitude: [`pack_map_alt`] clamps it to sea level.
+pub fn sample_wpos_presented(
+    config: &MapConfig,
+    sampler: &WorldSim,
+    wpos: Vec2<i32>,
+    rendered: impl FnOnce() -> Option<f32>,
+) -> f32 {
     if !config.is_basement
-        && let Some(alt) = sampler.authored_ground_presentation_alt(wpos)
+        && matches!(
+            sampler
+                .authored_rasters
+                .as_ref()
+                .and_then(|r| r.cell_at(wpos)),
+            Some(AuthoredCell::Ground { .. })
+        )
+        && let Some(alt) = rendered()
     {
         return (alt - config.focus.z as f32) / config.gain;
     }
     sample_wpos(config, sampler, wpos)
 }
+
+/// A normalised map altitude (`0.0` = sea level, `1.0` = the top of the
+/// map) packed as `WorldMapMsg::alt` stores it: 13 unsigned bits, shifted
+/// left by 3. Out-of-range values clamp.
+pub fn pack_map_alt(alt: f32) -> u32 { (((alt.clamp(0.0, 1.0) * 8191.0) as u32) & 0x1FFF) << 3 }
 
 /// Samples a MapSample at a chunk.
 ///

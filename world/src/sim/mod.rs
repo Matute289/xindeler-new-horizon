@@ -11,7 +11,7 @@ use self::erosion::Compute;
 pub use self::{
     diffusion::diffusion,
     location::Location,
-    map::{sample_pos, sample_wpos, sample_wpos_presented},
+    map::{pack_map_alt, sample_pos, sample_wpos, sample_wpos_presented},
     util::get_horizon_map,
     way::{Path, Way},
 };
@@ -4076,9 +4076,10 @@ impl WorldSim {
         self.get_map_with(index, calendar, true)
     }
 
-    /// [`Self::get_map`]; `authored_ground` false presents the chunk table
-    /// even on authored ground cells (the table-only map, kept for the identity
-    /// and acceptance tests).
+    /// Test seam of [`Self::get_map`] (which passes `true`): with
+    /// `authored_ground` false the map presents the chunk table even on
+    /// authored ground cells, the map as it was before ground patches were
+    /// presented. Only the identity and acceptance tests pass `false`.
     pub(crate) fn get_map_with(
         &self,
         index: IndexRef,
@@ -4086,17 +4087,6 @@ impl WorldSim {
         authored_ground: bool,
     ) -> WorldMapMsg {
         prof_span!("WorldSim::get_map");
-        // The altitude presented at a column (map shading and
-        // `WorldMapMsg::alt`, the client's LOD heights) reads authored ground
-        // patches at the sample column itself; identical to `sample_wpos`
-        // outside ground cells.
-        let present_wpos = |map_config: &MapConfig, wpos: Vec2<i32>| {
-            if authored_ground {
-                sample_wpos_presented(map_config, self, wpos)
-            } else {
-                sample_wpos(map_config, self, wpos)
-            }
-        };
         let mut map_config = MapConfig::orthographic(
             self.map_size_lg(),
             core::ops::RangeInclusive::new(CONFIG.sea_level, CONFIG.sea_level + self.max_height),
@@ -4168,6 +4158,30 @@ impl WorldSim {
         // TODO: Parallelize again.
         map_config.is_shaded = false;
 
+        // The altitude presented at a column (map shading and
+        // `WorldMapMsg::alt`, the client's LOD heights): on an authored
+        // ground cell at a chunk's sample column, the column sample already
+        // rendered there (`samples_data`, authored-aware); identical to
+        // `sample_wpos` everywhere else.
+        let present_wpos = |map_config: &MapConfig, wpos: Vec2<i32>| {
+            if !authored_ground {
+                return sample_wpos(map_config, self, wpos);
+            }
+            sample_wpos_presented(map_config, self, wpos, || {
+                let chunk = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+                if wpos.map2(chunk, |e, c| e.rem_euclid(c)) != Vec2::zero() {
+                    return None;
+                }
+                let pos = wpos.map2(chunk, |e, c| e.div_euclid(c));
+                let size = self.map_size_lg().chunks().map(|e| e as i32);
+                if pos.x < 0 || pos.y < 0 || pos.x >= size.x || pos.y >= size.y {
+                    return None;
+                }
+                samples_data[vec2_as_uniform_idx(self.map_size_lg(), pos)]
+                    .as_ref()
+                    .map(|s| s.alt)
+            })
+        };
         map_config.generate(
             |pos| sample_pos(&map_config, self, index, Some(&samples_data), pos),
             |pos| present_wpos(&map_config, pos),
@@ -4183,7 +4197,7 @@ impl WorldSim {
                 // NOTE: Safe by invariants on map_size_lg.
                 let posi = (pos.y << self.map_size_lg().vec().x) | pos.x;
                 v[posi] = u32::from_le_bytes([r, g, b, a]);
-                alts[posi] = (((alt.clamp(0.0, 1.0) * 8191.0) as u32) & 0x1FFF) << 3;
+                alts[posi] = pack_map_alt(alt);
             },
         );
         WorldMapMsg {

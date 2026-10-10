@@ -163,19 +163,6 @@ impl WorldSim {
         }
     }
 
-    /// The altitude the world map and the LOD present at the column `wpos`:
-    /// [`Self::ground_alt_at`] on an authored ground cell
-    /// (exact or ring), `None` everywhere else, so every caller keeps its own
-    /// table-based value outside ground cells and a world without a ground
-    /// layer stays bit-identical. Presentation only: generation never reads
-    /// it (the sim inside regions stays frozen).
-    pub fn authored_ground_presentation_alt(&self, wpos: Vec2<i32>) -> Option<f32> {
-        match self.authored_rasters.as_ref()?.cell_at(wpos)? {
-            AuthoredCell::Ground { .. } => self.ground_alt_at(wpos),
-            _ => None,
-        }
-    }
-
     /// `get_gradient_approx` of the chunk holding `wpos`, authored-aware: for
     /// a chunk whose centre column is a ground cell, the steepest of the
     /// slopes from its centre to the four neighbouring chunk centres over
