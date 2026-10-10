@@ -477,7 +477,8 @@ impl Footprint {
 
     /// The deterministic frontier step: the clear plaza patch nearest the
     /// anchor whose nearest plaza is between [`FRONTIER_MIN_SPACING`] and
-    /// [`FRONTIER_MAX_SPACING`] times `plaza_dist` away. Draws no random
+    /// [`FRONTIER_MAX_SPACING`] times `plaza_dist` away, and, while
+    /// steering, not in a ward that already has its quota. Draws no random
     /// numbers.
     pub(crate) fn frontier_plaza(
         &mut self,
@@ -498,7 +499,7 @@ impl Footprint {
             plaza_radius,
             |centre| {
                 let d2 = self.plaza_dist2[self.index(centre)];
-                d2 > min2 && d2 <= max2
+                d2 > min2 && d2 <= max2 && !self.ward_full(centre)
             },
             is_clear,
         );

@@ -879,8 +879,14 @@ impl Site {
                         None => {
                             rng.random_range(0..48) > aabr.center().map(|e| e.abs()).reduce_max()
                         },
-                        Some(footprint) => footprint
-                            .has_room_for_plaza(aabr, |tile| self.tiles.get(tile).is_empty()),
+                        // While steering, the network only grows into
+                        // wards still short of their quota.
+                        Some(footprint) => {
+                            !footprint.ward_full(aabr.center())
+                                && footprint.has_room_for_plaza(aabr, |tile| {
+                                    self.tiles.get(tile).is_empty()
+                                })
+                        },
                     };
                     within_reach && aabr_tiles(aabr).all(|tile| !self.tiles.get(tile).is_obstacle())
                 })
