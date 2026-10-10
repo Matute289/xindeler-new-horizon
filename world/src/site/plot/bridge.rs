@@ -1303,7 +1303,7 @@ impl Bridge {
                 col.alt as i32
             } else {
                 return (
-                    test_start.with_z(land.get_alt_approx(start) as i32),
+                    test_start.with_z(land.ground_alt_at(start) as i32),
                     i32::MAX,
                 );
             };

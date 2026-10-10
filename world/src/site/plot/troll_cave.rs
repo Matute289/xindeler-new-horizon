@@ -33,7 +33,7 @@ impl TrollCave {
         let temp = site_temp;
         Self {
             bounds,
-            alt: land.get_alt_approx(site.tile_center_wpos(tile_aabr.center())) as i32 + 2,
+            alt: land.ground_alt_at(site.tile_center_wpos(tile_aabr.center())) as i32 + 2,
             temp,
         }
     }
@@ -48,7 +48,7 @@ impl Structure for TrollCave {
 
     fn render_inner(&self, _site: &Site, land: &Land, painter: &Painter) {
         let center = self.bounds.center();
-        let base = land.get_alt_approx(center) as i32;
+        let base = land.ground_alt_at(center) as i32;
         let mut rng = rand::rng();
         let model_pos = center.with_z(base);
         // model

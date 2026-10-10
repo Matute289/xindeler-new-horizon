@@ -105,8 +105,9 @@ pub struct Data {
     /// XINDELER: per authored region, the digest of its manifest entry this
     /// save last saw (sorted, so the save's bytes are deterministic; ~100 B
     /// per region). Startup logs how many NPCs stand on the ground layer of a
-    /// region that changed (`rule::authored_water::note_ground_region_changes`).
-    /// Additive `#[serde(default)]` field, so `CURRENT_VERSION` does not move.
+    /// region that changed
+    /// (`rule::authored_water::note_ground_region_changes`). Additive `#
+    /// [serde(default)]` field, so `CURRENT_VERSION` does not move.
     #[serde(default)]
     pub authored_region_digests: std::collections::BTreeMap<String, String>,
 

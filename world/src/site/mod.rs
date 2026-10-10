@@ -497,8 +497,8 @@ impl Site {
                             let neighbor = (tile + *dir, *dir);
 
                             // Transition cost
-                            let alt_a = land.get_alt_approx(this.tile_center_wpos(tile));
-                            let alt_b = land.get_alt_approx(this.tile_center_wpos(neighbor.0));
+                            let alt_a = land.ground_alt_at(this.tile_center_wpos(tile));
+                            let alt_b = land.ground_alt_at(this.tile_center_wpos(neighbor.0));
                             let mut cost = 1.0
                                 + (alt_a - alt_b).abs() / TILE_SIZE as f32
                                 + (prev_dir != *dir) as i32 as f32;
@@ -565,7 +565,7 @@ impl Site {
                                 a: i.saturating_sub(1) as u16,
                                 b: (i + 1).min(path.len() - 1) as u16,
                                 w,
-                                alt: land.get_alt_approx(self.tile_center_wpos(tile))
+                                alt: land.ground_alt_at(self.tile_center_wpos(tile))
                                     // Clamp roads to an altitude that means they can always reach their destination with less than a 45 degree slope
                                     .clamp(
                                         src_alt - i as f32 * tile::TILE_SIZE as f32,
@@ -577,7 +577,7 @@ impl Site {
                                     ),//Lerp::lerp(alt_a, alt_b, i as f32 / path.len() as f32),
                             },
                             plot: old_tile.plot.or(Some(plot)),
-                            hard_alt: Some(land.get_alt_approx(self.tile_center_wpos(tile)) as i32),
+                            hard_alt: Some(land.ground_alt_at(self.tile_center_wpos(tile)) as i32),
                         });
                     }
                 }
@@ -767,7 +767,7 @@ impl Site {
         road_kind: plot::RoadKind,
     ) -> Option<Id<Plot>> {
         let tpos = tile_aabr.center();
-        let plaza_alt = land.get_alt_approx(self.tile_center_wpos(tpos)) as i32;
+        let plaza_alt = land.ground_alt_at(self.tile_center_wpos(tpos)) as i32;
 
         let plaza = self.create_plot(Plot {
             kind: PlotKind::Plaza(plot::Plaza::generate(
@@ -948,7 +948,7 @@ impl Site {
                                     closest_pos: path_wpos,
                                     path,
                                 };
-                                tile.hard_alt = Some(land.get_alt_approx(path_wpos.as_()) as i32);
+                                tile.hard_alt = Some(land.ground_alt_at(path_wpos.as_()) as i32);
                             });
                     }
                 }
@@ -2035,14 +2035,14 @@ impl Site {
 
         // Pick the starting downhill direction based on the average drop over
         // two chunks in the four cardinal directions
-        let origin_alt = land.get_alt_approx(origin);
+        let origin_alt = land.ground_alt_at(origin);
         let alt_drops: Vec<f32> = CARDINALS
             .iter()
             .map(|c| {
                 origin_alt
                     - 0.5
-                        * (land.get_alt_approx(origin + *c * TerrainChunkSize::RECT_SIZE.x as i32)
-                            + land.get_alt_approx(
+                        * (land.ground_alt_at(origin + *c * TerrainChunkSize::RECT_SIZE.x as i32)
+                            + land.ground_alt_at(
                                 origin + 2 * *c * TerrainChunkSize::RECT_SIZE.x as i32,
                             ))
             })
@@ -3817,7 +3817,7 @@ fn wpos_is_hazard(land: &Land, wpos: Vec2<i32>) -> Option<HazardKind> {
     if land.near_water_at(wpos).is_none_or(|near| near) {
         Some(HazardKind::Water)
     } else {
-        Some(land.get_gradient_approx(wpos))
+        Some(land.ground_gradient_at(wpos))
             .filter(|g| *g > 0.8)
             .map(|gradient| HazardKind::Hill { gradient })
     }
@@ -3851,7 +3851,7 @@ fn get_gradient_average(aabr: Aabr<i32>, land: &Land) -> f32 {
 
     for x_pos in (range_x_min..=range_x_max).step_by(chunk_size as usize) {
         for y_pos in (range_y_min..=range_y_max).step_by(chunk_size as usize) {
-            let gradient_at_pos = land.get_gradient_approx(Vec2::new(x_pos, y_pos));
+            let gradient_at_pos = land.ground_gradient_at(Vec2::new(x_pos, y_pos));
             gradient_sum += gradient_at_pos;
             gradient_sample_count += 1;
         }

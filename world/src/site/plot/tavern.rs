@@ -309,7 +309,7 @@ impl Tavern {
         let door_wpos = door_dir.select_aabr_with(ibounds, door_tile_center);
         let temperature = land.get_interpolated(door_wpos, |c| c.temp);
 
-        let door_alt = alt.unwrap_or_else(|| land.get_alt_approx(door_wpos).ceil() as i32);
+        let door_alt = alt.unwrap_or_else(|| land.ground_alt_at(door_wpos).ceil() as i32);
         let door_wpos = door_wpos.with_z(door_alt);
 
         fn gen_range_snap(rng: &mut impl RngExt, range: RangeInclusive<i32>, snap_max: i32) -> i32 {
@@ -562,7 +562,7 @@ impl Tavern {
                     // Pick a  height of the new room
                     let room_hgt = rng.random_range(3..=5);
 
-                    let wanted_alt = land.get_alt_approx(max_bounds.center()) as i32 + 1;
+                    let wanted_alt = land.ground_alt_at(max_bounds.center()) as i32 + 1;
                     let max_stair_length =
                         (in_dir.select(if wanted_alt < from_room.bounds.min.z {
                             from_bounds.size()
@@ -1913,7 +1913,7 @@ impl Structure for Tavern {
                     _ => {
                         if width >= 5
                             && door_dist > 3
-                            && wall.base_alt >= land.get_alt_approx(wall_center) as i32
+                            && wall.base_alt >= land.ground_alt_at(wall_center) as i32
                         {
                             painter
                                 .aabb(aabb(Aabb {

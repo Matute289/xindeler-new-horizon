@@ -350,6 +350,24 @@ fn authored_spawn_ok(world: &World, wpos: Vec2<i32>, aquatic: Option<bool>) -> b
     }
 }
 
+/// XINDELER: the spawn height at a site position. The authored-aware ground
+/// (`WorldSim::ground_alt_at`: the authored ground inside authored regions,
+/// the chunk table everywhere else, unchanged there), except on a flooded
+/// authored column (authored water, or a sea-filled pit of authored ground,
+/// see `AuthoredColumn::is_flooded`), where that ground is a bed under
+/// water: there a body that does not live in water spawns on the water
+/// surface (`WorldSim::surface_alt_at`) instead.
+fn site_spawn_alt(world: &World, wpos: Vec2<i32>, body: &Body) -> f32 {
+    let sim = world.sim();
+    if body_aquatic(body) != Some(true)
+        && sim.authored_column_at(wpos).is_some_and(|c| c.is_flooded())
+    {
+        sim.surface_alt_at(wpos)
+    } else {
+        sim.ground_alt_at(wpos).unwrap_or(0.0)
+    }
+}
+
 fn spawn_anywhere(
     data: &mut Data,
     world: &World,
@@ -422,9 +440,7 @@ fn spawn_at_plot(
         .choose(rng)
     {
         let wpos = site.tile_center_wpos(plot.root_tile());
-        let wpos = wpos
-            .as_()
-            .with_z(world.sim().ground_alt_at(wpos).unwrap_or(0.0));
+        let wpos = wpos.as_().with_z(site_spawn_alt(world, wpos, &body));
         let mut npc = Actor::new_npc(rng.random(), wpos, body, death.role.clone())
             .with_personality(personality)
             .with_home(id);
@@ -552,9 +568,7 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
             .map(|id| (id, &data.sites[id]));
         if let Some((id, site)) = site {
             let wpos = site.wpos;
-            let wpos = wpos
-                .as_()
-                .with_z(world.sim().ground_alt_at(wpos).unwrap_or(0.0));
+            let wpos = wpos.as_().with_z(site_spawn_alt(world, wpos, &body));
             data.spawn_actor(
                 Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                     .with_personality(personality)
@@ -620,9 +634,7 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                     .choose(&mut rng)
                 {
                     let wpos = site.wpos;
-                    let wpos = wpos
-                        .as_()
-                        .with_z(world.sim().ground_alt_at(wpos).unwrap_or(0.0));
+                    let wpos = wpos.as_().with_z(site_spawn_alt(world, wpos, &body));
                     data.spawn_actor(
                         Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                             .with_personality(personality)

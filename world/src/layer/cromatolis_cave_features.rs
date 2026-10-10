@@ -652,7 +652,7 @@ fn build_generated_cave(
     let profile = feature.size_class.profile();
     let chunk_pos = feature.position.to_chunk_pos(map_size);
     let hub_wpos = chunk_pos.cpos_to_wpos_center();
-    let hub_alt = land.get_alt_approx_table(hub_wpos);
+    let hub_alt = land.get_alt_approx(hub_wpos);
     let hub_floor_z = hub_alt as i32 - profile.depth;
     let hub_ceiling_z = hub_floor_z + profile.headroom as i32;
 
@@ -670,7 +670,7 @@ fn build_generated_cave(
         let angle = (i as f32 / profile.branch_count as f32) * TAU + fnv1a_unit(&branch_seed) * 0.5;
         let offset = Vec2::new(angle.cos(), angle.sin()) * profile.branch_length;
         let tip_wpos = hub_wpos + offset.map(|e| e.round() as i32);
-        let tip_alt = land.get_alt_approx_table(tip_wpos);
+        let tip_alt = land.get_alt_approx(tip_wpos);
         let tip_floor_z = (tip_alt as i32 - profile.depth).clamp(
             hub_floor_z - MAX_BRANCH_FLOOR_DRIFT,
             hub_floor_z + MAX_BRANCH_FLOOR_DRIFT,
@@ -2656,7 +2656,7 @@ mod tests {
             .expect("the authored region must index its voids");
         let land = Land::from_sim(world.sim());
 
-        let inert = voids.inert_connect_features(|wpos| land.get_alt_approx_table(wpos));
+        let inert = voids.inert_connect_features(|wpos| land.get_alt_approx(wpos));
         println!("inert Connect features in the real catalog: {inert:?}");
         assert_eq!(
             inert, KNOWN_INERT,

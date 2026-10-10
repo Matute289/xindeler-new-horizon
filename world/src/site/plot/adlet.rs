@@ -100,9 +100,9 @@ impl AdletStronghold {
         // relative to entrance
         let angle = angle_samples
             .max_by_key(|theta| {
-                let entrance_height = land.get_alt_approx(entrance);
+                let entrance_height = land.ground_alt_at(entrance);
                 let height =
-                    |pos: Vec2<f32>| land.get_alt_approx(pos.as_() + entrance) - entrance_height;
+                    |pos: Vec2<f32>| land.ground_alt_at(pos.as_() + entrance) - entrance_height;
                 let (x, y) = (theta.cos(), theta.sin());
                 (40..=50)
                     .map(|r| {
@@ -126,8 +126,8 @@ impl AdletStronghold {
             + (Vec2::new(angle.cos(), angle.sin()) * (tunnel_length as f32 + cavern_radius as f32))
                 .as_();
 
-        let cavern_alt = (land.get_alt_approx(cavern_center) - cavern_radius as f32)
-            .min(land.get_alt_approx(entrance));
+        let cavern_alt = (land.ground_alt_at(cavern_center) - cavern_radius as f32)
+            .min(land.ground_alt_at(entrance));
 
         let mut outer_structures = Vec::<(AdletStructure, Vec2<i32>, Dir2)>::new();
 
@@ -672,7 +672,7 @@ impl Structure for AdletStronghold {
             .iter()
             .map(|(structure, rpos, dir)| {
                 let wpos = rpos + self.entrance;
-                (structure, wpos, land.get_alt_approx(wpos), dir)
+                (structure, wpos, land.ground_alt_at(wpos), dir)
             })
             .chain(self.cavern_structures.iter().map(|(structure, rpos, dir)| {
                 (structure, rpos + self.cavern_center, self.cavern_alt, dir)
