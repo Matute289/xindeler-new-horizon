@@ -1868,10 +1868,17 @@ fn region_digests_follow_each_region_and_the_new_fields_are_digest_stable() {
         let r = load(&[build_region(&s).unwrap()]).unwrap();
         assert_ne!(r.region_digests()["a"], da["a"]);
     }
-    let text = ron::ser::to_string(&build_region(&spec("a", 1024, 24_000)).unwrap().manifest)
-        .unwrap();
-    for field in ["sites_on_patch", "site_levelling", "max_exposed_void_columns"] {
-        assert!(!text.contains(field), "{field} serialised at its default: {text}");
+    let text =
+        ron::ser::to_string(&build_region(&spec("a", 1024, 24_000)).unwrap().manifest).unwrap();
+    for field in [
+        "sites_on_patch",
+        "site_levelling",
+        "max_exposed_void_columns",
+    ] {
+        assert!(
+            !text.contains(field),
+            "{field} serialised at its default: {text}"
+        );
     }
     let parsed: RegionManifest = ron::from_str(&text).unwrap();
     assert!(parsed.site_levelling && parsed.sites_on_patch.is_empty());
@@ -1918,16 +1925,18 @@ fn blend_cells_fade_into_the_natural_map_and_authored_only_chunks_are_lakes() {
 /// are left alone.
 #[test]
 fn buried_positions_are_lifted_to_the_authored_ground() {
-    let s = region("lift", (1024, 1024), (1536, 1280), 32, vec![PaintOp::Ground {
-        shape: Shape::Rect {
-            x0: 1100.0,
-            y0: 1100.0,
-            x1: 1200.0,
-            y1: 1200.0,
+    let s = region("lift", (1024, 1024), (1536, 1280), 32, vec![
+        PaintOp::Ground {
+            shape: Shape::Rect {
+                x0: 1100.0,
+                y0: 1100.0,
+                x1: 1200.0,
+                y1: 1200.0,
+            },
+            ground_cm: 25_050,
+            weight: GROUND_EXACT,
         },
-        ground_cm: 25_050,
-        weight: GROUND_EXACT,
-    }]);
+    ]);
     let mut sim = crate::sim::WorldSim::empty();
     sim.set_authored_rasters_for_test(Some(load(&[build_region(&s).unwrap()]).unwrap()));
     let p = |z| Vec3::new(1150, 1150, z);
@@ -2084,7 +2093,9 @@ fn voids_exposed_by_a_patch_are_counted_and_mouths_are_exempt() {
         b.finish().unwrap()
     };
     let (mut world, _) = crate::World::empty();
-    world.sim.set_authored_rasters_for_test(Some(load(&[build_region(&spec(0)).unwrap()]).unwrap()));
+    world
+        .sim
+        .set_authored_rasters_for_test(Some(load(&[build_region(&spec(0)).unwrap()]).unwrap()));
     // Ceiling 10 blocks under the ground: covered.
     let r = void_exposure(&world, Some(&voids(240)), &[]);
     assert_eq!(r.len(), 1);

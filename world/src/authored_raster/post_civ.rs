@@ -3,24 +3,23 @@
 //! is handed to the server.
 //!
 //! * **Sites** ([`site_patch_report`]): a site whose bounds come within
-//!   [`SITE_PATCH_MARGIN_M`] of a ground region must be listed in that
-//!   region's `sites_on_patch` (its layout follows the patch, so listing it
-//!   is the reviewed act that re-blesses its layout digest); a listed site
-//!   must not stand on ring cells (the authored-aware ground query only
-//!   approximates them); and every exact ground column a listed site's plot
-//!   levelling moves is counted (reported, not refused: houses level their
-//!   lots).
+//!   [`SITE_PATCH_MARGIN_M`] of a ground region must be listed in that region's
+//!   `sites_on_patch` (its layout follows the patch, so listing it is the
+//!   reviewed act that re-blesses its layout digest); a listed site must not
+//!   stand on ring cells (the authored-aware ground query only approximates
+//!   them); and every exact ground column a listed site's plot levelling moves
+//!   is counted (reported, not refused: houses level their lots).
 //! * **Voids** ([`void_exposure`]): an authored void (cave, interior) whose
-//!   authored top comes within [`VOID_EXPOSURE_TOLERANCE_BLOCKS`] of the
-//!   ground over it is exposed by the patch; more such columns than the
-//!   region allows (`max_exposed_void_columns`, default 0) stop world
-//!   generation. Declared mouths are exempt; a declared *wet* mouth must not
-//!   hold more water than it declares.
+//!   authored top comes within [`VOID_EXPOSURE_TOLERANCE_BLOCKS`] of the ground
+//!   over it is exposed by the patch; more such columns than the region allows
+//!   (`max_exposed_void_columns`, default 0) stop world generation. Declared
+//!   mouths are exempt; a declared *wet* mouth must not hold more water than it
+//!   declares.
 //! * **Roads** ([`road_cliffs`]): civ roads are planned on the natural chunk
 //!   table, so one can cross an authored cliff. Every road column on an exact
 //!   ground cell that steps more than [`ROAD_CLIMB_LIMIT_BLOCKS`] to an
-//!   adjacent exact cell is reported (a verifier gates it; the fix is an
-//!   edit, not an engine change).
+//!   adjacent exact cell is reported (a verifier gates it; the fix is an edit,
+//!   not an engine change).
 //!
 //! Each check enumerates its columns once, samples them in parallel and
 //! sorts the result, so its output does not depend on the thread count.
@@ -159,7 +158,10 @@ pub fn site_patch_report(world: &World, index: IndexRef) -> SitePatchReport {
         .values()
         .filter_map(|s| {
             let id = s.site_tmp?;
-            Some((crate::civ::seeds::site_seed_key(s), index.sites[id].bounds()))
+            Some((
+                crate::civ::seeds::site_seed_key(s),
+                index.sites[id].bounds(),
+            ))
         })
         .collect();
     sites.sort_unstable_by(|a, b| a.0.cmp(&b.0));

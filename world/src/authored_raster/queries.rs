@@ -5,10 +5,11 @@
 //!
 //! The one routing point for the ground is [`WorldSim::ground_alt_at`]:
 //! `Land::get_alt_approx` and `Land::get_gradient_approx` delegate to it, and
-//! [`WorldSim::surface_alt_at`] adds the water on top. `WorldSim::get_alt_approx`
-//! stays the chunk table (the natural map the sim was built from): consumers
-//! whose result reaches beyond the sampled point (the cave graph, caverns,
-//! authored voids) read it through `Land::get_alt_approx_table`.
+//! [`WorldSim::surface_alt_at`] adds the water on top.
+//! `WorldSim::get_alt_approx` stays the chunk table (the natural map the sim
+//! was built from): consumers whose result reaches beyond the sampled point
+//! (the cave graph, caverns, authored voids) read it through
+//! `Land::get_alt_approx_table`.
 //!
 //! Inside an authored region these answer from the raster (the water the
 //! player sees); everywhere else they return exactly what the chunk table
@@ -127,20 +128,16 @@ impl WorldSim {
     ///   ([`top_block_alt`], the column sampler's convention), with no
     ///   sea-level clamp (a dry pit below 0 m is its floor);
     /// * blend (ring) ground of weight `w`: `lerp(table, block, w / 255)`. The
-    ///   rendered ring lerps toward the engine column *with* its noise
-    ///   instead, so on ring cells this differs from the blocks by up to the
-    ///   engine's relief times `1 - w` (rings belong outside sites; the
-    ///   post-civ site check refuses one under a listed site);
+    ///   rendered ring lerps toward the engine column *with* its noise instead,
+    ///   so on ring cells this differs from the blocks by up to the engine's
+    ///   relief times `1 - w` (rings belong outside sites; the post-civ site
+    ///   check refuses one under a listed site);
     /// * everything else, and every column outside every region: the chunk
     ///   table ([`Self::get_alt_approx`]), bit for bit.
     ///
     /// `None` outside the map.
     pub fn ground_alt_at(&self, wpos: Vec2<i32>) -> Option<f32> {
-        match self
-            .authored_rasters
-            .as_ref()
-            .and_then(|r| r.cell_at(wpos))
-        {
+        match self.authored_rasters.as_ref().and_then(|r| r.cell_at(wpos)) {
             Some(AuthoredCell::Wet { bed_block, .. } | AuthoredCell::Bank { bed_block }) => {
                 Some(top_block_alt(bed_block))
             },

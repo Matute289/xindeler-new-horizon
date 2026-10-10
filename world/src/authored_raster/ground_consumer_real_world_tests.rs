@@ -158,9 +158,7 @@ fn ground_queries_are_the_table_outside_and_the_patch_inside() {
         .step_by(3)
         .flat_map(|y| (x0 - 40..x0).map(move |x| Vec2::new(x, y)))
         .filter_map(|p| match rasters.cell_at(p) {
-            Some(AuthoredCell::Ground { weight, .. }) if weight < GROUND_EXACT => {
-                Some((p, weight))
-            },
+            Some(AuthoredCell::Ground { weight, .. }) if weight < GROUND_EXACT => Some((p, weight)),
             _ => None,
         })
         .collect();
@@ -181,8 +179,8 @@ fn ground_queries_are_the_table_outside_and_the_patch_inside() {
         .map(|e| e.1)
         .fold(0.0, f32::max);
     println!(
-        "ring tolerance: {} ring cells, |rendered - ground_alt_at| mean {mean:.2} m, max {max:.2} m \
-         (weight >= 192: max {hi:.2} m)",
+        "ring tolerance: {} ring cells, |rendered - ground_alt_at| mean {mean:.2} m, max {max:.2} \
+         m (weight >= 192: max {hi:.2} m)",
         errs.len()
     );
     assert!(!errs.is_empty() && max < 16.0);
@@ -272,10 +270,22 @@ fn grounding(
         for t in plot.tiles() {
             let (a, e) = (site.tile_wpos(t), site.tile_wpos(t + 1));
             for (n, edge) in [
-                (Vec2::new(1, 0), (Vec2::new(e.x, a.y), Vec2::new(e.x + 1, e.y))),
-                (Vec2::new(-1, 0), (Vec2::new(a.x - 1, a.y), Vec2::new(a.x, e.y))),
-                (Vec2::new(0, 1), (Vec2::new(a.x, e.y), Vec2::new(e.x, e.y + 1))),
-                (Vec2::new(0, -1), (Vec2::new(a.x, a.y - 1), Vec2::new(e.x, a.y))),
+                (
+                    Vec2::new(1, 0),
+                    (Vec2::new(e.x, a.y), Vec2::new(e.x + 1, e.y)),
+                ),
+                (
+                    Vec2::new(-1, 0),
+                    (Vec2::new(a.x - 1, a.y), Vec2::new(a.x, e.y)),
+                ),
+                (
+                    Vec2::new(0, 1),
+                    (Vec2::new(a.x, e.y), Vec2::new(e.x, e.y + 1)),
+                ),
+                (
+                    Vec2::new(0, -1),
+                    (Vec2::new(a.x, a.y - 1), Vec2::new(e.x, a.y)),
+                ),
             ] {
                 if own.contains(&(t + n)) {
                     continue;
@@ -402,9 +412,7 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
             cells.levelled_exact.len()
         );
         let (buildings, floating, buried) = grounding(&world, index_ref, site);
-        println!(
-            "{id}: grounding: {buildings} buildings, {floating} floating, {buried} buried"
-        );
+        println!("{id}: grounding: {buildings} buildings, {floating} floating, {buried} buried");
         assert!(row.buildings > 0 && buildings > 0);
         assert!(row.misplaced <= row.misplaced_table);
         let land = Land::from_sim(&world.sim);
@@ -413,12 +421,19 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
             .filter(|p| p.is_building())
             .filter(|p| {
                 let root = site.tile_center_wpos(p.root_tile());
-                (land.get_alt_approx(root) as i32 - land.get_alt_approx_table(root) as i32).abs() > 2
+                (land.get_alt_approx(root) as i32 - land.get_alt_approx_table(root) as i32).abs()
+                    > 2
             })
             .count();
-        println!("{id}: {table_land_off} buildings would be off by more than 2 blocks on the table");
+        println!(
+            "{id}: {table_land_off} buildings would be off by more than 2 blocks on the table"
+        );
         if id == "bt10_flat" {
-            assert_eq!((floating, buried), (0, 0), "{id}: floating or buried buildings");
+            assert_eq!(
+                (floating, buried),
+                (0, 0),
+                "{id}: floating or buried buildings"
+            );
             assert_eq!(row.misplaced, 0, "{id}: lots off their base on a flat");
         } else {
             // On a slope a building whose door faces downhill is cut into the
@@ -441,7 +456,10 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
                 .max()
                 .unwrap_or(0);
             println!("{id}: levelling moves exact columns by at most {shift} block(s)");
-            assert!(shift <= 1, "levelling on a flat moves a lot by {shift} blocks");
+            assert!(
+                shift <= 1,
+                "levelling on a flat moves a lot by {shift} blocks"
+            );
         }
     }
 }
@@ -532,7 +550,9 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
     world
         .sim
         .set_authored_rasters_for_test(Some(load_specs(&[spec(&[], whole)]).unwrap()));
-    let err = check_ground_consumers(&world, index_ref, None).unwrap_err().0;
+    let err = check_ground_consumers(&world, index_ref, None)
+        .unwrap_err()
+        .0;
     println!("unlisted: {err}");
     assert!(err.contains(&key) && err.contains("does not list them"));
     // Every site near the region (the chosen one and its procedural
@@ -568,7 +588,9 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
     world
         .sim
         .set_authored_rasters_for_test(Some(load_specs(&[spec(&near, short)]).unwrap()));
-    let err = check_ground_consumers(&world, index_ref, None).unwrap_err().0;
+    let err = check_ground_consumers(&world, index_ref, None)
+        .unwrap_err()
+        .0;
     println!("ring under site: {err}");
     assert!(err.contains(&key) && err.contains("blend (ring)"));
 }
@@ -589,11 +611,21 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
     let (g10, g90) = (before(p10), before(p90));
     let raised = RegionSpec::new("bt11_raised", REGION_MIN, (23328, REGION_MAX.1), 32, vec![
         exact(
-            rect(p10.x as f32, p10.y as f32, (p10.x + 96) as f32, (p10.y + 96) as f32),
+            rect(
+                p10.x as f32,
+                p10.y as f32,
+                (p10.x + 96) as f32,
+                (p10.y + 96) as f32,
+            ),
             (g10 + 10) * 100 + 50,
         ),
         exact(
-            rect(p90.x as f32, p90.y as f32, (p90.x + 96) as f32, (p90.y + 96) as f32),
+            rect(
+                p90.x as f32,
+                p90.y as f32,
+                (p90.x + 96) as f32,
+                (p90.y + 96) as f32,
+            ),
             (g90 + 90) * 100 + 50,
         ),
     ]);
@@ -637,7 +669,12 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
         // Simulated NPCs (per-tick snap) and rtsim spawns.
         assert_eq!(sim.surface_alt_at(c), (block + 1) as f32);
         assert_eq!(sim.ground_alt_at(c), Some(top_block_alt(block)));
-        println!("B-T11 +{}: lifted from z {} to {}", block - old, feet.z, block + 1);
+        println!(
+            "B-T11 +{}: lifted from z {} to {}",
+            block - old,
+            feet.z,
+            block + 1
+        );
     }
     // B-T14 (a): the pit floor.
     let c = Vec2::new(pit.0 + 64, pit.1 + 64);
@@ -738,11 +775,23 @@ fn br1_a_road_over_an_authored_cliff_is_reported_and_painted_on_the_patch() {
     let base = world.sim.get_alt_approx(c * 32 + 16).unwrap() as i32;
     let (x0, y0) = ((c.x - 1) * 32, (c.y - 1) * 32);
     let split = c.x * 32 + 16;
-    let spec = RegionSpec::new("br1_cliff", ((c.x - 3) * 32, (c.y - 3) * 32), ((c.x + 4) * 32, (c.y + 4) * 32), 32, vec![
-        exact(rect(x0 as f32, y0 as f32, split as f32, (y0 + 96) as f32), base * 100 + 50),
-        exact(rect(split as f32, y0 as f32, (x0 + 96) as f32, (y0 + 96) as f32), (base + 5) * 100 + 50),
-        ring(16),
-    ]);
+    let spec = RegionSpec::new(
+        "br1_cliff",
+        ((c.x - 3) * 32, (c.y - 3) * 32),
+        ((c.x + 4) * 32, (c.y + 4) * 32),
+        32,
+        vec![
+            exact(
+                rect(x0 as f32, y0 as f32, split as f32, (y0 + 96) as f32),
+                base * 100 + 50,
+            ),
+            exact(
+                rect(split as f32, y0 as f32, (x0 + 96) as f32, (y0 + 96) as f32),
+                (base + 5) * 100 + 50,
+            ),
+            ring(16),
+        ],
+    );
     world
         .sim
         .set_authored_rasters_for_test(Some(load_specs(&[spec]).unwrap()));
@@ -754,7 +803,12 @@ fn br1_a_road_over_an_authored_cliff_is_reported_and_painted_on_the_patch() {
         report.steep.first()
     );
     assert!(report.road_columns > 0);
-    assert!(report.steep.iter().all(|(p, step)| *step == 5 && (p.x - split).abs() <= 1));
+    assert!(
+        report
+            .steep
+            .iter()
+            .all(|(p, step)| *step == 5 && (p.x - split).abs() <= 1)
+    );
     let rasters = world.sim.authored_rasters.as_ref().unwrap();
     let (mut painted, mut exact_top, mut other) = (0, 0, 0);
     let mut cats = std::collections::BTreeMap::<String, usize>::new();
@@ -782,7 +836,12 @@ fn br1_a_road_over_an_authored_cliff_is_reported_and_painted_on_the_patch() {
                         continue;
                     }
                     painted += 1;
-                    let at = |z: i32| chunk.get(Vec3::new(x, y, z)).copied().unwrap_or_else(|_| Block::empty());
+                    let at = |z: i32| {
+                        chunk
+                            .get(Vec3::new(x, y, z))
+                            .copied()
+                            .unwrap_or_else(|_| Block::empty())
+                    };
                     let top = (block - 8..block + 24)
                         .rev()
                         .find(|z| at(*z).is_filled())
@@ -810,7 +869,10 @@ fn br1_a_road_over_an_authored_cliff_is_reported_and_painted_on_the_patch() {
             }
         }
     }
-    println!("B-R1 paint: {painted} road columns on exact cells, top = block (Earth) on {exact_top}, other {other}: {cats:?}");
+    println!(
+        "B-R1 paint: {painted} road columns on exact cells, top = block (Earth) on {exact_top}, \
+         other {other}: {cats:?}"
+    );
     assert!(painted > 0);
     assert_eq!(exact_top, painted, "road painted on the patch");
     let _ = TerrainChunkSize::RECT_SIZE;
