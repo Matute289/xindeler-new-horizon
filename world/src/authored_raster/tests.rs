@@ -2001,3 +2001,124 @@ fn layers_read_the_chunk_table() {
         "authored-aware ground reads under world/src/layer (use the *_table accessors): {bad:#?}"
     );
 }
+
+/// B-K1 / §9.6: an authored void under a patch that comes within the
+/// tolerance of the ground is exposed (a start-up error at the default
+/// tolerance 0, allowed when the region raises it); a declared mouth is
+/// exempt; a declared wet mouth must not hold more water than it declares.
+#[test]
+fn voids_exposed_by_a_patch_are_counted_and_mouths_are_exempt() {
+    use super::post_civ::{VoidMouth, void_exposure};
+    use crate::layer::{
+        authored_voids::{AuthoredVoidsBuilder, DiscShape, ProceduralContact},
+        traversal::AccommodationTier,
+    };
+    // Ground at block 250 over x 1100..1200; water (top 249, bed 243) at
+    // x 1200..1210 held by a bank at 250 beyond it.
+    let spec = |max_exposed: u32| {
+        let mut s = region("voids", (1024, 1024), (1536, 1280), 32, vec![
+            PaintOp::Ground {
+                shape: Shape::Rect {
+                    x0: 1100.0,
+                    y0: 1100.0,
+                    x1: 1200.0,
+                    y1: 1200.0,
+                },
+                ground_cm: 25_050,
+                weight: GROUND_EXACT,
+            },
+            PaintOp::Water {
+                shape: Shape::Rect {
+                    x0: 1200.0,
+                    y0: 1100.0,
+                    x1: 1210.0,
+                    y1: 1200.0,
+                },
+                surface_cm: 24_950,
+                bed_cm: 24_350,
+            },
+            PaintOp::Bank {
+                shape: Shape::Rect {
+                    x0: 1210.0,
+                    y0: 1099.0,
+                    x1: 1211.0,
+                    y1: 1201.0,
+                },
+                bed_cm: 25_050,
+            },
+            PaintOp::Bank {
+                shape: Shape::Rect {
+                    x0: 1200.0,
+                    y0: 1099.0,
+                    x1: 1210.0,
+                    y1: 1100.0,
+                },
+                bed_cm: 25_050,
+            },
+            PaintOp::Bank {
+                shape: Shape::Rect {
+                    x0: 1200.0,
+                    y0: 1200.0,
+                    x1: 1210.0,
+                    y1: 1201.0,
+                },
+                bed_cm: 25_050,
+            },
+        ]);
+        s.max_exposed_void_columns = max_exposed;
+        s
+    };
+    let voids = |ceiling_z: i32| {
+        let mut b = AuthoredVoidsBuilder::default();
+        b.push_disc(
+            DiscShape {
+                centre: Vec2::new(1150, 1150),
+                radius: 4.0,
+                floor_z: 200,
+                ceiling_z,
+            },
+            ProceduralContact::Seal,
+            AccommodationTier::HandAuthored,
+            "test_cave",
+        );
+        b.finish().unwrap()
+    };
+    let (mut world, _) = crate::World::empty();
+    world.sim.set_authored_rasters_for_test(Some(load(&[build_region(&spec(0)).unwrap()]).unwrap()));
+    // Ceiling 10 blocks under the ground: covered.
+    let r = void_exposure(&world, Some(&voids(240)), &[]);
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].exposed, 0);
+    assert!(!r[0].is_error());
+    // Ceiling 2 blocks under the ground: exposed on the disc's columns.
+    let r = void_exposure(&world, Some(&voids(248)), &[]);
+    let exposed = r[0].exposed;
+    assert!(exposed > 0 && r[0].is_error(), "{r:?}");
+    assert_eq!(r[0].features[0].0, "test_cave");
+    // A declared mouth is exempt.
+    let mouth = VoidMouth {
+        column: r[0].features[0].2,
+        max_water_depth_blocks: None,
+    };
+    let r = void_exposure(&world, Some(&voids(248)), &[mouth]);
+    assert_eq!(r[0].exposed, exposed - 1);
+    // A wet mouth on the water: 6 blocks of water against 2 declared.
+    let wet = VoidMouth {
+        column: Vec2::new(1205, 1150),
+        max_water_depth_blocks: Some(2),
+    };
+    let r = void_exposure(&world, Some(&voids(240)), &[wet]);
+    assert_eq!(r[0].flooded_mouths, vec![(Vec2::new(1205, 1150), 6)]);
+    assert!(r[0].is_error());
+    let r = void_exposure(&world, Some(&voids(240)), &[VoidMouth {
+        max_water_depth_blocks: Some(6),
+        ..wet
+    }]);
+    assert!(!r[0].is_error());
+    // The region allows the opening.
+    world.sim.set_authored_rasters_for_test(Some(
+        load(&[build_region(&spec(exposed as u32)).unwrap()]).unwrap(),
+    ));
+    let r = void_exposure(&world, Some(&voids(248)), &[]);
+    assert!(!r[0].is_error(), "{r:?}");
+}
