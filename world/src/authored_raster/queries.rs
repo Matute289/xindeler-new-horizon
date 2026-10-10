@@ -370,6 +370,20 @@ impl WorldSim {
         })
     }
 
+    /// Whether the chunk is authored dry ground of a [`SeaFill::AuthoredOnly`]
+    /// region: it holds authored cells of such a region and
+    /// [`Self::chunk_water`] calls it dry. Its ground is dry at any
+    /// altitude, below sea level included, whatever the chunk table's
+    /// (frozen, natural) water says. `false` everywhere else, and always
+    /// without authored rasters.
+    pub fn chunk_is_authored_dry(&self, chunk_pos: Vec2<i32>) -> bool {
+        self.authored_rasters
+            .as_ref()
+            .and_then(|r| r.chunk_summary(chunk_pos))
+            .is_some_and(|s| s.authored_only)
+            && self.chunk_water(chunk_pos).is_some_and(|w| !w.wet())
+    }
+
     /// Whether a chunk is water (river, lake or ocean), authored-aware
     /// ([`Self::chunk_water`]). `None` outside the map.
     pub fn chunk_is_wet(&self, chunk_pos: Vec2<i32>) -> Option<bool> {

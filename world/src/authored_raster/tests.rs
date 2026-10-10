@@ -2337,3 +2337,109 @@ fn map_presentation_reads_the_rendered_column_only_on_ground_cells() {
         8191 << 3
     );
 }
+
+/// The world map colour of authored dry ground: a chunk of a
+/// `sea_fill: AuthoredOnly` region that is dry ground below sea level (a pit
+/// at -10 m, a depression at -1500 m) is coloured as ground even where the
+/// chunk table calls it sea or lies below sea level, while an authored lake
+/// below sea level in the same region, a sea floor of an `Auto` region and
+/// columns outside every region keep exactly the table's colour (water).
+#[test]
+fn map_colour_of_authored_dry_ground_below_sea_level_is_not_water() {
+    use crate::{
+        CONFIG,
+        index::{Index, IndexOwned},
+        sim::{RiverKind, WorldSim, sample_pos_with},
+    };
+    use common::terrain::{MapSizeLg, map::MapConfig, vec2_as_uniform_idx};
+
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let ground = |shape, ground_cm| PaintOp::Ground {
+        shape,
+        ground_cm,
+        weight: GROUND_EXACT,
+    };
+    let lake = rect(2176.0, 1152.0, 2240.0, 1216.0);
+    let mut own = region("dry_below_sea", (2048, 1024), (2304, 1280), 0, vec![
+        ground(rect(2048.0, 1024.0, 2304.0, 1280.0), 25_050),
+        // A dry pit at -10 m and a dry depression at -1500 m.
+        ground(rect(2048.0, 1024.0, 2112.0, 1088.0), 13_050),
+        ground(rect(2176.0, 1024.0, 2240.0, 1088.0), -135_950),
+        // A lake whose surface is 20 m below sea level.
+        PaintOp::ClearGround {
+            shape: lake.clone(),
+        },
+        PaintOp::Water {
+            shape: lake,
+            surface_cm: 12_050,
+            bed_cm: 11_050,
+        },
+    ]);
+    own.sea_fill = SeaFill::AuthoredOnly;
+    // A sea floor 10 m below sea level in an `Auto` region.
+    let auto = region("sea_floor", (1024, 1024), (1280, 1280), 0, vec![ground(
+        rect(1024.0, 1024.0, 1280.0, 1280.0),
+        13_050,
+    )]);
+    let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
+    // The frozen table: sea everywhere, 10 m below sea level.
+    for c in sim.chunks.iter_mut() {
+        c.alt = CONFIG.sea_level - 10.0;
+        c.water_alt = CONFIG.sea_level;
+        c.river.river_kind = Some(RiverKind::Ocean);
+    }
+    sim.set_authored_rasters_for_test(Some(
+        load(&[build_region(&own).unwrap(), build_region(&auto).unwrap()]).unwrap(),
+    ));
+    let config = MapConfig::orthographic(
+        sim.map_size_lg(),
+        CONFIG.sea_level..=CONFIG.sea_level + 1000.0,
+    );
+    let index = IndexOwned::new(Index::new(0));
+    let rgb = |chunk: Vec2<i32>, presented: bool| {
+        sample_pos_with(
+            &config,
+            &sim,
+            index.as_index_ref(),
+            None,
+            chunk,
+            presented,
+        )
+        .rgb
+    };
+    let is_water_colour = |c: Rgb<u8>| c.r == 0 && c.b > c.g / 2 && c.b >= 0x52;
+    let chunk_of = |x: i32, y: i32| Vec2::new(x, y) / CHUNK;
+
+    // Dry ground below sea level: water in the table's colour, ground once
+    // presented, with or without the table's sea.
+    for (wpos, what) in [
+        ((2064, 1040), "pit -10 m"),
+        ((2192, 1040), "depression -1500 m"),
+    ] {
+        let c = chunk_of(wpos.0, wpos.1);
+        assert!(sim.chunk_is_authored_dry(c), "{what} is dry");
+        assert!(is_water_colour(rgb(c, false)), "{what}: table colour");
+        assert!(
+            !is_water_colour(rgb(c, true)),
+            "{what}: presented {:?}",
+            rgb(c, true)
+        );
+    }
+    sim.chunks[vec2_as_uniform_idx(sim.map_size_lg(), chunk_of(2064, 1040))]
+        .river
+        .river_kind = None;
+    assert!(!is_water_colour(rgb(chunk_of(2064, 1040), true)));
+
+    // Water stays water, byte for byte: the lake below sea level, the `Auto`
+    // sea floor, and a chunk outside every region.
+    for (wpos, what) in [
+        ((2192, 1168), "lake -20 m"),
+        ((1104, 1104), "Auto sea floor"),
+        ((3000, 3000), "outside"),
+    ] {
+        let c = chunk_of(wpos.0, wpos.1);
+        assert!(!sim.chunk_is_authored_dry(c), "{what} is not dry ground");
+        assert!(is_water_colour(rgb(c, true)), "{what}: water colour");
+        assert_eq!(rgb(c, true), rgb(c, false), "{what}");
+    }
+}

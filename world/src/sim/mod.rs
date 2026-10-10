@@ -11,7 +11,7 @@ use self::erosion::Compute;
 pub use self::{
     diffusion::diffusion,
     location::Location,
-    map::{pack_map_alt, sample_pos, sample_wpos, sample_wpos_presented},
+    map::{pack_map_alt, sample_pos, sample_pos_with, sample_wpos, sample_wpos_presented},
     util::get_horizon_map,
     way::{Path, Way},
 };
@@ -3943,6 +3943,17 @@ impl WorldSim {
         self.authored_rasters = rasters;
     }
 
+    /// [`Self::empty`] grown to `map_size_lg`, every chunk a copy of the
+    /// empty world's only chunk: a table for asset-free tests of queries
+    /// that read chunks far from the origin.
+    #[cfg(test)]
+    pub(crate) fn empty_with_size_for_test(map_size_lg: MapSizeLg) -> Self {
+        let mut sim = Self::empty();
+        sim.chunks = vec![sim.chunks[0].clone(); map_size_lg.chunks_len()];
+        sim.map_size_lg = map_size_lg;
+        sim
+    }
+
     pub fn get_size(&self) -> Vec2<u32> { self.map_size_lg().chunks().map(u32::from) }
 
     /// Which purely-procedural voxel layers still run in this world.
@@ -4078,8 +4089,9 @@ impl WorldSim {
 
     /// Test seam of [`Self::get_map`] (which passes `true`): with
     /// `authored_ground` false the map presents the chunk table even on
-    /// authored ground cells, the map as it was before ground patches were
-    /// presented. Only the identity and acceptance tests pass `false`.
+    /// authored ground cells and colours authored dry ground below sea level
+    /// as water, the map as it was before ground patches were presented.
+    /// Only the identity and acceptance tests pass `false`.
     pub(crate) fn get_map_with(
         &self,
         index: IndexRef,
@@ -4183,7 +4195,16 @@ impl WorldSim {
             })
         };
         map_config.generate(
-            |pos| sample_pos(&map_config, self, index, Some(&samples_data), pos),
+            |pos| {
+                sample_pos_with(
+                    &map_config,
+                    self,
+                    index,
+                    Some(&samples_data),
+                    pos,
+                    authored_ground,
+                )
+            },
             |pos| present_wpos(&map_config, pos),
             |pos, (r, g, b, _a)| {
                 // We currently ignore alpha and replace it with the height at pos, scaled to
