@@ -37,7 +37,7 @@ settlement:site.cutstone_city	b8cfa93a779404d2	86	55	Cutstone City
 settlement:site.cutwood_town	ebf82cc3ad574e0e	50	32	Cutwood Town
 settlement:site.dove_city	0eda20290ab052b2	71	42	Dove City
 settlement:site.dromos_city	ab20590df1b5af16	79	44	Dromos City
-settlement:site.duren	3845719976159a80	133	77	Duren
+settlement:site.duren	d38c5754238fcbc6	389	283	Duren
 settlement:site.el_ojo_de_luna	eccce4e2b5dfdb69	1	1	El Ojo de Luna
 settlement:site.elynshara	f836cb287b1e76d0	40	29	Elynshara
 settlement:site.evercross	1b033c8a109dd2f4	44	25	Evercross
@@ -55,7 +55,7 @@ settlement:site.hita_post	f5af5d44231fa7e0	1	1	Hita Post
 settlement:site.inebel	0752c41fca3ffa88	91	45	Inebel
 settlement:site.itos_village	486c1ce891b0abd0	42	23	Itos Village
 settlement:site.kalitos	9b8057df9c54be3d	19	10	Kalitos
-settlement:site.kalthis	684751b6d4892c45	116	55	Kalthis
+settlement:site.kalthis	860a75645d799cda	442	351	Kalthis
 settlement:site.le_pont_dargent	458d2762fb69a3c9	1	1	Le Pont D'argent
 settlement:site.levannois_village	657627410f4d1766	20	11	Levannois Village
 settlement:site.levassi	cd9d41ff48ce202c	42	25	Levassi

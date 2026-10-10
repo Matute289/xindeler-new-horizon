@@ -1780,3 +1780,8 @@ fn every_jetty_has_an_anchorage_or_the_known_exception() {
 /// Per-site layout digests, determinism and terrain-perturbation
 /// experiments for the authored world's civ layer.
 pub(crate) mod site_layouts;
+
+/// Authored settlement layouts (footprint, anchor, building quotas) against
+/// the real authored world: placement rules, wiring and the spread of
+/// building counts over seeds.
+mod settlement_layouts;

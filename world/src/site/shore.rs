@@ -1376,6 +1376,7 @@ mod tests {
                 None,
                 &mut gen_meta,
                 naval_port,
+                None,
             )
         }
 

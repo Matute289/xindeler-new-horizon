@@ -5,6 +5,7 @@ mod econ;
 mod maritime_traffic;
 pub mod naval_berths;
 pub(crate) mod seeds;
+mod settlement_layouts;
 
 #[cfg(feature = "airship_maps")]
 pub mod airship_route_map;
@@ -1118,6 +1119,101 @@ fn resolve_naval_port(
 /// therefore how much room it deserves.
 const AUTHORED_LANDMARK_CLEARANCE_BLOCKS: i32 = 12;
 
+/// Resolves the authored settlement layouts into world space, each keeping
+/// out of every authored landmark's footprint as well as the circles it
+/// names itself. A layout is only consumed by the city generator, so a
+/// layout for a settlement that does not generate as a city (an inn, a post)
+/// is a data error, reported like any other bad authored layer.
+fn resolve_settlement_layouts(
+    sites: &Store<Site>,
+    layouts: &settlement_layouts::AuthoredSettlementLayouts,
+    pins: &settlement_layouts::AuthoredPins,
+    landmark_exclusions: &[PortExclusion],
+) -> std::collections::HashMap<String, site::layout::SettlementLayout> {
+    for id in layouts.site_ids() {
+        let kind = sites
+            .values()
+            .find(|site| site.authored_id() == Some(id))
+            .map(|site| &site.kind);
+        if !matches!(kind, Some(SiteKind::Refactor)) {
+            let specifier = settlement_layouts::SPECIFIER;
+            let err = AuthoredLayerError(format!(
+                "authored Cromatolis settlement layouts [{specifier}]: {id} has a layout but \
+                 generates as {kind:?}, not as a city"
+            ));
+            panic!("{err}");
+        }
+    }
+    let landmark_exclusions: Vec<_> = landmark_exclusions
+        .iter()
+        .map(|exclusion| site::layout::LayoutExclusion {
+            centre_wpos: exclusion.centre_wpos,
+            radius: exclusion.radius,
+        })
+        .collect();
+    layouts.resolve(pins, &landmark_exclusions)
+}
+
+/// Generates one authored settlement of an already generated Cromatolis
+/// (world seed 0) world again, from `seed` (`None`: its own first-draw
+/// seed), with exactly the inputs
+/// world generation gives it (size, naval port request, landmark
+/// exclusions, and its layout unless `with_layout` is false). For measuring
+/// how a settlement's layout varies over seeds.
+#[cfg(test)]
+pub(crate) fn generate_authored_city_with_seed(
+    world: &crate::World,
+    index: IndexRef,
+    site_id: &str,
+    seed: Option<[u8; 32]>,
+    with_layout: bool,
+) -> (WorldSite, Option<site::layout::SettlementLayout>) {
+    let map_size = world.sim().map_size_lg();
+    let settlements =
+        AuthoredCromatolisSettlements::load_owned("world.map.cromatolis_v0_sites").unwrap();
+    let landmarks =
+        AuthoredCromatolisLandmarks::load_owned("world.map.cromatolis_v0_landmarks").unwrap();
+    let maritime_routes =
+        AuthoredCromatolisMaritimeRoutes::load_owned("world.map.cromatolis_v0_maritime_routes")
+            .unwrap();
+    let layouts =
+        settlement_layouts::AuthoredSettlementLayouts::load_owned(settlement_layouts::SPECIFIER)
+            .unwrap();
+    let pins = settlement_layouts::AuthoredPins::new(map_size, &settlements, &landmarks);
+    layouts.validate(&pins).unwrap();
+    let sites = &world.civs().sites;
+    let exclusions = authored_landmark_exclusions(sites);
+    let resolved = resolve_settlement_layouts(sites, &layouts, &pins, &exclusions);
+    let sim_site = sites
+        .values()
+        .find(|site| site.authored_id() == Some(site_id))
+        .unwrap_or_else(|| panic!("no authored site {site_id}"));
+    let authored = sim_site.authored.as_ref().unwrap();
+    let wpos = sim_site.center.cpos_to_wpos_center();
+    let naval_port = resolve_naval_port(Some(authored), Some(&maritime_routes))
+        .map(|class| NavalPortRequest::new(class, &exclusions));
+    let layout = with_layout
+        .then(|| resolved.get(site_id).cloned())
+        .flatten();
+    let seed = seed.unwrap_or_else(|| {
+        seeds::CivSeedPolicy::new(0, true)
+            .site_seed(sim_site)
+            .unwrap()
+    });
+    let site = WorldSite::generate_city(
+        &Land::from_sim(world.sim()),
+        index,
+        &mut ChaChaRng::from_seed(seed),
+        wpos,
+        authored.size.city_scale(),
+        None,
+        &mut SitesGenMeta::new(0),
+        naval_port,
+        layout.as_ref(),
+    );
+    (site, layout)
+}
+
 /// Every established authored landmark, as a keep-out region for the shoreline
 /// port search.
 ///
@@ -2101,6 +2197,25 @@ impl Civs {
             )
             .unwrap_or_else(|err| panic!("{err}"))
         });
+        // Footprint, main-plaza anchor and building quotas of the authored
+        // settlements that have one; resolved against the settlement and
+        // landmark pins it names.
+        let authored_settlement_layouts = authored_settlements
+            .as_ref()
+            .zip(authored_landmarks.as_ref())
+            .map(|(settlements, landmarks)| {
+                let pins =
+                    settlement_layouts::AuthoredPins::new(map_size_lg, settlements, landmarks);
+                let layouts = load_authored_cromatolis_layer(
+                    "settlement layouts",
+                    settlement_layouts::SPECIFIER,
+                    |layouts: &settlement_layouts::AuthoredSettlementLayouts| {
+                        layouts.validate(&pins)
+                    },
+                )
+                .unwrap_or_else(|err| panic!("{err}"));
+                (layouts, pins)
+            });
         let authored_settlement_template_contract = if authored_settlements.is_some() {
             Some(
                 load_authored_cromatolis_layer(
@@ -2500,6 +2615,12 @@ impl Civs {
         // `this.sites` mutably, so this cannot be done inside it) and hand
         // them to the shoreline search as explicit keep-out regions.
         let naval_port_exclusions = authored_landmark_exclusions(&this.sites);
+        let settlement_layouts = authored_settlement_layouts
+            .as_ref()
+            .map(|(layouts, pins)| {
+                resolve_settlement_layouts(&this.sites, layouts, pins, &naval_port_exclusions)
+            })
+            .unwrap_or_default();
 
         // Place sites in world
         prof_span!(guard, "Place sites in world");
@@ -2532,6 +2653,10 @@ impl Civs {
                             authored_maritime_routes.as_ref(),
                         )
                         .map(|class| NavalPortRequest::new(class, &naval_port_exclusions));
+                        let layout = sim_site
+                            .authored
+                            .as_ref()
+                            .and_then(|authored| settlement_layouts.get(&authored.id));
                         // XINDELER: an authored settlement whose layout
                         // falls below its size band is re-drawn from
                         // derived sub-seeds (see `seeds`); others are
@@ -2554,6 +2679,7 @@ impl Civs {
                                 calendar,
                                 &mut meta,
                                 naval_port,
+                                layout,
                             );
                             (site, meta)
                         };

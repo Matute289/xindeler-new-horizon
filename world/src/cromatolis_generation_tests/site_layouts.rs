@@ -85,7 +85,7 @@ fn generate_world(map: &str, perturbation: Option<MapPerturbation>) -> (World, I
     )
 }
 
-fn generate_cromatolis(perturbation: Option<MapPerturbation>) -> (World, IndexOwned) {
+pub(super) fn generate_cromatolis(perturbation: Option<MapPerturbation>) -> (World, IndexOwned) {
     generate_world("world.map.cromatolis_v0", perturbation)
 }
 

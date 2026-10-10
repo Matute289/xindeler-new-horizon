@@ -79,12 +79,26 @@ impl TileGrid {
         area_range: Range<u32>,
         min_dims: Extent2<u32>,
     ) -> Result<Aabr<i32>, Aabr<i32>> {
+        self.grow_aabr_within(center, area_range, min_dims, |_| true)
+    }
+
+    /// [`Self::grow_aabr`] that only grows over tiles `allow` accepts (and
+    /// requires it of `center`): the AABR stays inside an authored
+    /// footprint instead of being rejected for leaving it.
+    pub fn grow_aabr_within(
+        &self,
+        center: Vec2<i32>,
+        area_range: Range<u32>,
+        min_dims: Extent2<u32>,
+        allow: impl Fn(Vec2<i32>) -> bool,
+    ) -> Result<Aabr<i32>, Aabr<i32>> {
+        let free = |tpos: Vec2<i32>| self.get(tpos).is_empty() && allow(tpos);
         let mut aabr = Aabr {
             min: center,
             max: center + 1,
         };
 
-        if !self.get(center).is_empty() {
+        if !free(center) {
             return Err(aabr);
         };
 
@@ -103,26 +117,22 @@ impl TileGrid {
             } else {
                 // `center.sum()` to avoid biasing certain directions
                 match (i + center.sum().abs()) % 4 {
-                    0 if (aabr.min.y..aabr.max.y + 1)
-                        .all(|y| self.get(Vec2::new(aabr.max.x, y)).is_empty()) =>
-                    {
+                    0 if (aabr.min.y..aabr.max.y + 1).all(|y| free(Vec2::new(aabr.max.x, y))) => {
                         aabr.max.x += 1;
                         last_growth = i;
                     },
-                    1 if (aabr.min.x..aabr.max.x + 1)
-                        .all(|x| self.get(Vec2::new(x, aabr.max.y)).is_empty()) =>
-                    {
+                    1 if (aabr.min.x..aabr.max.x + 1).all(|x| free(Vec2::new(x, aabr.max.y))) => {
                         aabr.max.y += 1;
                         last_growth = i;
                     },
                     2 if (aabr.min.y..aabr.max.y + 1)
-                        .all(|y| self.get(Vec2::new(aabr.min.x - 1, y)).is_empty()) =>
+                        .all(|y| free(Vec2::new(aabr.min.x - 1, y))) =>
                     {
                         aabr.min.x -= 1;
                         last_growth = i;
                     },
                     3 if (aabr.min.x..aabr.max.x + 1)
-                        .all(|x| self.get(Vec2::new(x, aabr.min.y - 1)).is_empty()) =>
+                        .all(|x| free(Vec2::new(x, aabr.min.y - 1))) =>
                     {
                         aabr.min.y -= 1;
                         last_growth = i;

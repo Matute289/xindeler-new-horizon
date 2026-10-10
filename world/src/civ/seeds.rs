@@ -371,21 +371,21 @@ pub(crate) fn min_buildings_for(category: &str, size: &str) -> Option<usize> {
     table.iter().find(|(s, _)| *s == size).map(|(_, n)| *n)
 }
 
-/// Plots that are buildings: everything but plazas, roads, farm fields and
-/// bridges.
+/// Plots that are buildings ([`crate::site::Plot::is_building`]).
 pub(crate) fn building_count(site: &crate::site::Site) -> usize {
-    use crate::site::PlotKind;
-    site.plots()
-        .filter(|plot| {
-            !matches!(
-                plot.kind(),
-                PlotKind::Plaza(_)
-                    | PlotKind::Road(_)
-                    | PlotKind::FarmField(_)
-                    | PlotKind::Bridge(_)
-            )
-        })
-        .count()
+    site.plots().filter(|plot| plot.is_building()).count()
+}
+
+/// A seed for measuring a settlement's spread of layouts: variant `k` of
+/// the site whose stable key is `site_key`, in the same domain as its real
+/// seed but never one generation uses.
+#[cfg(test)]
+pub(crate) fn layout_variant_seed(world_seed: u32, site_key: &str, k: u32) -> [u8; 32] {
+    derive_seed(
+        SITE_SEED_DOMAIN,
+        world_seed,
+        &format!("{site_key}#variant-{k}"),
+    )
 }
 
 /// Keeps `first` if it reaches `band`; otherwise re-draws with `retry(1)`,
