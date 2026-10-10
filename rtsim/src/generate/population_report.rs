@@ -131,7 +131,9 @@ fn cromatolis_population_report() {
         data.write_to(&mut bytes).unwrap();
         let save_ms = started.elapsed().as_secs_f64() * 1e3;
         let started = Instant::now();
-        let loaded = Data::from_reader(&bytes[..]).ok().expect("save must load");
+        let Ok(loaded) = Data::from_reader(&bytes[..]) else {
+            panic!("save must load");
+        };
         let load_ms = started.elapsed().as_secs_f64() * 1e3;
         assert_eq!(loaded.actors.len(), data.actors.len());
         println!(
