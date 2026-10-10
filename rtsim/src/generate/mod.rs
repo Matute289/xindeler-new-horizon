@@ -23,26 +23,81 @@ use world::{
     IndexRef, World, civ::airship_travel::AirshipSpawningLocation, site::PlotKind, util::seed_expan,
 };
 
+/// How many NPCs of each town role one settlement wants (NH-171).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SettlementPopulation {
+    pub guards: u32,
+    pub adventurers: u32,
+    pub merchants: u32,
+    /// Farmers, herbalists, hunters, blacksmiths, chefs and alchemists.
+    pub others: u32,
+}
+
+impl SettlementPopulation {
+    /// The upstream rule: one guard per 4 plots, one adventurer per 5, the
+    /// rest of the plot count as other town NPCs, and merchants on top
+    /// (one per 6 plots, plus one).
+    pub fn from_plot_count(plots: u32) -> Self {
+        let guards = plots / 4;
+        let adventurers = plots / 5;
+        Self {
+            guards,
+            adventurers,
+            merchants: plots / 6 + 1,
+            others: plots.saturating_sub(guards + adventurers),
+        }
+    }
+
+    /// An authored total split in the same proportions as
+    /// [`Self::from_plot_count`] (merchants are 1/6 on top of the plot count,
+    /// i.e. 1/7 of the total), adding up to exactly `total`.
+    pub fn from_total(total: u32) -> Self {
+        let merchants = total / 7;
+        let rest = total - merchants;
+        let guards = rest / 4;
+        let adventurers = rest / 5;
+        Self {
+            guards,
+            adventurers,
+            merchants,
+            others: rest - guards - adventurers,
+        }
+    }
+
+    pub fn total(&self) -> u32 { self.guards + self.adventurers + self.merchants + self.others }
+}
+
+/// The NPC population a world site wants, if it is a settlement: its
+/// authored `npc_count` when the data sets one, otherwise the upstream
+/// plot-count rule. `None` for every non-settlement site.
+pub fn settlement_population(site: &world::site::Site) -> Option<SettlementPopulation> {
+    // TODO: Stupid. Only find site towns
+    if !site
+        .meta()
+        .is_some_and(|m| matches!(m, common::terrain::SiteKindMeta::Settlement(_)))
+    {
+        return None;
+    }
+    Some(match site.npc_count {
+        Some(total) => SettlementPopulation::from_total(total),
+        None => SettlementPopulation::from_plot_count(site.plots().len() as u32),
+    })
+}
+
 pub fn wanted_population(world: &World, index: IndexRef) -> Population {
     let mut pop = Population::default();
 
     let sites = &index.sites;
 
     // Spawn some npcs at settlements
-    for (_, site) in sites.iter()
-        // TODO: Stupid. Only find site towns
-        .filter(|(_, site)| site.meta().is_some_and(|m| matches!(m, common::terrain::SiteKindMeta::Settlement(_))))
+    for town in sites
+        .iter()
+        .filter_map(|(_, site)| settlement_population(site))
     {
-        let town_pop = site.plots().len() as u32;
-        let guards = town_pop / 4;
-        let adventurers = town_pop / 5;
-        let others = town_pop.saturating_sub(guards + adventurers);
-
-        pop.add(TrackedPopulation::Guards, guards);
-        pop.add(TrackedPopulation::Adventurers, adventurers);
-        pop.add(TrackedPopulation::OtherTownNpcs, others);
-
-        pop.add(TrackedPopulation::Merchants, (town_pop / 6) + 1);
+        pop.add(TrackedPopulation::Guards, town.guards);
+        pop.add(TrackedPopulation::Adventurers, town.adventurers);
+        pop.add(TrackedPopulation::OtherTownNpcs, town.others);
+        pop.add(TrackedPopulation::Merchants, town.merchants);
     }
 
     let pirate_hideouts = sites
@@ -159,9 +214,15 @@ impl Data {
 
         this.architect.wanted_population = wanted_population(world, index);
 
+        let groups = this.architect.wanted_population.groups();
         info!(
-            "Generated {} rtsim NPCs to be spawned.",
-            this.architect.wanted_population.total()
+            total = this.architect.wanted_population.total(),
+            civilians = groups.civilians,
+            pirates = groups.pirates,
+            cultists = groups.cultists,
+            monsters = groups.monsters,
+            wild = groups.wild,
+            "Generated rtsim NPCs to be spawned."
         );
 
         this

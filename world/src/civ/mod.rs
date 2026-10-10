@@ -100,6 +100,11 @@ pub struct Civs {
 //   placeholder bug: no real per-family physical generator exists yet.
 // ---------------------------------------------------------------------------
 
+/// Upper bound on one settlement's authored `npc_count`. A typo guard, not a
+/// budget: the world-wide budget is rtsim's NPC ceiling (NH-171), and no
+/// single settlement is planned above a few hundred.
+const MAX_SETTLEMENT_NPC_COUNT: u32 = 5_000;
+
 /// Authored settlement data for Cromatolis. The source-of-truth asset is
 /// generated from `xindeler-open-world`, while the engine consumes this
 /// compact runtime copy so it never depends on another working tree.
@@ -154,6 +159,15 @@ impl AuthoredCromatolisSettlements {
             }
             if !settlement.population.is_valid() {
                 return Err(format!("invalid population metadata for {}", settlement.id));
+            }
+            if let Some(npc_count) = settlement.population.npc_count
+                && npc_count > MAX_SETTLEMENT_NPC_COUNT
+            {
+                return Err(format!(
+                    "settlement {} asks for {npc_count} NPCs, above the per-settlement limit of \
+                     {MAX_SETTLEMENT_NPC_COUNT}",
+                    settlement.id
+                ));
             }
             if settlement.target_buildings == 0 {
                 return Err(format!(
@@ -1313,6 +1327,13 @@ struct AuthoredSettlementPopulation {
     peoples: Vec<AuthoredSettlementPeople>,
     #[serde(default)]
     future_peoples: Vec<String>,
+    /// How many rtsim NPCs live in this settlement (NH-171 / NH-166 T36):
+    /// the total over every town role (guards, adventurers, merchants and
+    /// the other professions). `None` keeps the upstream rule, which sizes
+    /// the population by the settlement's plot count, so a settlement
+    /// changes only when this is set. Decoupled from `target_buildings`.
+    #[serde(default)]
+    npc_count: Option<u32>,
 }
 
 impl AuthoredSettlementPopulation {
@@ -1557,7 +1578,8 @@ struct AuthoredSettlementMeta {
     /// direction generates with the default (Villa) style.
     #[expect(dead_code)]
     architectural_direction: Option<ArchitecturalDirection>,
-    #[expect(dead_code)]
+    /// Read for `npc_count` (`Site::authored_npc_count`); the peoples are
+    /// not consumed by generation yet.
     population: AuthoredSettlementPopulation,
     #[expect(dead_code)]
     requires_capital_castle: bool,
@@ -2905,7 +2927,9 @@ impl Civs {
                 } else {
                     generated_site
                 };
-                generated_site.with_authored_settlement(sim_site.is_authored_settlement())
+                generated_site
+                    .with_authored_settlement(sim_site.is_authored_settlement())
+                    .with_npc_count(sim_site.authored_npc_count())
             });
             sim_site.site_tmp = Some(site);
             let site_ref = &index.sites[site];
@@ -4884,6 +4908,15 @@ impl Site {
             .map(|settlement| settlement.id.as_str())
     }
 
+    /// The authored settlement's own rtsim NPC count, if its data sets one
+    /// (`population.npc_count`). `None` for every procedural site and for an
+    /// authored settlement that keeps the plot-based default.
+    pub fn authored_npc_count(&self) -> Option<u32> {
+        self.authored
+            .as_ref()
+            .and_then(|settlement| settlement.population.npc_count)
+    }
+
     /// The authored settlement's `(category, size)` contract keys (e.g.
     /// `("city", "large")`), if this is an authored settlement.
     pub(crate) fn authored_category_and_size(&self) -> Option<(&'static str, &'static str)> {
@@ -6858,6 +6891,51 @@ mod tests {
         assert!(err.contains("site.test_settlement"), "{err}");
     }
 
+    // ---- Per-settlement NPC count (NH-166 T36 / NH-171) ----
+
+    #[test]
+    fn npc_count_is_optional_and_bounded() {
+        // Absent: the plot-count default, and every real export today.
+        let absent = parse_settlements(&settlement_ron("Town", "Small", Some("50")))
+            .expect("a settlement without npc_count must parse");
+        absent.validate(synthetic_map_size()).unwrap();
+        assert!(
+            absent
+                .settlements
+                .iter()
+                .all(|s| s.population.npc_count.is_none())
+        );
+        assert!(
+            real_settlements()
+                .settlements
+                .iter()
+                .all(|s| s.population.npc_count.is_none()),
+            "no real settlement sets npc_count yet: every population is today's"
+        );
+
+        let with = |n: u32| {
+            settlement_ron("Town", "Small", Some("50")).replace(
+                "population: (tag: Human, peoples: [Human]),\n                        center: (x: 0.25",
+                &format!(
+                    "population: (tag: Human, peoples: [Human], npc_count: Some({n})),\n                        center: (x: 0.25"
+                ),
+            )
+        };
+        let set = parse_settlements(&with(40)).expect("npc_count must parse");
+        set.validate(synthetic_map_size()).unwrap();
+        assert_eq!(set.settlements[1].population.npc_count, Some(40));
+        // 0 is a valid, deliberately empty settlement.
+        parse_settlements(&with(0))
+            .unwrap()
+            .validate(synthetic_map_size())
+            .unwrap();
+        let err = parse_settlements(&with(MAX_SETTLEMENT_NPC_COUNT + 1))
+            .unwrap()
+            .validate(synthetic_map_size())
+            .expect_err("an absurd npc_count must fail validation");
+        assert!(err.contains("site.test_settlement"), "{err}");
+    }
+
     #[test]
     fn the_real_aldea_sites_load_with_the_decided_size_and_target() {
         let settlements = real_settlements();
@@ -7027,6 +7105,7 @@ mod tests {
                         tag: AuthoredSettlementPopulationTag::Human,
                         peoples: vec![AuthoredSettlementPeople::Human],
                         future_peoples: Vec::new(),
+                        npc_count: None,
                     },
                     requires_capital_castle: false,
                     start_eligible,
