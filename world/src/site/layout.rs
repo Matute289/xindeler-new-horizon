@@ -134,21 +134,63 @@ impl SettlementLayout {
             .map(|e| (e / TILE_SIZE as f64).floor() as i32)
     }
 
-    /// Whether the anchor lies within [`FOOTPRINT_DOMAIN_TILES`] of
-    /// `site_origin`, where a footprint can use it.
+    /// Whether the anchor lies within this layout's domain around
+    /// `site_origin` ([`Self::domain_tiles`]), where a footprint can use it.
     pub fn anchor_in_domain(&self, site_origin: Vec2<i32>) -> bool {
-        Footprint::in_domain(self.anchor_tile(site_origin))
+        self.anchor_tile(site_origin).map(|e| e.abs()).reduce_max()
+            <= self.domain_tiles(site_origin)
+    }
+
+    /// How far from `site_origin` (Chebyshev, in tiles) the generator
+    /// evaluates terrain for this layout: far enough to cover every ward, its
+    /// field ring and the clear room around a plaza, but never less than an
+    /// ordinary city ([`MIN_FOOTPRINT_DOMAIN_TILES`]) nor more than
+    /// [`MAX_FOOTPRINT_DOMAIN_TILES`]. A ward is a rectangle, so its farthest
+    /// tile is one of its corners.
+    pub fn domain_tiles(&self, site_origin: Vec2<i32>) -> i32 {
+        let ring = match self.fields {
+            FieldPlacement::Inside => 0,
+            FieldPlacement::Ring(width) => width as i32,
+        };
+        let extent = self
+            .wards
+            .iter()
+            .flat_map(|ward| {
+                [
+                    Vec2::new(ward.a.0, ward.b.0),
+                    Vec2::new(ward.a.0, ward.b.1),
+                    Vec2::new(ward.a.1, ward.b.0),
+                    Vec2::new(ward.a.1, ward.b.1),
+                ]
+            })
+            .map(|corner| {
+                (self.frame.to_world(corner) - site_origin.as_::<f64>())
+                    .map(|e| (e / TILE_SIZE as f64).floor().abs() as i32)
+                    .reduce_max()
+            })
+            .max()
+            .unwrap_or(0);
+        (extent + ring + PLAZA_ROOM_TILES)
+            .clamp(MIN_FOOTPRINT_DOMAIN_TILES, MAX_FOOTPRINT_DOMAIN_TILES)
     }
 }
 
-/// How far from the site origin (Chebyshev, in tiles) a footprint may reach:
-/// the tiles `Site::demarcate_obstacles` fully stamps with water, hill and
-/// route hazards. It marks tiles `t - 1` and `t - 2` per axis from a spiral
-/// over `|t| <= OBSTACLE_SEARCH_RADIUS`, so the last two rows on the
-/// positive side are only partly evaluated. Beyond this a tile's hazard
-/// status is unknown and nothing may be built there; the domain does not
-/// grow with the footprint.
-pub const FOOTPRINT_DOMAIN_TILES: i32 = Site::OBSTACLE_SEARCH_RADIUS as i32 - 2;
+/// The smallest domain a footprint gets (Chebyshev tiles from the site
+/// origin): what an ordinary city evaluates. `Site::demarcate_obstacles`
+/// stamps water, hill and route hazards on tiles `t - 1` and `t - 2` per
+/// axis from a spiral over `|t| <= radius`, so the last two rows on the
+/// positive side are only partly evaluated: a domain of `d` tiles needs a
+/// radius of `d + 2` ([`DOMAIN_OBSTACLE_MARGIN`]).
+pub const MIN_FOOTPRINT_DOMAIN_TILES: i32 =
+    Site::OBSTACLE_SEARCH_RADIUS as i32 - DOMAIN_OBSTACLE_MARGIN;
+
+/// The largest domain a footprint may get: the city's tile grid holds
+/// `TILE_RADIUS` (256) tiles each way, and a plot grown at the edge of the
+/// domain needs a few more.
+pub const MAX_FOOTPRINT_DOMAIN_TILES: i32 = 240;
+
+/// See [`MIN_FOOTPRINT_DOMAIN_TILES`].
+pub const DOMAIN_OBSTACLE_MARGIN: i32 = 2;
 
 /// The frontier step accepts a site whose nearest plaza is within this
 /// band, in multiples of the plaza spacing: far enough not to crowd it, near
@@ -195,8 +237,10 @@ pub const MAX_WARDS: usize = (u8::MAX - WARD_BASE) as usize;
 /// A layout rasterised into one city's tile space for one generation.
 /// Lives on [`Site::footprint`] only while `generate_city` runs.
 pub struct Footprint {
-    /// Ward/ring classification of every tile within
-    /// [`FOOTPRINT_DOMAIN_TILES`] of the origin, row-major.
+    /// The layout's domain, [`SettlementLayout::domain_tiles`].
+    domain: i32,
+    /// Ward/ring classification of every tile within `domain` of the
+    /// origin, row-major.
     cells: Vec<u8>,
     /// Squared distance (tiles²) from each cell to the nearest plaza root,
     /// tracked only up to [`PLAZA_DISTANCE_TRACK_TILES`]; `f32::INFINITY`
@@ -219,21 +263,25 @@ pub struct Footprint {
 }
 
 impl Footprint {
-    const SIDE: i32 = 2 * FOOTPRINT_DOMAIN_TILES + 1;
-
     /// Rasterises `layout` around a city whose tile grid starts at
     /// `site_origin` (world blocks), classifying each tile by its centre.
     /// Overlapping wards are a data error (rejected when the layout is
     /// loaded); here the first ward listed would win.
     pub fn new(layout: &SettlementLayout, site_origin: Vec2<i32>) -> Self {
         assert!(layout.wards.len() <= MAX_WARDS, "too many wards");
-        let side = Self::SIDE as usize;
+        let domain = layout.domain_tiles(site_origin);
+        let side = (2 * domain + 1) as usize;
         let mut cells = vec![OUTSIDE; side * side];
+        let in_domain = |t: Vec2<i32>| t.map(|e| e.abs()).reduce_max() <= domain;
+        let index = |t: Vec2<i32>| {
+            let p = t + domain;
+            p.y as usize * side + p.x as usize
+        };
         let tile_centre = |tpos: Vec2<i32>| {
             (site_origin + tpos * TILE_SIZE as i32 + TILE_SIZE as i32 / 2).as_::<f64>()
         };
         // Only the exclusions that reach the domain.
-        let reach = (FOOTPRINT_DOMAIN_TILES + 1) * TILE_SIZE as i32;
+        let reach = (domain + 1) * TILE_SIZE as i32;
         let exclusions: Vec<_> = layout
             .exclusions
             .iter()
@@ -248,8 +296,8 @@ impl Footprint {
             })
         };
         let mut ward_tiles = Vec::new();
-        for y in -FOOTPRINT_DOMAIN_TILES..=FOOTPRINT_DOMAIN_TILES {
-            for x in -FOOTPRINT_DOMAIN_TILES..=FOOTPRINT_DOMAIN_TILES {
+        for y in -domain..=domain {
+            for x in -domain..=domain {
                 let tpos = Vec2::new(x, y);
                 let wpos = tile_centre(tpos);
                 if excluded(wpos) {
@@ -257,7 +305,7 @@ impl Footprint {
                 }
                 let ab = layout.frame.to_frame(wpos);
                 if let Some(i) = layout.wards.iter().position(|ward| ward.contains(ab)) {
-                    cells[Self::index(tpos)] = WARD_BASE + i as u8;
+                    cells[index(tpos)] = WARD_BASE + i as u8;
                     ward_tiles.push(tpos);
                 }
             }
@@ -268,11 +316,8 @@ impl Footprint {
                 for dy in -width..=width {
                     for dx in -width..=width {
                         let t = tpos + Vec2::new(dx, dy);
-                        if Self::in_domain(t)
-                            && cells[Self::index(t)] == OUTSIDE
-                            && !excluded(tile_centre(t))
-                        {
-                            cells[Self::index(t)] = RING;
+                        if in_domain(t) && cells[index(t)] == OUTSIDE && !excluded(tile_centre(t)) {
+                            cells[index(t)] = RING;
                         }
                     }
                 }
@@ -283,6 +328,7 @@ impl Footprint {
         // distance ties the same way every time.
         ward_tiles.sort_by_key(|t| (*t - anchor_tile).magnitude_squared());
         Self {
+            domain,
             cells,
             plaza_dist2: vec![f32::INFINITY; side * side],
             ward_tiles_by_anchor_distance: ward_tiles,
@@ -294,18 +340,21 @@ impl Footprint {
         }
     }
 
-    fn in_domain(tpos: Vec2<i32>) -> bool {
-        tpos.map(|e| e.abs()).reduce_max() <= FOOTPRINT_DOMAIN_TILES
+    /// The layout's domain in tiles ([`SettlementLayout::domain_tiles`]).
+    pub fn domain_tiles(&self) -> i32 { self.domain }
+
+    fn in_domain(&self, tpos: Vec2<i32>) -> bool {
+        tpos.map(|e| e.abs()).reduce_max() <= self.domain
     }
 
-    fn index(tpos: Vec2<i32>) -> usize {
-        let p = tpos + FOOTPRINT_DOMAIN_TILES;
-        (p.y * Self::SIDE + p.x) as usize
+    fn index(&self, tpos: Vec2<i32>) -> usize {
+        let p = tpos + self.domain;
+        (p.y * (2 * self.domain + 1) + p.x) as usize
     }
 
     fn cell(&self, tpos: Vec2<i32>) -> u8 {
-        if Self::in_domain(tpos) {
-            self.cells[Self::index(tpos)]
+        if self.in_domain(tpos) {
+            self.cells[self.index(tpos)]
         } else {
             OUTSIDE
         }
@@ -367,9 +416,10 @@ impl Footprint {
         for y in -r..=r {
             for x in -r..=r {
                 let t = root + Vec2::new(x, y);
-                if Self::in_domain(t) {
+                if self.in_domain(t) {
                     let d2 = (x * x + y * y) as f32;
-                    let cell = &mut self.plaza_dist2[Self::index(t)];
+                    let i = self.index(t);
+                    let cell = &mut self.plaza_dist2[i];
                     *cell = cell.min(d2);
                 }
             }
@@ -408,7 +458,7 @@ impl Footprint {
         let found = self.nearest_patch_to_anchor(
             plaza_radius,
             |centre| {
-                let d2 = self.plaza_dist2[Self::index(centre)];
+                let d2 = self.plaza_dist2[self.index(centre)];
                 d2 > min2 && d2 <= max2
             },
             is_clear,
@@ -630,11 +680,20 @@ mod tests {
             !fp.allows(Vec2::new(5, -3), Zone::Rural),
             "ring is 2 tiles wide"
         );
-        // Nothing outside the evaluated domain, however large the ward.
+        // The domain follows the wards (here 120 blocks = 20 tiles, under
+        // the minimum) but never passes the maximum, however large the ward.
+        assert_eq!(fp.domain_tiles(), MIN_FOOTPRINT_DOMAIN_TILES);
+        l.wards[1].b = (60.0, 900.0);
+        let fp = Footprint::new(&l, Vec2::new(1000, 1000));
+        // 900 blocks = tile 150, plus the 2-tile ring and the plaza room.
+        assert_eq!(fp.domain_tiles(), 153);
+        assert!(fp.allows(Vec2::new(149, 2), Zone::Built));
+        assert!(!fp.allows(Vec2::new(150, 2), Zone::Built));
         l.wards[1].b = (60.0, 1.0e6);
         let fp = Footprint::new(&l, Vec2::new(1000, 1000));
-        assert!(fp.allows(Vec2::new(FOOTPRINT_DOMAIN_TILES, 2), Zone::Built));
-        assert!(!fp.allows(Vec2::new(FOOTPRINT_DOMAIN_TILES + 1, 2), Zone::Built));
+        assert_eq!(fp.domain_tiles(), MAX_FOOTPRINT_DOMAIN_TILES);
+        assert!(fp.allows(Vec2::new(MAX_FOOTPRINT_DOMAIN_TILES, 2), Zone::Built));
+        assert!(!fp.allows(Vec2::new(MAX_FOOTPRINT_DOMAIN_TILES + 1, 2), Zone::Built));
     }
 
     #[test]
