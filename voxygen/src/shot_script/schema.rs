@@ -14,14 +14,24 @@ pub const SCRIPT_VERSION: u32 = 1;
 /// Maximum length of a screenshot name or a sample label, in bytes.
 pub const MAX_NAME_LEN: usize = 64;
 
-/// Times of day accepted by [`Step::Time`]; the same named times the `/time`
-/// admin command understands. Numeric times are deliberately not accepted, so
-/// the value can never smuggle extra command arguments.
+/// Largest script file `load` accepts, in bytes.
+pub const MAX_SCRIPT_BYTES: u64 = 1024 * 1024;
+
+/// Most steps a script may contain.
+pub const MAX_STEPS: usize = 10_000;
+
+/// Times of day accepted by [`Step::Time`]; exactly the named times the
+/// `/time` admin command understands (`TIMES` in `common/src/cmd.rs`, matched
+/// in `handle_time` in `server/src/cmd.rs`; a test keeps them in sync). Numeric
+/// times are deliberately not accepted, so the value can never smuggle extra
+/// command arguments.
 pub const TIME_NAMES: &[&str] = &[
     "midnight", "night", "dawn", "morning", "day", "noon", "dusk",
 ];
 
-/// Accepted window size range (both dimensions), in pixels.
+/// Accepted window size range (both dimensions), in pixels. These are this
+/// tool's own sanity bounds, not engine limits: the client takes whatever size
+/// the window system gives it.
 const WINDOW_MIN: u32 = 320;
 const WINDOW_MAX: u32 = 7680;
 
@@ -143,12 +153,22 @@ impl ShotScript {
     /// Read, parse and validate a script file.
     pub fn load(path: &Path) -> Result<Self, ScriptError> {
         let file = path.display().to_string();
-        let src = std::fs::read_to_string(path).map_err(|e| ScriptError {
+        let fail = |message: String| ScriptError {
             file: file.clone(),
             line: None,
             col: None,
-            message: format!("cannot read script: {e}"),
-        })?;
+            message,
+        };
+        let len = std::fs::metadata(path)
+            .map_err(|e| fail(format!("cannot read script: {e}")))?
+            .len();
+        if len > MAX_SCRIPT_BYTES {
+            return Err(fail(format!(
+                "script is {len} bytes; the limit is {MAX_SCRIPT_BYTES} bytes"
+            )));
+        }
+        let src =
+            std::fs::read_to_string(path).map_err(|e| fail(format!("cannot read script: {e}")))?;
         Self::parse(&src, &file)
     }
 
@@ -203,10 +223,19 @@ impl ShotScript {
         if self.steps.is_empty() {
             return Err(top("script has no steps".into()));
         }
+        if self.steps.len() > MAX_STEPS {
+            return Err(top(format!(
+                "script has {} steps; the limit is {MAX_STEPS}",
+                self.steps.len()
+            )));
+        }
 
         let lines = StepLines::new(src);
         let mut seen_kind: Vec<(&'static str, usize)> = Vec::new();
-        let mut screenshot_names: HashSet<&str> = HashSet::new();
+        // Compared case-insensitively: on case-insensitive file systems
+        // (macOS by default) `A.png` would overwrite `a.png`. Names are
+        // ASCII-only, so ASCII lowercasing is enough.
+        let mut screenshot_names: HashSet<String> = HashSet::new();
         for (index, step) in self.steps.iter().enumerate() {
             let kind = step.kind();
             // Which occurrence of this kind this step is, to locate its line.
@@ -228,9 +257,11 @@ impl ShotScript {
             };
             validate_step(step).map_err(at)?;
             if let Step::Screenshot { name } = step
-                && !screenshot_names.insert(name.as_str())
+                && !screenshot_names.insert(name.to_ascii_lowercase())
             {
-                return Err(at(format!("duplicate screenshot name {name:?}")));
+                return Err(at(format!(
+                    "duplicate screenshot name {name:?} (names are compared ignoring case)"
+                )));
             }
         }
         Ok(())
@@ -355,36 +386,107 @@ pub fn check_name(what: &str, name: &str) -> Result<(), String> {
 }
 
 /// Finds the source line of the n-th occurrence of a step kind, so
-/// validation errors can point at a line. Best effort: comments are skipped,
-/// and a kind only matches as a whole identifier followed by `(`.
-struct StepLines<'a> {
-    src: &'a str,
+/// validation errors can point at a line. A small RON-aware scan: identifiers
+/// inside `//` and (nested) `/* */` comments, strings and raw strings are
+/// ignored, and a kind only counts as a whole identifier followed by `(`.
+struct StepLines {
+    /// Every identifier followed by `(`, with its 1-based line, in order.
+    calls: Vec<(String, usize)>,
 }
 
-impl<'a> StepLines<'a> {
-    fn new(src: &'a str) -> Self { Self { src } }
-
-    fn find(&self, kind: &str, nth: usize) -> Option<usize> {
-        let mut count = 0;
-        for (line_no, line) in self.src.lines().enumerate() {
-            let code = line.split("//").next().unwrap_or("");
-            let mut start = 0;
-            while let Some(pos) = code[start..].find(kind) {
-                let abs = start + pos;
-                let before_ok = code[..abs]
-                    .chars()
-                    .next_back()
-                    .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
-                let after_ok = code[abs + kind.len()..].trim_start().starts_with('(');
-                if before_ok && after_ok {
-                    if count == nth {
-                        return Some(line_no + 1);
-                    }
-                    count += 1;
+impl StepLines {
+    fn new(src: &str) -> Self {
+        let chars: Vec<char> = src.chars().collect();
+        let mut calls = Vec::new();
+        let mut line = 1;
+        let mut i = 0;
+        // Advance past `chars[i]`, keeping the line count.
+        let bump = |i: &mut usize, line: &mut usize| {
+            if chars[*i] == '\n' {
+                *line += 1;
+            }
+            *i += 1;
+        };
+        while i < chars.len() {
+            let c = chars[i];
+            let next = chars.get(i + 1).copied();
+            if c == '/' && next == Some('/') {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
                 }
-                start = abs + kind.len();
+            } else if c == '/' && next == Some('*') {
+                let mut depth = 0usize;
+                while i < chars.len() {
+                    match (chars[i], chars.get(i + 1).copied()) {
+                        ('/', Some('*')) => {
+                            depth += 1;
+                            i += 2;
+                        },
+                        ('*', Some('/')) => {
+                            depth -= 1;
+                            i += 2;
+                            if depth == 0 {
+                                break;
+                            }
+                        },
+                        _ => bump(&mut i, &mut line),
+                    }
+                }
+            } else if c == '"' {
+                i += 1;
+                while i < chars.len() && chars[i] != '"' {
+                    if chars[i] == '\\' && i + 1 < chars.len() {
+                        bump(&mut i, &mut line);
+                    }
+                    bump(&mut i, &mut line);
+                }
+                i += 1;
+            } else if c == 'r' && matches!(next, Some('"' | '#')) {
+                // Raw string r"..." / r#"..."#.
+                let mut j = i + 1;
+                let mut hashes = 0;
+                while chars.get(j) == Some(&'#') {
+                    hashes += 1;
+                    j += 1;
+                }
+                if chars.get(j) != Some(&'"') {
+                    i += 1;
+                    continue;
+                }
+                i = j + 1;
+                while i < chars.len() {
+                    if chars[i] == '"' && (1..=hashes).all(|k| chars.get(i + k) == Some(&'#')) {
+                        i += 1 + hashes;
+                        break;
+                    }
+                    bump(&mut i, &mut line);
+                }
+            } else if c.is_ascii_alphabetic() || c == '_' {
+                let start = i;
+                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    i += 1;
+                }
+                let ident: String = chars[start..i].iter().collect();
+                let ident_line = line;
+                let mut j = i;
+                while j < chars.len() && chars[j].is_whitespace() {
+                    j += 1;
+                }
+                if chars.get(j) == Some(&'(') {
+                    calls.push((ident, ident_line));
+                }
+            } else {
+                bump(&mut i, &mut line);
             }
         }
-        None
+        Self { calls }
+    }
+
+    fn find(&self, kind: &str, nth: usize) -> Option<usize> {
+        self.calls
+            .iter()
+            .filter(|(ident, _)| ident == kind)
+            .nth(nth)
+            .map(|(_, line)| *line)
     }
 }

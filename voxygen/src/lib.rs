@@ -19,6 +19,7 @@ mod credits;
 #[cfg(feature = "discord")] pub mod discord;
 mod ecs;
 pub mod error;
+#[cfg(test)] mod feature_guard_tests;
 pub mod game_input;
 pub mod hud;
 pub mod key_state;

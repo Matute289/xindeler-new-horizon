@@ -199,32 +199,92 @@ fn load_reports_missing_file() {
     assert!(e.message.contains("cannot read script"), "{e}");
 }
 
-/// The feature must stay opt-in: never part of either default feature set.
 #[test]
-fn feature_is_in_no_default_set() {
-    let manifest = include_str!("../../Cargo.toml");
-    let features = manifest
-        .split("\n[features]\n")
+fn oversized_script_file_is_rejected() {
+    let path = std::env::temp_dir().join(format!("shot-script-big-{}.ron", std::process::id()));
+    std::fs::write(&path, vec![b' '; schema::MAX_SCRIPT_BYTES as usize + 1]).unwrap();
+    let e = ShotScript::load(&path).unwrap_err();
+    std::fs::remove_file(&path).ok();
+    assert!(e.message.contains("the limit is 1048576 bytes"), "{e}");
+}
+
+#[test]
+fn too_many_steps_are_rejected() {
+    let steps = "WaitSeconds(1.0),".repeat(schema::MAX_STEPS + 1);
+    let e = err(&script(&steps));
+    assert!(e.message.contains("the limit is 10000"), "{e}");
+    let steps = "WaitSeconds(1.0),".repeat(schema::MAX_STEPS);
+    ShotScript::parse(&script(&steps), "t.ron").expect("exactly the limit is fine");
+}
+
+#[test]
+fn duplicate_screenshot_names_ignore_case() {
+    let e = err(&script(
+        "Screenshot(name: \"Deck_Noon\"), Screenshot(name: \"deck_noon\")",
+    ));
+    assert!(
+        e.message
+            .contains("duplicate screenshot name \"deck_noon\""),
+        "{e}"
+    );
+}
+
+#[test]
+fn step_lines_skip_block_comments_and_strings() {
+    // Line 6 holds a commented-out step of the same kind; line 7 the real one.
+    let e = err(&script(
+        "        /* WaitSeconds(1.0) */\n        WaitSeconds(0.0),",
+    ));
+    assert_eq!(e.line, Some(7), "{e}");
+    // A multi-line nested block comment and `//` inside a string.
+    let e = err(&script(
+        "        Sample(label: \"a\"), /* Screenshot(name: \"x\")\n        /* nested */ \
+         Screenshot(name: \"y\") */\n        Time(\"noon\"), // Screenshot(name: \"z\")\n        \
+         Screenshot(name: \"ok\"),\n        Screenshot(name: \"bad name\"),",
+    ));
+    assert!(e.message.starts_with("step 4 (Screenshot)"), "{e}");
+    assert_eq!(e.line, Some(10), "{e}");
+}
+
+/// `TIME_NAMES` must match the `/time` command exactly: the completion list in
+/// `common/src/cmd.rs` and the named arms of the server's parser.
+#[test]
+fn time_names_match_time_command() {
+    fn quoted(s: &str) -> Vec<String> {
+        s.split('"')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_string)
+            .collect()
+    }
+    let mut ours: Vec<String> = schema::TIME_NAMES.iter().map(|s| s.to_string()).collect();
+    ours.sort();
+
+    let common = include_str!("../../../common/src/cmd.rs");
+    let list = common
+        .split("static ref TIMES: Vec<String> = [")
         .nth(1)
-        .expect("[features] table")
-        .split("\n[")
+        .expect("TIMES list in common/src/cmd.rs")
+        .split(']')
         .next()
         .unwrap();
-    assert!(
-        features
-            .lines()
-            .any(|l| l.trim_start().starts_with("shot-script =")),
-        "shot-script feature must exist"
-    );
-    for set in ["default", "default-publish"] {
-        let start = features
-            .find(&format!("\n{set} = ["))
-            .unwrap_or_else(|| panic!("{set} feature set"));
-        let body = &features[start..];
-        let body = &body[..body.find(']').expect("closing bracket")];
-        assert!(
-            !body.contains("shot-script"),
-            "shot-script must not be in the {set} feature set"
-        );
-    }
+    let mut common_names = quoted(list);
+    common_names.sort();
+    assert_eq!(ours, common_names, "TIME_NAMES vs common TIMES");
+
+    let server = include_str!("../../../server/src/cmd.rs");
+    let arms = server
+        .split("let new_time = match time.as_deref() {")
+        .nth(1)
+        .expect("time match in server/src/cmd.rs")
+        .split("Some(n) =>")
+        .next()
+        .unwrap();
+    let mut server_names: Vec<String> = arms
+        .split("Some(\"")
+        .skip(1)
+        .map(|a| a.split('"').next().unwrap().to_string())
+        .collect();
+    server_names.sort();
+    assert_eq!(ours, server_names, "TIME_NAMES vs server /time arms");
 }
