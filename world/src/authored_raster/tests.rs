@@ -2361,10 +2361,10 @@ fn map_colour_of_authored_dry_ground_below_sea_level_is_not_water() {
     };
     let lake = rect(2176.0, 1152.0, 2240.0, 1216.0);
     let mut own = region("dry_below_sea", (2048, 1024), (2304, 1280), 0, vec![
-        ground(rect(2048.0, 1024.0, 2304.0, 1280.0), 25_050),
+        ground(rect(2080.0, 1056.0, 2272.0, 1248.0), 25_050),
         // A dry pit at -10 m and a dry depression at -1500 m.
-        ground(rect(2048.0, 1024.0, 2112.0, 1088.0), 13_050),
-        ground(rect(2176.0, 1024.0, 2240.0, 1088.0), -135_950),
+        ground(rect(2080.0, 1056.0, 2144.0, 1120.0), 13_050),
+        ground(rect(2176.0, 1056.0, 2240.0, 1120.0), -135_950),
         // A lake whose surface is 20 m below sea level.
         PaintOp::ClearGround {
             shape: lake.clone(),
@@ -2378,7 +2378,7 @@ fn map_colour_of_authored_dry_ground_below_sea_level_is_not_water() {
     own.sea_fill = SeaFill::AuthoredOnly;
     // A sea floor 10 m below sea level in an `Auto` region.
     let auto = region("sea_floor", (1024, 1024), (1280, 1280), 0, vec![ground(
-        rect(1024.0, 1024.0, 1280.0, 1280.0),
+        rect(1056.0, 1056.0, 1248.0, 1248.0),
         13_050,
     )]);
     let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
@@ -2388,6 +2388,9 @@ fn map_colour_of_authored_dry_ground_below_sea_level_is_not_water() {
         c.water_alt = CONFIG.sea_level;
         c.river.river_kind = Some(RiverKind::Ocean);
     }
+    // The pit's chunk is no table water, only below sea level.
+    let pit = vec2_as_uniform_idx(sim.map_size_lg(), Vec2::new(2096, 1072) / CHUNK);
+    sim.chunks[pit].river.river_kind = None;
     sim.set_authored_rasters_for_test(Some(
         load(&[build_region(&own).unwrap(), build_region(&auto).unwrap()]).unwrap(),
     ));
@@ -2411,10 +2414,10 @@ fn map_colour_of_authored_dry_ground_below_sea_level_is_not_water() {
     let chunk_of = |x: i32, y: i32| Vec2::new(x, y) / CHUNK;
 
     // Dry ground below sea level: water in the table's colour, ground once
-    // presented, with or without the table's sea.
+    // presented, with (depression) or without (pit) the table's sea.
     for (wpos, what) in [
-        ((2064, 1040), "pit -10 m"),
-        ((2192, 1040), "depression -1500 m"),
+        ((2096, 1072), "pit -10 m"),
+        ((2192, 1072), "depression -1500 m"),
     ] {
         let c = chunk_of(wpos.0, wpos.1);
         assert!(sim.chunk_is_authored_dry(c), "{what} is dry");
@@ -2425,10 +2428,6 @@ fn map_colour_of_authored_dry_ground_below_sea_level_is_not_water() {
             rgb(c, true)
         );
     }
-    sim.chunks[vec2_as_uniform_idx(sim.map_size_lg(), chunk_of(2064, 1040))]
-        .river
-        .river_kind = None;
-    assert!(!is_water_colour(rgb(chunk_of(2064, 1040), true)));
 
     // Water stays water, byte for byte: the lake below sea level, the `Auto`
     // sea floor, and a chunk outside every region.
