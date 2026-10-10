@@ -12,12 +12,12 @@ landmark:site.black_tower_north	a0d43500d69ce73f	1	1	Black Tower
 landmark:site.black_tower_south	404c4b91af114c1c	1	1	Black Tower
 landmark:site.bs_lighthouse	b3890bf9589d8ca8	1	1	BS Lighthouse
 landmark:site.dove_point_lighthouse	f754b001a9f93df9	1	1	Dove Point Lighthouse
-landmark:site.duren_river_port	85a11396ed9b6499	1	1	Duren River Port
+landmark:site.duren_river_port	a864daab83884117	1	1	Duren River Port
 landmark:site.faro_de_alzinder	658fe97786440f51	1	1	Faro De Alzinder
 landmark:site.faro_de_caros	6a402544a2464853	1	1	Faro De Caros
 landmark:site.headlamp_tip	63cb95ca67203bca	1	1	Headlamp Tip
 landmark:site.kalitos_last_light	928e3b027462010d	1	1	Kalitos Last Light
-landmark:site.kalthis_river_port	b88e688e178bece1	1	1	Kalthis River Port
+landmark:site.kalthis_river_port	a37475920e2df439	1	1	Kalthis River Port
 landmark:site.kinderpon_beacon	f84f6b83574ddbb9	1	1	Kinderpon Beacon
 landmark:site.portland_lighthouse	7b18bab864a46e90	1	1	Portland Lighthouse
 landmark:site.red_lighthouse	94c1840efbe04a06	1	1	Red Lighthouse
@@ -37,7 +37,7 @@ settlement:site.cutstone_city	b8cfa93a779404d2	86	55	Cutstone City
 settlement:site.cutwood_town	ebf82cc3ad574e0e	50	32	Cutwood Town
 settlement:site.dove_city	0eda20290ab052b2	71	42	Dove City
 settlement:site.dromos_city	ab20590df1b5af16	79	44	Dromos City
-settlement:site.duren	34ec4de85025852e	910	650	Duren
+settlement:site.duren	e9843a1795de8720	927	650	Duren
 settlement:site.el_ojo_de_luna	eccce4e2b5dfdb69	1	1	El Ojo de Luna
 settlement:site.elynshara	f836cb287b1e76d0	40	29	Elynshara
 settlement:site.evercross	1b033c8a109dd2f4	44	25	Evercross
@@ -55,7 +55,7 @@ settlement:site.hita_post	f5af5d44231fa7e0	1	1	Hita Post
 settlement:site.inebel	0752c41fca3ffa88	91	45	Inebel
 settlement:site.itos_village	486c1ce891b0abd0	42	23	Itos Village
 settlement:site.kalitos	9b8057df9c54be3d	19	10	Kalitos
-settlement:site.kalthis	a5c8560f1daa0ac5	788	651	Kalthis
+settlement:site.kalthis	b51a684b3f27378e	801	651	Kalthis
 settlement:site.le_pont_dargent	458d2762fb69a3c9	1	1	Le Pont D'argent
 settlement:site.levannois_village	657627410f4d1766	20	11	Levannois Village
 settlement:site.levassi	cd9d41ff48ce202c	42	25	Levassi

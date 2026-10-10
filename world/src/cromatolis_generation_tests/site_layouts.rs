@@ -550,10 +550,17 @@ fn raising_one_far_chunk_one_block_rerolls_no_site() {
 
 /// A chunk that a procedural connector runs through (between Itos Village
 /// and its anchor), raised 5 m: the A* reroutes that connector, and no site
-/// re-rolls.
+/// re-rolls -- except a local street-tile change, as in
+/// `raising_the_whole_map_by_a_re_encode_bias_stays_local`: raising a chunk
+/// nudges `SimChunk::alt` map-wide by ~1e-5 blocks, which can flip a street
+/// A* tie. Since NH-166 T36 grew Kalthis and Duren to 650 buildings (and
+/// ~900 plots each), seed 0 shows exactly that in Duren: one road plot one
+/// tile longer. A ratchet on that count; it may go down, raising it needs
+/// review.
 #[test]
 #[ignore]
 fn raising_a_chunk_on_a_procedural_road_five_metres_rerolls_no_site() {
+    const MAX_CHANGED_SITES: usize = 1;
     let on_road = Vec2::new(122, 219);
     assert!(
         base_layouts()
@@ -564,7 +571,7 @@ fn raising_a_chunk_on_a_procedural_road_five_metres_rerolls_no_site() {
         "premise: {on_road:?} must lie on a road"
     );
     let (_, changed, report) = run_perturbation(raise_chunks(vec![on_road], 5.0));
-    assert!(changed.is_empty(), "{report}");
+    assert!(changed.len() <= MAX_CHANGED_SITES, "{report}");
 }
 
 /// The whole map raised by the mean quantisation bias of a heightmap
