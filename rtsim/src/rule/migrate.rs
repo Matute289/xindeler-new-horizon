@@ -205,8 +205,15 @@ impl Rule for Migrate {
             let Data {
                 actors,
                 authored_rasters_digest,
+                authored_region_digests,
                 ..
             } = data;
+            super::authored_water::note_ground_region_changes(
+                actors,
+                authored_rasters_digest.as_deref(),
+                authored_region_digests,
+                ctx.world,
+            );
             super::authored_water::resolve_npcs(
                 actors,
                 authored_rasters_digest,

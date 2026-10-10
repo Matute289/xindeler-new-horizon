@@ -66,7 +66,18 @@ pub struct RegionSpec {
     /// Passed through to [`RegionManifest::sea_fill`].
     #[serde(default)]
     pub sea_fill: SeaFill,
+    /// Passed through to [`RegionManifest::sites_on_patch`].
+    #[serde(default)]
+    pub sites_on_patch: Vec<String>,
+    /// Passed through to [`RegionManifest::site_levelling`].
+    #[serde(default = "spec_default_true")]
+    pub site_levelling: bool,
+    /// Passed through to [`RegionManifest::max_exposed_void_columns`].
+    #[serde(default)]
+    pub max_exposed_void_columns: u32,
 }
+
+fn spec_default_true() -> bool { true }
 
 impl RegionSpec {
     /// A region with the default settings (natural decorations kept, no
@@ -91,6 +102,9 @@ impl RegionSpec {
             aquatic_ecology_profile: None,
             consistency: ConsistencyBudget::default(),
             sea_fill: SeaFill::Auto,
+            sites_on_patch: Vec::new(),
+            site_levelling: true,
+            max_exposed_void_columns: 0,
         }
     }
 }
@@ -532,6 +546,9 @@ impl RegionRaster {
                 aquatic_ecology_profile: self.spec.aquatic_ecology_profile.clone(),
                 consistency: self.spec.consistency,
                 sea_fill: self.spec.sea_fill,
+                sites_on_patch: self.spec.sites_on_patch.clone(),
+                site_levelling: self.spec.site_levelling,
+                max_exposed_void_columns: self.spec.max_exposed_void_columns,
             },
             tiles: water_tiles,
             ground_tiles,

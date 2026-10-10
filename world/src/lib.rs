@@ -236,6 +236,15 @@ impl World {
             ) {
                 panic!("{err}");
             }
+            // XINDELER: sites, authored voids and roads on authored ground
+            // (`authored_raster::post_civ`).
+            if let Err(err) = authored_raster::post_civ::check_ground_consumers(
+                &world,
+                index.as_index_ref(),
+                layer::authored_regions::authored_voids(&index, &world.sim),
+            ) {
+                panic!("{err}");
+            }
             (world, index)
         })
     }
@@ -1106,7 +1115,7 @@ impl World {
                     kind: model,
                     pos: (wpos2d - min_wpos)
                         .map(|e| e as i16)
-                        .with_z(self.sim().get_alt_approx(wpos2d).unwrap_or(0.0) as i16),
+                        .with_z(self.sim().ground_alt_at(wpos2d).unwrap_or(0.0) as i16),
                     flags: if column.snow_cover {
                         lod::InstFlags::SNOW_COVERED
                     } else {

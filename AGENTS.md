@@ -10,12 +10,14 @@ concluded that reverting to the original Veloren-derived engine — rather than 
 from-scratch Bevy 0.19 port — was the more viable path. Three related repos exist:
 - **`xindeler-new-horizon`** (this repo) — the live, ongoing successor project. All new work
   happens here.
-- **`xindeler-old`** (sibling local checkout) — the frozen source this repo was cloned from
-  (Veloren-derived engine, still `veloren`-branded). Kept as a clean reference; not touched by
-  new-horizon work.
-- **`xindeler`** (sibling local checkout) — the earlier Bevy 0.19 port. Superseded, not deleted;
-  its shared sim-crate history and any future frozen-reserve decision are documented in the
-  engine-strategy spec above.
+- **`xindeler-old`** — the frozen source this repo was cloned from (Veloren-derived engine,
+  still `veloren`-branded). **The local checkout was deleted on 2026-10-04**: its Cromatolis work
+  already lives in this repo, and a bundle of its local-only commits is kept in
+  `~/Documents/xindeler-scratch-backup-2026-10-04/old-repos/`. Do not look for a sibling checkout.
+- **`xindeler`** (sibling local checkout) — the earlier Bevy 0.19 port. Superseded; kept only until
+  the HUD/other imports from it are finished (`NH-164`: "finished" = the HUD cooldowns merged plus
+  the NH-164 checklist steps 1-5, Matías 2026-10-08), then deleted. Its shared sim-crate history is
+  documented in the engine-strategy spec above.
 
 Full rationale, the conditional pivot plan, and the `NH-N` backlog rows all live in
 `docs/design/` (the same private repo nested in `xindeler`, reused here — see below).
@@ -92,17 +94,23 @@ queda lista para mergear, no solo cuando estás bloqueado — Mati no siempre es
 
 ## Toolchain
 
-Nightly Rust is required (pinned in `rust-toolchain`). The project uses the 2024 edition. The `specs` ECS crate requires nightly.
+Nightly Rust is required (pinned in `rust-toolchain`, currently `nightly-2026-07-01`). The sibling
+`xindeler-open-world` repo is different: its CI pins **stable Rust 1.99** (run `cargo +1.99 clippy` /
+`cargo +1.99 test` there before a PR). The project uses the 2024 edition. The `specs` ECS crate requires nightly.
 
 ## Commands
 
 ```bash
-# Run the game client (hot-reloading enabled by default in dev builds)
+# Run the game client (dev builds enable the asset hot-reload watcher,
+# `hot-reloading`, by default — this works fine on every platform including
+# macOS, and needs no special handling for a normal run)
 cargo run --bin xindeler-voxygen
-# On macOS, hot-reloading doesn't work (common/dynlib/src/lib.rs logs an error
-# and the dylib reload never succeeds) — run with everything else `default`
-# gives you, minus `hot-reloading`, instead:
-cargo run --bin xindeler-voxygen --no-default-features --features default-publish,shaderc-from-source,egui-ui
+# `hot-anim` (dylib-reloaded animation/agent code) is a SEPARATE, opt-in
+# feature — it is not part of `default` and is not enabled by the command
+# above. Only if you explicitly add `--features hot-anim` does macOS hit a
+# real bug (common/dynlib/src/lib.rs logs an error and the dylib reload
+# never succeeds); an earlier version of this note incorrectly blamed
+# `hot-reloading` for that and told you to disable the wrong feature.
 
 # Run the server
 cargo run --bin xindeler-server-cli
@@ -226,7 +234,8 @@ Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico
 
 **Topology — three sources, one working tree:**
 - **GitHub public** (`Matute289/xindeler-new-horizon`, `origin`) — code + RON/i18n + LFS pointers. No blobs.
-- **VPS** (`greenmountain.dev:/srv/git-lfs/repos/xindeler.git`) — the SAME shared blob store the sibling Bevy-port repo and `xindeler-old` already use (asset history is common to all three), served by `git-lfs-transfer` over **pure SSH** (no HTTP server, no Caddy). Private (SSH-key auth). It is the **single copy** of the binaries, so it must be backed up server-side. Server-side setup notes live in the private `MyServerVPS` repo (`git-lfs/`).
+- **VPS** (`greenmountain.dev:/srv/git-lfs/repos/xindeler.git`) — the SAME shared blob store the sibling Bevy-port repo and the (now deleted) `xindeler-old` used (asset history is common to all three), served by `git-lfs-transfer` over **pure SSH** (no HTTP server, no Caddy). Private (SSH-key auth). It is the **single copy** of the binaries, so it must be backed up server-side. Server-side setup notes live in the private `MyServerVPS` repo (`git-lfs/`).
+- **The VPS host (since 2026-10-10):** a Hostinger box (4 cores, ~15 GB RAM, 193 GB disk, Ubuntu 24.04). The hostname `greenmountain.dev`, the SSH user (`mgrinberg`) and `.lfsconfig` did not change; `/srv/git-lfs` (store, guard, the nightly `xindeler-lfs-verify` cron), the release builds and the downloads/updater layout all moved with it. The previous Vultr box (2 vCPU / 4 GB RAM) is **destroyed**, so the old "RAM-limited 4 GB box" constraints (e.g. `CARGO_BUILD_JOBS=1`, no LTO for `portrait_gen`) no longer apply as hardware limits. Migration runbook: `MyServerVPS` PR #21.
 - **GitHub private** (`Matute289/xindeler-design`, nested at `docs/design/`) — design/lore, shared with the sibling Bevy-port repo (see above).
 
 **How it's wired:**
@@ -243,7 +252,7 @@ Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico
 
 **Where each build runs:**
 - **Code CI** (build / check / test / lint on PRs) → **GitHub Actions** (public repo = free, unlimited minutes). It must **not** pull LFS — compilation and tests don't need the binary assets.
-- **Server release** → built **on the VPS** (where the assets are local), not on GitHub Actions. `release.yml` triggers on a `v*` tag push, SSHes to the VPS with `secrets.VPS_SSH_KEY`, and runs `/srv/git-lfs/scripts/build-release.sh <tag>`, which checks out the tag in the live `/opt/xindeler-server/src` checkout and delegates the actual build/install/health-check/rollback to `deploy/deploy.sh` in this repo. Already adapted and proven for `xindeler-new-horizon` specifically (binary `xindeler-server-cli`, toolchain pin, `.lfsconfig` all match this repo) — v0.1.0 through v0.25.4 have shipped this way as of 2026-09.
+- **Server release** → built **on the VPS** (where the assets are local), not on GitHub Actions. `release.yml` triggers on a `v*` tag push, SSHes to the VPS with `secrets.VPS_SSH_KEY`, and runs `/srv/git-lfs/scripts/build-release.sh <tag>`, which checks out the tag in the live `/opt/xindeler-server/src` checkout and delegates the actual build/install/health-check/rollback to `deploy/deploy.sh` in this repo. Already adapted and proven for `xindeler-new-horizon` specifically (binary `xindeler-server-cli`, toolchain pin, `.lfsconfig` all match this repo) — v0.1.0 through v0.26.1 have shipped this way as of 2026-10 (v0.26.1 was built on the old Vultr box; the first release on the new Hostinger box is the next `v*` tag).
 - **Docker image** (`publish-docker.yml`, manual) → pulls only the asset dirs the image bundles (`assets/common,server,world`) from the VPS, builds `xindeler-server-cli`, pushes to GHCR.
 - **Client release** (`xindeler-voxygen` desktop builds) → **live since NH-58 (2026-09-07)**, no longer deferred. `build-check.yml` runs a cheap compile-check on every merge to `development` (no LFS, no packaging); `build.yml` runs the real pipeline only on a `v*` tag — builds, packages, and publishes all 5 supported targets (Linux x64/ARM64, macOS Intel/ARM signed+notarized, Windows x64 unsigned) to `downloads.xindeler.com` (manifest at `/latest.json`, consumed by `xindeler-web-api`/`xindeler-web-landing`). Windows code-signing was evaluated and declined (ongoing cost, requires cloud/HSM signing post-2023, doesn't clear SmartScreen without the pricier EV tier) — ships unsigned permanently. Windows ARM64 is scoped but deferred (wasmtime is Tier 3 there) — see NH-58's backlog row and task board (`docs/design/`) for the full story, including the Airshipper launcher investigation spun out as NH-60.
 - **Repo secrets**: `secrets.VPS_SSH_KEY` is configured (set 2026-09-05, using the same `~/.ssh/xindeler_ci` dedicated deploy key the sibling `xindeler` repo's identically-named secret already uses).

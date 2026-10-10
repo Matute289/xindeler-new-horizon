@@ -1,0 +1,10 @@
+{
+  "message": "the region does not declare Ground",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_water_0_0.bin": "ce3b7f6739c255fc5fb2837268dbbfa502a1f21da4a450343a6d97570340e720",
+    "cromatolis_v0_ar_fixture_water_0_1.bin": "0249dbb054a238074b76f85cc54ee0d16bf792ed9830dc6cd36559ebe4d8cabc",
+    "cromatolis_v0_ar_fixture_water_1_0.bin": "76bc857a0d39e65d18d33c89df95f5af47270c4c83dbbf9d6b6f52c05ab74fae",
+    "cromatolis_v0_ar_fixture_water_1_1.bin": "ee6bad7e2990f8fa5a38041a525a69db5ee45ac3944435718fcb18cea980191b"
+  },
+  "verdict": "refuse"
+}

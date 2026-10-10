@@ -1077,6 +1077,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                 warp,
                 max_warp: spawn_rules.max_warp,
                 base_sea_level,
+                site_prefer_alt: spawn_rules.get_preferred_alt(),
             },
             |level| flooded_water_level(level, biome_profile),
         );

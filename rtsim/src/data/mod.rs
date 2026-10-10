@@ -102,6 +102,14 @@ pub struct Data {
     #[serde(default)]
     pub authored_rasters_digest: Option<String>,
 
+    /// XINDELER: per authored region, the digest of its manifest entry this
+    /// save last saw (sorted, so the save's bytes are deterministic; ~100 B
+    /// per region). Startup logs how many NPCs stand on the ground layer of a
+    /// region that changed (`rule::authored_water::note_ground_region_changes`).
+    /// Additive `#[serde(default)]` field, so `CURRENT_VERSION` does not move.
+    #[serde(default)]
+    pub authored_region_digests: std::collections::BTreeMap<String, String>,
+
     #[serde(skip)]
     pub airship_sim: AirshipSim,
 }
@@ -422,6 +430,7 @@ mod tests {
         let data = Data::from_reader(&encoded[..]).expect("an old save must still load");
         assert_eq!(data.tick, 21);
         assert_eq!(data.authored_rasters_digest, None);
+        assert!(data.authored_region_digests.is_empty());
     }
 
     /// `TerrainOverridePayload::Damage` is a brand new enum variant added

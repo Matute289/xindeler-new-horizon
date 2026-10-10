@@ -1,6 +1,14 @@
-//! Authored-aware water queries for the consumers that read the sim chunk
-//! table instead of generated blocks: rtsim (boats, fish, spawns), civ
-//! (placement, road costs), ports, wildlife, admin commands.
+//! Authored-aware water and ground queries for the consumers that read the
+//! sim chunk table instead of generated blocks: rtsim (boats, fish, spawns,
+//! simulated NPCs), sites and plots (through `Land`), ports, wildlife, admin
+//! commands.
+//!
+//! The one routing point for the ground is [`WorldSim::ground_alt_at`]:
+//! `Land::get_alt_approx` and `Land::get_gradient_approx` delegate to it, and
+//! [`WorldSim::surface_alt_at`] adds the water on top. `WorldSim::get_alt_approx`
+//! stays the chunk table (the natural map the sim was built from): consumers
+//! whose result reaches beyond the sampled point (the cave graph, caverns,
+//! authored voids) read it through `Land::get_alt_approx_table`.
 //!
 //! Inside an authored region these answer from the raster (the water the
 //! player sees); everywhere else they return exactly what the chunk table
@@ -9,7 +17,10 @@
 //! columns of a partial chunk are the natural map, so there too the table
 //! answers.
 
-use super::{AuthoredCell, AuthoredColumn, AuthoredWater, SEA_TOP_BLOCK, SeaFill};
+use super::{
+    AuthoredCell, AuthoredColumn, AuthoredWater, SEA_TOP_BLOCK, SeaFill, format::GROUND_EXACT,
+    top_block_alt,
+};
 use crate::{World, sim::WorldSim};
 use vek::*;
 
@@ -108,44 +119,150 @@ impl WorldSim {
     /// outside the map.
     pub fn is_wet_at(&self, wpos: Vec2<i32>) -> Option<bool> { self.water_at(wpos).map(|w| w.wet) }
 
-    /// `get_surface_alt_approx` made authored-aware: inside a region, the
-    /// authored water surface, the authored bank top, or the land (no sim
-    /// water there); elsewhere unchanged.
-    pub fn surface_alt_at(&self, wpos: Vec2<i32>) -> f32 {
+    /// The authored-aware ground altitude at a column: the single
+    /// implementation every consumer that must stand on the real ground reads
+    /// (`Land::get_alt_approx`, rtsim spawns, LOD objects).
+    ///
+    /// * exact ground, bank, wet bed: the authored top block's altitude
+    ///   ([`top_block_alt`], the column sampler's convention), with no
+    ///   sea-level clamp (a dry pit below 0 m is its floor);
+    /// * blend (ring) ground of weight `w`: `lerp(table, block, w / 255)`. The
+    ///   rendered ring lerps toward the engine column *with* its noise
+    ///   instead, so on ring cells this differs from the blocks by up to the
+    ///   engine's relief times `1 - w` (rings belong outside sites; the
+    ///   post-civ site check refuses one under a listed site);
+    /// * everything else, and every column outside every region: the chunk
+    ///   table ([`Self::get_alt_approx`]), bit for bit.
+    ///
+    /// `None` outside the map.
+    pub fn ground_alt_at(&self, wpos: Vec2<i32>) -> Option<f32> {
         match self
-            .authored_cell_at(wpos)
-            .filter(|c| !self.natural_unauthored(*c, wpos))
+            .authored_rasters
+            .as_ref()
+            .and_then(|r| r.cell_at(wpos))
         {
-            Some(AuthoredCell::Wet { surface_block, .. }) => (surface_block + 1) as f32,
-            Some(AuthoredCell::Bank { bed_block }) => (bed_block + 1) as f32,
-            // Not routed to the ground layer yet: consumers keep the table
-            // (the natural map the sim was built from) until the
-            // authored-aware ground query lands; ground cells are dry land.
-            Some(AuthoredCell::Ground { .. } | AuthoredCell::None) => self
-                .get_alt_approx(wpos)
-                .unwrap_or(crate::CONFIG.sea_level)
-                .max(crate::CONFIG.sea_level),
+            Some(AuthoredCell::Wet { bed_block, .. } | AuthoredCell::Bank { bed_block }) => {
+                Some(top_block_alt(bed_block))
+            },
+            Some(AuthoredCell::Ground {
+                block,
+                weight: GROUND_EXACT,
+            }) => Some(top_block_alt(block)),
+            Some(AuthoredCell::Ground { block, weight }) => Some(Lerp::lerp(
+                self.get_alt_approx(wpos)?,
+                top_block_alt(block),
+                weight as f32 / GROUND_EXACT as f32,
+            )),
+            Some(AuthoredCell::None) | None => self.get_alt_approx(wpos),
+        }
+    }
+
+    /// `get_gradient_approx` of the chunk holding `wpos`, authored-aware: for
+    /// a chunk whose centre column is a ground cell, the steepest of the
+    /// slopes from its centre to the four neighbouring chunk centres over
+    /// [`Self::ground_alt_at`] (the table's downhill neighbour would miss a
+    /// ramp or a prepared flat); otherwise the table's value. `None` outside
+    /// the map.
+    pub fn ground_gradient_at(&self, wpos: Vec2<i32>) -> Option<f32> {
+        let chunk_pos = wpos.map(|e| e.div_euclid(super::CHUNK));
+        let centre = chunk_pos * super::CHUNK + super::CHUNK / 2;
+        if !matches!(
+            self.authored_rasters
+                .as_ref()
+                .and_then(|r| r.cell_at(centre)),
+            Some(AuthoredCell::Ground { .. })
+        ) {
+            return self.get_gradient_approx(chunk_pos);
+        }
+        let here = self.ground_alt_at(centre)?;
+        Some(
+            [
+                Vec2::new(1, 0),
+                Vec2::new(-1, 0),
+                Vec2::new(0, 1),
+                Vec2::new(0, -1),
+            ]
+            .into_iter()
+            .filter_map(|d| self.ground_alt_at(centre + d * super::CHUNK))
+            .map(|n| (here - n).abs() / super::CHUNK as f32)
+            .fold(0.0, f32::max),
+        )
+    }
+
+    /// `get_surface_alt_approx` made authored-aware: inside a region, the
+    /// authored water surface, the authored bank or ground top (a sea floor
+    /// of a [`SeaFill::Auto`] region: the sea's surface over it), or the land
+    /// (no sim water there); elsewhere unchanged. Simulated rtsim NPCs are
+    /// snapped to it every tick.
+    pub fn surface_alt_at(&self, wpos: Vec2<i32>) -> f32 {
+        let sea = crate::CONFIG.sea_level;
+        let table_land = || self.get_alt_approx(wpos).unwrap_or(sea).max(sea);
+        match self
+            .authored_rasters
+            .as_ref()
+            .and_then(|r| r.cell_detail_at(wpos))
+            .filter(|&(cell, _, partial)| !(partial && cell == AuthoredCell::None))
+        {
+            Some((AuthoredCell::Wet { surface_block, .. }, ..)) => (surface_block + 1) as f32,
+            Some((AuthoredCell::Bank { bed_block }, ..)) => (bed_block + 1) as f32,
+            Some((AuthoredCell::Ground { block, weight }, sea_fill, _)) => {
+                let top = (block + 1) as f32;
+                let land = if weight == GROUND_EXACT {
+                    top
+                } else {
+                    Lerp::lerp(table_land(), top, weight as f32 / GROUND_EXACT as f32)
+                };
+                match sea_fill {
+                    // Below sea level the sea fills it: its surface.
+                    SeaFill::Auto => land.max(sea),
+                    // Dry at any altitude.
+                    SeaFill::AuthoredOnly => land,
+                }
+            },
+            Some((AuthoredCell::None, ..)) => table_land(),
             None => self.get_surface_alt_approx(wpos),
         }
     }
 
-    /// An unauthored column of a partial chunk: the natural map.
-    fn natural_unauthored(&self, cell: AuthoredCell, wpos: Vec2<i32>) -> bool {
-        cell == AuthoredCell::None
-            && self
-                .authored_rasters
-                .as_ref()
-                .is_some_and(|r| r.natural_at(wpos))
+    /// Login spawn-fix for a position saved before a ground patch raised the
+    /// ground over it: when `feet` lies inside solid terrain (`solid`) in a
+    /// ground-cell column, the z to search from instead -- one block above the
+    /// authored ground ([`Self::ground_alt_at`] on a ring cell) -- so the
+    /// normal ground search starts on the new surface rather than in a cave
+    /// below it or more than its reach under it. `None` (search from `feet`
+    /// as before) everywhere else: outside every region, on water, bank and
+    /// unauthored columns, when the feet are in free space (a cave or an
+    /// interior under the patch), or when the surface is not above the feet.
+    pub fn buried_ground_lift(&self, feet: Vec3<i32>, solid: bool) -> Option<i32> {
+        if !solid {
+            return None;
+        }
+        let z = match self.authored_rasters.as_ref()?.cell_at(feet.xy())? {
+            AuthoredCell::Ground {
+                block,
+                weight: GROUND_EXACT,
+            } => block + 1,
+            AuthoredCell::Ground { .. } => self.ground_alt_at(feet.xy())?.floor() as i32 + 1,
+            AuthoredCell::Wet { .. } | AuthoredCell::Bank { .. } | AuthoredCell::None => {
+                return None;
+            },
+        };
+        (z > feet.z).then_some(z)
     }
 
     /// The water facts of a chunk, authored-aware: inside a region from the
     /// raster's per-chunk summary (a chunk is water when at least half its
-    /// columns are water -- authored water, plus, in a partial chunk the
-    /// table calls water, its unauthored natural columns; it keeps the
+    /// columns are water -- authored water and sea floors, plus, in a partial
+    /// chunk the table calls water, its unauthored natural columns and the
+    /// ring cells that fade into them; exact ground, banks and the ground of
+    /// a [`SeaFill::AuthoredOnly`] region are dry at any altitude, so
+    /// reclaimed land stops being water once it is mostly land; it keeps the
     /// table's kind when the table also calls it lake or river, else it is
     /// ocean when its surface is at the ocean's top block and lake
-    /// otherwise; it is near water when it or any of its 8 neighbours holds
-    /// authored water, or, for a partial chunk, when the table says so);
+    /// otherwise -- always lake in a [`SeaFill::AuthoredOnly`] region, whose
+    /// only water is authored; it is near water when it or any of its 8
+    /// neighbours holds authored water, or, for a partial chunk, when the
+    /// table says so);
     /// outside every region, and for a partial chunk without authored cells,
     /// exactly the table's values. `None` outside the map.
     pub fn chunk_water(&self, chunk_pos: Vec2<i32>) -> Option<ChunkWater> {
@@ -174,10 +291,11 @@ impl WorldSim {
         let all = (super::CHUNK * super::CHUNK) as u32;
         // Unauthored columns that keep the natural water.
         let natural_wet = if natural && table.wet() {
-            all - summary.map_or(0, |s| s.authored_columns)
+            all - summary.map_or(0, |s| s.authored_columns - s.fading_blend_columns)
         } else {
             0
         };
+        let authored_only = summary.is_some_and(|s| s.authored_only);
         let wet = (summary.map_or(0, |s| s.water_columns()) + natural_wet) * 2 >= all;
         let near_water = (natural && table.near_water)
             || (-1..=1).any(|dy| {
@@ -191,11 +309,16 @@ impl WorldSim {
             (false, _) => (false, false, false),
             (true, Some(crate::sim::RiverKind::River { .. })) => (true, false, false),
             (true, Some(crate::sim::RiverKind::Lake { .. })) => (false, true, false),
+            // The region's own water, not the sea's.
+            (true, Some(crate::sim::RiverKind::Ocean)) if authored_only && natural_wet == 0 => {
+                (false, true, false)
+            },
             (true, Some(crate::sim::RiverKind::Ocean)) => (false, false, true),
             (true, None) => {
-                let sea = summary.is_some_and(|s| {
-                    s.min_surface_block <= SEA_TOP_BLOCK || s.sea_ground_columns > 0
-                });
+                let sea = !authored_only
+                    && summary.is_some_and(|s| {
+                        s.min_surface_block <= SEA_TOP_BLOCK || s.sea_ground_columns > 0
+                    });
                 (false, !sea, sea)
             },
         };

@@ -792,6 +792,20 @@ impl AuthoredVoids {
         inert
     }
 
+    /// Every shape's authored top at this column -- the ceiling of an air
+    /// void, the surface of a liquid one -- as authored, *before* the surface
+    /// cap lowers it under shallow terrain, paired with the name of the
+    /// feature it belongs to. What the authored ground layer's exposure check
+    /// compares with the patch over it.
+    pub(crate) fn authored_tops_at_column(&self, wpos2d: Vec2<i32>) -> Vec<(f32, &str)> {
+        self.carved_bands_at_column(wpos2d, f32::INFINITY, |shape| {
+            self.features[shape.feature as usize].as_str()
+        })
+        .into_iter()
+        .map(|(band, feature)| (*band.end(), feature))
+        .collect()
+    }
+
     /// [`Self::carved_bands_at_column`] paired with each shape's policy.
     #[cfg(test)]
     pub(crate) fn carved_contact_bands_at_column(
