@@ -19,7 +19,10 @@ use crate::{
     sim::{FileOpts, GenOpts, WorldOpts},
     util::Sampler,
 };
-use common::terrain::{TerrainChunkSize, uniform_idx_as_vec2};
+use common::{
+    terrain::{TerrainChunkSize, uniform_idx_as_vec2},
+    vol::RectVolSize,
+};
 use common_net::msg::WorldMapMsg;
 use vek::*;
 
