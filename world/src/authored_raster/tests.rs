@@ -2337,3 +2337,225 @@ fn map_presentation_reads_the_rendered_column_only_on_ground_cells() {
         8191 << 3
     );
 }
+
+/// The world map colour of authored dry ground: a chunk of a
+/// `sea_fill: AuthoredOnly` region that is dry ground below sea level (a pit
+/// at -10 m, a depression at -1500 m) is coloured as ground even where the
+/// chunk table calls it sea or lies below sea level, while an authored lake
+/// below sea level in the same region, a sea floor of an `Auto` region and
+/// columns outside every region keep exactly the table's colour (water).
+#[test]
+fn map_colour_of_authored_dry_ground_below_sea_level_is_not_water() {
+    use crate::{
+        CONFIG,
+        index::{Index, IndexOwned},
+        sim::{RiverKind, WorldSim, sample_pos_with},
+    };
+    use common::terrain::{MapSizeLg, map::MapConfig, vec2_as_uniform_idx};
+
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let ground = |shape, ground_cm| PaintOp::Ground {
+        shape,
+        ground_cm,
+        weight: GROUND_EXACT,
+    };
+    let lake = rect(2176.0, 1152.0, 2240.0, 1216.0);
+    let mut own = region("dry_below_sea", (2048, 1024), (2304, 1280), 0, vec![
+        ground(rect(2080.0, 1056.0, 2272.0, 1248.0), 25_050),
+        // A dry pit at -10 m and a dry depression at -1500 m.
+        ground(rect(2080.0, 1056.0, 2144.0, 1120.0), 13_050),
+        ground(rect(2176.0, 1056.0, 2240.0, 1120.0), -135_950),
+        // A lake whose surface is 20 m below sea level.
+        PaintOp::ClearGround {
+            shape: lake.clone(),
+        },
+        PaintOp::Water {
+            shape: lake,
+            surface_cm: 12_050,
+            bed_cm: 11_050,
+        },
+    ]);
+    own.sea_fill = SeaFill::AuthoredOnly;
+    // A sea floor 10 m below sea level in an `Auto` region.
+    let auto = region("sea_floor", (1024, 1024), (1280, 1280), 0, vec![ground(
+        rect(1056.0, 1056.0, 1248.0, 1248.0),
+        13_050,
+    )]);
+    let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
+    // The frozen table: sea everywhere, 10 m below sea level.
+    for c in sim.chunks.iter_mut() {
+        c.alt = CONFIG.sea_level - 10.0;
+        c.water_alt = CONFIG.sea_level;
+        c.river.river_kind = Some(RiverKind::Ocean);
+    }
+    // The pit's chunk is no table water, only below sea level.
+    let pit = vec2_as_uniform_idx(sim.map_size_lg(), Vec2::new(2096, 1072) / CHUNK);
+    sim.chunks[pit].river.river_kind = None;
+    sim.set_authored_rasters_for_test(Some(
+        load(&[build_region(&own).unwrap(), build_region(&auto).unwrap()]).unwrap(),
+    ));
+    let config = MapConfig::orthographic(
+        sim.map_size_lg(),
+        CONFIG.sea_level..=CONFIG.sea_level + 1000.0,
+    );
+    let index = IndexOwned::new(Index::new(0));
+    let rgb = |chunk: Vec2<i32>, presented: bool| {
+        sample_pos_with(&config, &sim, index.as_index_ref(), None, chunk, presented).rgb
+    };
+    let is_water_colour = |c: Rgb<u8>| c.r == 0 && c.b > c.g / 2 && c.b >= 0x52;
+    let chunk_of = |x: i32, y: i32| Vec2::new(x, y) / CHUNK;
+
+    // Dry ground below sea level: water in the table's colour, ground once
+    // presented, with (depression) or without (pit) the table's sea.
+    for (wpos, what) in [
+        ((2096, 1072), "pit -10 m"),
+        ((2192, 1072), "depression -1500 m"),
+    ] {
+        let c = chunk_of(wpos.0, wpos.1);
+        assert!(sim.chunk_is_authored_dry(c), "{what} is dry");
+        assert!(is_water_colour(rgb(c, false)), "{what}: table colour");
+        assert!(
+            !is_water_colour(rgb(c, true)),
+            "{what}: presented {:?}",
+            rgb(c, true)
+        );
+    }
+
+    // Water stays water, byte for byte: the lake below sea level, the `Auto`
+    // sea floor, and a chunk outside every region.
+    for (wpos, what) in [
+        ((2192, 1168), "lake -20 m"),
+        ((1104, 1104), "Auto sea floor"),
+        ((3000, 3000), "outside"),
+    ] {
+        let c = chunk_of(wpos.0, wpos.1);
+        assert!(!sim.chunk_is_authored_dry(c), "{what} is not dry ground");
+        assert!(is_water_colour(rgb(c, true)), "{what}: water colour");
+        assert_eq!(rgb(c, true), rgb(c, false), "{what}");
+    }
+}
+
+/// The dry rule is per chunk and follows the majority of its columns: a
+/// river or sea chunk a dry `sea_fill: AuthoredOnly` patch covers for more
+/// than half is coloured as ground, for less than half it keeps exactly the
+/// table's water colour and river link; a mostly dry chunk the patch does not
+/// cover entirely keeps its river link (the river still runs through it),
+/// a fully covered one drops it; at the region's edge, where the patch can
+/// cover at most half of the first chunk, that chunk stays water and the
+/// chunk outside the region is untouched.
+#[test]
+fn map_colour_of_partly_authored_dry_chunks_follows_the_majority() {
+    use crate::{
+        CONFIG,
+        index::{Index, IndexOwned},
+        sim::{RiverKind, WorldSim, sample_pos_with},
+    };
+    use common::terrain::{MapSizeLg, map::MapConfig, vec2_as_uniform_idx};
+
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let dry = |shape| PaintOp::Ground {
+        shape,
+        ground_cm: 13_050,
+        weight: GROUND_EXACT,
+    };
+    let mut own = region("straddle", (2560, 1024), (2816, 1280), 0, vec![
+        // River chunks: 26 of 32 columns, 12 of 32, all 32.
+        dry(rect(2624.0, 1056.0, 2650.0, 1088.0)),
+        dry(rect(2688.0, 1056.0, 2700.0, 1088.0)),
+        dry(rect(2752.0, 1056.0, 2784.0, 1088.0)),
+        // Sea chunks: 26 of 32 columns, 12 of 32.
+        dry(rect(2624.0, 1120.0, 2650.0, 1152.0)),
+        dry(rect(2688.0, 1120.0, 2700.0, 1152.0)),
+        // From the region's 16 m margin into the next chunk.
+        dry(rect(2576.0, 1184.0, 2624.0, 1216.0)),
+    ]);
+    own.sea_fill = SeaFill::AuthoredOnly;
+    // Unauthored columns keep the natural map (the table's water), so a
+    // chunk the patch covers partly straddles patch and natural water.
+    own.allow_partial = true;
+    let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
+    let size = sim.map_size_lg();
+    for c in sim.chunks.iter_mut() {
+        c.alt = CONFIG.sea_level - 10.0;
+        c.water_alt = CONFIG.sea_level;
+        c.river.river_kind = Some(RiverKind::Ocean);
+    }
+    // A river along y = 1056..1088 flowing east, one chunk to the next.
+    let chunk_of = |x: i32, y: i32| Vec2::new(x, y) / CHUNK;
+    for x in (2560..2816).step_by(CHUNK as usize) {
+        let c = &mut sim.chunks[vec2_as_uniform_idx(size, chunk_of(x, 1056))];
+        c.river.river_kind = Some(RiverKind::River {
+            cross_section: Vec2::new(12.0, 2.0),
+        });
+        c.downhill = Some(Vec2::new(x + CHUNK, 1056));
+    }
+    sim.set_authored_rasters_for_test(Some(load(&[build_region(&own).unwrap()]).unwrap()));
+    let config = MapConfig::orthographic(size, CONFIG.sea_level..=CONFIG.sea_level + 1000.0);
+    let index = IndexOwned::new(Index::new(0));
+    let sample = |chunk: Vec2<i32>, presented: bool| {
+        sample_pos_with(&config, &sim, index.as_index_ref(), None, chunk, presented)
+    };
+    let is_water_colour = |c: Rgb<u8>| c.r == 0 && c.b > c.g / 2 && c.b >= 0x52;
+    let links = |chunk: Vec2<i32>, presented: bool| {
+        sample(chunk, presented)
+            .connections
+            .map_or(0, |c| c.iter().flatten().count())
+    };
+    let same = |chunk: Vec2<i32>, what: &str| {
+        let (new, old) = (sample(chunk, true), sample(chunk, false));
+        assert_eq!(new.rgb, old.rgb, "{what}: colour");
+        assert_eq!(new.alt.to_bits(), old.alt.to_bits(), "{what}: alt");
+        assert_eq!(links(chunk, true), links(chunk, false), "{what}: links");
+    };
+
+    // River chunks (coloured as land with or without the patch: the link
+    // is what shows the river).
+    let (most, few, all) = (
+        chunk_of(2624, 1056),
+        chunk_of(2688, 1056),
+        chunk_of(2752, 1056),
+    );
+    assert!(sim.chunk_is_authored_dry(most));
+    assert_eq!(
+        links(most, true),
+        1,
+        "mostly dry river chunk keeps its link"
+    );
+    assert!(!sim.chunk_is_authored_dry(few));
+    same(few, "river chunk 12/32 dry");
+    assert_eq!(links(few, true), 1);
+    assert!(sim.chunk_is_authored_dry(all));
+    assert_eq!(links(all, false), 1);
+    assert_eq!(links(all, true), 0, "fully dry river chunk drops its link");
+    // Upstream of the patch, untouched.
+    same(chunk_of(2592, 1056), "upstream river chunk");
+
+    // Sea chunks.
+    let (most, few) = (chunk_of(2624, 1120), chunk_of(2688, 1120));
+    assert!(sim.chunk_is_authored_dry(most));
+    assert!(is_water_colour(sample(most, false).rgb));
+    assert!(
+        !is_water_colour(sample(most, true).rgb),
+        "sea chunk 26/32 dry"
+    );
+    assert!(!sim.chunk_is_authored_dry(few));
+    assert!(is_water_colour(sample(few, true).rgb));
+    same(few, "sea chunk 12/32 dry");
+
+    // The region's edge: the first chunk holds 16 of 32 dry columns (a tie
+    // is water), the next is all dry, the one outside is untouched.
+    let (edge, next, outside) = (
+        chunk_of(2560, 1184),
+        chunk_of(2592, 1184),
+        chunk_of(2528, 1184),
+    );
+    assert!(!sim.chunk_is_authored_dry(edge));
+    assert!(is_water_colour(sample(edge, true).rgb));
+    same(edge, "edge chunk 16/32 dry");
+    assert!(sim.chunk_is_authored_dry(next));
+    assert!(
+        !is_water_colour(sample(next, true).rgb),
+        "chunk next to the edge"
+    );
+    same(outside, "chunk outside the region");
+}

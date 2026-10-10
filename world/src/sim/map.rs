@@ -258,6 +258,24 @@ pub fn sample_pos(
     samples: Option<&[Option<ColumnSample>]>,
     pos: Vec2<i32>,
 ) -> MapSample {
+    sample_pos_with(config, sampler, index, samples, pos, false)
+}
+
+/// [`sample_pos`] for what the server presents (the world map image). With
+/// `authored_ground` true, a chunk of authored dry ground in a
+/// `sea_fill: AuthoredOnly` region ([`WorldSim::chunk_is_authored_dry`]) is
+/// coloured as the ground it is at any altitude: its table water (the frozen
+/// natural lake or sea) and an altitude below sea level no longer paint it as
+/// water. Everywhere else, and with `authored_ground` false, exactly
+/// [`sample_pos`].
+pub fn sample_pos_with(
+    config: &MapConfig,
+    sampler: &WorldSim,
+    index: IndexRef,
+    samples: Option<&[Option<ColumnSample>]>,
+    pos: Vec2<i32>,
+    authored_ground: bool,
+) -> MapSample {
     let map_size_lg = config.map_size_lg();
     let MapConfig {
         focus,
@@ -383,9 +401,31 @@ pub fn sample_pos(
         column_data.map_or(alt, |(_, alt, _, _, _, _)| alt)
     };
 
+    // Per chunk, not per column: a chunk is authored dry when its authored
+    // columns make it mostly dry by `chunk_water`'s majority-of-columns rule,
+    // so a chunk only partly covered by a dry patch keeps the table's water
+    // when the water still holds at least half of it.
+    let authored_dry = authored_ground && !is_basement && sampler.chunk_is_authored_dry(pos);
+    // A mostly dry chunk the patch does not cover entirely keeps the table's
+    // river link to its downhill chunk: the natural river still runs through
+    // its unauthored columns, and dropping the link would leave a stub
+    // upstream. Only a fully authored dry chunk drops it.
+    let authored_fully_dry = authored_dry
+        && sampler
+            .authored_rasters
+            .as_ref()
+            .and_then(|r| r.chunk_summary(pos))
+            .is_some_and(|s| s.authored_columns == TerrainChunkSize::RECT_SIZE.product());
     let depth_m = (alt.max(water_alt) - alt).max(0.0) as f64;
     let true_water_alt = (alt.max(water_alt) as f64 - focus.z) / gain as f64;
     let true_alt = (alt as f64 - focus.z) / gain as f64;
+    // What the colour decisions below read: on authored dry ground, no water
+    // of any kind and no "below sea level"; elsewhere the values themselves.
+    let (colour_river_kind, colour_depth_m, colour_true_alt) = if authored_dry {
+        (None, 0.0, true_alt.max(true_sea_level))
+    } else {
+        (river_kind, depth_m, true_alt)
+    };
     let alt = true_alt.clamp(0.0, 1.0);
 
     let default_rgb = Rgb::new(
@@ -404,7 +444,8 @@ pub fn sample_pos(
     let mut has_connections = false;
     // TODO: Support non-river connections.
     // TODO: Support multiple connections.
-    let river_width = river_kind.map(|river| match river {
+    let connection_river_kind = if authored_fully_dry { None } else { river_kind };
+    let river_width = connection_river_kind.map(|river| match river {
         RiverKind::River { cross_section } => cross_section.x,
         RiverKind::Lake { .. } | RiverKind::Ocean => TerrainChunkSize::RECT_SIZE.x as f32,
     });
@@ -424,12 +465,16 @@ pub fn sample_pos(
             });
     };
     let rgb = if is_water
+        && !authored_dry
         && is_ice
         && column_data.is_some_and(|(_, _, ice_depth, _, _, _)| ice_depth > 0.0)
     {
         CONFIG.ice_color
     } else {
-        match (river_kind, (is_water, true_alt >= true_sea_level)) {
+        match (
+            colour_river_kind,
+            (is_water, colour_true_alt >= true_sea_level),
+        ) {
             (_, (false, _)) | (None, (_, true)) | (Some(RiverKind::River { .. }), _) => {
                 let (r, g, b) = (
                     (column_rgb.r
@@ -464,12 +509,17 @@ pub fn sample_pos(
     let rgb = if let Some(sample) = sampler
         .get(pos)
         .filter(|sample| sample.authored_cromatolis_v0)
-        .filter(|_| authored_map_post_processing_applies(river_kind, true_alt, true_sea_level))
-    {
+        .filter(|_| {
+            authored_map_post_processing_applies(colour_river_kind, colour_true_alt, true_sea_level)
+        }) {
         let altitude = ((sample.alt - CONFIG.sea_level) as f64 / 1050.0).clamp(0.0, 1.0);
         let vegetation = sample.tree_density.clamp(0.0, 1.0) as f64;
-        let is_physical_water =
-            authored_map_cell_is_physical_water(river_kind, depth_m, true_alt, true_sea_level);
+        let is_physical_water = authored_map_cell_is_physical_water(
+            colour_river_kind,
+            colour_depth_m,
+            colour_true_alt,
+            true_sea_level,
+        );
         let profile = sampler.authored_ground_cover_profile.as_ref();
 
         // Cromatolis's alpine policy is expressed in real relief metres and
@@ -578,7 +628,13 @@ pub fn sample_pos(
 
     MapSample {
         rgb: Rgb::new(rgb.r, rgb.g, rgb.b),
-        alt: if is_water {
+        // The shading altitude: on authored dry ground the raw column
+        // altitude, below sea level on a dry pit, with no water surface over
+        // it. Only the colour decisions above treat such ground as if at sea
+        // level (so it is not painted as water); shading keeps the real
+        // relief. `WorldMapMsg::alt` is packed separately and clamps at sea
+        // level.
+        alt: if is_water && !authored_dry {
             true_alt.max(true_water_alt)
         } else {
             true_alt
