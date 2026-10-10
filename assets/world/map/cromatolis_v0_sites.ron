@@ -7,6 +7,7 @@
             name: "Kalthis",
             category: Capital,
             size: VeryLarge,
+            target_buildings: 650,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins, Dhampirs],
@@ -19,6 +20,7 @@
             name: "Bronze Shore",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -30,7 +32,8 @@
             id: "site.ravenfair",
             name: "Ravenfair",
             category: Village,
-            size: Small,
+            size: Medium,
+            target_buildings: 18,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -43,6 +46,7 @@
             name: "BG West Post",
             category: Post,
             size: Minimal,
+            target_buildings: 3,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -55,6 +59,7 @@
             name: "BG Central Post",
             category: Post,
             size: Minimal,
+            target_buildings: 3,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -67,6 +72,7 @@
             name: "BG East Post",
             category: Post,
             size: Minimal,
+            target_buildings: 3,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -79,6 +85,7 @@
             name: "Evercross",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -91,6 +98,7 @@
             name: "Lighthill",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: Custom,
                 peoples: [Human, Dwarf, Goblins, Dhampirs],
@@ -103,6 +111,7 @@
             name: "Windgrave",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: Custom,
                 peoples: [Human, Dwarf, Goblins, Dhampirs, Orc],
@@ -115,6 +124,7 @@
             name: "Green Post",
             category: Post,
             size: Minimal,
+            target_buildings: 3,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -127,6 +137,7 @@
             name: "Farhaven",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins, Dhampirs],
@@ -139,6 +150,7 @@
             name: "Gloomshear",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dhampirs],
@@ -151,6 +163,7 @@
             name: "Cutwood Town",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Dhampirs],
@@ -163,6 +176,7 @@
             name: "Cutstone City",
             category: City,
             size: Large,
+            target_buildings: 250,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins],
@@ -175,6 +189,7 @@
             name: "Falsepost",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -187,6 +202,7 @@
             name: "Wazir Town",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: Custom,
                 peoples: [Human, Dhampirs, Goblins, Orc],
@@ -199,6 +215,7 @@
             name: "Mordorin",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human, Dwarf, Dhampirs, Goblins, Orc],
@@ -211,6 +228,7 @@
             name: "Fire Post North",
             category: Post,
             size: Minimal,
+            target_buildings: 3,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -223,6 +241,7 @@
             name: "Fire Post South",
             category: Post,
             size: Minimal,
+            target_buildings: 3,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -235,6 +254,7 @@
             name: "Hita Post",
             category: Post,
             size: Minimal,
+            target_buildings: 3,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -245,8 +265,9 @@
         (
             id: "site.hita",
             name: "Hita",
-            category: Village,
-            size: Small,
+            category: Town,
+            size: Large,
+            target_buildings: 175,
             population: (
                 tag: Custom,
                 peoples: [Human, Dwarf, Dhampirs, Goblins, Orc],
@@ -258,7 +279,8 @@
             id: "site.kalitos",
             name: "Kalitos",
             category: Town,
-            size: Medium,
+            size: Small,
+            target_buildings: 85,
             population: (
                 tag: Custom,
                 peoples: [Human, Goblins, Orc],
@@ -271,6 +293,7 @@
             name: "Dove City",
             category: City,
             size: Large,
+            target_buildings: 250,
             population: (
                 tag: Custom,
                 peoples: [Human, Goblins, Dhampirs, Elven, Orc],
@@ -283,6 +306,7 @@
             name: "Sutar Town",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: Custom,
                 peoples: [Human, Dwarf, Orc],
@@ -295,6 +319,7 @@
             name: "Tathune",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Goblins, Orc],
@@ -307,6 +332,7 @@
             name: "Levannois Village",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human, Dwarf],
@@ -319,6 +345,7 @@
             name: "Ourez",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: Custom,
                 peoples: [Human, Dhampirs, Goblins, Orc],
@@ -331,6 +358,7 @@
             name: "Trident Dreams",
             category: Inn,
             size: Minimal,
+            target_buildings: 2,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins, Dhampirs, Orc],
@@ -343,6 +371,7 @@
             name: "Trident Post",
             category: Post,
             size: Minimal,
+            target_buildings: 3,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -355,6 +384,7 @@
             name: "Naville",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Dhampirs, Goblins],
@@ -367,6 +397,7 @@
             name: "Inebel",
             category: City,
             size: Large,
+            target_buildings: 250,
             population: (
                 tag: Elven,
                 peoples: [Elven],
@@ -379,6 +410,7 @@
             name: "Belletoile Village",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -391,6 +423,7 @@
             name: "Le Pont D'argent",
             category: Inn,
             size: Minimal,
+            target_buildings: 2,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins, Dhampirs],
@@ -403,6 +436,7 @@
             name: "Rivermore Town",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven],
@@ -415,6 +449,7 @@
             name: "Rosemire",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -427,6 +462,7 @@
             name: "Dromos City",
             category: City,
             size: Large,
+            target_buildings: 250,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Dhampirs, Goblins, Orc],
@@ -439,6 +475,7 @@
             name: "Mazon Town",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Goblins],
@@ -451,6 +488,7 @@
             name: "Maistra",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human, Dwarf, Goblins],
@@ -463,6 +501,7 @@
             name: "Fallfair",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Goblins],
@@ -473,8 +512,9 @@
         (
             id: "site.tenoxitlan",
             name: "Tenoxitlan",
-            category: Hamlet,
+            category: Aldea,
             size: Large,
+            target_buildings: 25,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins, Orc],
@@ -487,6 +527,7 @@
             name: "Giva",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human],
@@ -499,6 +540,7 @@
             name: "Levassi",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -511,6 +553,7 @@
             name: "Neoland",
             category: City,
             size: Large,
+            target_buildings: 250,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -522,7 +565,8 @@
             id: "site.portland",
             name: "Portland",
             category: Town,
-            size: Medium,
+            size: Large,
+            target_buildings: 175,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -534,7 +578,8 @@
             id: "site.duren",
             name: "Duren",
             category: City,
-            size: Large,
+            size: VeryLarge,
+            target_buildings: 650,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins, Dhampirs],
@@ -547,6 +592,7 @@
             name: "Garens Town",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Human,
                 peoples: [Human],
@@ -559,6 +605,7 @@
             name: "Andiran",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Goblins],
@@ -571,6 +618,7 @@
             name: "Timos",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Custom,
                 peoples: [Human, Goblins, Orc, Dhampirs],
@@ -581,8 +629,9 @@
         (
             id: "site.itos_village",
             name: "Itos Village",
-            category: Village,
-            size: Small,
+            category: Town,
+            size: Medium,
+            target_buildings: 75,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -594,7 +643,8 @@
             id: "site.rios_port",
             name: "Rios Port",
             category: Town,
-            size: Medium,
+            size: Large,
+            target_buildings: 175,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Dhampirs],
@@ -607,6 +657,7 @@
             name: "Nugget Field Mines",
             category: Village,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
@@ -619,6 +670,7 @@
             name: "Vaelindra Dorei",
             category: City,
             size: VeryLarge,
+            target_buildings: 650,
             population: (
                 tag: Elven,
                 peoples: [Elven],
@@ -631,6 +683,7 @@
             name: "Morhe Dorei",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: Elven,
                 peoples: [Elven],
@@ -643,6 +696,7 @@
             name: "Myenahone",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: Elven,
                 peoples: [Elven],
@@ -655,6 +709,7 @@
             name: "Elynshara",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: Elven,
                 peoples: [Elven],
@@ -667,6 +722,7 @@
             name: "Wanora",
             category: Town,
             size: Medium,
+            target_buildings: 100,
             population: (
                 tag: Elven,
                 peoples: [Elven],
@@ -677,8 +733,9 @@
         (
             id: "site.malicious_haven.alice.zha_lloig_rhaz",
             name: "Zha’Lloig-Rhaz",
-            category: Hamlet,
-            size: Small,
+            category: Aldea,
+            size: Large,
+            target_buildings: 25,
             population: (
                 tag: Human,
                 peoples: [Human],
@@ -690,8 +747,9 @@
         (
             id: "site.malicious_haven.susy.thlug_nyarr",
             name: "Thlûg-Nyarr",
-            category: Hamlet,
+            category: Aldea,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Human,
                 peoples: [Human],
@@ -703,8 +761,9 @@
         (
             id: "site.malicious_haven.elena.vhorr_azhal",
             name: "Vhôrr-Azhal",
-            category: Hamlet,
-            size: Small,
+            category: Aldea,
+            size: Medium,
+            target_buildings: 18,
             population: (
                 tag: Human,
                 peoples: [Human],
@@ -716,8 +775,9 @@
         (
             id: "site.malicious_haven.merid.gha_rrul_uth",
             name: "Gha’rrul-Uth",
-            category: Hamlet,
+            category: Aldea,
             size: Small,
+            target_buildings: 12,
             population: (
                 tag: Human,
                 peoples: [Human],
@@ -731,6 +791,7 @@
             name: "The Sapphire Pillow",
             category: Inn,
             size: Minimal,
+            target_buildings: 2,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins, Dhampirs],
@@ -743,6 +804,7 @@
             name: "The Fish Journey",
             category: Inn,
             size: Minimal,
+            target_buildings: 2,
             population: (
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins, Dhampirs],
@@ -755,6 +817,7 @@
             name: "Twin Dreams",
             category: Inn,
             size: Minimal,
+            target_buildings: 2,
             population: (
                 tag: Human,
                 peoples: [Human],
@@ -767,6 +830,7 @@
             name: "Under the River",
             category: Inn,
             size: Minimal,
+            target_buildings: 2,
             population: (
                 tag: Human,
                 peoples: [Human],
@@ -779,6 +843,7 @@
             name: "El Ojo de Luna",
             category: Inn,
             size: Minimal,
+            target_buildings: 2,
             population: (
                 tag: Human,
                 peoples: [Human],

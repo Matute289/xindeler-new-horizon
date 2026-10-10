@@ -154,6 +154,12 @@ impl AuthoredCromatolisSettlements {
             if !settlement.population.is_valid() {
                 return Err(format!("invalid population metadata for {}", settlement.id));
             }
+            if settlement.target_buildings == 0 {
+                return Err(format!(
+                    "settlement {} has a target_buildings of 0",
+                    settlement.id
+                ));
+            }
             if settlement.category == AuthoredSettlementCategory::Capital {
                 capitals += 1;
             }
@@ -1010,6 +1016,10 @@ enum AuthoredSettlementCategory {
     City,
     Town,
     Village,
+    /// Indigenous-style village (NH-167 T41): generated exactly like a
+    /// `Village` today, with its own contract families, building targets
+    /// and (placeholder) architectural direction.
+    Aldea,
     Hamlet,
     Inn,
     Post,
@@ -1024,6 +1034,7 @@ impl AuthoredSettlementCategory {
             Self::City => "city",
             Self::Town => "town",
             Self::Village => "village",
+            Self::Aldea => "aldea",
             Self::Hamlet => "hamlet",
             Self::Inn => "inn",
             Self::Post => "post",
@@ -1037,9 +1048,12 @@ impl AuthoredSettlementCategory {
     const fn default_site_kind(self) -> SiteKind {
         match self {
             Self::Inn | Self::Post => SiteKind::Camp,
-            Self::Capital | Self::City | Self::Town | Self::Village | Self::Hamlet => {
-                SiteKind::Refactor
-            },
+            Self::Capital
+            | Self::City
+            | Self::Town
+            | Self::Village
+            | Self::Aldea
+            | Self::Hamlet => SiteKind::Refactor,
         }
     }
 
@@ -1056,7 +1070,7 @@ impl AuthoredSettlementCategory {
             // `default_site_kind` above), so `generate_city` never sees this
             // arm for them today -- included anyway so the match stays
             // exhaustive and correct if that ever changes.
-            Self::Village | Self::Hamlet | Self::Inn | Self::Post => PortClass::Jetty,
+            Self::Village | Self::Aldea | Self::Hamlet | Self::Inn | Self::Post => PortClass::Jetty,
         }
     }
 }
@@ -1409,6 +1423,10 @@ struct AuthoredCromatolisSettlement {
     name: String,
     category: AuthoredSettlementCategory,
     size: AuthoredSettlementSize,
+    /// The building-count target the open-world exporter resolved for this
+    /// settlement (its authored override, else the resolving template
+    /// family's default). Required: an export without it is a stale one.
+    target_buildings: usize,
     population: AuthoredSettlementPopulation,
     center: AuthoredMapPoint,
     requires_capital_castle: bool,
@@ -1433,6 +1451,16 @@ struct AuthoredSettlementMeta {
     name: String,
     category: AuthoredSettlementCategory,
     size: AuthoredSettlementSize,
+    /// This settlement's own building-count target, read from the site (never
+    /// re-derived from the family). Not consumed by generation yet: the
+    /// density work that targets it is NH-166 T36.
+    #[expect(dead_code)]
+    target_buildings: usize,
+    /// The architectural direction of the resolving template family, if it
+    /// names one. Placeholder: no house-style variants exist yet, so every
+    /// direction generates with the default (Villa) style.
+    #[expect(dead_code)]
+    architectural_direction: Option<ArchitecturalDirection>,
     #[expect(dead_code)]
     population: AuthoredSettlementPopulation,
     #[expect(dead_code)]
@@ -1481,6 +1509,47 @@ struct SettlementTemplateFamily {
     /// (`"camp"`, `"refactor_city"`, or `"refactor_city_with_castle"`). See
     /// `site_kind_for_fallback_name`.
     xindeler_old_fallback: String,
+    /// The family's default building-count target (NH-167). A settlement's
+    /// own `target_buildings` (which may be an authored override) is what
+    /// generation reads; this is only validated and kept for tooling.
+    #[serde(default, deserialize_with = "present_value")]
+    target_buildings: Option<usize>,
+    /// The family's architectural direction id, if it has one (see
+    /// [`ArchitecturalDirection`]). Kept as the raw string so that an
+    /// unknown id is reported by `validate`, with the family named, rather
+    /// than as an opaque deserialization error.
+    #[serde(default, deserialize_with = "present_value")]
+    architectural_direction: Option<String>,
+}
+
+/// Deserializes an optional field written as a bare value (`field: 25`, as
+/// the open-world export writes it, not `field: Some(25)`); an absent field
+/// is `None` through `#[serde(default)]`.
+fn present_value<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// An architectural direction a template family can ask for. Placeholder
+/// for the house-style / palette variants that need art first: nothing
+/// branches on it yet, so every direction renders with the default style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchitecturalDirection {
+    /// Indigenous-style village (`aldea` families). Villa style until art
+    /// exists.
+    IndigenousAldea,
+}
+
+impl ArchitecturalDirection {
+    fn from_contract_key(key: &str) -> Option<Self> {
+        match key {
+            "indigenous_aldea" => Some(Self::IndigenousAldea),
+            _ => None,
+        }
+    }
 }
 
 impl FileAsset for SettlementTemplateContract {
@@ -1499,6 +1568,19 @@ impl SettlementTemplateContract {
         }
         if self.template_families.is_empty() {
             return Err("settlement template contract has no families".to_string());
+        }
+        for family in &self.template_families {
+            if family.target_buildings == Some(0) {
+                return Err(format!("family {} has a target_buildings of 0", family.id));
+            }
+            if let Some(direction) = &family.architectural_direction
+                && ArchitecturalDirection::from_contract_key(direction).is_none()
+            {
+                return Err(format!(
+                    "family {} names unknown architectural_direction {direction:?}",
+                    family.id
+                ));
+            }
         }
         Ok(())
     }
@@ -1533,18 +1615,38 @@ fn resolve_settlement_site_kind(
     category: AuthoredSettlementCategory,
     size: AuthoredSettlementSize,
 ) -> SiteKind {
-    contract
-        .and_then(|contract| {
-            contract.template_families.iter().find(|family| {
-                family.category == category.contract_key()
-                    && family
-                        .supported_sizes
-                        .iter()
-                        .any(|s| s == size.contract_key())
-            })
-        })
+    find_settlement_template_family(contract, category, size)
         .and_then(|family| site_kind_for_fallback_name(&family.xindeler_old_fallback))
         .unwrap_or_else(|| category.default_site_kind())
+}
+
+/// The first template family covering `category` at `size`, if the contract
+/// is loaded and has one.
+fn find_settlement_template_family(
+    contract: Option<&SettlementTemplateContract>,
+    category: AuthoredSettlementCategory,
+    size: AuthoredSettlementSize,
+) -> Option<&SettlementTemplateFamily> {
+    contract?.template_families.iter().find(|family| {
+        family.category == category.contract_key()
+            && family
+                .supported_sizes
+                .iter()
+                .any(|s| s == size.contract_key())
+    })
+}
+
+/// The architectural direction of the family covering `category` at `size`
+/// (`None` if there is no such family, or it names none).
+fn resolve_architectural_direction(
+    contract: Option<&SettlementTemplateContract>,
+    category: AuthoredSettlementCategory,
+    size: AuthoredSettlementSize,
+) -> Option<ArchitecturalDirection> {
+    find_settlement_template_family(contract, category, size)?
+        .architectural_direction
+        .as_deref()
+        .and_then(ArchitecturalDirection::from_contract_key)
 }
 
 // Change this to get rid of particularly horrid seeds
@@ -3329,6 +3431,12 @@ impl Civs {
                 name: settlement.name.clone(),
                 category: settlement.category,
                 size: settlement.size,
+                target_buildings: settlement.target_buildings,
+                architectural_direction: resolve_architectural_direction(
+                    contract,
+                    settlement.category,
+                    settlement.size,
+                ),
                 population: settlement.population.clone(),
                 requires_capital_castle: settlement.requires_capital_castle,
                 start_eligible: settlement.start_eligible,
@@ -5176,9 +5284,10 @@ mod tests {
     const AUTHORED_SETTLEMENTS_BY_CATEGORY: &[(AuthoredSettlementCategory, usize)] = &[
         (AuthoredSettlementCategory::Capital, 1),
         (AuthoredSettlementCategory::City, 7),
-        (AuthoredSettlementCategory::Town, 17),
-        (AuthoredSettlementCategory::Village, 20),
-        (AuthoredSettlementCategory::Hamlet, 5),
+        (AuthoredSettlementCategory::Town, 19),
+        (AuthoredSettlementCategory::Village, 18),
+        (AuthoredSettlementCategory::Aldea, 5),
+        (AuthoredSettlementCategory::Hamlet, 0),
         (AuthoredSettlementCategory::Inn, 7),
         (AuthoredSettlementCategory::Post, 8),
     ];
@@ -5350,6 +5459,7 @@ mod tests {
                 | AuthoredSettlementCategory::City
                 | AuthoredSettlementCategory::Town
                 | AuthoredSettlementCategory::Village
+                | AuthoredSettlementCategory::Aldea
                 | AuthoredSettlementCategory::Hamlet
                 | AuthoredSettlementCategory::Inn
                 | AuthoredSettlementCategory::Post => AUTHORED_SETTLEMENTS_BY_CATEGORY
@@ -5419,6 +5529,8 @@ mod tests {
                 name: settlement.name.clone(),
                 category: settlement.category,
                 size: settlement.size,
+                target_buildings: settlement.target_buildings,
+                architectural_direction: None,
                 population: settlement.population.clone(),
                 requires_capital_castle: settlement.requires_capital_castle,
                 start_eligible: settlement.start_eligible,
@@ -5467,6 +5579,8 @@ mod tests {
             name: kalthis.name.clone(),
             category: kalthis.category,
             size: kalthis.size,
+            target_buildings: kalthis.target_buildings,
+            architectural_direction: None,
             population: kalthis.population.clone(),
             requires_capital_castle: kalthis.requires_capital_castle,
             start_eligible: kalthis.start_eligible,
@@ -6460,6 +6574,7 @@ mod tests {
             AuthoredSettlementCategory::City,
             AuthoredSettlementCategory::Town,
             AuthoredSettlementCategory::Village,
+            AuthoredSettlementCategory::Aldea,
             AuthoredSettlementCategory::Hamlet,
             AuthoredSettlementCategory::Inn,
             AuthoredSettlementCategory::Post,
@@ -6502,6 +6617,8 @@ mod tests {
                 category: "inn".to_string(),
                 supported_sizes: vec!["minimal".to_string()],
                 xindeler_old_fallback: "some_future_bespoke_inn_generator".to_string(),
+                target_buildings: None,
+                architectural_direction: None,
             }],
         };
         let kind = resolve_settlement_site_kind(
@@ -6527,6 +6644,242 @@ mod tests {
         }
     }
 
+    // ---- Aldea (NH-167 T41) ----
+
+    /// One settlement record, as the open-world export writes it.
+    fn settlement_ron(category: &str, size: &str, target: Option<&str>) -> String {
+        let target = target.map_or(String::new(), |t| format!("target_buildings: {t},"));
+        format!(
+            r#"(
+                schema: "xindeler_open_world.authored_settlements.v1",
+                coordinate_space: "normalized_map_xy_top_left_origin",
+                settlements: [
+                    (
+                        id: "site.test_capital",
+                        name: "Test Capital",
+                        category: Capital,
+                        size: VeryLarge,
+                        target_buildings: 650,
+                        population: (tag: Human, peoples: [Human]),
+                        center: (x: 0.5, y: 0.5),
+                        requires_capital_castle: true,
+                    ),
+                    (
+                        id: "site.test_settlement",
+                        name: "Test Settlement",
+                        category: {category},
+                        size: {size},
+                        {target}
+                        population: (tag: Human, peoples: [Human]),
+                        center: (x: 0.25, y: 0.25),
+                        requires_capital_castle: false,
+                    ),
+                ],
+            )"#
+        )
+    }
+
+    fn parse_settlements(text: &str) -> Result<AuthoredCromatolisSettlements, BoxedError> {
+        load_ron(text.as_bytes())
+    }
+
+    #[test]
+    fn aldea_category_parses_validates_and_maps_to_the_village_generator() {
+        let parsed = parse_settlements(&settlement_ron("Aldea", "Large", Some("25")))
+            .expect("an Aldea settlement must parse");
+        parsed
+            .validate(synthetic_map_size())
+            .expect("an Aldea settlement must validate");
+        let aldea = &parsed.settlements[1];
+        assert_eq!(aldea.category, AuthoredSettlementCategory::Aldea);
+        assert_eq!(aldea.size, AuthoredSettlementSize::Large);
+        assert_eq!(aldea.target_buildings, 25);
+
+        let category = AuthoredSettlementCategory::Aldea;
+        assert_eq!(category.contract_key(), "aldea");
+        // Generated exactly like a Villa until Aldea art exists.
+        assert_eq!(category.default_site_kind(), SiteKind::Refactor);
+        assert_eq!(
+            category.naval_port_class(),
+            AuthoredSettlementCategory::Village.naval_port_class()
+        );
+    }
+
+    #[test]
+    fn an_unknown_settlement_category_is_a_hard_error() {
+        // A category this engine does not know must fail the parse, never be
+        // skipped or mapped to a default (an authored layer that fails to
+        // load is a startup error, see `load_authored_cromatolis_layer`).
+        for unknown in ["Fortress", "aldea", "Caserio", ""] {
+            assert!(
+                parse_settlements(&settlement_ron(unknown, "Large", Some("25"))).is_err(),
+                "category {unknown:?} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn a_settlement_without_a_target_is_rejected_and_zero_fails_validation() {
+        assert!(
+            parse_settlements(&settlement_ron("Aldea", "Large", None)).is_err(),
+            "a stale export without target_buildings must not load"
+        );
+        let zero = parse_settlements(&settlement_ron("Aldea", "Large", Some("0")))
+            .expect("0 is well-formed");
+        let err = zero
+            .validate(synthetic_map_size())
+            .expect_err("a zero target must fail validation");
+        assert!(err.contains("site.test_settlement"), "{err}");
+    }
+
+    #[test]
+    fn the_real_aldea_sites_load_with_the_decided_size_and_target() {
+        let settlements = real_settlements();
+        let find = |id: &str| {
+            settlements
+                .settlements
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap_or_else(|| panic!("{id} must be authored"))
+        };
+        use AuthoredSettlementSize::{Large, Medium, Small};
+        for (id, size, target) in [
+            ("site.tenoxitlan", Large, 25),
+            ("site.malicious_haven.alice.zha_lloig_rhaz", Large, 25),
+            ("site.malicious_haven.elena.vhorr_azhal", Medium, 18),
+            ("site.malicious_haven.merid.gha_rrul_uth", Small, 12),
+            ("site.malicious_haven.susy.thlug_nyarr", Small, 12),
+        ] {
+            let site = find(id);
+            assert_eq!(site.category, AuthoredSettlementCategory::Aldea, "{id}");
+            assert_eq!(site.size, size, "{id}");
+            assert_eq!(site.target_buildings, target, "{id}");
+        }
+        // The other NH-167 T40 corrections, by their decided
+        // (category, size, target).
+        use AuthoredSettlementCategory::{City, Town, Village};
+        for (id, category, size, target) in [
+            ("site.duren", City, AuthoredSettlementSize::VeryLarge, 650),
+            ("site.portland", Town, Large, 175),
+            ("site.rios_port", Town, Large, 175),
+            ("site.hita", Town, Large, 175),
+            ("site.kalitos", Town, Small, 85),
+            ("site.itos_village", Town, Medium, 75),
+            ("site.ravenfair", Village, Medium, 18),
+        ] {
+            let site = find(id);
+            assert_eq!(
+                (site.category, site.size, site.target_buildings),
+                (category, size, target),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_real_settlement_target_is_its_family_default_or_a_decided_override() {
+        let settlements = real_settlements();
+        let contract = real_settlement_template_contract();
+        // Per-settlement overrides (NH-167 section 9.5; source of truth:
+        // `target_buildings` in xindeler-open-world's
+        // `authored_settlement_profiles.ron`); everything else must equal the
+        // type x size matrix default of the resolving family.
+        let overrides = [("site.kalitos", 85), ("site.itos_village", 75)];
+        for settlement in &settlements.settlements {
+            let family = find_settlement_template_family(
+                Some(&contract),
+                settlement.category,
+                settlement.size,
+            )
+            .unwrap_or_else(|| panic!("{} has no family", settlement.id));
+            let expected = overrides
+                .iter()
+                .find(|(id, _)| *id == settlement.id)
+                .map(|(_, target)| *target)
+                .or(family.target_buildings)
+                .unwrap_or_else(|| panic!("family {} has no target", family.id));
+            assert_eq!(
+                settlement.target_buildings, expected,
+                "{} ({}) target drifted from the contract",
+                settlement.id, family.id
+            );
+        }
+    }
+
+    #[test]
+    fn aldea_and_large_village_families_resolve_from_the_real_contract() {
+        let contract = real_settlement_template_contract();
+        contract
+            .validate()
+            .expect("the real contract must validate");
+        use AuthoredSettlementSize::{Large, Medium, Small};
+        for (size, id, target) in [
+            (Large, "aldea_large", 25),
+            (Medium, "aldea_medium", 18),
+            (Small, "aldea_small", 12),
+        ] {
+            let family = find_settlement_template_family(
+                Some(&contract),
+                AuthoredSettlementCategory::Aldea,
+                size,
+            )
+            .unwrap_or_else(|| panic!("no family for aldea {size:?}"));
+            assert_eq!(family.id, id);
+            assert_eq!(family.target_buildings, Some(target));
+            assert_eq!(
+                resolve_architectural_direction(
+                    Some(&contract),
+                    AuthoredSettlementCategory::Aldea,
+                    size
+                ),
+                Some(ArchitecturalDirection::IndigenousAldea)
+            );
+            assert_eq!(
+                resolve_settlement_site_kind(
+                    Some(&contract),
+                    AuthoredSettlementCategory::Aldea,
+                    size
+                ),
+                SiteKind::Refactor
+            );
+        }
+        let village_large = find_settlement_template_family(
+            Some(&contract),
+            AuthoredSettlementCategory::Village,
+            Large,
+        )
+        .expect("village_large must exist");
+        assert_eq!(village_large.id, "village_large");
+        assert_eq!(village_large.target_buildings, Some(25));
+        assert_eq!(village_large.architectural_direction, None);
+        // No family, or a contract that failed to load, names no direction.
+        assert_eq!(
+            resolve_architectural_direction(
+                Some(&contract),
+                AuthoredSettlementCategory::Village,
+                Large
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_architectural_direction(None, AuthoredSettlementCategory::Aldea, Large),
+            None
+        );
+    }
+
+    #[test]
+    fn a_family_naming_an_unknown_architectural_direction_fails_contract_validation() {
+        let mut contract = real_settlement_template_contract();
+        contract.template_families[0].architectural_direction = Some("martian_dome".to_string());
+        let err = contract
+            .validate()
+            .expect_err("an unknown direction is a hard error");
+        assert!(err.contains("martian_dome"), "{err}");
+        let mut contract = real_settlement_template_contract();
+        contract.template_families[0].target_buildings = Some(0);
+        assert!(contract.validate().is_err());
+    }
+
     // ---- Site helper methods ----
 
     #[test]
@@ -6542,6 +6895,8 @@ mod tests {
                     name: "Test".to_string(),
                     category: AuthoredSettlementCategory::Village,
                     size: AuthoredSettlementSize::Small,
+                    target_buildings: 12,
+                    architectural_direction: None,
                     population: AuthoredSettlementPopulation {
                         tag: AuthoredSettlementPopulationTag::Human,
                         peoples: vec![AuthoredSettlementPeople::Human],
