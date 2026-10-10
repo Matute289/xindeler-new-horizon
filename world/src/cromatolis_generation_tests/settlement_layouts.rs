@@ -280,3 +280,41 @@ fn layout_settlements_reach_their_band_on_every_seed() {
     println!("{report}");
     assert!(below_band.is_empty(), "{}", below_band.join("\n"));
 }
+
+/// A settlement with an authored layout keeps the rtsim population of the
+/// layout it would have generated without one, so the larger town brings no
+/// more NPCs; every other site's population is still its own plot count.
+///
+/// The expected plot counts are the layouts Kalthis and Duren generated
+/// before settlement layouts existed (`cromatolis_site_layout_digests.txt`
+/// as committed then). A terrain edit that re-rolls either town's
+/// procedural layout changes them; re-measure, don't just re-approve.
+#[test]
+#[ignore]
+fn layout_settlements_keep_their_procedural_population() {
+    const PROCEDURAL_PLOTS: &[(&str, usize)] = &[("site.kalthis", 116), ("site.duren", 133)];
+    let (world, index) = generate_cromatolis(None);
+    for &(site_id, plots) in PROCEDURAL_PLOTS {
+        let site = generated_site(&world, &index, site_id);
+        assert_eq!(site.population_plots(), plots, "{site_id}");
+        assert!(
+            site.plots().len() > plots,
+            "{site_id}: premise, the layout grew it"
+        );
+    }
+    let layout_sites: Vec<_> = LAYOUT_SITES
+        .iter()
+        .map(|&id| generated_site(&world, &index, id) as *const site::Site)
+        .collect();
+    for (_, site) in index.sites.iter() {
+        if layout_sites.contains(&(site as *const site::Site)) {
+            continue;
+        }
+        assert_eq!(
+            site.population_plots(),
+            site.plots().len(),
+            "{:?}",
+            site.name()
+        );
+    }
+}

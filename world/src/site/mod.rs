@@ -332,6 +332,10 @@ pub struct Site {
     /// plot and plaza searches it restricts (`find_aabr`, `make_plaza`,
     /// ...) are shared with every other town generator, which never set it.
     footprint: Option<Box<layout::Footprint>>,
+    /// The plot count rtsim sizes this town's population by, when it is not
+    /// the town's own: a settlement with an authored layout keeps the
+    /// population of the layout it would have had without one.
+    population_plots: Option<usize>,
 }
 
 impl Site {
@@ -1099,6 +1103,20 @@ impl Site {
     pub fn with_authored_settlement(mut self, is_authored_settlement: bool) -> Self {
         self.is_authored_settlement = is_authored_settlement;
         self
+    }
+
+    /// Sets the plot count rtsim sizes this town's population by (see
+    /// [`Self::population_plots`]); `None` keeps the town's own.
+    pub fn with_population_plots(mut self, population_plots: Option<usize>) -> Self {
+        self.population_plots = population_plots;
+        self
+    }
+
+    /// The plot count rtsim sizes this town's population by: the town's own
+    /// plot count unless an authored layout fixed it at what the town would
+    /// have had without that layout.
+    pub fn population_plots(&self) -> usize {
+        self.population_plots.unwrap_or_else(|| self.plots().len())
     }
 
     pub fn generate_mine(land: &Land, rng: &mut impl Rng, origin: Vec2<i32>) -> Self {
