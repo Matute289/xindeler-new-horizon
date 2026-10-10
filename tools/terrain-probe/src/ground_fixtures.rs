@@ -118,14 +118,48 @@ fn fixtures() -> Vec<Fixture> {
             },
         },
         Fixture {
-            name: "refuse_blend_weight",
-            refuse: Some("blend weights"),
+            // An exact plateau and a trench with the blend ring the exporter
+            // derives (32 m, the ground continuing flat), plus a lone blend
+            // cell: every weight 1..=255 loads.
+            name: "accept_blend_ring",
+            refuse: None,
             build: || {
-                built(region(vec![PaintOp::Ground {
-                    shape: rect(2100.0, 2100.0, 2110.0, 2110.0),
-                    ground_cm: PLATEAU,
-                    weight: 128,
-                }]))
+                built(region(vec![
+                    ground(rect(2200.0, 2200.0, 2300.0, 2300.0), PLATEAU),
+                    ground(rect(2240.0, 2200.0, 2242.0, 2300.0), PLATEAU - 300),
+                    PaintOp::GroundRing {
+                        width_m: 32,
+                        ground_cm: None,
+                    },
+                    PaintOp::Ground {
+                        shape: rect(2400.0, 2400.0, 2401.0, 2401.0),
+                        ground_cm: PLATEAU + 777,
+                        weight: 1,
+                    },
+                ]))
+            },
+        },
+        Fixture {
+            // Blend cells beside authored water: only exact ground (or a
+            // bank) at least as high holds water.
+            name: "refuse_blend_ground_beside_water",
+            refuse: Some("or not exact"),
+            build: || {
+                built(region(vec![
+                    PaintOp::Ground {
+                        shape: rect(2100.0, 2100.0, 2500.0, 2500.0),
+                        ground_cm: PLATEAU,
+                        weight: 200,
+                    },
+                    PaintOp::ClearGround {
+                        shape: rect(2200.0, 2290.0, 2400.0, 2310.0),
+                    },
+                    PaintOp::Water {
+                        shape: rect(2200.0, 2290.0, 2400.0, 2310.0),
+                        surface_cm: 23_850,
+                        bed_cm: 23_250,
+                    },
+                ]))
             },
         },
         Fixture {

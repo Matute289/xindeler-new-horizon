@@ -224,7 +224,19 @@ impl World {
             // the first chunk that queries it. See `layer::authored_regions`.
             layer::authored_regions::warm(&index, &sim);
 
-            (Self { sim, civs }, IndexOwned::new(index))
+            let world = Self { sim, civs };
+            let index = IndexOwned::new(index);
+            // XINDELER: authored ground meeting natural water is checked once
+            // the column sampler is final (sites placed). See
+            // `authored_raster::queries::check_ground_seams`.
+            if let Err(err) = authored_raster::queries::check_ground_seams(
+                &world,
+                index.as_index_ref(),
+                calendar.as_ref(),
+            ) {
+                panic!("{err}");
+            }
+            (world, index)
         })
     }
 

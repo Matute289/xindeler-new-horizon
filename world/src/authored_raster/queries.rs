@@ -416,3 +416,133 @@ pub(crate) fn check_authored_sites(
         )))
     }
 }
+
+/// One water wall found by [`ground_seams`]: natural (or sea) water beside a
+/// ground cell stands higher than everything the ground cell holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeamWall {
+    pub ground: Vec2<i32>,
+    /// Top solid block of the ground cell (its own water top, when the sea
+    /// fills it, if higher).
+    pub ground_top: i32,
+    pub neighbour: Vec2<i32>,
+    /// Top water block of the neighbour.
+    pub water_top: i32,
+}
+
+/// What [`ground_seams`] looked at and found.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SeamReport {
+    /// `(ground cell, neighbour)` pairs compared.
+    pub pairs: usize,
+    /// Distinct columns sampled.
+    pub columns_sampled: usize,
+    /// Every water wall, sorted by ground cell then neighbour.
+    pub walls: Vec<SeamWall>,
+}
+
+/// Top solid block and top water block (when the column holds water above
+/// its ground) of a column sample, with `block.rs`'s rules: `z` is solid when
+/// `z as i32 <= alt as i32`, and water when not solid and `z < water_level`.
+fn column_tops(col: &crate::ColumnSample) -> (i32, Option<i32>) {
+    let solid = col.alt as i32;
+    let water = col.water_level.ceil() as i32 - 1;
+    (solid, (water > solid).then_some(water))
+}
+
+/// The post-civ seam check of the ground layer: every ground cell (exact or
+/// blend) that meets the natural map -- an unauthored column of a partial
+/// chunk, or, around [`SeaFill::AuthoredOnly`] ground below the ocean's top
+/// block, any unauthored column -- is compared with that neighbour through
+/// the column sampler (sites are placed, so levelling and `Damage` overrides
+/// are in): a neighbour whose water stands above everything the ground cell
+/// holds is a water wall. Only the seam pairs are sampled, deduplicated and
+/// in parallel; the order of the result does not depend on the thread count.
+pub fn ground_seams(
+    world: &World,
+    index: crate::IndexRef,
+    calendar: Option<&common::calendar::Calendar>,
+) -> SeamReport {
+    use crate::util::Sampler;
+    use rayon::prelude::*;
+    let Some(rasters) = world.sim.authored_rasters.as_ref() else {
+        return SeamReport::default();
+    };
+    let pairs = rasters.ground_seam_pairs();
+    if pairs.is_empty() {
+        return SeamReport::default();
+    }
+    let mut cols: Vec<Vec2<i32>> = pairs.iter().flat_map(|&(g, n)| [g, n]).collect();
+    cols.sort_unstable_by_key(|p| (p.y, p.x));
+    cols.dedup();
+    let sampler = world.sample_columns();
+    let tops: Vec<Option<(i32, Option<i32>)>> = cols
+        .par_iter()
+        .map(|&p| sampler.get((p, index, calendar)).map(|c| column_tops(&c)))
+        .collect();
+    let top_at = |p: Vec2<i32>| {
+        cols.binary_search_by_key(&(p.y, p.x), |q| (q.y, q.x))
+            .ok()
+            .and_then(|i| tops[i])
+    };
+    let mut walls: Vec<SeamWall> = pairs
+        .iter()
+        .filter_map(|&(g, n)| {
+            let (g_solid, g_water) = top_at(g)?;
+            let (_, n_water) = top_at(n)?;
+            let ground_top = g_water.map_or(g_solid, |w| w.max(g_solid));
+            let water_top = n_water?;
+            (water_top > ground_top).then_some(SeamWall {
+                ground: g,
+                ground_top,
+                neighbour: n,
+                water_top,
+            })
+        })
+        .collect();
+    walls.sort_unstable_by_key(|w| (w.ground.y, w.ground.x, w.neighbour.y, w.neighbour.x));
+    SeamReport {
+        pairs: pairs.len(),
+        columns_sampled: cols.len(),
+        walls,
+    }
+}
+
+/// [`ground_seams`] as a start-up rule: any water wall stops world
+/// generation, with the first walls and the fixes in the message.
+pub(crate) fn check_ground_seams(
+    world: &World,
+    index: crate::IndexRef,
+    calendar: Option<&common::calendar::Calendar>,
+) -> Result<SeamReport, super::LoadError> {
+    let report = ground_seams(world, index, calendar);
+    if report.walls.is_empty() {
+        if report.pairs > 0 {
+            tracing::info!(
+                pairs = report.pairs,
+                columns = report.columns_sampled,
+                "Authored ground meets the natural map without a water wall"
+            );
+        }
+        return Ok(report);
+    }
+    let first: Vec<String> = report
+        .walls
+        .iter()
+        .take(10)
+        .map(|w| {
+            format!(
+                "{:?} (ground top block {}) beside {:?} (water top block {})",
+                w.ground, w.ground_top, w.neighbour, w.water_top
+            )
+        })
+        .collect();
+    Err(super::LoadError(format!(
+        "authored rasters: {} ground cell edge(s) meet natural water that stands higher than the \
+         ground (the water would stand as a wall), first: {}. Raise the ground there to the \
+         water's top block at least (a dyke), author the water in the region, or keep the patch \
+         away from the natural water",
+        report.walls.len(),
+        first.join("; ")
+    )))
+}
