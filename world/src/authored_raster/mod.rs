@@ -1434,6 +1434,27 @@ impl AuthoredRasters {
                     rm.layers
                 )));
             }
+            if !rm.layers.contains(&LayerKind::Ground)
+                && (!rm.sites_on_patch.is_empty()
+                    || !rm.site_levelling
+                    || rm.max_exposed_void_columns > 0)
+            {
+                return Err(rerr(
+                    "sites_on_patch, site_levelling and max_exposed_void_columns configure the \
+                     ground layer, and the region does not declare Ground"
+                        .into(),
+                ));
+            }
+            if let Some((i, key)) = rm
+                .sites_on_patch
+                .iter()
+                .enumerate()
+                .find(|(i, k)| k.is_empty() || rm.sites_on_patch[..*i].contains(k))
+            {
+                return Err(rerr(format!(
+                    "sites_on_patch[{i}] {key:?} is empty or listed twice"
+                )));
+            }
             let min: Vec2<i32> = Vec2::from(rm.min);
             let max: Vec2<i32> = Vec2::from(rm.max);
             if min.x % CHUNK != 0 || min.y % CHUNK != 0 || max.x % CHUNK != 0 || max.y % CHUNK != 0
