@@ -1182,6 +1182,20 @@ pub(crate) fn generate_authored_city_with_seed(
     seed: Option<[u8; 32]>,
     with_layout: bool,
 ) -> (WorldSite, Option<site::layout::SettlementLayout>) {
+    generate_authored_city_with_edited_layout(world, index, site_id, seed, with_layout, |_| {})
+}
+
+/// [`generate_authored_city_with_seed`], with `edit` applied to the layout
+/// first (e.g. a test exclusion that makes a ward unreachable).
+#[cfg(test)]
+pub(crate) fn generate_authored_city_with_edited_layout(
+    world: &crate::World,
+    index: IndexRef,
+    site_id: &str,
+    seed: Option<[u8; 32]>,
+    with_layout: bool,
+    edit: impl FnOnce(&mut site::layout::SettlementLayout),
+) -> (WorldSite, Option<site::layout::SettlementLayout>) {
     let map_size = world.sim().map_size_lg();
     let settlements =
         AuthoredCromatolisSettlements::load_owned("world.map.cromatolis_v0_sites").unwrap();
@@ -1206,9 +1220,12 @@ pub(crate) fn generate_authored_city_with_seed(
     let wpos = sim_site.center.cpos_to_wpos_center();
     let naval_port = resolve_naval_port(Some(authored), Some(&maritime_routes))
         .map(|class| NavalPortRequest::new(class, &exclusions));
-    let layout = with_layout
+    let mut layout = with_layout
         .then(|| resolved.get(site_id).cloned())
         .flatten();
+    if let Some(layout) = layout.as_mut() {
+        edit(layout);
+    }
     let seed = seed.unwrap_or_else(|| {
         seeds::CivSeedPolicy::new(0, true)
             .site_seed(sim_site)

@@ -16,8 +16,11 @@
 
 use super::{site_layouts::generate_cromatolis, *};
 use crate::{
-    civ::{generate_authored_city_with_seed, seeds::layout_variant_seed},
-    site::layout::{Footprint, Zone},
+    civ::{
+        generate_authored_city_with_edited_layout, generate_authored_city_with_seed,
+        seeds::layout_variant_seed,
+    },
+    site::layout::{Footprint, LayoutExclusion, Zone},
 };
 use std::fmt::Write as _;
 
@@ -173,18 +176,33 @@ fn layout_settlements_stay_in_their_footprint_and_clear_of_other_sites() {
 /// Steering on, a settlement with a ward it cannot fill still reaches its
 /// total: with steering every other ward stops at its own quota, so a total
 /// at target while a ward is short proves the fill stalled, turned steering
-/// off and went on. Kalthis's riverside wards are mostly inside the
-/// river-port keep-out today, so it takes that path on its world seed.
+/// off and went on. Kalthis fills every ward on its own, so the test makes
+/// one unreachable: a keep-out circle over `emberrow`.
 #[test]
 #[ignore]
 fn a_layout_with_an_unreachable_ward_still_reaches_its_total() {
     let (world, index) = generate_cromatolis(None);
-    let site = generated_site(&world, &index, "site.kalthis");
-    let (_, layout) =
-        generate_authored_city_with_seed(&world, index.as_index_ref(), "site.kalthis", None, true);
+    let (site, layout) = generate_authored_city_with_edited_layout(
+        &world,
+        index.as_index_ref(),
+        "site.kalthis",
+        None,
+        true,
+        |layout| {
+            let ward = layout.wards.iter().find(|w| w.id == "emberrow").unwrap();
+            let centre = layout.frame.to_world(Vec2::new(
+                (ward.a.0 + ward.a.1) / 2.0,
+                (ward.b.0 + ward.b.1) / 2.0,
+            ));
+            layout.exclusions.push(LayoutExclusion {
+                centre_wpos: centre.map(|e| e.round() as i32),
+                radius: 200,
+            });
+        },
+    );
     let layout = layout.unwrap();
     let footprint = Footprint::new(&layout, site.origin);
-    let per_ward = footprint.buildings_per_ward(building_roots(site));
+    let per_ward = footprint.buildings_per_ward(building_roots(&site));
     let short: Vec<_> = layout
         .wards
         .iter()
@@ -193,7 +211,10 @@ fn a_layout_with_an_unreachable_ward_still_reaches_its_total() {
         .map(|(ward, count)| format!("{} {count}/{}", ward.id, ward.target_buildings))
         .collect();
     println!("Kalthis per ward {per_ward:?}; short: {short:?}");
-    assert!(!short.is_empty(), "premise: a ward Kalthis cannot fill");
+    assert!(
+        short.iter().any(|s| s.starts_with("emberrow")),
+        "premise: emberrow is unreachable"
+    );
     assert!(per_ward.iter().sum::<usize>() >= layout.target_buildings());
 }
 
