@@ -553,8 +553,8 @@ fn raising_one_far_chunk_one_block_rerolls_no_site() {
 /// re-rolls -- except a local street-tile change, as in
 /// `raising_the_whole_map_by_a_re_encode_bias_stays_local`: raising a chunk
 /// nudges `SimChunk::alt` map-wide by ~1e-5 blocks, which can flip a street
-/// A* tie. Since NH-166 T36 grew Kalthis and Duren to 650 buildings (and
-/// ~900 plots each), seed 0 shows exactly that in Duren: one road plot one
+/// A* tie. Since settlement layouts grew Kalthis and Duren to 650 buildings
+/// (and ~900 plots each), seed 0 shows exactly that in Duren: one road plot one
 /// tile longer. A ratchet on that count; it may go down, raising it needs
 /// review.
 #[test]
