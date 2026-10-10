@@ -1327,11 +1327,15 @@ struct AuthoredSettlementPopulation {
     peoples: Vec<AuthoredSettlementPeople>,
     #[serde(default)]
     future_peoples: Vec<String>,
-    /// How many rtsim NPCs live in this settlement (NH-171 / NH-166 T36):
-    /// the total over every town role (guards, adventurers, merchants and
-    /// the other professions). `None` keeps the upstream rule, which sizes
-    /// the population by the settlement's plot count, so a settlement
-    /// changes only when this is set. Decoupled from `target_buildings`.
+    /// The rtsim NPC population this settlement aims for (NH-171 / NH-166
+    /// T36): the total over every town role (guards, adventurers, merchants
+    /// and the other professions). It is a target, not a hard cap: it sets
+    /// how many town NPCs the world wants, and respawns are steered toward
+    /// settlements below their number, but when none of those can take one
+    /// (e.g. all loaded) an NPC may still go to a settlement at its number.
+    /// `None` keeps the upstream rule, which sizes the population by the
+    /// settlement's plot count, so a settlement changes only when this is
+    /// set. Decoupled from `target_buildings`.
     #[serde(default)]
     npc_count: Option<u32>,
 }
@@ -6924,7 +6928,7 @@ mod tests {
         let set = parse_settlements(&with(40)).expect("npc_count must parse");
         set.validate(synthetic_map_size()).unwrap();
         assert_eq!(set.settlements[1].population.npc_count, Some(40));
-        // 0 is a valid, deliberately empty settlement.
+        // 0 is valid: a settlement that wants no NPCs of its own.
         parse_settlements(&with(0))
             .unwrap()
             .validate(synthetic_map_size())
