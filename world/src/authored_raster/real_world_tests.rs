@@ -30,9 +30,9 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use vek::*;
 
-const REGION_MIN: (i32, i32) = (22752, 24576);
-const REGION_MAX: (i32, i32) = (23936, 25600);
-const PLATEAU_CM: i32 = 23_918;
+pub(super) const REGION_MIN: (i32, i32) = (22752, 24576);
+pub(super) const REGION_MAX: (i32, i32) = (23936, 25600);
+pub(super) const PLATEAU_CM: i32 = 23_918;
 
 fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Shape { Shape::Rect { x0, y0, x1, y1 } }
 
@@ -109,16 +109,21 @@ pub fn generate_world() -> (World, crate::IndexOwned) {
 }
 
 pub fn load_spec(spec: &RegionSpec) -> AuthoredRasters {
-    let built = vec![build_region(spec).unwrap()];
-    let files: HashMap<(i32, i32), Vec<u8>> = built[0].tiles.iter().cloned().collect();
-    let fetch = |_: &str, _: LayerKind, tx: i32, ty: i32| {
-        files
-            .get(&(tx, ty))
-            .cloned()
+    load_specs(std::slice::from_ref(spec)).unwrap()
+}
+
+/// Build and load several regions (every layer) through the real loader.
+pub fn load_specs(specs: &[RegionSpec]) -> Result<AuthoredRasters, super::LoadError> {
+    let built: Vec<_> = specs.iter().map(|s| build_region(s).unwrap()).collect();
+    let fetch = |id: &str, layer: LayerKind, tx: i32, ty: i32| {
+        built
+            .iter()
+            .find(|r| r.manifest.id == id)
+            .and_then(|r| r.tile(layer, tx, ty))
+            .map(<[u8]>::to_vec)
             .ok_or_else(|| "missing".to_string())
     };
     AuthoredRasters::from_manifest(manifest(&built), Vec2::broadcast(32768), "test", &fetch)
-        .unwrap()
 }
 
 /// Every numeric/colour output of a column, as bits.
@@ -195,12 +200,45 @@ fn chunk_digest(world: &World, index: crate::IndexRef, cpos: Vec2<i32>) -> u64 {
 #[test]
 #[ignore]
 fn columns_and_chunks_outside_the_region_are_bit_identical() {
+    assert_identical_outside(
+        load_spec(&arena_spec()),
+        REGION_MIN,
+        REGION_MAX,
+        Vec2::new(23000, 25410),
+    );
+}
+
+/// Identity gate 3 for the ground layer: the Stage-2 battery regions (Auto
+/// and AuthoredOnly, every scenario) leave every column and chunk outside
+/// their boxes bit-identical.
+#[test]
+#[ignore]
+fn ground_layer_leaves_everything_outside_its_boxes_identical() {
+    assert_identical_outside(
+        load_specs(&ground_battery_specs()).unwrap(),
+        REGION_MIN,
+        REGION_MAX,
+        Vec2::new(22900, 25000),
+    );
+}
+
+/// Columns and chunks outside `rmin..rmax` (the union of the regions'
+/// boxes) are bit-identical with and without `rasters`, on the same world:
+/// every `ColumnSample` field of 10 000 random columns plus the whole ring
+/// around the box, and every block of 10 000 random chunks plus every chunk
+/// 1..=3 chunks outside the box. `inside` must be a column the rasters
+/// author (or this proves nothing).
+fn assert_identical_outside(
+    rasters: AuthoredRasters,
+    rmin: (i32, i32),
+    rmax: (i32, i32),
+    inside: Vec2<i32>,
+) {
     let (mut world, index) = generate_world();
     let index_ref = index.as_index_ref();
-    let rasters = load_spec(&arena_spec());
     let map = world.sim.get_size().map(|e| e as i32) * 32;
-    let rmin = Vec2::from(REGION_MIN);
-    let rmax = Vec2::from(REGION_MAX);
+    let rmin = Vec2::from(rmin);
+    let rmax = Vec2::from(rmax);
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(161);
     let mut cols: Vec<Vec2<i32>> = Vec::new();
     while cols.len() < 10_000 {
@@ -301,10 +339,14 @@ fn columns_and_chunks_outside_the_region_are_bit_identical() {
     assert_eq!(col_diff, 0);
     assert!(differing.is_empty());
     // The region really changed something inside, or this test proves nothing.
-    let inside = Vec2::new(23300, 25410);
-    assert_ne!(
-        world.sim.authored_rasters.as_ref().unwrap().column(inside),
-        None
+    assert!(
+        world
+            .sim
+            .authored_rasters
+            .as_ref()
+            .unwrap()
+            .cell_at(inside)
+            .is_some_and(|c| c != super::AuthoredCell::None)
     );
 }
 
@@ -429,7 +471,7 @@ fn block_class(b: &Block) -> u32 {
     }
 }
 
-fn is_natural_ground(b: &Block) -> bool {
+pub(super) fn is_natural_ground(b: &Block) -> bool {
     matches!(
         b.kind(),
         BlockKind::Rock
@@ -535,6 +577,9 @@ fn authored_water_renders_exactly_in_the_arena() {
                                 ex.push(format!("bank {wpos:?}: water"));
                             }
                         },
+                        super::AuthoredCell::Ground { .. } => {
+                            unreachable!("the Stage-1 arena has no ground layer")
+                        },
                         super::AuthoredCell::None => {
                             n.none += 1;
                             n.none_sampler_dry += (col.water_level == base_sea_level) as u32;
@@ -597,10 +642,20 @@ fn authored_water_renders_exactly_in_the_arena() {
 /// prints p50/p99 per chunk and fails only on a gross regression.
 #[test]
 #[ignore]
-fn authored_region_generation_cost() {
+fn authored_region_generation_cost() { generation_cost(load_spec(&arena_spec())); }
+
+/// [`authored_region_generation_cost`] for the Stage-2 ground battery (exact
+/// ground over the whole arena, including the 5 km pillar and the -1860
+/// block pit, whose chunks are tall).
+#[test]
+#[ignore]
+fn ground_region_generation_cost() {
+    generation_cost(load_specs(&ground_battery_specs()).unwrap());
+}
+
+fn generation_cost(rasters: AuthoredRasters) {
     let (mut world, index) = generate_world();
     let index_ref = index.as_index_ref();
-    let rasters = load_spec(&arena_spec());
     let cmin = Vec2::from(REGION_MIN) / 32;
     let cmax = Vec2::from(REGION_MAX) / 32;
     let chunks: Vec<Vec2<i32>> = (cmin.y..cmax.y)
@@ -964,3 +1019,5 @@ fn a_pond_edited_into_a_natural_river() {
     assert_eq!(pond_col.1, surface_block as f32 + 0.5);
     assert_eq!(pond_col.0, bed_block as f32 + 0.5);
 }
+
+pub use super::ground_real_world_tests::ground_battery_specs;

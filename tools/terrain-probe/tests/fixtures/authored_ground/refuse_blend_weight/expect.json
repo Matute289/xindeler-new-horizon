@@ -1,0 +1,7 @@
+{
+  "message": "blend weights",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "a72edd7fbb1ed1b897d00e6dad65100b62361ec05f2a081def54dad1ac434d06"
+  },
+  "verdict": "refuse"
+}

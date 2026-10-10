@@ -19,11 +19,22 @@ fn load(regions: &[writer::BuiltRegion]) -> Result<AuthoredRasters, LoadError> {
                 .map(|((tx, ty), b)| ((r.manifest.id.clone(), *tx, *ty), b.clone()))
         })
         .collect();
-    let fetch = move |id: &str, _layer: LayerKind, tx: i32, ty: i32| {
-        files
-            .get(&(id.to_string(), tx, ty))
-            .cloned()
-            .ok_or_else(|| format!("missing tile {id} {tx} {ty}"))
+    let ground: StdHashMap<(String, i32, i32), Vec<u8>> = regions
+        .iter()
+        .flat_map(|r| {
+            r.ground_tiles
+                .iter()
+                .map(|((tx, ty), b)| ((r.manifest.id.clone(), *tx, *ty), b.clone()))
+        })
+        .collect();
+    let fetch = move |id: &str, layer: LayerKind, tx: i32, ty: i32| {
+        match layer {
+            LayerKind::Water => &files,
+            LayerKind::Ground => &ground,
+        }
+        .get(&(id.to_string(), tx, ty))
+        .cloned()
+        .ok_or_else(|| format!("missing tile {id} {tx} {ty}"))
     };
     AuthoredRasters::from_manifest(manifest(regions), MAP, "test", &fetch)
 }
@@ -108,7 +119,7 @@ fn cells_quantise_with_integer_arithmetic() {
 #[test]
 fn negative_centimetres_floor_towards_minus_infinity() {
     // Bank cells may not go below the ocean, so test the arithmetic directly.
-    let raw = RawTile {
+    let raw = format::WaterTile {
         origin: Vec2::zero(),
         base_cm: -250,
         surface: vec![format::NONE; TILE_CELLS].into(),
@@ -120,9 +131,15 @@ fn negative_centimetres_floor_towards_minus_infinity() {
             b.into()
         },
     };
-    assert_eq!(cell_of(&raw, 0), AuthoredCell::Bank { bed_block: -3 });
-    assert_eq!(cell_of(&raw, 1), AuthoredCell::Bank { bed_block: -1 });
-    assert_eq!(cell_of(&raw, 2), AuthoredCell::Bank { bed_block: 0 });
+    assert_eq!(cell_of(Some(&raw), None, 0), AuthoredCell::Bank {
+        bed_block: -3
+    });
+    assert_eq!(cell_of(Some(&raw), None, 1), AuthoredCell::Bank {
+        bed_block: -1
+    });
+    assert_eq!(cell_of(Some(&raw), None, 2), AuthoredCell::Bank {
+        bed_block: 0
+    });
 }
 
 #[test]
@@ -145,6 +162,7 @@ const SETTINGS: RegionSettings = RegionSettings {
     suppress_procedural_in_water: true,
     exclude_procedural_margin_m: 0.0,
     aquatic_profile: None,
+    sea_fill: SeaFill::Auto,
 };
 
 fn engine() -> EngineColumn {
@@ -558,7 +576,7 @@ fn manifest_schema_and_layers_are_strict() {
     );
     // Unknown fields and layers are parse errors, never ignored.
     let text = ron::ser::to_string(&manifest(std::slice::from_ref(&r))).unwrap();
-    let unknown_layer = text.replacen("layers:[Water]", "layers:[Water,Ground]", 1);
+    let unknown_layer = text.replacen("layers:[Water]", "layers:[Water,Lava]", 1);
     assert_ne!(unknown_layer, text, "test needs the compact RON spelling");
     assert!(ron::from_str::<Manifest>(&unknown_layer).is_err());
     let unknown_field = text.replacen("schema:1", "schema:1,colour:3", 1);
@@ -669,6 +687,7 @@ fn procedural_suppression_follows_the_region_settings() {
             suppress_procedural_in_water: suppress,
             exclude_procedural_margin_m: margin,
             aquatic_profile: None,
+            sea_fill: SeaFill::Auto,
         },
         weight: 1.0,
         cell,
@@ -877,6 +896,31 @@ fn column_lookup_cost() {
     time("inside the river region (mixed)", &river, &inside, false);
     time("wet cells", &river, &wet, false);
     time("cell_at (mixed)", &river, &inside, true);
+    let plateau = load(&[build_region(&plateau_spec()).unwrap()]).unwrap();
+    time("exact ground cells", &plateau, &inside, false);
+    // Two regions in opposite corners of the map: the union box covers the
+    // map, so every column pays the region scan.
+    let corners = load(&[
+        build_region(&region("sw", (1024, 1024), (1536, 1216), 32, vec![])).unwrap(),
+        build_region(&region(
+            "ne",
+            (31_232, 31_232),
+            (31_744, 31_424),
+            32,
+            vec![],
+        ))
+        .unwrap(),
+    ])
+    .unwrap();
+    let middle: Vec<_> = (0..100_000)
+        .map(|k| Vec2::new(16_000 + k % 300, 16_000 + k / 300))
+        .collect();
+    time(
+        "two corner regions, columns between them",
+        &corners,
+        &middle,
+        false,
+    );
     let t = std::time::Instant::now();
     let fresh = load(&[build_region(&river_spec()).unwrap()]).unwrap();
     fresh.prewarm();
@@ -890,7 +934,6 @@ fn the_process_wide_counter_follows_loaded_manifests() {
     let share = a.resident_bytes;
     assert!(share > 0);
     assert!(global_resident_bytes() >= share);
-    assert!(global_resident_cap() >= GLOBAL_RESIDENT_CAP_BYTES.min(global_resident_cap()));
     drop(a);
     // A refused manifest leaves nothing reserved: the huge one of
     // `the_memory_budget_is_checked_before_any_tile_is_read` fails before
@@ -916,4 +959,570 @@ fn the_process_wide_cap_refuses_with_a_clear_error() {
     let r = ReservedBytes::reserve(1 << 20, usize::MAX).expect("under the cap");
     assert!(global_resident_bytes() >= 1 << 20);
     drop(r);
+}
+
+// --------------------------------------------------------------------------
+// Stage 2: the ground layer
+// --------------------------------------------------------------------------
+
+/// A 200 x 100 m exact plateau at 251.37 m (block 251) with a 1 m trench,
+/// a 1 m ridge and a 1:4 ramp, inside a ground-only region.
+fn plateau_spec() -> RegionSpec {
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    region("plateau", (1024, 1024), (1536, 1216), 32, vec![
+        PaintOp::Ground {
+            shape: rect(1100.0, 1050.0, 1300.0, 1150.0),
+            ground_cm: 25_137,
+            weight: GROUND_EXACT,
+        },
+        // 1 m wide trench, 3 m deep.
+        PaintOp::Ground {
+            shape: rect(1150.0, 1050.0, 1151.0, 1150.0),
+            ground_cm: 24_837,
+            weight: GROUND_EXACT,
+        },
+        // 1 m wide ridge, 2 m high.
+        PaintOp::Ground {
+            shape: rect(1200.0, 1050.0, 1201.0, 1150.0),
+            ground_cm: 25_337,
+            weight: GROUND_EXACT,
+        },
+        // A ramp rising 25 cm per metre in x.
+        PaintOp::GroundPlane {
+            shape: rect(1250.0, 1050.0, 1300.0, 1150.0),
+            origin: (1250.0, 1050.0),
+            origin_cm: 25_137,
+            cm_per_m: (25.0, 0.0),
+        },
+    ])
+}
+
+fn ground_col(cell: AuthoredCell, sea_fill: SeaFill) -> AuthoredColumn {
+    AuthoredColumn {
+        settings: RegionSettings {
+            sea_fill,
+            ..SETTINGS
+        },
+        weight: 0.3,
+        cell,
+        water_dist: Some(12.0),
+        natural: false,
+    }
+}
+
+#[test]
+fn ground_cells_are_read_exactly() {
+    let built = build_region(&plateau_spec()).unwrap();
+    assert_eq!(built.manifest.layers, vec![LayerKind::Ground]);
+    assert!(built.tiles.is_empty() && !built.ground_tiles.is_empty());
+    let ar = load(&[built]).unwrap();
+    let cell = |x, y| ar.cell_at(Vec2::new(x, y)).unwrap();
+    assert_eq!(cell(1120, 1100), AuthoredCell::Ground {
+        block: 251,
+        weight: GROUND_EXACT
+    });
+    assert_eq!(cell(1150, 1100), AuthoredCell::Ground {
+        block: 248,
+        weight: GROUND_EXACT
+    });
+    assert_eq!(cell(1149, 1100), AuthoredCell::Ground {
+        block: 251,
+        weight: GROUND_EXACT
+    });
+    assert_eq!(cell(1200, 1100), AuthoredCell::Ground {
+        block: 253,
+        weight: GROUND_EXACT
+    });
+    // Ramp: centre of column 1260 is 10.5 m in: 25137 + 262.5 -> 25400 cm.
+    assert_eq!(cell(1260, 1100), AuthoredCell::Ground {
+        block: 254,
+        weight: GROUND_EXACT
+    });
+    assert_eq!(cell(1099, 1100), AuthoredCell::None);
+    assert_eq!(cell(1120, 1100).exact_ground_block(), Some(251));
+    assert_eq!(ar.water_at(Vec2::new(1120, 1100)), None);
+    // The chunk summary and the stone floor see the ground.
+    let s = ar.chunk_summary(Vec2::new(1150 / 32, 1100 / 32)).unwrap();
+    assert_eq!(s.ground_columns, s.authored_columns);
+    assert_eq!(s.wet_columns, 0);
+    assert_eq!(s.min_ground_cell_block, 248);
+    assert_eq!(s.min_bed_block, i32::MAX);
+    assert_eq!(
+        ar.floor_block(Vec2::new(1150 / 32, 1100 / 32)),
+        Some(248 - FLOOR_MARGIN_BLOCKS)
+    );
+}
+
+#[test]
+fn resolve_exact_ground_drops_every_engine_term() {
+    let cell = AuthoredCell::Ground {
+        block: 251,
+        weight: GROUND_EXACT,
+    };
+    for sea_fill in [SeaFill::Auto, SeaFill::AuthoredOnly] {
+        let r = ground_col(cell, sea_fill).resolve(engine(), dry());
+        assert_eq!(r.alt, 251.5);
+        assert_eq!(r.riverless_alt, 251.5);
+        assert_eq!(r.warp_factor, 0.0);
+        assert_eq!(r.cliff_offset, 0.0);
+        assert_eq!(r.water_dist, Some(12.0));
+        assert_eq!(r.water_level, match sea_fill {
+            SeaFill::Auto => 139.01,
+            SeaFill::AuthoredOnly => 251.5,
+        });
+    }
+    // In a partial chunk a ground cell is still exact (only unauthored
+    // columns keep the natural map).
+    let mut natural = ground_col(cell, SeaFill::Auto);
+    natural.natural = true;
+    let r = apply(Some(natural), engine(), dry(), |l| l);
+    assert_eq!(r.alt, 251.5);
+    // Below sea level: Auto fills it with sea water, AuthoredOnly keeps it dry.
+    let pit = AuthoredCell::Ground {
+        block: 120,
+        weight: GROUND_EXACT,
+    };
+    let auto = ground_col(pit, SeaFill::Auto).resolve(engine(), dry());
+    assert!(auto.water_level > auto.alt + 18.0);
+    let dry_pit = ground_col(pit, SeaFill::AuthoredOnly).resolve(engine(), dry());
+    assert_eq!(dry_pit.water_level, dry_pit.alt);
+    assert_eq!(dry_pit.alt, 120.5);
+}
+
+#[test]
+fn authored_only_wet_and_bank_cells_have_no_sea_fill() {
+    let lake = AuthoredCell::Wet {
+        surface_block: 119,
+        bed_block: 110,
+    };
+    // (In Auto such a lake is refused at load; a sea-level lake still gets
+    // the sea's level.)
+    let sea_lake = AuthoredCell::Wet {
+        surface_block: 139,
+        bed_block: 110,
+    };
+    let auto = ground_col(sea_lake, SeaFill::Auto).resolve(engine(), dry());
+    assert_eq!(auto.water_level, 139.5);
+    let own = ground_col(lake, SeaFill::AuthoredOnly).resolve(engine(), dry());
+    assert_eq!(
+        own.water_level, 119.5,
+        "AuthoredOnly: the lake's own surface"
+    );
+    assert_eq!(own.alt, 110.5);
+    let bank = AuthoredCell::Bank { bed_block: 100 };
+    let own = ground_col(bank, SeaFill::AuthoredOnly).resolve(engine(), dry());
+    assert_eq!(own.water_level, own.alt);
+    let auto = ground_col(bank, SeaFill::Auto).resolve(engine(), dry());
+    assert_eq!(auto.water_level, 139.01);
+}
+
+#[test]
+fn top_block_alt_has_the_block_as_its_top_below_zero_too() {
+    for block in [-1860, -5, -1, 0, 1, 139, 5140] {
+        let alt = top_block_alt(block);
+        // `block.rs`: solid when `z as i32 <= alt as i32`.
+        assert_eq!(alt as i32, block, "truncation at {block}");
+        assert_eq!(alt.floor() as i32, block, "floor at {block}");
+    }
+}
+
+#[test]
+fn ground_below_water_must_agree_with_the_water_layer() {
+    let water = |shape| PaintOp::Water {
+        shape,
+        surface_cm: 23_868,
+        bed_cm: 23_268,
+    };
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let base = |ground_cm: i32, bank_cm: i32| {
+        region("both", (1024, 1024), (1536, 1216), 32, vec![
+            water(rect(1100.0, 1100.0, 1200.0, 1110.0)),
+            PaintOp::BankRing {
+                width_m: 1,
+                bed_cm: Some(bank_cm),
+            },
+            // Ground over the whole area: under the water, under the banks,
+            // and beside them.
+            PaintOp::Ground {
+                shape: rect(1090.0, 1090.0, 1210.0, 1120.0),
+                ground_cm,
+                weight: GROUND_EXACT,
+            },
+        ])
+    };
+    // Ground disagrees with the bed.
+    let e = load(&[build_region(&base(23_918, 23_918)).unwrap()]).unwrap_err();
+    assert!(e.0.contains("under authored water"), "{e}");
+    // Where only ground is painted it must match: paint the water layer
+    // after the ground so the beds and banks override it exactly.
+    let mut ok = base(23_918, 23_918);
+    ok.ops.rotate_left(2); // ground first, then water + bank ring
+    // The bank ring skips cells that already hold ground: the ground beside
+    // the water is at 239.18 m, above the water's top block 238.
+    let built = build_region(&ok).unwrap();
+    assert_eq!(built.manifest.layers, vec![
+        LayerKind::Water,
+        LayerKind::Ground
+    ]);
+    // Water cells still carry their ground underneath: it is the plateau,
+    // not the bed -> refused.
+    let e = load(&[built]).unwrap_err();
+    assert!(e.0.contains("under authored water"), "{e}");
+    // Clearing the ground under the water makes the two layers consistent,
+    // and the exact ground beside the water contains it.
+    let mut ok = base(23_918, 23_918);
+    ok.ops.rotate_left(2);
+    ok.ops.push(PaintOp::ClearGround {
+        shape: rect(1100.0, 1100.0, 1200.0, 1110.0),
+    });
+    let ar = load(&[build_region(&ok).unwrap()]).unwrap();
+    assert!(ar.cell_at(Vec2::new(1150, 1105)).unwrap().is_wet());
+    assert_eq!(
+        ar.cell_at(Vec2::new(1150, 1110)).unwrap(),
+        AuthoredCell::Ground {
+            block: 239,
+            weight: GROUND_EXACT
+        }
+    );
+    // A bank with ground under it must agree too.
+    let banked = region("banked", (1024, 1024), (1536, 1216), 32, vec![
+        PaintOp::Ground {
+            shape: rect(1100.0, 1100.0, 1110.0, 1110.0),
+            ground_cm: 24_000,
+            weight: GROUND_EXACT,
+        },
+        PaintOp::Bank {
+            shape: rect(1100.0, 1100.0, 1105.0, 1110.0),
+            bed_cm: 24_100,
+        },
+    ]);
+    let e = load(&[build_region(&banked).unwrap()]).unwrap_err();
+    assert!(e.0.contains("under an authored bank"), "{e}");
+}
+
+#[test]
+fn water_next_to_lower_ground_is_a_wall_and_refused() {
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let spec = |ground_cm| {
+        region("quay", (1024, 1024), (1536, 1216), 32, vec![
+            PaintOp::Ground {
+                shape: rect(1090.0, 1090.0, 1210.0, 1120.0),
+                ground_cm,
+                weight: GROUND_EXACT,
+            },
+            PaintOp::ClearGround {
+                shape: rect(1100.0, 1100.0, 1200.0, 1110.0),
+            },
+            PaintOp::Water {
+                shape: rect(1100.0, 1100.0, 1200.0, 1110.0),
+                surface_cm: 23_868,
+                bed_cm: 23_268,
+            },
+        ])
+    };
+    // A quay at 240 m holds water whose top block is 238.
+    assert!(load(&[build_region(&spec(24_050)).unwrap()]).is_ok());
+    // Ground at 237.5 m (block 237) next to water top 238: a wall.
+    let e = load(&[build_region(&spec(23_750)).unwrap()]).unwrap_err();
+    assert!(e.0.contains("would stand as a wall"), "{e}");
+}
+
+#[test]
+fn ground_rules_refuse_blend_weights_and_out_of_range_blocks() {
+    let rect = Shape::Rect {
+        x0: 1100.0,
+        y0: 1100.0,
+        x1: 1110.0,
+        y1: 1110.0,
+    };
+    let spec = |ground_cm, weight| {
+        region("g", (1024, 1024), (1536, 1216), 32, vec![PaintOp::Ground {
+            shape: rect.clone(),
+            ground_cm,
+            weight,
+        }])
+    };
+    expect_error(
+        vec![build_region(&spec(24_000, 128)).unwrap()],
+        "blend weights",
+    );
+    expect_error(
+        vec![build_region(&spec(819_200, GROUND_EXACT)).unwrap()],
+        "outside the blocks",
+    );
+    expect_error(
+        vec![build_region(&spec(-409_601, GROUND_EXACT)).unwrap()],
+        "outside the blocks",
+    );
+    // The extremes of the range load (an AuthoredOnly region: no sea rule).
+    for cm in [-409_600, 819_199] {
+        let mut s = spec(cm, GROUND_EXACT);
+        s.sea_fill = SeaFill::AuthoredOnly;
+        assert!(load(&[build_region(&s).unwrap()]).is_ok(), "{cm}");
+    }
+    // The 16 m box margin applies to ground cells too.
+    let near_edge = region("edge", (1024, 1024), (1536, 1216), 32, vec![
+        PaintOp::Ground {
+            shape: Shape::Rect {
+                x0: 1030.0,
+                y0: 1100.0,
+                x1: 1040.0,
+                y1: 1110.0,
+            },
+            ground_cm: 24_000,
+            weight: GROUND_EXACT,
+        },
+    ]);
+    expect_error(
+        vec![build_region(&near_edge).unwrap()],
+        "at least 16 m inside",
+    );
+}
+
+#[test]
+fn layers_and_tile_listing_are_checked_per_layer() {
+    let built = build_region(&plateau_spec()).unwrap();
+    // A ground tile in a region that declares only water.
+    let mut r = build_region(&plateau_spec()).unwrap();
+    r.manifest.layers = vec![LayerKind::Water];
+    expect_error(vec![r], "a layer the region does not declare");
+    // Layer order and duplicates.
+    let mut r = build_region(&plateau_spec()).unwrap();
+    r.manifest.layers = vec![LayerKind::Ground, LayerKind::Water];
+    expect_error(vec![r], "[Water], [Ground] or [Water, Ground]");
+    let mut r = build_region(&plateau_spec()).unwrap();
+    let dup = r.manifest.tiles[0].clone();
+    r.manifest.tiles.push(dup);
+    expect_error(vec![r], "Ground tile");
+    // A water and a ground tile at the same index load (a two-layer region).
+    let mut both = plateau_spec();
+    both.ops.push(PaintOp::Water {
+        shape: Shape::Rect {
+            x0: 1350.0,
+            y0: 1100.0,
+            x1: 1360.0,
+            y1: 1110.0,
+        },
+        surface_cm: 23_868,
+        bed_cm: 23_268,
+    });
+    both.ops.push(PaintOp::BankRing {
+        width_m: 1,
+        bed_cm: Some(23_918),
+    });
+    let b = build_region(&both).unwrap();
+    assert_eq!(b.manifest.layers, vec![LayerKind::Water, LayerKind::Ground]);
+    let idx: Vec<_> = b.manifest.tiles.iter().map(|t| (t.tx, t.ty)).collect();
+    assert!(idx.iter().filter(|t| **t == (1, 0)).count() == 2, "{idx:?}");
+    assert!(load(&[b]).is_ok());
+    // Corrupt ground tiles are refused like water tiles.
+    let mut r = built;
+    r.ground_tiles[0].1[30] ^= 0xFF;
+    expect_error(vec![r], "sha256");
+}
+
+#[test]
+fn ground_memory_is_charged_per_layer() {
+    let ground_only = load(&[build_region(&plateau_spec()).unwrap()]).unwrap();
+    // 2 x 1 grid; ground tiles only, no distance fields.
+    let n = build_region(&plateau_spec()).unwrap().ground_tiles.len();
+    assert_eq!(ground_only.resident_bytes, n * (192 << 10));
+    let water = load(&[build_region(&river_spec()).unwrap()]).unwrap();
+    let w = build_region(&river_spec()).unwrap().tiles.len();
+    assert_eq!(water.resident_bytes, w * (256 << 10) + 2 * (64 << 10));
+}
+
+#[test]
+fn sea_fill_auto_allows_ground_below_sea_only_in_the_sea() {
+    let pit = |sea_fill| {
+        let mut s = region("pit", (1024, 1024), (1536, 1216), 32, vec![
+            PaintOp::Ground {
+                shape: Shape::Rect {
+                    x0: 1100.0,
+                    y0: 1100.0,
+                    x1: 1150.0,
+                    y1: 1150.0,
+                },
+                ground_cm: 12_000,
+                weight: GROUND_EXACT,
+            },
+        ]);
+        s.sea_fill = sea_fill;
+        load(&[build_region(&s).unwrap()]).unwrap()
+    };
+    let auto = pit(SeaFill::Auto);
+    let e = auto.check_sea_fill("test", |_| Some(false)).unwrap_err();
+    assert!(e.0.contains("sea_fill: AuthoredOnly"), "{e}");
+    assert!(e.0.contains("lowest block 120"), "{e}");
+    assert!(
+        auto.check_sea_fill("test", |_| Some(true)).is_ok(),
+        "a sea floor"
+    );
+    let own = pit(SeaFill::AuthoredOnly);
+    assert!(
+        own.check_sea_fill("test", |_| Some(false)).is_ok(),
+        "a dry pit"
+    );
+    // Banks and wet surfaces below sea level: refused in Auto at load,
+    // allowed in AuthoredOnly.
+    let lake = |sea_fill| {
+        let mut s = region("lake", (1024, 1024), (1536, 1216), 32, vec![
+            PaintOp::Water {
+                shape: Shape::Rect {
+                    x0: 1100.0,
+                    y0: 1100.0,
+                    x1: 1150.0,
+                    y1: 1150.0,
+                },
+                surface_cm: 12_050,
+                bed_cm: 11_050,
+            },
+            PaintOp::BankRing {
+                width_m: 1,
+                bed_cm: Some(12_050),
+            },
+        ]);
+        s.sea_fill = sea_fill;
+        load(&[build_region(&s).unwrap()])
+    };
+    let e = lake(SeaFill::Auto).unwrap_err();
+    assert!(e.0.contains("sea_fill: AuthoredOnly"), "{e}");
+    let own = lake(SeaFill::AuthoredOnly).unwrap();
+    assert_eq!(
+        own.water_at(Vec2::new(1120, 1120)).unwrap().surface_block,
+        120
+    );
+}
+
+/// Identity gate 2 (digest part): a manifest whose new fields are at their
+/// defaults serialises exactly as before them, so its digest does not move.
+#[test]
+fn new_manifest_fields_at_their_defaults_do_not_change_the_digest() {
+    let m = Manifest {
+        schema: 1,
+        regions: vec![RegionManifest {
+            id: "arena_stage1".into(),
+            min: (22752, 24576),
+            max: (23936, 25600),
+            feather_m: 32,
+            tile_size_m: 256,
+            cell_size_m: 1,
+            layers: vec![LayerKind::Water],
+            tiles: vec![TileManifest {
+                layer: LayerKind::Water,
+                tx: 0,
+                ty: 0,
+                sha256: "ab".repeat(32),
+            }],
+            suppress_procedural_in_water: false,
+            exclude_procedural_margin_m: 0,
+            allow_partial: false,
+            allow_partial_chunks: vec![],
+            aquatic_ecology_profile: None,
+            consistency: ConsistencyBudget::default(),
+            sea_fill: SeaFill::Auto,
+        }],
+    };
+    let text = ron::ser::to_string(&m).unwrap();
+    // The Stage-1 engine's serialisation of the same manifest, byte for byte.
+    let stage1 = "(schema:1,regions:[(id:\"arena_stage1\",min:(22752,24576),max:(23936,25600),\
+                  feather_m:32,tile_size_m:256,cell_size_m:1,layers:[Water],tiles:[(layer:Water,\
+                  tx:0,ty:0,sha256:\"\
+                  abababababababababababababababababababababababababababababababab\")],\
+                  suppress_procedural_in_water:false,exclude_procedural_margin_m:0,allow_partial:\
+                  false,allow_partial_chunks:[],aquatic_ecology_profile:None,consistency:\
+                  (max_authored_dry_table_wet_chunks:0,max_authored_wet_table_dry_chunks:None))])";
+    assert_eq!(text, stage1);
+    // A Stage-1 manifest text still parses to the same value.
+    assert_eq!(ron::from_str::<Manifest>(stage1).unwrap(), m);
+    // A non-default value is serialised (and so changes the digest).
+    let mut own = m.clone();
+    own.regions[0].sea_fill = SeaFill::AuthoredOnly;
+    let t = ron::ser::to_string(&own).unwrap();
+    assert!(t.contains("sea_fill:AuthoredOnly"), "{t}");
+    assert_eq!(ron::from_str::<Manifest>(&t).unwrap(), own);
+}
+
+#[test]
+fn the_resident_cap_has_a_default_a_warning_band_and_a_hard_ceiling() {
+    const GIB: usize = 1 << 30;
+    let ram = Some(15u64 << 30);
+    // Default: 8 GiB, no warning.
+    assert_eq!(resident_cap_from(None, ram).unwrap(), (8 * GIB, None));
+    // Up to the default: no warning.
+    assert_eq!(
+        resident_cap_from(Some("2048"), ram).unwrap(),
+        (2 * GIB, None)
+    );
+    assert_eq!(
+        resident_cap_from(Some("8192"), ram).unwrap(),
+        (8 * GIB, None)
+    );
+    // Between 8 and 10 GiB: allowed, with a warning that prints the budget.
+    for mib in ["8193", "9216", "10240"] {
+        let (cap, w) = resident_cap_from(Some(mib), ram).unwrap();
+        assert_eq!(cap, mib.parse::<usize>().unwrap() << 20);
+        let w = w.expect("warning");
+        assert!(w.contains("recommended 8192 MiB"), "{w}");
+        assert!(w.contains("total RAM 15360 MiB"), "{w}");
+    }
+    // Above 10 GiB, or not a number: refused.
+    for v in ["10241", "16384", "lots", "-1"] {
+        let e = resident_cap_from(Some(v), ram).unwrap_err();
+        assert!(e.contains(RESIDENT_CAP_ENV), "{e}");
+    }
+    let e = resident_cap_from(Some("12288"), None).unwrap_err();
+    assert!(e.contains("hard ceiling of 10240 MiB"), "{e}");
+    assert!(e.contains("total RAM unknown"), "{e}");
+}
+
+#[test]
+fn many_regions_use_the_index_and_answer_like_the_scan() {
+    // 20 small regions spread over the map (> LINEAR_SCAN_MAX_REGIONS).
+    let specs: Vec<_> = (0..20)
+        .map(|k| {
+            let x = 1024 + (k % 5) * 6144;
+            let y = 1024 + (k / 5) * 7168 + (k % 3) * 96;
+            build_region(&region(
+                &format!("r{k}"),
+                (x, y),
+                (x + 288, y + 320),
+                0,
+                vec![PaintOp::Ground {
+                    shape: Shape::Rect {
+                        x0: (x + 40) as f32,
+                        y0: (y + 40) as f32,
+                        x1: (x + 60) as f32,
+                        y1: (y + 60) as f32,
+                    },
+                    ground_cm: 24_000 + k * 100,
+                    weight: GROUND_EXACT,
+                }],
+            ))
+            .unwrap()
+        })
+        .collect();
+    let ar = load(&specs).unwrap();
+    assert!(ar.index.is_some());
+    for (k, r) in ar.regions.iter().enumerate() {
+        let inside = r.min + Vec2::new(50, 50);
+        assert_eq!(
+            ar.cell_at(inside),
+            Some(AuthoredCell::Ground {
+                block: 240 + k as i32,
+                weight: GROUND_EXACT
+            })
+        );
+        for p in [
+            r.min,
+            r.max - 1,
+            r.min - 1,
+            r.max,
+            Vec2::new(r.max.x, r.min.y),
+        ] {
+            let scan = ar.regions.iter().position(|q| q.contains(p));
+            let found = ar.region_at(p).map(|q| q.id.clone());
+            assert_eq!(found, scan.map(|i| ar.regions[i].id.clone()), "{p:?}");
+        }
+    }
 }

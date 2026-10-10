@@ -1,0 +1,7 @@
+{
+  "message": "at least 16 m inside",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "fcb8da43b1f74582276ac5a35125c3693e25449215c13cb73da2d5957174e670"
+  },
+  "verdict": "refuse"
+}

@@ -1,8 +1,26 @@
-//! XINDELER: authored raster layers -- the authored water layer.
+//! XINDELER: authored raster layers -- the authored water layer (Stage 1)
+//! and the authored ground layer (Stage 2).
 //!
 //! Not to be confused with [`crate::layer::authored_regions`], which indexes
 //! the authored *voids* (caves, interiors) of a map for the procedural cave
-//! guard. This module is about the terrain surface: exact water and banks.
+//! guard. This module is about the terrain surface: exact water, banks and
+//! ground.
+//!
+//! # The ground layer (Stage 2)
+//!
+//! A region may also declare a [`LayerKind::Ground`] layer: per block column
+//! an absolute ground altitude in integer cm and a blend weight
+//! ([`AuthoredCell::Ground`]). An *exact* ground cell (weight 255) is the
+//! column's ground: top solid block `floor(cm / 100)`, with none of the
+//! engine's terrain terms (chunk spline, undulation, `small_nz` relief,
+//! cliffs, warp, mesa, bank pull, the -16 m registration). Precedence: a
+//! water cell wins and a ground cell under it must agree with its bed or
+//! bank, checked at load. Blend weights (1..=254, the ring toward the engine
+//! terrain) are carried by the tile format but refused by this engine until
+//! the blend ring lands. Water below 0 m is a per-region parameter
+//! ([`SeaFill`]). The sim chunk table stays the natural map; the
+//! authored-aware ground queries for sites and rtsim are not routed to the
+//! ground layer yet (they read the table, as before).
 //!
 //! # What it does
 //!
@@ -85,7 +103,9 @@ use common::{
     terrain::TerrainChunkSize,
     vol::RectVolSize,
 };
-use format::{LayerKind, RawTile, TILE_CELLS, TILE_SIZE};
+use format::{
+    GROUND_EXACT, GroundTile, GroundTileCm, LayerKind, TILE_CELLS, TILE_SIZE, WaterTile, cell_index,
+};
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, sync::OnceLock};
@@ -105,20 +125,84 @@ pub const DIST_CAP_M: i32 = crate::column::WATER_WARP_FADE_M as i32;
 /// manifest. Over it, loading fails: split or shrink regions, or list fewer
 /// tiles (a tile without authored cells need not be listed).
 pub const RESIDENT_BUDGET_BYTES: usize = 256 << 20;
-/// Process-wide cap on the resident bytes of every loaded manifest
-/// together: a server hosting several worlds (one `WorldSim` each) holds one
-/// copy per world. Override with `XINDELER_AUTHORED_RASTERS_MAX_MIB`.
-pub const GLOBAL_RESIDENT_CAP_BYTES: usize = 1 << 30;
+/// Default (and recommended) process-wide cap on the resident bytes of every
+/// loaded manifest together: a server hosting several worlds (one `WorldSim`
+/// each) holds one copy per world.
+///
+/// Sizing (server with ~15 GiB of RAM; the rest of the server stack is
+/// expected to need ~3 GiB): 8 GiB leaves room for the stack plus the OS and
+/// its page cache. The cap is raised only explicitly, with
+/// `XINDELER_AUTHORED_RASTERS_MAX_MIB`, up to
+/// [`GLOBAL_RESIDENT_HARD_CAP_BYTES`].
+pub const GLOBAL_RESIDENT_CAP_BYTES: usize = 8 << 30;
+/// Hard ceiling of the process-wide cap: `XINDELER_AUTHORED_RASTERS_MAX_MIB`
+/// above it stops world generation. Between the default and this ceiling the
+/// server starts with a warning that prints the budget: at 10 GiB only ~5
+/// GiB of a 15 GiB box remain for the rest of the server, the OS and the
+/// page cache, which is little headroom. 8 GiB is the safe value.
+pub const GLOBAL_RESIDENT_HARD_CAP_BYTES: usize = 10 << 30;
+/// The environment variable that overrides [`GLOBAL_RESIDENT_CAP_BYTES`]
+/// (MiB).
+pub const RESIDENT_CAP_ENV: &str = "XINDELER_AUTHORED_RASTERS_MAX_MIB";
 /// Resident bytes of every live [`AuthoredRasters`] in this process.
 static GLOBAL_RESIDENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// The process-wide cap in force ([`GLOBAL_RESIDENT_CAP_BYTES`] unless the
-/// environment overrides it).
-pub fn global_resident_cap() -> usize {
-    std::env::var("XINDELER_AUTHORED_RASTERS_MAX_MIB")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .map_or(GLOBAL_RESIDENT_CAP_BYTES, |mib| mib << 20)
+/// The process-wide cap an override value asks for: `Ok((bytes, warning))`
+/// where `warning` is set when the cap is above the recommended default;
+/// `Err` when the value does not parse or is above
+/// [`GLOBAL_RESIDENT_HARD_CAP_BYTES`]. `None` = the default.
+pub fn resident_cap_from(
+    override_mib: Option<&str>,
+    total_ram: Option<u64>,
+) -> Result<(usize, Option<String>), String> {
+    let Some(v) = override_mib else {
+        return Ok((GLOBAL_RESIDENT_CAP_BYTES, None));
+    };
+    let mib: usize = v
+        .trim()
+        .parse()
+        .map_err(|_| format!("{RESIDENT_CAP_ENV}={v:?} is not a whole number of MiB"))?;
+    let bytes = mib.saturating_mul(1 << 20);
+    let ram = total_ram.map_or_else(|| "unknown".to_string(), |b| format!("{} MiB", b >> 20));
+    if bytes > GLOBAL_RESIDENT_HARD_CAP_BYTES {
+        return Err(format!(
+            "{RESIDENT_CAP_ENV}={mib} MiB is above the hard ceiling of {} MiB for authored \
+             rasters (total RAM {ram}; the rest of the server needs ~3 GiB plus the OS): use at \
+             most {} MiB, recommended {} MiB",
+            GLOBAL_RESIDENT_HARD_CAP_BYTES >> 20,
+            GLOBAL_RESIDENT_HARD_CAP_BYTES >> 20,
+            GLOBAL_RESIDENT_CAP_BYTES >> 20
+        ));
+    }
+    let warning = (bytes > GLOBAL_RESIDENT_CAP_BYTES).then(|| {
+        format!(
+            "authored rasters may use up to {mib} MiB ({RESIDENT_CAP_ENV}), above the recommended \
+             {} MiB; total RAM {ram}, the rest of the server needs ~3 GiB plus the OS and page \
+             cache",
+            GLOBAL_RESIDENT_CAP_BYTES >> 20
+        )
+    });
+    Ok((bytes, warning))
+}
+
+/// Total RAM of this machine, when known (Linux `/proc/meminfo`).
+pub fn total_ram_bytes() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = text.lines().find(|l| l.starts_with("MemTotal:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib * 1024)
+}
+
+/// The process-wide cap in force ([`GLOBAL_RESIDENT_CAP_BYTES`] unless
+/// [`RESIDENT_CAP_ENV`] overrides it; see [`resident_cap_from`]). Logs a
+/// warning when the override is above the recommended default.
+pub fn global_resident_cap() -> Result<usize, String> {
+    let env = std::env::var(RESIDENT_CAP_ENV).ok();
+    let (cap, warning) = resident_cap_from(env.as_deref(), total_ram_bytes())?;
+    if let Some(w) = warning {
+        tracing::warn!("{w}");
+    }
+    Ok(cap)
 }
 
 /// Resident bytes of every live [`AuthoredRasters`] in this process.
@@ -143,7 +227,6 @@ pub const FLOOR_MARGIN_BLOCKS: i32 = 16;
 /// load error otherwise).
 pub const REGION_MARGIN_M: i32 = 16;
 
-const BYTES_PER_RAW_TILE: usize = TILE_CELLS * 2 * 2;
 const BYTES_PER_DIST_TILE: usize = TILE_CELLS;
 const NO_DIST: u8 = u8::MAX;
 const CHUNK: i32 = TerrainChunkSize::RECT_SIZE.x as i32;
@@ -200,6 +283,37 @@ pub struct RegionManifest {
     pub aquatic_ecology_profile: Option<String>,
     #[serde(default)]
     pub consistency: ConsistencyBudget,
+    /// Water below sea level in this region (default [`SeaFill::Auto`]).
+    ///
+    /// Every field added after Stage 1 is skipped when serialised at its
+    /// default: the manifest digest is the sha256 of its serialisation, so a
+    /// new field written at its default would change the digest of every
+    /// existing manifest (terrain persistence would refuse to start, the
+    /// rtsim water pass would re-run).
+    #[serde(default, skip_serializing_if = "SeaFill::is_auto")]
+    pub sea_fill: SeaFill,
+}
+
+/// Where water below sea level comes from inside a region.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum SeaFill {
+    /// Today's behaviour: the sea fills everything below sea level. Ground
+    /// cells below sea level are allowed only in chunks the sim table calls
+    /// ocean or underwater (a sea floor, a dredged harbour basin) and fill
+    /// with sea water; wet surfaces and banks must stay at or above the
+    /// ocean's top block.
+    #[default]
+    Auto,
+    /// The authored layers are the only source of water in the region:
+    /// ground and bank cells are dry at any altitude (a dry pit below 0 m)
+    /// and wet cells may have a surface below sea level (a lake below 0 m).
+    /// Unauthored cells keep the Stage-1 rule (engine terrain, no water
+    /// above sea level).
+    AuthoredOnly,
+}
+
+impl SeaFill {
+    pub fn is_auto(&self) -> bool { *self == SeaFill::Auto }
 }
 
 /// How far a region's authored water may disagree with the sim's chunk
@@ -208,7 +322,8 @@ pub struct RegionManifest {
 #[serde(deny_unknown_fields)]
 pub struct ConsistencyBudget {
     /// Chunks the table calls wet (river, lake, ocean or underwater) that are
-    /// not fully authored (some column has neither water nor bank). Default
+    /// not fully authored (some column has neither water, bank nor ground).
+    /// Default
     /// **0**: the sim lowers such a chunk's terrain, and the unauthored
     /// columns in it render that pit next to the exact authored water (the
     /// masks were painted inside the region). A chunk counts as authored when
@@ -269,6 +384,10 @@ pub enum AuthoredCell {
     Wet { surface_block: i32, bed_block: i32 },
     /// Authored dry ground whose top block is `bed_block`.
     Bank { bed_block: i32 },
+    /// Authored ground whose top block is `block`, with its blend `weight`
+    /// ([`GROUND_EXACT`] = exact: the column's ground, no engine terrain).
+    /// Only where the water layer authors nothing.
+    Ground { block: i32, weight: u8 },
     /// Inside a region, but not authored: engine terrain without the
     /// region's suppressed sim water, or the natural map unchanged in a
     /// partial chunk ([`AuthoredColumn::natural`]).
@@ -277,6 +396,32 @@ pub enum AuthoredCell {
 
 impl AuthoredCell {
     pub fn is_wet(&self) -> bool { matches!(self, AuthoredCell::Wet { .. }) }
+
+    /// The top ground block this cell fixes, if it fixes one exactly (a wet
+    /// bed, a bank, an exact ground cell).
+    pub fn exact_ground_block(&self) -> Option<i32> {
+        match *self {
+            AuthoredCell::Wet { bed_block, .. } | AuthoredCell::Bank { bed_block } => {
+                Some(bed_block)
+            },
+            AuthoredCell::Ground { block, weight } => (weight == GROUND_EXACT).then_some(block),
+            AuthoredCell::None => None,
+        }
+    }
+}
+
+/// The column altitude whose top solid block is `block`. `block.rs` makes
+/// `z` solid when `z as i32 <= alt as i32`, and `as i32` truncates toward
+/// zero: `block + 0.5` has top block `block` only for `block >= 0`; below
+/// block 0 (more than 140 m under sea level) the altitude is the block
+/// itself, whose truncation and floor are both `block`.
+#[inline]
+pub fn top_block_alt(block: i32) -> f32 {
+    if block >= 0 {
+        block as f32 + 0.5
+    } else {
+        block as f32
+    }
 }
 
 /// Authored water at one column (the wet case of [`AuthoredCell`]).
@@ -304,6 +449,7 @@ pub struct RegionSettings {
     pub suppress_procedural_in_water: bool,
     pub exclude_procedural_margin_m: f32,
     pub(crate) aquatic_profile: Option<AquaticEcologyProfileId>,
+    pub sea_fill: SeaFill,
 }
 
 /// What the column sampler needs to know about one column inside a region.
@@ -383,7 +529,9 @@ impl AuthoredColumn {
     ///
     /// * wet: bed and surface exact, no warp/cliff carving; `riverless_alt` is
     ///   the bed (paths and trees reading it see the authored ground);
-    /// * bank: ground exact, no water above sea level;
+    /// * bank, exact ground: ground exact, no warp/cliff carving, no water
+    ///   above sea level ([`SeaFill::Auto`]: below it the sea fills the column)
+    ///   or no water at all ([`SeaFill::AuthoredOnly`]);
     /// * none: no water above sea level; terrain blended by the feather weight
     ///   from the engine's (with the sim water's carving) to the engine's *dry*
     ///   terrain (same noise and warp, faded by the distance to the authored
@@ -398,24 +546,51 @@ impl AuthoredColumn {
                 surface_block,
                 bed_block,
             } => {
+                let authored_only = self.settings.sea_fill == SeaFill::AuthoredOnly;
                 // Guaranteed by load-time validation.
-                debug_assert!(surface_block >= SEA_TOP_BLOCK && bed_block < surface_block);
+                debug_assert!(
+                    (authored_only || surface_block >= SEA_TOP_BLOCK) && bed_block < surface_block
+                );
+                let surface = surface_block as f32 + 0.5;
                 EngineColumn {
-                    alt: bed_block as f32 + 0.5,
-                    water_level: (surface_block as f32 + 0.5).max(dry.base_sea_level),
+                    alt: top_block_alt(bed_block),
+                    // A lake below 0 m keeps its own surface; elsewhere the
+                    // sea still fills up to sea level.
+                    water_level: if authored_only {
+                        surface
+                    } else {
+                        surface.max(dry.base_sea_level)
+                    },
                     water_dist: Some(-1.0),
                     warp_factor: 0.0,
                     cliff_offset: 0.0,
-                    riverless_alt: bed_block as f32 + 0.5,
+                    riverless_alt: top_block_alt(bed_block),
                 }
             },
-            AuthoredCell::Bank { bed_block } => EngineColumn {
-                alt: bed_block as f32 + 0.5,
-                water_level: dry.base_sea_level,
-                water_dist: self.water_dist,
-                warp_factor: 0.0,
-                cliff_offset: 0.0,
-                riverless_alt: bed_block as f32 + 0.5,
+            // Exact ground is a bank without water beside it: both fix the
+            // column's ground and nothing else. Blend weights (the ring toward
+            // the engine terrain) are refused at load by this engine, so every
+            // ground cell reaching the sampler is exact.
+            AuthoredCell::Bank { bed_block: block } | AuthoredCell::Ground { block, .. } => {
+                debug_assert!(
+                    !matches!(self.cell, AuthoredCell::Ground { weight, .. } if weight != GROUND_EXACT),
+                    "blend ground weights are refused at load"
+                );
+                let alt = top_block_alt(block);
+                EngineColumn {
+                    alt,
+                    // `AuthoredOnly`: a water level at the ground itself, so
+                    // the column fill writes no water (not a NaN/MIN
+                    // sentinel: `get_z_limits` takes a max over it).
+                    water_level: match self.settings.sea_fill {
+                        SeaFill::Auto => dry.base_sea_level,
+                        SeaFill::AuthoredOnly => alt,
+                    },
+                    water_dist: self.water_dist,
+                    warp_factor: 0.0,
+                    cliff_offset: 0.0,
+                    riverless_alt: alt,
+                }
             },
             AuthoredCell::None if self.natural => engine,
             AuthoredCell::None => {
@@ -447,6 +622,17 @@ impl AuthoredColumn {
         }
     }
 
+    /// Whether this is an exact ground-layer cell: the column sampler then
+    /// adds no snow height on top of it (the top block may still be snow).
+    /// Banks keep the Stage-1 behaviour (one block of snow may lie on them).
+    #[inline]
+    pub fn ground_is_exact(&self) -> bool {
+        matches!(self.cell, AuthoredCell::Ground {
+            weight: GROUND_EXACT,
+            ..
+        })
+    }
+
     /// Whether procedural boulders, trees and sprites must not be rooted in
     /// this column ([`RegionManifest::suppress_procedural_in_water`],
     /// [`RegionManifest::exclude_procedural_margin_m`]).
@@ -454,9 +640,10 @@ impl AuthoredColumn {
         self.settings.suppress_procedural_in_water
             && match self.cell {
                 AuthoredCell::Wet { .. } => true,
-                _ => self
-                    .water_dist
-                    .is_some_and(|d| d < self.settings.exclude_procedural_margin_m),
+                AuthoredCell::Bank { .. } | AuthoredCell::Ground { .. } | AuthoredCell::None => {
+                    self.water_dist
+                        .is_some_and(|d| d < self.settings.exclude_procedural_margin_m)
+                },
             }
     }
 
@@ -469,16 +656,26 @@ impl AuthoredColumn {
     }
 }
 
-/// Per-chunk summary of the authored cells, computed once at load.
+/// Per-chunk summary of the authored cells (water, banks and ground),
+/// computed once at load.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChunkWaterSummary {
     pub wet_columns: u32,
+    /// Wet, bank and ground cells.
     pub authored_columns: u32,
+    /// Ground-layer cells (where the water layer authors nothing).
+    pub ground_columns: u32,
+    /// Ground-layer cells below the ocean's top block in a [`SeaFill::Auto`]
+    /// region: a sea floor, under sea water.
+    pub sea_ground_columns: u32,
     /// `i32::MAX` / `i32::MIN` when the chunk has no wet column.
     pub min_surface_block: i32,
     pub max_surface_block: i32,
-    /// Lowest authored ground (bed or bank) block.
+    /// Lowest authored bed or bank block (`i32::MAX` when none).
     pub min_bed_block: i32,
+    /// Lowest ground-layer block (`i32::MAX` when the chunk has no ground
+    /// cell): the below-sea-level rule of [`SeaFill::Auto`] reads it.
+    pub min_ground_cell_block: i32,
 }
 
 impl Default for ChunkWaterSummary {
@@ -486,9 +683,12 @@ impl Default for ChunkWaterSummary {
         Self {
             wet_columns: 0,
             authored_columns: 0,
+            ground_columns: 0,
+            sea_ground_columns: 0,
             min_surface_block: i32::MAX,
             max_surface_block: i32::MIN,
             min_bed_block: i32::MAX,
+            min_ground_cell_block: i32::MAX,
         }
     }
 }
@@ -497,13 +697,24 @@ impl ChunkWaterSummary {
     fn merge(&mut self, o: &Self) {
         self.wet_columns += o.wet_columns;
         self.authored_columns += o.authored_columns;
+        self.ground_columns += o.ground_columns;
+        self.sea_ground_columns += o.sea_ground_columns;
         self.min_surface_block = self.min_surface_block.min(o.min_surface_block);
         self.max_surface_block = self.max_surface_block.max(o.max_surface_block);
         self.min_bed_block = self.min_bed_block.min(o.min_bed_block);
+        self.min_ground_cell_block = self.min_ground_cell_block.min(o.min_ground_cell_block);
     }
 
-    /// At least half of the chunk's columns are authored water.
-    pub fn wet_majority(&self) -> bool { self.wet_columns * 2 >= (CHUNK * CHUNK) as u32 }
+    /// Lowest authored ground block of any kind: wet bed, bank or ground
+    /// cell (`i32::MAX` when none).
+    pub fn min_ground_block(&self) -> i32 { self.min_bed_block.min(self.min_ground_cell_block) }
+
+    /// Columns under water: authored wet cells plus sea-floor ground cells.
+    pub fn water_columns(&self) -> u32 { self.wet_columns + self.sea_ground_columns }
+
+    /// At least half of the chunk's columns are under authored water (or the
+    /// sea over an authored sea floor).
+    pub fn wet_majority(&self) -> bool { self.water_columns() * 2 >= (CHUNK * CHUNK) as u32 }
 }
 
 // --------------------------------------------------------------------------
@@ -521,9 +732,11 @@ struct Region {
     /// One flag per chunk of the box (row-major from the south-west):
     /// unauthored columns keep the natural map.
     partial: Vec<bool>,
-    /// One slot per tile of the region grid, decoded once at load; `None` =
-    /// unlisted (no authored cell).
-    water: Vec<Option<RawTile>>,
+    /// One slot per tile of the region grid and layer, decoded once at
+    /// load; `None` = unlisted (no authored cell of that layer). A
+    /// `[Water, Ground]` region holds both tiles at the same index.
+    water: Vec<Option<WaterTile>>,
+    ground: Vec<Option<GroundTile>>,
     /// Distance-to-water fields, one per tile of the grid.
     dist: Vec<OnceLock<Option<Box<[u8]>>>>,
 }
@@ -551,18 +764,22 @@ impl Region {
     }
 
     #[inline(always)]
-    fn raw(&self, idx: usize) -> Option<&RawTile> { self.water[idx].as_ref() }
+    fn raw(&self, idx: usize) -> Option<&WaterTile> { self.water[idx].as_ref() }
 
     /// Cell state at `wpos` (must be inside the region).
     #[inline]
     fn cell(&self, wpos: Vec2<i32>) -> AuthoredCell {
         let local = wpos - self.min;
         let t = local.map(|e| e.div_euclid(TILE_SIZE));
-        let Some(raw) = self.tile_index(t).and_then(|idx| self.raw(idx)) else {
+        let Some(idx) = self.tile_index(t) else {
             return AuthoredCell::None;
         };
         let c = local - t * TILE_SIZE;
-        cell_of(raw, RawTile::idx(c.x, c.y))
+        cell_of(
+            self.water[idx].as_ref(),
+            self.ground[idx].as_ref(),
+            cell_index(c.x, c.y),
+        )
     }
 
     fn weight(&self, wpos: Vec2<i32>) -> f32 {
@@ -591,23 +808,35 @@ impl Region {
         let t = local.map(|e| e.div_euclid(TILE_SIZE));
         let field = self.dist_field(self.tile_index(t)?)?;
         let c = local - t * TILE_SIZE;
-        let d = field[RawTile::idx(c.x, c.y)];
+        let d = field[cell_index(c.x, c.y)];
         (d != NO_DIST).then(|| d as f32 / 3.0)
     }
 }
 
+/// The one place the layers' precedence is decided: a water cell (wet or
+/// bank) wins; a ground cell under it is checked at load to agree with it.
 #[inline(always)]
-fn cell_of(raw: &RawTile, k: usize) -> AuthoredCell {
-    match (raw.surface_cm(k), raw.bed_cm(k)) {
-        (Some(s), Some(b)) => AuthoredCell::Wet {
-            surface_block: s.div_euclid(100),
-            bed_block: b.div_euclid(100),
-        },
-        (None, Some(b)) => AuthoredCell::Bank {
-            bed_block: b.div_euclid(100),
-        },
-        // `(Some, None)` is refused at load.
-        _ => AuthoredCell::None,
+fn cell_of(water: Option<&WaterTile>, ground: Option<&GroundTile>, k: usize) -> AuthoredCell {
+    if let Some(raw) = water {
+        match (raw.surface_cm(k), raw.bed_cm(k)) {
+            (Some(s), Some(b)) => {
+                return AuthoredCell::Wet {
+                    surface_block: s.div_euclid(100),
+                    bed_block: b.div_euclid(100),
+                };
+            },
+            (None, Some(b)) => {
+                return AuthoredCell::Bank {
+                    bed_block: b.div_euclid(100),
+                };
+            },
+            // `(Some, None)` is refused at load.
+            (Some(_), None) | (None, None) => {},
+        }
+    }
+    match ground.and_then(|g| g.get(k)) {
+        Some((block, weight)) => AuthoredCell::Ground { block, weight },
+        None => AuthoredCell::None,
     }
 }
 
@@ -644,7 +873,7 @@ fn build_dist_field(region: &Region, t: Vec2<i32>) -> Option<Box<[u8]>> {
                 }
                 for i in 0..TILE_SIZE {
                     let wx = o.x + i - origin.x;
-                    if (0..n).contains(&wx) && raw.is_wet(RawTile::idx(i, j)) {
+                    if (0..n).contains(&wx) && raw.is_wet(cell_index(i, j)) {
                         d[(wy * n + wx) as usize] = 0;
                     }
                 }
@@ -682,7 +911,7 @@ fn build_dist_field(region: &Region, t: Vec2<i32>) -> Option<Box<[u8]>> {
         for i in 0..TILE_SIZE {
             let v = d[at(i + apron, j + apron)];
             if v <= cap {
-                out[RawTile::idx(i, j)] = v as u8;
+                out[cell_index(i, j)] = v as u8;
             }
         }
     }
@@ -693,6 +922,58 @@ fn build_dist_field(region: &Region, t: Vec2<i32>) -> Option<Box<[u8]>> {
 // Loaded rasters
 // --------------------------------------------------------------------------
 
+/// Up to this many regions, `region_at` scans them linearly after the union
+/// box check (a few ns); above it, a [`RegionIndex`] narrows the scan.
+pub const LINEAR_SCAN_MAX_REGIONS: usize = 16;
+const INDEX_CELL_LG: i32 = 8;
+
+/// Regions intersecting each 256 m cell of the union box (flattened lists).
+struct RegionIndex {
+    origin: Vec2<i32>,
+    cells: Vec2<i32>,
+    /// `offsets[c]..offsets[c + 1]` indexes `ids` for cell `c`.
+    offsets: Vec<u32>,
+    ids: Vec<u16>,
+}
+
+impl RegionIndex {
+    fn new(regions: &[Region], bounds: Aabr<i32>) -> Self {
+        let origin = bounds.min.map(|e| e >> INDEX_CELL_LG);
+        let cells = bounds.max.map(|e| (e - 1) >> INDEX_CELL_LG) - origin + 1;
+        let mut lists: Vec<Vec<u16>> = vec![Vec::new(); (cells.x * cells.y) as usize];
+        for (i, r) in regions.iter().enumerate() {
+            let c0 = r.min.map(|e| e >> INDEX_CELL_LG) - origin;
+            let c1 = r.max.map(|e| (e - 1) >> INDEX_CELL_LG) - origin;
+            for cy in c0.y..=c1.y {
+                for cx in c0.x..=c1.x {
+                    lists[(cy * cells.x + cx) as usize].push(i as u16);
+                }
+            }
+        }
+        let mut offsets = Vec::with_capacity(lists.len() + 1);
+        let mut ids = Vec::new();
+        offsets.push(0);
+        for l in lists {
+            ids.extend(l);
+            offsets.push(ids.len() as u32);
+        }
+        Self {
+            origin,
+            cells,
+            offsets,
+            ids,
+        }
+    }
+
+    /// Regions that may contain `wpos` (inside the union box).
+    #[inline(always)]
+    fn candidates(&self, wpos: Vec2<i32>) -> &[u16] {
+        let c = wpos.map(|e| e >> INDEX_CELL_LG) - self.origin;
+        let k = (c.y * self.cells.x + c.x) as usize;
+        &self.ids[self.offsets[k] as usize..self.offsets[k + 1] as usize]
+    }
+}
+
 /// All authored rasters of one world. `None` on `WorldSim` when the map has
 /// no manifest.
 pub struct AuthoredRasters {
@@ -700,6 +981,10 @@ pub struct AuthoredRasters {
     /// Union of the region boxes (min inclusive, max exclusive), checked
     /// first so every column outside all regions costs four comparisons.
     bounds: Aabr<i32>,
+    /// With more than [`LINEAR_SCAN_MAX_REGIONS`] regions: which regions
+    /// intersect each 256 m cell of the union box, so a lookup scans only
+    /// those (two far-apart regions make the union box cover much of the map).
+    index: Option<RegionIndex>,
     chunk_summary: HashMap<Vec2<i32>, ChunkWaterSummary>,
     /// sha256 of the canonical manifest (it pins every tile by sha256).
     digest: String,
@@ -830,7 +1115,7 @@ impl AuthoredRasters {
         manifest: Manifest,
         map_size_blocks: Vec2<i32>,
         source: &str,
-        fetch: &dyn Fn(&str, LayerKind, i32, i32) -> Result<Vec<u8>, String>,
+        fetch: &(dyn Fn(&str, LayerKind, i32, i32) -> Result<Vec<u8>, String> + Sync),
     ) -> Result<Self, LoadError> {
         let err = |msg: String| LoadError(format!("authored rasters [{source}]: {msg}"));
         if manifest.schema != MANIFEST_SCHEMA {
@@ -849,12 +1134,21 @@ impl AuthoredRasters {
         );
         // The memory budget comes from the manifest's counts alone, before a
         // single tile is read.
+        // Per layer: a water tile is 256 KiB, a ground tile 192 KiB; the
+        // distance fields (64 KiB per grid tile) exist only for regions that
+        // declare water.
         let mut resident = 0usize;
         for rm in &manifest.regions {
             let size = Vec2::<i32>::from(rm.max) - Vec2::<i32>::from(rm.min);
             let grid = size.map(|e| (e.max(0) + TILE_SIZE - 1) / TILE_SIZE);
-            resident += rm.tiles.len() * BYTES_PER_RAW_TILE
-                + (grid.x.max(0) * grid.y.max(0)) as usize * BYTES_PER_DIST_TILE;
+            resident += rm
+                .tiles
+                .iter()
+                .map(|t| format::resident_tile_bytes(t.layer))
+                .sum::<usize>();
+            if rm.layers.contains(&LayerKind::Water) {
+                resident += (grid.x.max(0) * grid.y.max(0)) as usize * BYTES_PER_DIST_TILE;
+            }
         }
         if resident > RESIDENT_BUDGET_BYTES {
             return Err(err(format!(
@@ -867,7 +1161,8 @@ impl AuthoredRasters {
         }
         // Reserve this manifest's share of the process-wide cap now (released
         // by `Drop`, or below on any error).
-        let reserved = ReservedBytes::reserve(resident, global_resident_cap()).map_err(err)?;
+        let reserved =
+            ReservedBytes::reserve(resident, global_resident_cap().map_err(err)?).map_err(err)?;
         let mut regions: Vec<Region> = Vec::new();
         let mut chunk_summary: HashMap<Vec2<i32>, ChunkWaterSummary> = HashMap::new();
         for rm in manifest.regions {
@@ -890,9 +1185,13 @@ impl AuthoredRasters {
                     rm.tile_size_m, rm.cell_size_m
                 )));
             }
-            if rm.layers != [LayerKind::Water] {
+            if !matches!(
+                rm.layers.as_slice(),
+                [LayerKind::Water] | [LayerKind::Ground] | [LayerKind::Water, LayerKind::Ground]
+            ) {
                 return Err(rerr(format!(
-                    "layers {:?}: this engine supports exactly [Water]",
+                    "layers {:?}: this engine supports [Water], [Ground] or [Water, Ground] (in \
+                     that order)",
                     rm.layers
                 )));
             }
@@ -947,7 +1246,10 @@ impl AuthoredRasters {
             }
             let tiles = (max - min).map(|e| (e + TILE_SIZE - 1) / TILE_SIZE);
             let n_tiles = (tiles.x * tiles.y) as usize;
-            let mut water: Vec<Option<RawTile>> = (0..n_tiles).map(|_| None).collect();
+            // The listing first (cheap, ordered errors), then every tile
+            // fetched, checked and decoded in parallel on the current pool.
+            let mut seen = hashbrown::HashSet::new();
+            let mut jobs: Vec<(LayerKind, Vec2<i32>, usize, &str)> = Vec::new();
             for tm in &rm.tiles {
                 let t = Vec2::new(tm.tx, tm.ty);
                 if t.x < 0 || t.y < 0 || t.x >= tiles.x || t.y >= tiles.y {
@@ -955,28 +1257,93 @@ impl AuthoredRasters {
                         "tile {t:?} lies outside the region grid {tiles:?}"
                     )));
                 }
-                let idx = (t.y * tiles.x + t.x) as usize;
-                if water[idx].is_some() {
-                    return Err(rerr(format!("tile {t:?} listed twice")));
+                if !rm.layers.contains(&tm.layer) {
+                    return Err(rerr(format!(
+                        "tile {t:?} is a {:?} tile, a layer the region does not declare ({:?})",
+                        tm.layer, rm.layers
+                    )));
                 }
-                let bytes = fetch(&id, tm.layer, t.x, t.y).map_err(&rerr)?;
+                let idx = (t.y * tiles.x + t.x) as usize;
+                if !seen.insert((tm.layer, idx)) {
+                    return Err(rerr(match tm.layer {
+                        LayerKind::Water => format!("tile {t:?} listed twice"),
+                        LayerKind::Ground => format!("{:?} tile {t:?} listed twice", tm.layer),
+                    }));
+                }
+                jobs.push((tm.layer, t, idx, tm.sha256.as_str()));
+            }
+            // Fetch + sha256 check of one listed tile.
+            let fetch_checked = |layer: LayerKind, t: Vec2<i32>, want_sha: &str| {
+                let bytes = fetch(&id, layer, t.x, t.y)?;
                 let sha = format::sha256_hex(&bytes);
-                if !sha.eq_ignore_ascii_case(&tm.sha256) {
+                if !sha.eq_ignore_ascii_case(want_sha) {
                     let hint = if bytes.starts_with(b"version https://git-lfs") {
                         " (the file is a Git LFS pointer: fetch the LFS objects of this asset root)"
                     } else {
                         ""
                     };
-                    return Err(rerr(format!(
-                        "tile {t:?} sha256 {sha} does not match the manifest ({}){hint}",
-                        tm.sha256
-                    )));
+                    let what = match layer {
+                        LayerKind::Water => format!("tile {t:?}"),
+                        LayerKind::Ground => format!("{layer:?} tile {t:?}"),
+                    };
+                    return Err(format!(
+                        "{what} sha256 {sha} does not match the manifest ({want_sha}){hint}"
+                    ));
                 }
-                // Decoded once, here; the compressed bytes are dropped.
-                let raw = format::decode_water(&bytes, min + t * TILE_SIZE)
-                    .map_err(|e| rerr(format!("tile {t:?}: {e}")))?;
-                water[idx] = Some(raw);
+                Ok(bytes)
+            };
+            use rayon::prelude::*;
+            // Water tiles first (the ground rules compare against them), each
+            // decoded once; the compressed bytes are dropped. Results are
+            // consumed in listing order, so the first error is deterministic.
+            let decoded: Vec<Result<(usize, WaterTile), String>> = jobs
+                .par_iter()
+                .filter(|j| j.0 == LayerKind::Water)
+                .map(|&(layer, t, idx, want_sha)| {
+                    let bytes = fetch_checked(layer, t, want_sha)?;
+                    format::decode_water(&bytes, min + t * TILE_SIZE)
+                        .map(|w| (idx, w))
+                        .map_err(|e| format!("tile {t:?}: {e}"))
+                })
+                .collect();
+            let mut water: Vec<Option<WaterTile>> = (0..n_tiles).map(|_| None).collect();
+            for d in decoded {
+                let (idx, w) = d.map_err(&rerr)?;
+                water[idx] = Some(w);
             }
+            // Ground tiles: decode, check the rules that need the centimetres
+            // (range, weights, agreement with the water layer) and pack, one
+            // tile per task, so only a tile per thread is ever held in cm.
+            let decoded: Vec<Result<(usize, Result<GroundTile, Problems>), String>> = jobs
+                .par_iter()
+                .filter(|j| j.0 == LayerKind::Ground)
+                .map(|&(layer, t, idx, want_sha)| {
+                    let bytes = fetch_checked(layer, t, want_sha)?;
+                    let origin = min + t * TILE_SIZE;
+                    let cm = format::decode_ground(&bytes, origin)
+                        .map_err(|e| format!("{layer:?} tile {t:?}: {e}"))?;
+                    let problems = validate_ground_tile(&cm, water[idx].as_ref());
+                    Ok((
+                        idx,
+                        if problems.count > 0 {
+                            Err(problems)
+                        } else {
+                            GroundTile::from_cm(&cm)
+                                .map_err(|e| format!("{layer:?} tile {t:?}: {e}"))
+                                .map(Ok)?
+                        },
+                    ))
+                })
+                .collect();
+            let mut ground: Vec<Option<GroundTile>> = (0..n_tiles).map(|_| None).collect();
+            let mut problems = Problems::default();
+            for d in decoded {
+                match d.map_err(&rerr)? {
+                    (idx, Ok(g)) => ground[idx] = Some(g),
+                    (_, Err(p)) => problems.merge(p),
+                }
+            }
+            problems.into_result().map_err(&rerr)?;
             let chunks = (max - min) / CHUNK;
             let mut partial = vec![rm.allow_partial; (chunks.x * chunks.y) as usize];
             for &(cx, cy) in &rm.allow_partial_chunks {
@@ -995,9 +1362,17 @@ impl AuthoredRasters {
                 let c = (p - min).map(|e| e.div_euclid(CHUNK));
                 partial[(c.y * chunks.x + c.x) as usize]
             };
-            let (authored_bounds, natural_seams) =
-                validate_region(min, max, tiles, &water, &is_partial, &mut chunk_summary)
-                    .map_err(&rerr)?;
+            let (authored_bounds, natural_seams) = validate_region(
+                min,
+                max,
+                tiles,
+                &water,
+                &ground,
+                rm.sea_fill,
+                &is_partial,
+                &mut chunk_summary,
+            )
+            .map_err(&rerr)?;
             if natural_seams > 0 {
                 info!(
                     source,
@@ -1042,10 +1417,12 @@ impl AuthoredRasters {
                     suppress_procedural_in_water: rm.suppress_procedural_in_water,
                     exclude_procedural_margin_m: rm.exclude_procedural_margin_m as f32,
                     aquatic_profile,
+                    sea_fill: rm.sea_fill,
                 },
                 budget: rm.consistency,
                 partial,
                 water,
+                ground,
                 dist: (0..n_tiles).map(|_| OnceLock::new()).collect(),
             });
         }
@@ -1057,9 +1434,12 @@ impl AuthoredRasters {
             })
             .reduce(|a, b| a.union(b))
             .expect("at least one region");
+        let index =
+            (regions.len() > LINEAR_SCAN_MAX_REGIONS).then(|| RegionIndex::new(&regions, bounds));
         Ok(Self {
             regions,
             bounds,
+            index,
             chunk_summary,
             digest,
             resident_bytes: reserved.keep(),
@@ -1075,7 +1455,14 @@ impl AuthoredRasters {
         {
             return None;
         }
-        self.regions.iter().find(|r| r.contains(wpos))
+        match &self.index {
+            None => self.regions.iter().find(|r| r.contains(wpos)),
+            Some(index) => index
+                .candidates(wpos)
+                .iter()
+                .map(|&i| &self.regions[i as usize])
+                .find(|r| r.contains(wpos)),
+        }
     }
 
     /// The authored column at `wpos` for the column sampler, or `None`
@@ -1104,6 +1491,15 @@ impl AuthoredRasters {
     #[inline]
     pub fn cell_at(&self, wpos: Vec2<i32>) -> Option<AuthoredCell> {
         Some(self.region_at(wpos)?.cell(wpos))
+    }
+
+    /// The authored cell at `wpos` with its region's [`SeaFill`] and whether
+    /// its chunk is partial (one region lookup), or `None` outside every
+    /// region.
+    #[inline]
+    pub fn cell_detail_at(&self, wpos: Vec2<i32>) -> Option<(AuthoredCell, SeaFill, bool)> {
+        let r = self.region_at(wpos)?;
+        Some((r.cell(wpos), r.settings.sea_fill, r.partial_at(wpos)))
     }
 
     /// The authored water at `wpos`, if `wpos` is an authored wet column of
@@ -1152,13 +1548,15 @@ impl AuthoredRasters {
     }
 
     /// The stone floor a chunk needs under its own authored ground:
-    /// [`FLOOR_MARGIN_BLOCKS`] below its lowest authored bed or bank block.
+    /// [`FLOOR_MARGIN_BLOCKS`] below its lowest authored bed, bank or ground
+    /// block (the caller takes the min with the sim's floor, so raised ground
+    /// never lowers it).
     /// `None` for a chunk without authored cells (outside every region in
     /// particular), whose floor stays the sim's.
     pub fn floor_block(&self, chunk_pos: Vec2<i32>) -> Option<i32> {
         self.chunk_summary
             .get(&chunk_pos)
-            .map(|s| s.min_bed_block - FLOOR_MARGIN_BLOCKS)
+            .map(|s| s.min_ground_block() - FLOOR_MARGIN_BLOCKS)
     }
 
     /// Build every distance field now (in parallel on the current rayon
@@ -1262,12 +1660,71 @@ impl AuthoredRasters {
         }
     }
 
-    /// [`Self::check_consistency`] against a generated sim.
+    /// Ground below sea level in a [`SeaFill::Auto`] region fills with sea
+    /// water, which is only intended on the sea: every chunk holding a
+    /// ground cell below the ocean's top block must be one the sim table
+    /// calls ocean or underwater (`table_sea(chunk)`), else this is an error
+    /// that names `sea_fill: AuthoredOnly`. [`SeaFill::AuthoredOnly`] regions
+    /// are dry below sea level and exempt.
+    pub fn check_sea_fill(
+        &self,
+        source: &str,
+        table_sea: impl Fn(Vec2<i32>) -> Option<bool>,
+    ) -> Result<(), LoadError> {
+        let mut errors = Vec::new();
+        for r in self
+            .regions
+            .iter()
+            .filter(|r| r.settings.sea_fill == SeaFill::Auto)
+        {
+            let (c0, c1) = (r.min / CHUNK, r.max / CHUNK);
+            let mut inland = Vec::new();
+            let mut lowest = i32::MAX;
+            for cy in c0.y..c1.y {
+                for cx in c0.x..c1.x {
+                    let cpos = Vec2::new(cx, cy);
+                    let Some(s) = self.chunk_summary.get(&cpos) else {
+                        continue;
+                    };
+                    if s.min_ground_cell_block < SEA_TOP_BLOCK && table_sea(cpos) != Some(true) {
+                        inland.push(cpos);
+                        lowest = lowest.min(s.min_ground_cell_block);
+                    }
+                }
+            }
+            if !inland.is_empty() {
+                errors.push(format!(
+                    "region '{}': {} chunk(s) the sim table calls dry land hold ground cells \
+                     below the ocean's top block {SEA_TOP_BLOCK} (lowest block {lowest}), e.g. \
+                     {:?}: with sea_fill: Auto they would fill with sea water. Author the water \
+                     there, raise the ground, or set sea_fill: AuthoredOnly to keep them dry",
+                    r.id,
+                    inland.len(),
+                    &inland[..inland.len().min(5)]
+                ));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(LoadError(format!(
+                "authored rasters [{source}]: {}",
+                errors.join("; ")
+            )))
+        }
+    }
+
+    /// [`Self::check_sea_fill`] then [`Self::check_consistency`] against a
+    /// generated sim.
     pub(crate) fn check_consistency_with_sim(
         &self,
         source: &str,
         sim: &WorldSim,
     ) -> Result<Vec<RegionConsistency>, LoadError> {
+        self.check_sea_fill(source, |cpos| {
+            sim.get(cpos)
+                .map(|c| c.river.is_ocean() || c.is_underwater())
+        })?;
         self.check_consistency(source, |cpos| {
             sim.get(cpos)
                 .map(|c| c.river.river_kind.is_some() || c.is_underwater())
@@ -1286,68 +1743,182 @@ pub(crate) fn io_error_kind(err: &assets::Error) -> Option<std::io::ErrorKind> {
     None
 }
 
+/// Collects a validation pass's problems: the first few messages and the
+/// total count.
+#[derive(Default)]
+struct Problems {
+    count: usize,
+    first: Vec<String>,
+}
+
+impl Problems {
+    const SHOWN: usize = 10;
+
+    fn report(&mut self, msg: String) {
+        self.count += 1;
+        if self.first.len() < Self::SHOWN {
+            self.first.push(msg);
+        }
+    }
+
+    fn merge(&mut self, o: Problems) {
+        self.count += o.count;
+        for m in o.first {
+            if self.first.len() < Self::SHOWN {
+                self.first.push(m);
+            }
+        }
+    }
+
+    fn into_result(self) -> Result<(), String> {
+        if self.count == 0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "{} invalid cell(s), first: {}",
+                self.count,
+                self.first.join("; ")
+            ))
+        }
+    }
+}
+
+/// The ground-layer rules that need the centimetres, per cell of one tile
+/// (`water`: the region's water tile at the same index, if listed):
+///
+/// * the top block lies in [`format::GROUND_BLOCK_RANGE`];
+/// * the weight is [`GROUND_EXACT`] (blend weights, the ring toward the engine
+///   terrain, are not supported by this engine yet);
+/// * under an authored wet cell the ground equals the bed, under a bank it
+///   equals the bank (one truth per column: a disagreement is a stale pin).
+fn validate_ground_tile(g: &GroundTileCm, water: Option<&WaterTile>) -> Problems {
+    let mut p = Problems::default();
+    for j in 0..TILE_SIZE {
+        for i in 0..TILE_SIZE {
+            let k = cell_index(i, j);
+            let Some(cm) = g.ground[k] else {
+                continue;
+            };
+            let wpos = g.origin + Vec2::new(i, j);
+            let weight = g.weight[k];
+            let block = cm.div_euclid(100);
+            if !format::GROUND_BLOCK_RANGE.contains(&block) {
+                p.report(format!(
+                    "{wpos:?}: ground {cm} cm (block {block}) is outside the blocks {:?} the \
+                     engine can hold",
+                    format::GROUND_BLOCK_RANGE
+                ));
+            }
+            if weight != GROUND_EXACT {
+                p.report(format!(
+                    "{wpos:?}: ground weight {weight}: this engine reads exact ground cells only \
+                     (weight {GROUND_EXACT}); blend weights need the blend ring support of a \
+                     newer engine"
+                ));
+            }
+            let Some(w) = water else {
+                continue;
+            };
+            match (w.surface_cm(k), w.bed_cm(k)) {
+                (Some(_), Some(bed)) if cm != bed || weight != GROUND_EXACT => p.report(format!(
+                    "{wpos:?}: ground {cm} cm (weight {weight}) under authored water must be \
+                     exact and equal the bed ({bed} cm): the layers disagree (stale pins?)"
+                )),
+                (None, Some(bank)) if cm != bank || weight != GROUND_EXACT => p.report(format!(
+                    "{wpos:?}: ground {cm} cm (weight {weight}) under an authored bank must be \
+                     exact and equal the bank ({bank} cm): the layers disagree (stale pins?)"
+                )),
+                _ => {},
+            }
+        }
+    }
+    p
+}
+
 /// The containment rules over one region's decoded tiles, plus the
 /// per-chunk summaries; returns the bounding box of the authored cells:
 ///
-/// * wet: bed block below surface block, surface not below the ocean's top;
-/// * bank: ground not below the ocean's top (it would flood);
-/// * every 4-neighbour of a wet cell inside the region is wet, or a bank at
-///   least as high as the water (otherwise the water stands as a wall);
+/// * wet: bed block below surface block; surface not below the ocean's top
+///   ([`SeaFill::Auto`]; a lake below 0 m is fine in
+///   [`SeaFill::AuthoredOnly`]);
+/// * bank: ground not below the ocean's top in [`SeaFill::Auto`] (it would
+///   flood);
+/// * every 4-neighbour of a wet cell inside the region is wet, or a bank or
+///   exact ground cell at least as high as the water (otherwise the water
+///   stands as a wall);
 /// * no authored cell beyond the region box; no surface without a bed.
+///
+/// Ground cells below sea level in a [`SeaFill::Auto`] region need the sim
+/// table (ocean chunks only): [`AuthoredRasters::check_consistency`] checks
+/// them.
 fn validate_region(
     min: Vec2<i32>,
     max: Vec2<i32>,
     tiles: Vec2<i32>,
-    water: &[Option<RawTile>],
-    partial: &dyn Fn(Vec2<i32>) -> bool,
+    water: &[Option<WaterTile>],
+    ground: &[Option<GroundTile>],
+    sea_fill: SeaFill,
+    partial: &(dyn Fn(Vec2<i32>) -> bool + Sync),
     summary: &mut HashMap<Vec2<i32>, ChunkWaterSummary>,
 ) -> Result<(Option<Aabr<i32>>, usize), String> {
+    use rayon::prelude::*;
+    const CHUNKS_PER_TILE: i32 = TILE_SIZE / CHUNK;
     let cross_tile_cell = |wpos: Vec2<i32>| -> AuthoredCell {
         let local = wpos - min;
         let t = local.map(|e| e.div_euclid(TILE_SIZE));
         if t.x < 0 || t.y < 0 || t.x >= tiles.x || t.y >= tiles.y {
             return AuthoredCell::None;
         }
-        match &water[(t.y * tiles.x + t.x) as usize] {
-            Some(raw) => {
-                let c = local - t * TILE_SIZE;
-                cell_of(raw, RawTile::idx(c.x, c.y))
-            },
-            None => AuthoredCell::None,
-        }
+        let idx = (t.y * tiles.x + t.x) as usize;
+        let c = local - t * TILE_SIZE;
+        cell_of(
+            water[idx].as_ref(),
+            ground[idx].as_ref(),
+            cell_index(c.x, c.y),
+        )
     };
     let inside = |p: Vec2<i32>| p.x >= min.x && p.y >= min.y && p.x < max.x && p.y < max.y;
-    let mut problems: Vec<String> = Vec::new();
-    let mut count = 0usize;
-    let mut report = |msg: String| {
-        count += 1;
-        if problems.len() < 10 {
-            problems.push(msg);
-        }
-    };
-    let mut bounds: Option<Aabr<i32>> = None;
-    let mut natural_seams = 0usize;
-    const CHUNKS_PER_TILE: i32 = TILE_SIZE / CHUNK;
-    for ty in 0..tiles.y {
-        for tx in 0..tiles.x {
-            let Some(raw) = &water[(ty * tiles.x + tx) as usize] else {
-                continue;
-            };
+    let authored_only = sea_fill == SeaFill::AuthoredOnly;
+    struct TileResult {
+        problems: Problems,
+        bounds: Option<Aabr<i32>>,
+        natural_seams: usize,
+        local: Vec<ChunkWaterSummary>,
+    }
+    let per_tile: Vec<Option<TileResult>> = (0..water.len())
+        .into_par_iter()
+        .map(|idx| {
+            let w = water[idx].as_ref();
+            let g = ground[idx].as_ref();
+            if w.is_none() && g.is_none() {
+                return None;
+            }
+            let (tx, ty) = (idx as i32 % tiles.x, idx as i32 / tiles.x);
             let origin = min + Vec2::new(tx, ty) * TILE_SIZE;
-            let mut local =
-                [ChunkWaterSummary::default(); (CHUNKS_PER_TILE * CHUNKS_PER_TILE) as usize];
+            let mut r = TileResult {
+                problems: Problems::default(),
+                bounds: None,
+                natural_seams: 0,
+                local: vec![
+                    ChunkWaterSummary::default();
+                    (CHUNKS_PER_TILE * CHUNKS_PER_TILE) as usize
+                ],
+            };
             for j in 0..TILE_SIZE {
                 for i in 0..TILE_SIZE {
-                    let k = RawTile::idx(i, j);
-                    if raw.surface[k] == format::NONE && raw.bed[k] == format::NONE {
+                    let k = cell_index(i, j);
+                    let authored = w.is_some_and(|w| w.is_authored(k))
+                        || g.is_some_and(|g| g.get(k).is_some());
+                    if !authored {
                         continue;
                     }
                     let wpos = origin + Vec2::new(i, j);
                     if !inside(wpos) {
-                        report(format!("{wpos:?}: authored cell outside the region box"));
+                        r.problems
+                            .report(format!("{wpos:?}: authored cell outside the region box"));
                         continue;
                     }
-                    bounds = Some(match bounds {
+                    r.bounds = Some(match r.bounds {
                         None => Aabr {
                             min: wpos,
                             max: wpos + 1,
@@ -1357,9 +1928,9 @@ fn validate_region(
                             max: Vec2::partial_max(b.max, wpos + 1),
                         },
                     });
-                    let entry = &mut local[((j / CHUNK) * CHUNKS_PER_TILE + i / CHUNK) as usize];
+                    let entry = &mut r.local[((j / CHUNK) * CHUNKS_PER_TILE + i / CHUNK) as usize];
                     entry.authored_columns += 1;
-                    match cell_of(raw, k) {
+                    match cell_of(w, g, k) {
                         AuthoredCell::Wet {
                             surface_block,
                             bed_block,
@@ -1369,15 +1940,16 @@ fn validate_region(
                             entry.max_surface_block = entry.max_surface_block.max(surface_block);
                             entry.min_bed_block = entry.min_bed_block.min(bed_block);
                             if bed_block >= surface_block {
-                                report(format!(
+                                r.problems.report(format!(
                                     "{wpos:?}: bed block {bed_block} is not below surface block \
                                      {surface_block}"
                                 ));
                             }
-                            if surface_block < SEA_TOP_BLOCK {
-                                report(format!(
+                            if surface_block < SEA_TOP_BLOCK && !authored_only {
+                                r.problems.report(format!(
                                     "{wpos:?}: surface block {surface_block} is below the ocean's \
-                                     top block {SEA_TOP_BLOCK}"
+                                     top block {SEA_TOP_BLOCK} (a lake below sea level needs \
+                                     sea_fill: AuthoredOnly)"
                                 ));
                             }
                             for d in [
@@ -1395,7 +1967,7 @@ fn validate_region(
                                 let ncell = if (0..TILE_SIZE).contains(&ni)
                                     && (0..TILE_SIZE).contains(&nj)
                                 {
-                                    cell_of(raw, RawTile::idx(ni, nj))
+                                    cell_of(w, g, cell_index(ni, nj))
                                 } else {
                                     cross_tile_cell(n)
                                 };
@@ -1403,16 +1975,32 @@ fn validate_region(
                                     AuthoredCell::Wet { .. } => {},
                                     AuthoredCell::Bank { bed_block: nb } if nb >= surface_block => {
                                     },
-                                    AuthoredCell::Bank { bed_block: nb } => report(format!(
-                                        "{wpos:?}: water (top block {surface_block}) next to bank \
-                                         {n:?} whose ground top {nb} is lower: the water would \
-                                         stand as a wall"
-                                    )),
+                                    AuthoredCell::Bank { bed_block: nb } => {
+                                        r.problems.report(format!(
+                                            "{wpos:?}: water (top block {surface_block}) next to \
+                                             bank {n:?} whose ground top {nb} is lower: the water \
+                                             would stand as a wall"
+                                        ))
+                                    },
+                                    // A quay, a canyon wall: exact ground at
+                                    // least as high holds the water.
+                                    AuthoredCell::Ground {
+                                        block: nb,
+                                        weight: GROUND_EXACT,
+                                    } if nb >= surface_block => {},
+                                    AuthoredCell::Ground { block: nb, weight } => {
+                                        r.problems.report(format!(
+                                            "{wpos:?}: water (top block {surface_block}) next to \
+                                             ground {n:?} (top block {nb}, weight {weight}) that \
+                                             is lower or not exact: the water would stand as a \
+                                             wall"
+                                        ))
+                                    },
                                     // A partial chunk's unauthored column is
                                     // the natural map: the author edits the
                                     // natural water there, seam included.
-                                    AuthoredCell::None if partial(n) => natural_seams += 1,
-                                    AuthoredCell::None => report(format!(
+                                    AuthoredCell::None if partial(n) => r.natural_seams += 1,
+                                    AuthoredCell::None => r.problems.report(format!(
                                         "{wpos:?}: water next to unauthored column {n:?} inside \
                                          the region; write a bank cell there, or declare its \
                                          chunk partial (allow_partial_chunks) to meet the natural \
@@ -1423,37 +2011,56 @@ fn validate_region(
                         },
                         AuthoredCell::Bank { bed_block } => {
                             entry.min_bed_block = entry.min_bed_block.min(bed_block);
-                            if bed_block < SEA_TOP_BLOCK {
-                                report(format!(
+                            if bed_block < SEA_TOP_BLOCK && !authored_only {
+                                r.problems.report(format!(
                                     "{wpos:?}: bank ground block {bed_block} is below the ocean's \
-                                     top block {SEA_TOP_BLOCK} and would flood"
+                                     top block {SEA_TOP_BLOCK} and would flood (dry ground below \
+                                     sea level needs sea_fill: AuthoredOnly)"
                                 ));
                             }
                         },
+                        AuthoredCell::Ground { block, .. } => {
+                            entry.ground_columns += 1;
+                            entry.sea_ground_columns +=
+                                (!authored_only && block < SEA_TOP_BLOCK) as u32;
+                            entry.min_ground_cell_block = entry.min_ground_cell_block.min(block);
+                        },
                         AuthoredCell::None => {
-                            report(format!("{wpos:?}: surface without a bed"));
+                            r.problems
+                                .report(format!("{wpos:?}: surface without a bed"));
                         },
                     }
                 }
             }
-            for (n, s) in local.iter().enumerate() {
-                if s.authored_columns > 0 {
-                    let c = (origin / CHUNK)
-                        + Vec2::new(n as i32 % CHUNKS_PER_TILE, n as i32 / CHUNKS_PER_TILE);
-                    summary.entry(c).or_default().merge(s);
-                }
+            Some(r)
+        })
+        .collect();
+    let mut problems = Problems::default();
+    let mut bounds: Option<Aabr<i32>> = None;
+    let mut natural_seams = 0usize;
+    for (idx, r) in per_tile.into_iter().enumerate() {
+        let Some(r) = r else {
+            continue;
+        };
+        problems.merge(r.problems);
+        natural_seams += r.natural_seams;
+        bounds = match (bounds, r.bounds) {
+            (Some(a), Some(b)) => Some(a.union(b)),
+            (a, b) => a.or(b),
+        };
+        let origin = min + Vec2::new(idx as i32 % tiles.x, idx as i32 / tiles.x) * TILE_SIZE;
+        for (n, s) in r.local.iter().enumerate() {
+            if s.authored_columns > 0 {
+                let c = (origin / CHUNK)
+                    + Vec2::new(n as i32 % CHUNKS_PER_TILE, n as i32 / CHUNKS_PER_TILE);
+                summary.entry(c).or_default().merge(s);
             }
         }
     }
-    if count == 0 {
-        Ok((bounds, natural_seams))
-    } else {
-        Err(format!(
-            "{count} invalid cell(s), first: {}",
-            problems.join("; ")
-        ))
-    }
+    problems.into_result()?;
+    Ok((bounds, natural_seams))
 }
 
+#[cfg(test)] mod ground_real_world_tests;
 #[cfg(test)] mod real_world_tests;
 #[cfg(test)] mod tests;

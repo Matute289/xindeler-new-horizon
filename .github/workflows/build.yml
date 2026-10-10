@@ -79,6 +79,25 @@ jobs:
           git lfs install --local
           git lfs pull
 
+      - name: Check authored raster tiles are present (singleplayer needs them)
+        # XINDELER (NH-161): singleplayer runs an embedded server from this
+        # bundle; a map that ships an authored raster manifest
+        # (`<map>_authored_rasters.ron`, water/ground layers) refuses to
+        # generate if a listed tile is missing or still an LFS pointer.
+        run: |
+          shopt -s nullglob
+          for m in assets/world/map/*_authored_rasters.ron; do
+            stem=$(basename "$m" _authored_rasters.ron)
+            tiles=(assets/world/map/"${stem}"_ar_*.bin)
+            for t in "${tiles[@]}"; do
+              if head -c 23 "$t" | grep -q "version https://git-lfs"; then
+                echo "::error::$t is a Git LFS pointer, not the tile"
+                exit 1
+              fi
+            done
+            echo "$m: ${#tiles[@]} tile file(s)"
+          done
+
       - name: Package assets.tar.gz
         # Q7=A (worksheet): one shared assets archive, not bundled per
         # platform — 467 MB once, not ×6.

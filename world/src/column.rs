@@ -1387,6 +1387,14 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                     sub_surface_color,
                 )
             };
+            // XINDELER: an exact authored ground cell keeps its height under
+            // snow (the top block turns to snow, it does not grow one); see
+            // `crate::authored_raster`.
+            let snow_height = if authored.is_some_and(|a| a.ground_is_exact()) {
+                0.0
+            } else {
+                snow_height
+            };
             (
                 alt + snow_height,
                 ground,

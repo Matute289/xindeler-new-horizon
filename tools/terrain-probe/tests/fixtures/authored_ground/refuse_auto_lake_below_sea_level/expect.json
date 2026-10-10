@@ -1,0 +1,14 @@
+{
+  "message": "a lake below sea level needs sea_fill: AuthoredOnly",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "75570598d82630a594350ac4d669d125c5ecdd6a4b15a92c6723b91a31d8a096",
+    "cromatolis_v0_ar_fixture_ground_0_1.bin": "f79f03ac8897fae135ac56cbcfd09002a6436cfe3b84f1b6999792aaeda665a8",
+    "cromatolis_v0_ar_fixture_ground_1_0.bin": "fd825a589c27e2c2752e57b0171f715666ce17e541cb22ff090f74cfef754f46",
+    "cromatolis_v0_ar_fixture_ground_1_1.bin": "db2ad9d69a69f37d6333b04bee00adbca75fb9bc12ec2c9b8d9db0483723f9fb",
+    "cromatolis_v0_ar_fixture_water_0_0.bin": "c06ab8a079a63dfd6bcfe9c7d6069f56f0b9f8b595019304449245ae6ba6ad13",
+    "cromatolis_v0_ar_fixture_water_0_1.bin": "2d756c968e8cb927d2c54d0794d7ad2a90a615a9db397220085461943bb37f62",
+    "cromatolis_v0_ar_fixture_water_1_0.bin": "bf29b7e8558c2371c0b7e640b28e2f425e690c65f52904a5e7a86f7e08eb5307",
+    "cromatolis_v0_ar_fixture_water_1_1.bin": "29c0fcbc95d8c25054bbb893aa516c418c508d28986550c8e930ce7cae7b2e1c"
+  },
+  "verdict": "refuse"
+}

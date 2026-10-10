@@ -1,0 +1,7 @@
+{
+  "message": "weight is 0",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "25eb4cf8ac4f7a7d338ff81cddcc16e85cf2ff90f4a134e2c8dbf2fc9aaf5a7b"
+  },
+  "verdict": "refuse"
+}

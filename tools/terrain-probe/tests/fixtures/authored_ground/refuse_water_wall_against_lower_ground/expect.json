@@ -1,0 +1,14 @@
+{
+  "message": "would stand as a wall",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "61f73bdf3420dd709166243ad1410fcec7180347ea1f7b3c828f305f5356dec4",
+    "cromatolis_v0_ar_fixture_ground_0_1.bin": "e2b44d809a05871c31b7d786c18606699fd71ae86f219e5cad5c64995d6abc77",
+    "cromatolis_v0_ar_fixture_ground_1_0.bin": "a6e4e62c350c48c4f7a12dc604ff5a34084fcb243f7093ca569797f58f83e937",
+    "cromatolis_v0_ar_fixture_ground_1_1.bin": "7b41a2f6157b55d1d152984c252b69df7cea2f6c4b01b17b8a889b7aaa35306f",
+    "cromatolis_v0_ar_fixture_water_0_0.bin": "6b0c8e47aa7a3dcb415d6382e98d8deed446f90f8d0cd20fe9409dd980cbfc5e",
+    "cromatolis_v0_ar_fixture_water_0_1.bin": "3fd53c17c4d88c4a2ba483fe433aa9548f7fccedac289401662195b2d45c8df0",
+    "cromatolis_v0_ar_fixture_water_1_0.bin": "c1b08deb8e26f704266f08a34138793169d3736d795c4701e35ba1d70f2fb77a",
+    "cromatolis_v0_ar_fixture_water_1_1.bin": "121b4f45235fd97a6d93dc822f9ec4c51d60c663d641dcec209f7bfaab70789f"
+  },
+  "verdict": "refuse"
+}

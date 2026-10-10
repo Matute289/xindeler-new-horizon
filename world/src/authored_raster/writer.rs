@@ -4,15 +4,17 @@
 //! The production writer is the open-world exporter; this one exists so the
 //! engine side can be tested end to end without it: tests and the
 //! `terrain-probe aw-write` tool paint synthetic water (straight rivers,
-//! slot canyons, lakes, straits, thin strips) or import a raw raster, and get
-//! byte-exact tiles plus a manifest with their sha256.
+//! slot canyons, lakes, straits, thin strips) and ground (plateaus, trenches,
+//! ramps, cliffs), or import a raw raster, and get byte-exact tiles plus a
+//! manifest with their sha256. A region's layers follow from what it paints:
+//! `[Water]` (also for an empty region), `[Ground]` or `[Water, Ground]`.
 //!
 //! Painting is in block-column space: a column `(x, y)` belongs to a shape
 //! when its centre `(x + 0.5, y + 0.5)` does.
 
 use super::{
-    ConsistencyBudget, Manifest, RegionManifest, TileManifest,
-    format::{self, LayerKind, TILE_CELLS, TILE_SIZE},
+    ConsistencyBudget, Manifest, RegionManifest, SeaFill, TileManifest,
+    format::{self, GROUND_EXACT, LayerKind, TILE_CELLS, TILE_SIZE},
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -23,6 +25,12 @@ use vek::*;
 pub struct CellCm {
     pub surface: Option<i32>,
     pub bed: Option<i32>,
+    /// Ground layer: centimetres and weight.
+    pub ground: Option<(i32, u8)>,
+}
+
+impl CellCm {
+    fn has_water(&self) -> bool { self.surface.is_some() || self.bed.is_some() }
 }
 
 /// A region to write.
@@ -55,6 +63,9 @@ pub struct RegionSpec {
     /// Passed through to [`RegionManifest::consistency`].
     #[serde(default)]
     pub consistency: ConsistencyBudget,
+    /// Passed through to [`RegionManifest::sea_fill`].
+    #[serde(default)]
+    pub sea_fill: SeaFill,
 }
 
 impl RegionSpec {
@@ -79,6 +90,7 @@ impl RegionSpec {
             allow_partial_chunks: Vec::new(),
             aquatic_ecology_profile: None,
             consistency: ConsistencyBudget::default(),
+            sea_fill: SeaFill::Auto,
         }
     }
 }
@@ -144,6 +156,34 @@ pub enum PaintOp {
         #[serde(default)]
         bed_cm: Option<i32>,
     },
+    /// Ground-layer cells at a constant altitude (water cells keep
+    /// precedence where both are painted).
+    Ground {
+        shape: Shape,
+        ground_cm: i32,
+        /// [`GROUND_EXACT`] unless given (a blend weight, which this engine
+        /// refuses at load: for refusal tests).
+        #[serde(default = "exact_weight")]
+        weight: u8,
+    },
+    /// Ground-layer cells on a plane (a ramp): at a column centre `(px, py)`
+    /// the ground is `round(origin_cm + (px - origin.0) * cm_per_m.0 + (py -
+    /// origin.1) * cm_per_m.1)`, exact.
+    GroundPlane {
+        shape: Shape,
+        origin: (f32, f32),
+        origin_cm: i32,
+        cm_per_m: (f32, f32),
+    },
+    /// Clear the ground layer only.
+    ClearGround { shape: Shape },
+    /// Import a raw ground raster: `i32` little-endian centimetres, rows from
+    /// the south, `i32::MIN` = not authored; exact cells.
+    GroundRaster {
+        origin: (i32, i32),
+        size: (i32, i32),
+        ground_file: PathBuf,
+    },
     /// Import a raw raster: `i32` little-endian centimetres, rows from the
     /// south, `i32::MIN` = not authored; applied where either layer is set.
     Raster {
@@ -152,6 +192,23 @@ pub enum PaintOp {
         surface_file: PathBuf,
         bed_file: PathBuf,
     },
+}
+
+fn exact_weight() -> u8 { GROUND_EXACT }
+
+fn read_i32_raster(p: &Path, size: (i32, i32)) -> Result<Vec<i32>, String> {
+    let b = std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
+    let (c, rest) = b.as_chunks::<4>();
+    if !rest.is_empty() || c.len() != (size.0 * size.1) as usize {
+        return Err(format!(
+            "{}: {} bytes is not {} x {} i32",
+            p.display(),
+            b.len(),
+            size.0,
+            size.1
+        ));
+    }
+    Ok(c.iter().map(|c| i32::from_le_bytes(*c)).collect())
 }
 
 /// A dense raster over one region box.
@@ -193,11 +250,18 @@ impl RegionRaster {
     }
 
     fn paint(&mut self, shape: &Shape, cell: CellCm) {
+        self.paint_with(shape, |c, _| {
+            c.surface = cell.surface;
+            c.bed = cell.bed;
+        });
+    }
+
+    fn paint_with(&mut self, shape: &Shape, mut f: impl FnMut(&mut CellCm, Vec2<i32>)) {
         for y in 0..self.size.y {
             for x in 0..self.size.x {
                 let w = self.min + Vec2::new(x, y);
                 if shape.contains(w.x, w.y) {
-                    self.cells[(y * self.size.x + x) as usize] = cell;
+                    f(&mut self.cells[(y * self.size.x + x) as usize], w);
                 }
             }
         }
@@ -213,12 +277,49 @@ impl RegionRaster {
             } => self.paint(shape, CellCm {
                 surface: Some(*surface_cm),
                 bed: Some(*bed_cm),
+                ground: None,
             }),
             PaintOp::Bank { shape, bed_cm } => self.paint(shape, CellCm {
                 surface: None,
                 bed: Some(*bed_cm),
+                ground: None,
             }),
-            PaintOp::Clear { shape } => self.paint(shape, CellCm::default()),
+            PaintOp::Clear { shape } => self.paint_with(shape, |c, _| *c = CellCm::default()),
+            PaintOp::Ground {
+                shape,
+                ground_cm,
+                weight,
+            } => self.paint_with(shape, |c, _| c.ground = Some((*ground_cm, *weight))),
+            PaintOp::GroundPlane {
+                shape,
+                origin,
+                origin_cm,
+                cm_per_m,
+            } => self.paint_with(shape, |c, w| {
+                let (px, py) = (w.x as f64 + 0.5, w.y as f64 + 0.5);
+                let cm = *origin_cm as f64
+                    + (px - origin.0 as f64) * cm_per_m.0 as f64
+                    + (py - origin.1 as f64) * cm_per_m.1 as f64;
+                c.ground = Some((cm.round() as i32, GROUND_EXACT));
+            }),
+            PaintOp::ClearGround { shape } => self.paint_with(shape, |c, _| c.ground = None),
+            PaintOp::GroundRaster {
+                origin,
+                size,
+                ground_file,
+            } => {
+                let g = read_i32_raster(ground_file, *size)?;
+                for j in 0..size.1 {
+                    for i in 0..size.0 {
+                        let v = g[(j * size.0 + i) as usize];
+                        if v != i32::MIN
+                            && let Some(k) = self.idx(Vec2::new(origin.0 + i, origin.1 + j))
+                        {
+                            self.cells[k].ground = Some((v, GROUND_EXACT));
+                        }
+                    }
+                }
+            },
             PaintOp::BankRing { width_m, bed_cm } => self.bank_ring(*width_m, *bed_cm),
             PaintOp::Raster {
                 origin,
@@ -226,32 +327,18 @@ impl RegionRaster {
                 surface_file,
                 bed_file,
             } => {
-                let read = |p: &Path| -> Result<Vec<i32>, String> {
-                    let b = std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
-                    let (c, rest) = b.as_chunks::<4>();
-                    if !rest.is_empty() || c.len() != (size.0 * size.1) as usize {
-                        return Err(format!(
-                            "{}: {} bytes is not {} x {} i32",
-                            p.display(),
-                            b.len(),
-                            size.0,
-                            size.1
-                        ));
-                    }
-                    Ok(c.iter().map(|c| i32::from_le_bytes(*c)).collect())
-                };
-                let s = read(surface_file)?;
-                let b = read(bed_file)?;
+                let s = read_i32_raster(surface_file, *size)?;
+                let b = read_i32_raster(bed_file, *size)?;
                 for j in 0..size.1 {
                     for i in 0..size.0 {
                         let k = (j * size.0 + i) as usize;
                         let opt = |v: i32| (v != i32::MIN).then_some(v);
-                        let cell = CellCm {
-                            surface: opt(s[k]),
-                            bed: opt(b[k]),
-                        };
-                        if cell != CellCm::default() {
-                            self.set(Vec2::new(origin.0 + i, origin.1 + j), cell);
+                        let (surface, bed) = (opt(s[k]), opt(b[k]));
+                        if (surface, bed) != (None, None)
+                            && let Some(at) = self.idx(Vec2::new(origin.0 + i, origin.1 + j))
+                        {
+                            self.cells[at].surface = surface;
+                            self.cells[at].bed = bed;
                         }
                     }
                 }
@@ -265,6 +352,8 @@ impl RegionRaster {
         for y in 0..self.size.y {
             for x in 0..self.size.x {
                 let k = (y * self.size.x + x) as usize;
+                // Authored ground holds the water by itself (or is refused
+                // at load when lower): no bank over it.
                 if self.cells[k] != CellCm::default() {
                     continue;
                 }
@@ -283,49 +372,67 @@ impl RegionRaster {
                 }
                 if let Some(s) = best {
                     // A bank level with the water's surface block holds it.
-                    out[k] = CellCm {
-                        surface: None,
-                        bed: Some(bed_cm.unwrap_or(s)),
-                    };
+                    out[k].surface = None;
+                    out[k].bed = Some(bed_cm.unwrap_or(s));
                 }
             }
         }
         self.cells = out;
     }
 
-    /// Encode every tile that holds any authored cell.
+    /// Encode every tile that holds any authored cell, per layer.
     pub fn build(&self) -> Result<BuiltRegion, String> {
         let tiles = self.size.map(|e| (e + TILE_SIZE - 1) / TILE_SIZE);
-        let mut out = Vec::new();
+        let has_water = self.cells.iter().any(CellCm::has_water);
+        let has_ground = self.cells.iter().any(|c| c.ground.is_some());
+        let mut water_tiles = Vec::new();
+        let mut ground_tiles = Vec::new();
         let mut entries = Vec::new();
         for ty in 0..tiles.y {
             for tx in 0..tiles.x {
                 let origin = self.min + Vec2::new(tx, ty) * TILE_SIZE;
                 let mut surface = vec![None; TILE_CELLS];
                 let mut bed = vec![None; TILE_CELLS];
-                let mut any = false;
+                let mut ground = vec![None; TILE_CELLS];
+                let (mut any_water, mut any_ground) = (false, false);
                 for j in 0..TILE_SIZE {
                     for i in 0..TILE_SIZE {
                         let c = self.get(origin + Vec2::new(i, j));
-                        let k = format::RawTile::idx(i, j);
+                        let k = format::cell_index(i, j);
                         surface[k] = c.surface;
                         bed[k] = c.bed;
-                        any |= c != CellCm::default();
+                        ground[k] = c.ground;
+                        any_water |= c.has_water();
+                        any_ground |= c.ground.is_some();
                     }
                 }
-                if !any {
-                    continue;
+                if any_water {
+                    let bytes = format::encode_water(origin, &surface, &bed)?;
+                    entries.push(TileManifest {
+                        layer: LayerKind::Water,
+                        tx,
+                        ty,
+                        sha256: format::sha256_hex(&bytes),
+                    });
+                    water_tiles.push(((tx, ty), bytes));
                 }
-                let bytes = format::encode_water(origin, &surface, &bed)?;
-                entries.push(TileManifest {
-                    layer: LayerKind::Water,
-                    tx,
-                    ty,
-                    sha256: format::sha256_hex(&bytes),
-                });
-                out.push(((tx, ty), bytes));
+                if any_ground {
+                    let bytes = format::encode_ground(origin, &ground)?;
+                    entries.push(TileManifest {
+                        layer: LayerKind::Ground,
+                        tx,
+                        ty,
+                        sha256: format::sha256_hex(&bytes),
+                    });
+                    ground_tiles.push(((tx, ty), bytes));
+                }
             }
         }
+        let layers = match (has_water, has_ground) {
+            (_, false) => vec![LayerKind::Water],
+            (false, true) => vec![LayerKind::Ground],
+            (true, true) => vec![LayerKind::Water, LayerKind::Ground],
+        };
         Ok(BuiltRegion {
             manifest: RegionManifest {
                 id: self.spec.id.clone(),
@@ -334,7 +441,7 @@ impl RegionRaster {
                 feather_m: self.spec.feather_m,
                 tile_size_m: TILE_SIZE,
                 cell_size_m: 1,
-                layers: vec![LayerKind::Water],
+                layers,
                 tiles: entries,
                 suppress_procedural_in_water: self.spec.suppress_procedural_in_water,
                 exclude_procedural_margin_m: self.spec.exclude_procedural_margin_m,
@@ -342,8 +449,10 @@ impl RegionRaster {
                 allow_partial_chunks: self.spec.allow_partial_chunks.clone(),
                 aquatic_ecology_profile: self.spec.aquatic_ecology_profile.clone(),
                 consistency: self.spec.consistency,
+                sea_fill: self.spec.sea_fill,
             },
-            tiles: out,
+            tiles: water_tiles,
+            ground_tiles,
         })
     }
 }
@@ -351,7 +460,23 @@ impl RegionRaster {
 /// An encoded region: its manifest entry and its tiles' bytes.
 pub struct BuiltRegion {
     pub manifest: RegionManifest,
+    /// Water tiles.
     pub tiles: Vec<((i32, i32), Vec<u8>)>,
+    /// Ground tiles.
+    pub ground_tiles: Vec<((i32, i32), Vec<u8>)>,
+}
+
+impl BuiltRegion {
+    /// The bytes of one tile, for an in-memory `fetch`.
+    pub fn tile(&self, layer: LayerKind, tx: i32, ty: i32) -> Option<&[u8]> {
+        let list = match layer {
+            LayerKind::Water => &self.tiles,
+            LayerKind::Ground => &self.ground_tiles,
+        };
+        list.iter()
+            .find(|(t, _)| *t == (tx, ty))
+            .map(|(_, b)| b.as_slice())
+    }
 }
 
 /// Paint `spec.ops` into a fresh raster and encode it.
@@ -387,15 +512,20 @@ pub fn write_assets(
     std::fs::write(&p, ron).map_err(|e| format!("{}: {e}", p.display()))?;
     written.push(p);
     for r in regions {
-        for ((tx, ty), bytes) in &r.tiles {
-            let name = format!(
-                "{stem}_ar_{}_{}_{tx}_{ty}.bin",
-                r.manifest.id,
-                LayerKind::Water.asset_name()
-            );
-            let p = map_dir.join(name);
-            std::fs::write(&p, bytes).map_err(|e| format!("{}: {e}", p.display()))?;
-            written.push(p);
+        for (layer, list) in [
+            (LayerKind::Water, &r.tiles),
+            (LayerKind::Ground, &r.ground_tiles),
+        ] {
+            for ((tx, ty), bytes) in list {
+                let name = format!(
+                    "{stem}_ar_{}_{}_{tx}_{ty}.bin",
+                    r.manifest.id,
+                    layer.asset_name()
+                );
+                let p = map_dir.join(name);
+                std::fs::write(&p, bytes).map_err(|e| format!("{}: {e}", p.display()))?;
+                written.push(p);
+            }
         }
     }
     Ok(written)

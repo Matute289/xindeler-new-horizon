@@ -1,0 +1,7 @@
+{
+  "message": "outside the blocks",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "e625f0e0bfe83c243cac2b0de3c6ce746873e7e08acd70146f545af20aa2db13"
+  },
+  "verdict": "refuse"
+}
