@@ -2681,8 +2681,10 @@ mod tests {
         // re-rolled Gloomshear's layout (one mouth ~250 m away). A change
         // here together with a changed `cromatolis_site_layout_digests.txt`
         // is that coupling, not a cave regression; re-check which mouth
-        // moved before re-baselining.
-        const EXPECTED_MARKERS: usize = 149;
+        // moved before re-baselining. 149 -> 148 (NH-166 T36): Duren's
+        // layout domain grew to its wards, and the mouth at (8202, 26754),
+        // ~960 blocks from Duren's pin, now lies inside the town's extent.
+        const EXPECTED_MARKERS: usize = 148;
 
         let (world, index) = cromatolis_world();
         let land = Land::from_sim(world.sim());
