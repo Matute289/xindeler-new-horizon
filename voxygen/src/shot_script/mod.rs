@@ -8,10 +8,11 @@
 //! in neither `default` nor `default-publish`. Even when compiled in, it does
 //! nothing unless the [`SCRIPT_ENV`] environment variable names a script file.
 //!
-//! Currently the schema, its validator and the named-screenshot capture exist;
-//! nothing executes steps yet.
+//! Currently the schema, its validator, the named-screenshot capture and the
+//! unattended login exist; nothing executes steps yet.
 
 pub mod capture;
+pub mod login;
 pub mod schema;
 
 pub use capture::{ShotError, ShotJob, ShotResult};
@@ -35,4 +36,5 @@ pub fn load_from_env() -> Option<Result<ShotScript, ScriptError>> {
     script_path_from_env().map(|path| ShotScript::load(&path))
 }
 
+#[cfg(test)] mod login_tests;
 #[cfg(test)] mod tests;

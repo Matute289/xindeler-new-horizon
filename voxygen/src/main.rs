@@ -92,6 +92,13 @@ fn main() {
     );
     info!(ver = game_version, "Session start");
 
+    // Unattended shot script: validate its environment before anything else.
+    #[cfg(feature = "shot-script")]
+    if let Err(code) = xindeler_voxygen::shot_script::login::init_from_env() {
+        drop(log_guards);
+        std::process::exit(code);
+    }
+
     // Re-run userdata selection so any warnings will be logged
     common_base::userdata_dir();
 
@@ -115,6 +122,8 @@ fn main() {
     // Load the settings — detect first launch to apply an auto-detected preset
     let is_first_run = Settings::is_new_install(&config_dir);
     let mut settings = Settings::load(&config_dir);
+    #[cfg(feature = "shot-script")]
+    xindeler_voxygen::shot_script::login::suppress_modals(&mut settings);
     if is_first_run {
         let instance = Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
         let adapters = instance.enumerate_adapters(Backends::default());
@@ -277,4 +286,11 @@ fn main() {
     info!("Session end");
     // Clean-exit: delete info/telemetry logs if no errors occurred this session
     log_guards.lifecycle.cleanup_on_exit(&log_guards.has_errors);
+
+    // An aborted shot script ends with its exit code once the logs are flushed.
+    #[cfg(feature = "shot-script")]
+    if let Some(code) = xindeler_voxygen::shot_script::login::exit_code() {
+        drop(log_guards);
+        std::process::exit(code);
+    }
 }
