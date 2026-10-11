@@ -1,0 +1,35 @@
+//! Unattended shot scripts (development tool).
+//!
+//! A shot script is a RON file listing positions to visit and screenshots to
+//! take, so terrain can be checked in the real renderer without anybody at the
+//! keyboard. See `voxygen/shot-script/example.ron` for the format.
+//!
+//! This module is compiled only with the `shot-script` cargo feature, which is
+//! in neither `default` nor `default-publish`. Even when compiled in, it does
+//! nothing unless the [`SCRIPT_ENV`] environment variable names a script file.
+//!
+//! Currently only the schema and its validator exist; nothing executes steps.
+
+pub mod schema;
+
+pub use schema::{Defaults, ScriptError, ShotScript, Step};
+
+use std::path::PathBuf;
+
+/// Environment variable naming the shot script to run.
+pub const SCRIPT_ENV: &str = "XINDELER_SHOT_SCRIPT";
+
+/// The script path from [`SCRIPT_ENV`], if set and non-empty.
+pub fn script_path_from_env() -> Option<PathBuf> {
+    std::env::var_os(SCRIPT_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Load and validate the script named by [`SCRIPT_ENV`]. `None` when the
+/// variable is unset, i.e. the shot driver stays inert.
+pub fn load_from_env() -> Option<Result<ShotScript, ScriptError>> {
+    script_path_from_env().map(|path| ShotScript::load(&path))
+}
+
+#[cfg(test)] mod tests;

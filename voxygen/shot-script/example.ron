@@ -1,0 +1,33 @@
+// Example shot script (development tool, needs `--features shot-script`).
+//
+// Run with XINDELER_SHOT_SCRIPT=<path to this file>. Steps run in order;
+// unknown fields and unknown steps are refused. Screenshot names are plain
+// file stems (ASCII letters, digits, '_', '-', '.') and must be unique.
+ShotScript(
+    version: 1,
+    window: (1920, 1080),                 // fixed so screenshots diff run to run
+    defaults: (
+        view_distance: 12,                // chunks; terrain + entity
+        terrain_radius_chunks: 6,         // what WaitForTerrain waits for
+        terrain_timeout_s: 180.0,
+        settle_frames: 30,                // frames after "ready" before a shot
+        hide_hud: true,
+    ),
+    steps: [
+        Time("noon"),
+        Teleport(wpos: (16384.0, 16384.0, 5150.0)),
+        WaitForTerrain(),
+        Camera(yaw_deg: 45.0, pitch_deg: -20.0, distance: 10.0),
+        Minimap(show: true),
+        WaitSeconds(5.0),
+        Sample(label: "citadel_minimap_on"),
+        Screenshot(name: "citadel_deck_noon"),
+        Minimap(show: false),
+        WaitSeconds(5.0),
+        Sample(label: "citadel_minimap_off"),
+        CromatolisTeleport(px: 1024, py: 768, z_above_ground: 2.0),
+        WaitForTerrain(radius_chunks: 8, timeout_s: 240.0),
+        Viewpoint(cam: (16384.0, 14884.0, 5200.0), look_at: (16384.0, 16384.0, 5150.0)),
+        Screenshot(name: "citadel_from_1500m"),
+    ],
+)
