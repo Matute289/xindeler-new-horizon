@@ -19,7 +19,7 @@
         "cannon-mount/collision-plate counterpart to the force-field dimensions above.",
     ],
     center: (16384, 16384),
-    altitude_above_sea_m: 5000,
+    altitude_above_sea_m: 4000,
     max_radius_m: 440,
     mountain_center: (80, -40),
     mountain_height_m: 200,
