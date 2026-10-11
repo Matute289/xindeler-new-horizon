@@ -1339,6 +1339,31 @@ impl Window {
         });
     }
 
+    /// Capture the next frame to `path` and send the outcome on `done`.
+    ///
+    /// Used by shot scripts; unlike [`Self::take_screenshot`] (F4) it uses the
+    /// given file name, posts no HUD message and creates no directory. Exactly
+    /// one result is sent on `done`, also on refusal or failure; `done` must
+    /// have room for it (unbounded, or bounded with free capacity), since it
+    /// is sent without blocking.
+    ///
+    /// The renderer holds one screenshot request per frame: a later request in
+    /// the same frame replaces an earlier one. A replaced request from here
+    /// reports `ShotError::Dropped`, which the caller should treat as
+    /// retryable (request again on a later frame); a replaced F4 request is
+    /// skipped silently.
+    #[cfg(feature = "shot-script")]
+    pub fn take_screenshot_to(
+        &mut self,
+        path: std::path::PathBuf,
+        done: channel::Sender<crate::shot_script::ShotResult>,
+    ) {
+        if let Some(job) = crate::shot_script::ShotJob::prepare(path, done) {
+            self.renderer
+                .create_screenshot(move |image| job.complete(image));
+        }
+    }
+
     fn is_pressed(
         map: &mut HashMap<GameInput, winit::event::ElementState>,
         input: GameInput,

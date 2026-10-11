@@ -8,10 +8,13 @@
 //! in neither `default` nor `default-publish`. Even when compiled in, it does
 //! nothing unless the [`SCRIPT_ENV`] environment variable names a script file.
 //!
-//! Currently only the schema and its validator exist; nothing executes steps.
+//! Currently the schema, its validator and the named-screenshot capture exist;
+//! nothing executes steps yet.
 
+pub mod capture;
 pub mod schema;
 
+pub use capture::{ShotError, ShotJob, ShotResult};
 pub use schema::{Defaults, ScriptError, ShotScript, Step};
 
 use std::path::PathBuf;
