@@ -286,4 +286,11 @@ fn main() {
     info!("Session end");
     // Clean-exit: delete info/telemetry logs if no errors occurred this session
     log_guards.lifecycle.cleanup_on_exit(&log_guards.has_errors);
+
+    // An aborted shot script ends with its exit code once the logs are flushed.
+    #[cfg(feature = "shot-script")]
+    if let Some(code) = xindeler_voxygen::shot_script::login::exit_code() {
+        drop(log_guards);
+        std::process::exit(code);
+    }
 }

@@ -270,7 +270,9 @@ impl PlayState for MainMenuState {
             },
             Some(InitMsg::IsAuthTrusted(auth_server)) => {
                 #[cfg(feature = "shot-script")]
-                crate::shot_script::login::refuse_auth();
+                if crate::shot_script::login::refuse_auth() {
+                    return PlayStateResult::Shutdown;
+                }
                 if global_state
                     .settings
                     .networking
@@ -306,11 +308,14 @@ impl PlayState for MainMenuState {
 
         // Unattended shot script: log in to the scratch server, no menu input.
         #[cfg(feature = "shot-script")]
-        if matches!(self.init, InitState::None)
-            && let Some(server) =
-                crate::shot_script::login::next_login(global_state.info_message.as_deref())
-        {
-            attempt_login(
+        match crate::shot_script::login::menu_tick(
+            matches!(self.init, InitState::None),
+            matches!(self.init, InitState::Client(_)),
+            global_state.info_message.as_deref(),
+        ) {
+            None => {},
+            Some(Err(())) => return PlayStateResult::Shutdown,
+            Some(Ok(server)) => attempt_login(
                 &mut global_state.info_message,
                 crate::shot_script::login::USERNAME.to_owned(),
                 String::new(),
@@ -324,7 +329,7 @@ impl PlayState for MainMenuState {
                 &global_state.i18n,
                 &global_state.config_dir,
                 global_state.args.client_type.0,
-            );
+            ),
         }
 
         // Tick the client to keep the connection alive if we are waiting on pipelines

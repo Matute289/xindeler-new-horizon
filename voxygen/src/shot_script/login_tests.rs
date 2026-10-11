@@ -5,6 +5,7 @@ use std::{
     ffi::OsString,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
+    time::{Duration, Instant},
 };
 
 const EXAMPLE: &str = include_str!("../../shot-script/example.ron");
@@ -256,11 +257,24 @@ fn char_select_reuses_existing_character() {
     let mut d = CharSelectDriver::default();
     assert_eq!(
         d.decide(false, [
-            ("T13SHOT", Some(CharacterId(1)), false),
+            ("Other", Some(CharacterId(1)), false),
             (CHARACTER_ALIAS, Some(CharacterId(9)), false),
             (CHARACTER_ALIAS, Some(CharacterId(4)), false),
         ]),
         CharAction::Play(CharacterId(4))
+    );
+}
+
+#[test]
+fn char_select_matches_alias_ignoring_case() {
+    // A server that normalises aliases must not trigger a second creation.
+    let mut d = CharSelectDriver::default();
+    assert_eq!(
+        d.decide(false, [
+            ("T13Shot", Some(CharacterId(3)), false),
+            ("t13shot2", Some(CharacterId(1)), false),
+        ]),
+        CharAction::Play(CharacterId(3))
     );
 }
 
@@ -271,4 +285,149 @@ fn char_select_fails_on_suspended_character() {
         d.decide(false, [(CHARACTER_ALIAS, Some(CharacterId(2)), true)]),
         CharAction::Fail(_)
     ));
+}
+
+#[test]
+fn loopback_lookalikes_are_refused() {
+    // Numeric shorthands that some resolvers treat as 127.0.0.1, userinfo,
+    // bracketed IPv4/hostnames and zone ids: all refused, nothing resolved.
+    for value in [
+        "127.1:14004",
+        "2130706433:14004",
+        "0x7f.0.0.1:14004",
+        "0177.0.0.1:14004",
+        "127.0.0.1@evil.com:14004",
+        "evil.com@127.0.0.1:14004",
+        "[127.0.0.1]:14004",
+        "[localhost]:14004",
+        "[::ffff:127.0.0.1%1]:14004",
+        "[::1%1]:14004",
+        "[::ffff:127.0.0.1%lo0]:14004",
+        "[::1]",
+        "[::1]:",
+        "[[::1]]:14004",
+        "localhost:14004/path",
+        "http://127.0.0.1:14004",
+    ] {
+        assert!(
+            parse_loopback_server(value).is_err(),
+            "{value:?} must be refused"
+        );
+    }
+    assert!(matches!(
+        refused("[::ffff:127.0.0.1%1]:14004"),
+        SetupError::NotLoopback { .. }
+    ));
+}
+
+#[test]
+fn connect_timeout_parsing() {
+    use std::ffi::OsStr;
+    assert_eq!(
+        parse_connect_timeout(None).unwrap(),
+        Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_S)
+    );
+    assert_eq!(
+        parse_connect_timeout(Some(OsStr::new(""))).unwrap(),
+        Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_S)
+    );
+    assert_eq!(
+        parse_connect_timeout(Some(OsStr::new("20"))).unwrap(),
+        Duration::from_secs(20)
+    );
+    for bad in ["0", "-1", "1.5", "20s", " 20", "601", "abc"] {
+        assert!(
+            matches!(
+                parse_connect_timeout(Some(OsStr::new(bad))),
+                Err(SetupError::BadTimeout { .. })
+            ),
+            "{bad:?} must be refused"
+        );
+    }
+}
+
+#[test]
+fn setup_rejects_bad_timeout_before_touching_out_dir() {
+    let out = scratch("timeout");
+    let out_s = out.to_str().unwrap();
+    assert!(matches!(
+        setup_with(
+            Ok(example()),
+            env(&[
+                (SERVER_ENV, "127.0.0.1:14004"),
+                (CONNECT_TIMEOUT_ENV, "0"),
+                (OUT_ENV, out_s)
+            ])
+        ),
+        Err(SetupError::BadTimeout { .. })
+    ));
+    assert!(!out.exists());
+}
+
+#[test]
+fn menu_connects_once_then_waits_or_aborts() {
+    let server = SocketAddr::from((Ipv4Addr::LOCALHOST, 14004));
+    let timeout = Duration::from_secs(20);
+    let t0 = Instant::now();
+    let decide = |started, now, idle, connecting| {
+        menu_decide(
+            started,
+            now,
+            idle,
+            connecting,
+            server,
+            timeout,
+            Some("boom"),
+        )
+    };
+    assert_eq!(decide(None, t0, true, false), MenuAction::Connect(server));
+    // Still connecting inside the deadline.
+    assert_eq!(
+        decide(Some(t0), t0 + Duration::from_secs(19), false, true),
+        MenuAction::Wait
+    );
+    // Past the deadline: abort with a clear message.
+    match decide(Some(t0), t0 + Duration::from_secs(21), false, true) {
+        MenuAction::Abort(msg) => assert!(msg.contains("scratch server"), "{msg}"),
+        other => panic!("expected abort, got {other:?}"),
+    }
+    // Connected (pipelines being built): the deadline no longer applies.
+    assert_eq!(
+        decide(Some(t0), t0 + Duration::from_secs(300), false, false),
+        MenuAction::Wait
+    );
+    // Back to idle after an attempt: abort with the menu's message.
+    assert_eq!(
+        decide(Some(t0), t0, true, false),
+        MenuAction::Abort("boom".into())
+    );
+}
+
+#[test]
+fn owner_and_mode_rules() {
+    assert_eq!(owner_mode_problem(501, 0o700, 501), None);
+    assert_eq!(owner_mode_problem(501, 0o755, 501), None);
+    assert!(owner_mode_problem(0, 0o700, 501).is_some());
+    assert!(owner_mode_problem(501, 0o770, 501).is_some());
+    assert!(owner_mode_problem(501, 0o707, 501).is_some());
+    assert!(owner_mode_problem(501, 0o1777, 501).is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_out_dir_must_not_be_group_or_world_writable() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("mode");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (mode, accepted) in [(0o700, true), (0o755, true), (0o775, false), (0o777, false)] {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+        let got = prepare_out_dir(dir.as_os_str());
+        assert_eq!(got.is_ok(), accepted, "mode {mode:o}: {got:?}");
+        if let Err(e) = got {
+            assert!(e.to_string().contains("group or others"), "{e}");
+        }
+    }
+    // The owner probe leaves nothing behind.
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
 }

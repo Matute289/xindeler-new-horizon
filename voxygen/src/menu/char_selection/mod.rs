@@ -267,10 +267,12 @@ impl PlayState for CharSelectionState {
 
             // Unattended shot script: create/select its character, enter the world.
             #[cfg(feature = "shot-script")]
-            self.shot_login.tick(
+            if self.shot_login.tick(
                 &mut self.client.borrow_mut(),
                 global_state.settings.graphics.view_distances(),
-            );
+            ) {
+                return PlayStateResult::Shutdown;
+            }
 
             // Tick the client (currently only to keep the connection alive).
             let localized_strings = &global_state.i18n.read();
@@ -308,7 +310,9 @@ impl PlayState for CharSelectionState {
                             },
                             client::Event::CharacterError(error) => {
                                 #[cfg(feature = "shot-script")]
-                                crate::shot_script::login::character_error(&error);
+                                if crate::shot_script::login::character_error(&error) {
+                                    return PlayStateResult::Shutdown;
+                                }
                                 self.char_selection_ui.display_error(error);
                             },
                             client::Event::CharacterJoined(metadata) => {
