@@ -364,9 +364,15 @@ impl StepRunner {
                 if !moved && now - since < CROMATOLIS_SETTLE_S {
                     return (StepOutcome::Waiting, None);
                 }
-                // The server put the player `CROMATOLIS_CLEARANCE` above the
-                // ground; re-place them at the requested height above it.
-                let ground = pos.z - CROMATOLIS_CLEARANCE;
+                // After a jump the server has just put the player
+                // `CROMATOLIS_CLEARANCE` above the ground; without one the
+                // player was already standing there. Re-place them at the
+                // requested height above that ground.
+                let ground = if moved {
+                    pos.z - CROMATOLIS_CLEARANCE
+                } else {
+                    pos.z
+                };
                 let target = Vec3::new(pos.x, pos.y, ground + z_above_ground);
                 self.anchor = Some(Anchor {
                     target,

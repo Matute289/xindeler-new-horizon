@@ -164,7 +164,7 @@ fn cromatolis_teleport_when_already_there() {
     ctx.advance(super::driver::CROMATOLIS_SETTLE_S + 0.1);
     assert_eq!(
         line(r.tick(&ctx)).as_deref(),
-        Some("/goto 10.00 10.00 105.00")
+        Some("/goto 10.00 10.00 110.00")
     );
     r.tick(&ctx);
     assert_eq!(outcomes(&r), vec![StepOutcome::Done]);
