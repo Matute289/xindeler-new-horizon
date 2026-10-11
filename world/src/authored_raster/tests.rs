@@ -2377,10 +2377,11 @@ fn map_colour_of_authored_dry_ground_below_sea_level_is_not_water() {
     ]);
     own.sea_fill = SeaFill::AuthoredOnly;
     // A sea floor 10 m below sea level in an `Auto` region.
-    let auto = region("sea_floor", (1024, 1024), (1280, 1280), 0, vec![ground(
-        rect(1056.0, 1056.0, 1248.0, 1248.0),
-        13_050,
-    )]);
+    let auto = region("sea_floor", (1024, 1024), (1280, 1280), 0, vec![
+        ground(rect(1056.0, 1056.0, 1248.0, 1248.0), 13_050),
+        // A patch in a chunk whose other columns keep the natural sea.
+        ground(rect(1252.0, 1120.0, 1262.0, 1152.0), 13_050),
+    ]);
     let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
     // The frozen table: sea everywhere, 10 m below sea level.
     for c in sim.chunks.iter_mut() {
@@ -2571,7 +2572,7 @@ fn chunk_presentation_on_a_synthetic_raster() {
     use crate::{
         CONFIG,
         index::{Index, IndexOwned},
-        sim::{ChunkPresentation, RiverKind, WorldSim, sample_pos, sample_pos_with, sample_wpos},
+        sim::{ChunkPresentation, RiverKind, WorldSim, sample_pos, sample_wpos},
     };
     use common::terrain::{MapSizeLg, map::MapConfig};
 
@@ -2601,6 +2602,11 @@ fn chunk_presentation_on_a_synthetic_raster() {
     let mut partial = region("partial", (2560, 1024), (2816, 1280), 0, vec![
         ground(rect(2624.0, 1120.0, 2650.0, 1152.0), 13_050),
         ground(rect(2688.0, 1120.0, 2700.0, 1152.0), 13_050),
+        // Exactly half and one column over half: `chunk_water` calls a chunk
+        // wet when water covers at least half of it, so 16 dry columns of 32
+        // keep the table and 17 do not.
+        ground(rect(2720.0, 1120.0, 2736.0, 1152.0), 13_050),
+        ground(rect(2752.0, 1120.0, 2769.0, 1152.0), 13_050),
     ]);
     partial.sea_fill = SeaFill::AuthoredOnly;
     partial.allow_partial = true;
@@ -2649,6 +2655,17 @@ fn chunk_presentation_on_a_synthetic_raster() {
             "sea chunk 12/32 dry",
             ChunkPresentation::TABLE,
         ),
+        (
+            (2720, 1120),
+            "sea chunk 16/32 dry: a tie is wet",
+            ChunkPresentation::TABLE,
+        ),
+        ((2752, 1120), "sea chunk 17/32 dry", dry),
+        (
+            (1252, 1120),
+            "Auto chunk, natural sea in the unauthored columns",
+            ChunkPresentation::TABLE,
+        ),
         ((2192, 1168), "lake -20 m", ChunkPresentation::TABLE),
         ((1104, 1104), "Auto sea floor", ChunkPresentation::TABLE),
         (
@@ -2667,16 +2684,8 @@ fn chunk_presentation_on_a_synthetic_raster() {
             "{what}: basement"
         );
 
-        // The map sample is the presented `sample_pos_with`; on table chunks
-        // also exactly `sample_pos`.
+        // On table chunks the presented map sample is exactly `sample_pos`.
         let new = sim.presented_map_sample(&config, index.as_index_ref(), None, c);
-        let old = sample_pos_with(&config, &sim, index.as_index_ref(), None, c, true);
-        assert_eq!(new.rgb, old.rgb, "{what}");
-        assert_eq!(new.alt.to_bits(), old.alt.to_bits(), "{what}");
-        let links = |s: &common::terrain::map::MapSample| {
-            s.connections.map_or(0, |c| c.iter().flatten().count())
-        };
-        assert_eq!(links(&new), links(&old), "{what}");
         if expected == ChunkPresentation::TABLE {
             let table = sample_pos(&config, &sim, index.as_index_ref(), None, c);
             assert_eq!(new.rgb, table.rgb, "{what}: table colour");

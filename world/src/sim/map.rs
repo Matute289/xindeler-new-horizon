@@ -243,7 +243,9 @@ pub fn pack_map_alt(alt: f32) -> u32 { (((alt.clamp(0.0, 1.0) * 8191.0) as u32) 
 /// ([`WorldSim::chunk_is_authored_dry`]) into the water kind, depth and
 /// altitude the colour, relief and connection decisions read. Built by
 /// [`WorldSim::chunk_presentation`]; [`ChunkPresentation::TABLE`] presents
-/// the chunk table unchanged.
+/// the chunk table unchanged. Paired with [`WorldSim::presented_wpos`]: with
+/// no column samples that altitude is [`sample_wpos`]'s, which keeps its
+/// `.max(water_alt)`, so dry ground still gets the table's water altitude.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChunkPresentation {
     /// Authored dry ground: mostly dry by `chunk_water`'s majority rule in a
@@ -332,6 +334,11 @@ impl WorldSim {
     /// that chunk's column sample in `samples` (one per chunk, as `get_map`
     /// builds them); [`sample_wpos`] everywhere else, and everywhere when
     /// `samples` is `None` (paths without column samples stay table-only).
+    ///
+    /// With `samples` of `None` this degrades to [`sample_wpos`], which keeps
+    /// its `.max(water_alt)`: dry ground there still gets the table's water
+    /// altitude. A caller that needs the dry altitude must pass column
+    /// samples or use a table-only dry variant.
     pub fn presented_wpos(
         &self,
         config: &MapConfig,
@@ -357,7 +364,8 @@ impl WorldSim {
     }
 
     /// The map sample presented for chunk `pos`: [`sample_pos_with`] with
-    /// authored ground presented ([`Self::chunk_presentation`]).
+    /// authored ground presented ([`Self::chunk_presentation`]). The next
+    /// consumer is the airship route map.
     pub fn presented_map_sample(
         &self,
         config: &MapConfig,
