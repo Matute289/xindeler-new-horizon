@@ -197,6 +197,9 @@ pub struct SessionState {
     /// `Scene::transition_active`). Gates a fresh takeover from firing again
     /// too soon; `None` means none has ended yet this session.
     last_terrain_transition_end: Option<std::time::Instant>,
+    /// Unattended shot script executor, while one is active.
+    #[cfg(feature = "shot-script")]
+    shot_driver: Option<crate::shot_script::driver::SessionDriver>,
 }
 
 /// Represents an active game session (i.e., the one being played).
@@ -279,6 +282,8 @@ impl SessionState {
             lines: Default::default(),
             gizmos: Vec::new(),
             last_terrain_transition_end: None,
+            #[cfg(feature = "shot-script")]
+            shot_driver: crate::shot_script::driver::SessionDriver::from_active(),
         }
     }
 
@@ -2705,6 +2710,16 @@ impl PlayState for SessionState {
 
             // Clean things up after the tick.
             self.cleanup();
+
+            // Unattended shot script: run its current step; end the session
+            // once every step has finished.
+            #[cfg(feature = "shot-script")]
+            if let Some(driver) = &mut self.shot_driver
+                && driver.tick(&mut self.client.borrow_mut(), self.scene.terrain())
+                    == crate::shot_script::driver::DriverStatus::Finished
+            {
+                return PlayStateResult::Shutdown;
+            }
 
             PlayStateResult::Continue
         } else if client_registered && client_presence.is_none() {
