@@ -92,6 +92,13 @@ fn main() {
     );
     info!(ver = game_version, "Session start");
 
+    // Unattended shot script: validate its environment before anything else.
+    #[cfg(feature = "shot-script")]
+    if let Err(code) = xindeler_voxygen::shot_script::login::init_from_env() {
+        drop(log_guards);
+        std::process::exit(code);
+    }
+
     // Re-run userdata selection so any warnings will be logged
     common_base::userdata_dir();
 

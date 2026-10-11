@@ -269,6 +269,8 @@ impl PlayState for MainMenuState {
                 );
             },
             Some(InitMsg::IsAuthTrusted(auth_server)) => {
+                #[cfg(feature = "shot-script")]
+                crate::shot_script::login::refuse_auth();
                 if global_state
                     .settings
                     .networking
@@ -300,6 +302,29 @@ impl PlayState for MainMenuState {
                 );
             },
             None => {},
+        }
+
+        // Unattended shot script: log in to the scratch server, no menu input.
+        #[cfg(feature = "shot-script")]
+        if matches!(self.init, InitState::None)
+            && let Some(server) =
+                crate::shot_script::login::next_login(global_state.info_message.as_deref())
+        {
+            attempt_login(
+                &mut global_state.info_message,
+                crate::shot_script::login::USERNAME.to_owned(),
+                String::new(),
+                ConnectionArgs::Tcp {
+                    hostname: server.to_string(),
+                    prefer_ipv6: false,
+                },
+                &mut self.init,
+                &global_state.tokio_runtime,
+                None,
+                &global_state.i18n,
+                &global_state.config_dir,
+                global_state.args.client_type.0,
+            );
         }
 
         // Tick the client to keep the connection alive if we are waiting on pipelines
@@ -412,6 +437,12 @@ impl PlayState for MainMenuState {
                         Rc::new(RefCell::new(*client)),
                         Rc::new(RefCell::new(persisted_state)),
                     );
+
+                    // Unattended shot script: no server-rules screen.
+                    #[cfg(feature = "shot-script")]
+                    if crate::shot_script::login::active().is_some() {
+                        return PlayStateResult::Push(Box::new(char_select));
+                    }
 
                     let new_state = ServerInfoState::try_from_server_info(
                         global_state,
