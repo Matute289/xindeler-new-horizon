@@ -2559,3 +2559,161 @@ fn map_colour_of_partly_authored_dry_chunks_follows_the_majority() {
     );
     same(outside, "chunk outside the region");
 }
+
+/// The shared presentation helper on a tiny synthetic raster: authored dry
+/// ground of a `sea_fill: AuthoredOnly` region (fully or mostly covered
+/// chunks) is presented dry, the region's lake below sea level, an `Auto`
+/// region's sea floor, a minority-dry chunk, a chunk outside every region and
+/// the basement map present the table unchanged; the helper's map sample and
+/// altitude without column samples equal the table-path functions there.
+#[test]
+fn chunk_presentation_on_a_synthetic_raster() {
+    use crate::{
+        CONFIG,
+        index::{Index, IndexOwned},
+        sim::{ChunkPresentation, RiverKind, WorldSim, sample_pos, sample_pos_with, sample_wpos},
+    };
+    use common::terrain::{MapSizeLg, map::MapConfig};
+
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let ground = |shape, ground_cm| PaintOp::Ground {
+        shape,
+        ground_cm,
+        weight: GROUND_EXACT,
+    };
+    let lake = rect(2176.0, 1152.0, 2240.0, 1216.0);
+    let mut own = region("dry_below_sea", (2048, 1024), (2304, 1280), 0, vec![
+        ground(rect(2080.0, 1056.0, 2272.0, 1248.0), 25_050),
+        // A dry pit at -10 m.
+        ground(rect(2080.0, 1056.0, 2144.0, 1120.0), 13_050),
+        // A lake whose surface is 20 m below sea level.
+        PaintOp::ClearGround {
+            shape: lake.clone(),
+        },
+        PaintOp::Water {
+            shape: lake,
+            surface_cm: 12_050,
+            bed_cm: 11_050,
+        },
+    ]);
+    own.sea_fill = SeaFill::AuthoredOnly;
+    // Dry patches covering 26 and 12 of a sea chunk's 32 columns.
+    let mut partial = region("partial", (2560, 1024), (2816, 1280), 0, vec![
+        ground(rect(2624.0, 1120.0, 2650.0, 1152.0), 13_050),
+        ground(rect(2688.0, 1120.0, 2700.0, 1152.0), 13_050),
+    ]);
+    partial.sea_fill = SeaFill::AuthoredOnly;
+    partial.allow_partial = true;
+    // A sea floor 10 m below sea level in an `Auto` region.
+    let auto = region("sea_floor", (1024, 1024), (1280, 1280), 0, vec![ground(
+        rect(1056.0, 1056.0, 1248.0, 1248.0),
+        13_050,
+    )]);
+    let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
+    // The frozen table: sea everywhere, 10 m below sea level.
+    for c in sim.chunks.iter_mut() {
+        c.alt = CONFIG.sea_level - 10.0;
+        c.water_alt = CONFIG.sea_level;
+        c.river.river_kind = Some(RiverKind::Ocean);
+    }
+    sim.set_authored_rasters_for_test(Some(
+        load(&[
+            build_region(&own).unwrap(),
+            build_region(&partial).unwrap(),
+            build_region(&auto).unwrap(),
+        ])
+        .unwrap(),
+    ));
+    let size = sim.map_size_lg();
+    let config = MapConfig::orthographic(size, CONFIG.sea_level..=CONFIG.sea_level + 1000.0);
+    let basement = MapConfig {
+        is_basement: true,
+        ..config
+    };
+    let index = IndexOwned::new(Index::new(0));
+    let chunk_of = |x: i32, y: i32| Vec2::new(x, y) / CHUNK;
+    let dry = ChunkPresentation {
+        authored_dry: true,
+        authored_fully_dry: false,
+    };
+    let fully_dry = ChunkPresentation {
+        authored_dry: true,
+        authored_fully_dry: true,
+    };
+
+    for (wpos, what, expected) in [
+        ((2096, 1072), "pit -10 m, fully covered", fully_dry),
+        ((2624, 1120), "sea chunk 26/32 dry", dry),
+        (
+            (2688, 1120),
+            "sea chunk 12/32 dry",
+            ChunkPresentation::TABLE,
+        ),
+        ((2192, 1168), "lake -20 m", ChunkPresentation::TABLE),
+        ((1104, 1104), "Auto sea floor", ChunkPresentation::TABLE),
+        (
+            (3000, 3000),
+            "outside every region",
+            ChunkPresentation::TABLE,
+        ),
+    ] {
+        let c = chunk_of(wpos.0, wpos.1);
+        let presentation = sim.chunk_presentation(&config, c);
+        assert_eq!(presentation, expected, "{what}");
+        assert_eq!(presentation.authored_dry, sim.chunk_is_authored_dry(c));
+        assert_eq!(
+            sim.chunk_presentation(&basement, c),
+            ChunkPresentation::TABLE,
+            "{what}: basement"
+        );
+
+        // The map sample is the presented `sample_pos_with`; on table chunks
+        // also exactly `sample_pos`.
+        let new = sim.presented_map_sample(&config, index.as_index_ref(), None, c);
+        let old = sample_pos_with(&config, &sim, index.as_index_ref(), None, c, true);
+        assert_eq!(new.rgb, old.rgb, "{what}");
+        assert_eq!(new.alt.to_bits(), old.alt.to_bits(), "{what}");
+        let links = |s: &common::terrain::map::MapSample| {
+            s.connections.map_or(0, |c| c.iter().flatten().count())
+        };
+        assert_eq!(links(&new), links(&old), "{what}");
+        if expected == ChunkPresentation::TABLE {
+            let table = sample_pos(&config, &sim, index.as_index_ref(), None, c);
+            assert_eq!(new.rgb, table.rgb, "{what}: table colour");
+            assert_eq!(new.alt.to_bits(), table.alt.to_bits(), "{what}: table alt");
+        }
+
+        // Without column samples the presented altitude is the table's.
+        for dx in [0, 1, 17] {
+            let w = c * CHUNK + Vec2::new(dx, 0);
+            assert_eq!(
+                sim.presented_wpos(&config, w, None).to_bits(),
+                sample_wpos(&config, &sim, w).to_bits(),
+                "{what}: altitude at {w:?}"
+            );
+        }
+    }
+
+    // What the colour, relief and connection decisions read.
+    let river = Some(RiverKind::River {
+        cross_section: Vec2::new(12.0, 2.0),
+    });
+    let table = ChunkPresentation::TABLE;
+    assert_eq!(table.water_kind(river), river);
+    assert_eq!(table.connection_kind(river), river);
+    assert_eq!(table.water_depth(3.0), 3.0);
+    assert_eq!(table.colour_alt(-0.25, 0.0), -0.25);
+    assert!(table.shows_water(true));
+    assert_eq!(dry.water_kind(river), None);
+    assert_eq!(
+        dry.connection_kind(river),
+        river,
+        "mostly dry keeps the link"
+    );
+    assert_eq!(dry.water_depth(3.0), 0.0);
+    assert_eq!(dry.colour_alt(-0.25, 0.0), 0.0);
+    assert_eq!(dry.colour_alt(0.5, 0.0), 0.5);
+    assert!(!dry.shows_water(true));
+    assert!(!table.shows_water(false));
+    assert_eq!(fully_dry.connection_kind(river), None);
+}
