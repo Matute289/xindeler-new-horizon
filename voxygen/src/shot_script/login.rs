@@ -239,6 +239,14 @@ pub fn init_from_env() -> Result<(), i32> {
     }
 }
 
+/// Turn off settings that would open a modal nobody is there to close (the
+/// first-session intro). In memory only; the runner's config dir is scratch.
+pub fn suppress_modals(settings: &mut crate::settings::Settings) {
+    if active().is_some() {
+        settings.interface.intro_show = crate::hud::Intro::Never;
+    }
+}
+
 /// The validated setup, if a shot script is running.
 pub fn active() -> Option<&'static ShotSetup> { ACTIVE.get() }
 

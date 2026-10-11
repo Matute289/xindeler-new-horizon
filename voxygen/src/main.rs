@@ -122,6 +122,8 @@ fn main() {
     // Load the settings — detect first launch to apply an auto-detected preset
     let is_first_run = Settings::is_new_install(&config_dir);
     let mut settings = Settings::load(&config_dir);
+    #[cfg(feature = "shot-script")]
+    xindeler_voxygen::shot_script::login::suppress_modals(&mut settings);
     if is_first_run {
         let instance = Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
         let adapters = instance.enumerate_adapters(Backends::default());
