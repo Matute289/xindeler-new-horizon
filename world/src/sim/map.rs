@@ -238,6 +238,137 @@ pub fn sample_wpos_presented(
 /// left by 3. Out-of-range values clamp.
 pub fn pack_map_alt(alt: f32) -> u32 { (((alt.clamp(0.0, 1.0) * 8191.0) as u32) & 0x1FFF) << 3 }
 
+/// How a presentation path (a map image, its relief, its river lines) must
+/// treat one chunk: the single place that turns the authored dry-ground rule
+/// ([`WorldSim::chunk_is_authored_dry`]) into the water kind, depth and
+/// altitude the colour, relief and connection decisions read. Built by
+/// [`WorldSim::chunk_presentation`]; [`ChunkPresentation::TABLE`] presents
+/// the chunk table unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChunkPresentation {
+    /// Authored dry ground: mostly dry by `chunk_water`'s majority rule in a
+    /// `sea_fill: AuthoredOnly` region, so no water of any kind and no
+    /// "below sea level" for colour decisions, at any altitude.
+    pub authored_dry: bool,
+    /// Authored dry ground over every column of the chunk. Only such a chunk
+    /// drops the table's river link: a mostly dry chunk still carries the
+    /// natural river through its unauthored columns.
+    pub authored_fully_dry: bool,
+}
+
+impl ChunkPresentation {
+    /// The chunk table as it is, for paths that do not present authored
+    /// ground (and for the basement map).
+    pub const TABLE: Self = Self {
+        authored_dry: false,
+        authored_fully_dry: false,
+    };
+
+    /// The water kind the colour decisions read: none on authored dry
+    /// ground, the table's elsewhere.
+    pub fn water_kind(&self, table: Option<RiverKind>) -> Option<RiverKind> {
+        if self.authored_dry { None } else { table }
+    }
+
+    /// The water kind a river link (map connection) is drawn from: none on
+    /// a fully authored dry chunk, the table's elsewhere.
+    pub fn connection_kind(&self, table: Option<RiverKind>) -> Option<RiverKind> {
+        if self.authored_fully_dry { None } else { table }
+    }
+
+    /// The water depth (metres) the colour decisions read: zero on authored
+    /// dry ground.
+    pub fn water_depth(&self, table_depth_m: f64) -> f64 {
+        if self.authored_dry {
+            0.0
+        } else {
+            table_depth_m
+        }
+    }
+
+    /// The normalised altitude the colour decisions read: on authored dry
+    /// ground never below `sea_level` (so it is never painted as water);
+    /// elsewhere `alt` itself.
+    pub fn colour_alt(&self, alt: f64, sea_level: f64) -> f64 {
+        if self.authored_dry {
+            alt.max(sea_level)
+        } else {
+            alt
+        }
+    }
+
+    /// Whether a map that draws water (`MapConfig::is_water`) may draw it
+    /// over this chunk (ice colour, shading altitude at the water surface):
+    /// never on authored dry ground.
+    pub fn shows_water(&self, map_draws_water: bool) -> bool {
+        map_draws_water && !self.authored_dry
+    }
+}
+
+impl WorldSim {
+    /// How a presentation path must treat `chunk_pos` under `config`
+    /// ([`ChunkPresentation`]). The basement map, chunks outside every
+    /// region and worlds without authored rasters get
+    /// [`ChunkPresentation::TABLE`].
+    pub fn chunk_presentation(
+        &self,
+        config: &MapConfig,
+        chunk_pos: Vec2<i32>,
+    ) -> ChunkPresentation {
+        let authored_dry = !config.is_basement && self.chunk_is_authored_dry(chunk_pos);
+        ChunkPresentation {
+            authored_dry,
+            authored_fully_dry: authored_dry
+                && self
+                    .authored_rasters
+                    .as_ref()
+                    .and_then(|r| r.chunk_summary(chunk_pos))
+                    .is_some_and(|s| s.authored_columns == TerrainChunkSize::RECT_SIZE.product()),
+        }
+    }
+
+    /// The map altitude presented at `wpos` ([`sample_wpos_presented`]): on
+    /// an authored ground cell at a chunk's sample column, the altitude of
+    /// that chunk's column sample in `samples` (one per chunk, as `get_map`
+    /// builds them); [`sample_wpos`] everywhere else, and everywhere when
+    /// `samples` is `None` (paths without column samples stay table-only).
+    pub fn presented_wpos(
+        &self,
+        config: &MapConfig,
+        wpos: Vec2<i32>,
+        samples: Option<&[Option<ColumnSample>]>,
+    ) -> f32 {
+        sample_wpos_presented(config, self, wpos, || {
+            let samples = samples?;
+            let chunk = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+            if wpos.map2(chunk, |e, c| e.rem_euclid(c)) != Vec2::zero() {
+                return None;
+            }
+            let pos = wpos.map2(chunk, |e, c| e.div_euclid(c));
+            let size = self.map_size_lg().chunks().map(|e| e as i32);
+            if pos.x < 0 || pos.y < 0 || pos.x >= size.x || pos.y >= size.y {
+                return None;
+            }
+            samples
+                .get(vec2_as_uniform_idx(self.map_size_lg(), pos))?
+                .as_ref()
+                .map(|s| s.alt)
+        })
+    }
+
+    /// The map sample presented for chunk `pos`: [`sample_pos_with`] with
+    /// authored ground presented ([`Self::chunk_presentation`]).
+    pub fn presented_map_sample(
+        &self,
+        config: &MapConfig,
+        index: IndexRef,
+        samples: Option<&[Option<ColumnSample>]>,
+        pos: Vec2<i32>,
+    ) -> MapSample {
+        sample_pos_with(config, self, index, samples, pos, true)
+    }
+}
+
 /// Samples a MapSample at a chunk.
 ///
 /// You should generally pass a closure over this function into generate
@@ -405,27 +536,25 @@ pub fn sample_pos_with(
     // columns make it mostly dry by `chunk_water`'s majority-of-columns rule,
     // so a chunk only partly covered by a dry patch keeps the table's water
     // when the water still holds at least half of it.
-    let authored_dry = authored_ground && !is_basement && sampler.chunk_is_authored_dry(pos);
     // A mostly dry chunk the patch does not cover entirely keeps the table's
     // river link to its downhill chunk: the natural river still runs through
     // its unauthored columns, and dropping the link would leave a stub
     // upstream. Only a fully authored dry chunk drops it.
-    let authored_fully_dry = authored_dry
-        && sampler
-            .authored_rasters
-            .as_ref()
-            .and_then(|r| r.chunk_summary(pos))
-            .is_some_and(|s| s.authored_columns == TerrainChunkSize::RECT_SIZE.product());
+    let presentation = if authored_ground {
+        sampler.chunk_presentation(config, pos)
+    } else {
+        ChunkPresentation::TABLE
+    };
     let depth_m = (alt.max(water_alt) - alt).max(0.0) as f64;
     let true_water_alt = (alt.max(water_alt) as f64 - focus.z) / gain as f64;
     let true_alt = (alt as f64 - focus.z) / gain as f64;
     // What the colour decisions below read: on authored dry ground, no water
     // of any kind and no "below sea level"; elsewhere the values themselves.
-    let (colour_river_kind, colour_depth_m, colour_true_alt) = if authored_dry {
-        (None, 0.0, true_alt.max(true_sea_level))
-    } else {
-        (river_kind, depth_m, true_alt)
-    };
+    let (colour_river_kind, colour_depth_m, colour_true_alt) = (
+        presentation.water_kind(river_kind),
+        presentation.water_depth(depth_m),
+        presentation.colour_alt(true_alt, true_sea_level),
+    );
     let alt = true_alt.clamp(0.0, 1.0);
 
     let default_rgb = Rgb::new(
@@ -444,7 +573,7 @@ pub fn sample_pos_with(
     let mut has_connections = false;
     // TODO: Support non-river connections.
     // TODO: Support multiple connections.
-    let connection_river_kind = if authored_fully_dry { None } else { river_kind };
+    let connection_river_kind = presentation.connection_kind(river_kind);
     let river_width = connection_river_kind.map(|river| match river {
         RiverKind::River { cross_section } => cross_section.x,
         RiverKind::Lake { .. } | RiverKind::Ocean => TerrainChunkSize::RECT_SIZE.x as f32,
@@ -464,8 +593,7 @@ pub fn sample_pos_with(
                 });
             });
     };
-    let rgb = if is_water
-        && !authored_dry
+    let rgb = if presentation.shows_water(is_water)
         && is_ice
         && column_data.is_some_and(|(_, _, ice_depth, _, _, _)| ice_depth > 0.0)
     {
@@ -634,7 +762,7 @@ pub fn sample_pos_with(
         // level (so it is not painted as water); shading keeps the real
         // relief. `WorldMapMsg::alt` is packed separately and clamps at sea
         // level.
-        alt: if is_water && !authored_dry {
+        alt: if presentation.shows_water(is_water) {
             true_alt.max(true_water_alt)
         } else {
             true_alt
