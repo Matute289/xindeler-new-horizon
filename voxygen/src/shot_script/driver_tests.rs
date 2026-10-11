@@ -543,6 +543,7 @@ fn later_slice_steps_fail_without_commands() {
 fn exit_code_reflects_failed_steps() {
     let ctx = Fake::new();
     let mut ok = StepRunner::new(&script("WaitSeconds(0.1)", 0));
+    ok.tick(&ctx);
     ctx.advance(1.0);
     ok.tick(&ctx);
     assert!(ok.is_finished());

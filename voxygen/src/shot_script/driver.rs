@@ -701,6 +701,8 @@ impl StepRunner {
                 anchor.returning_since = None;
                 anchor.rest = Rest::default();
                 anchor.rest_z = None;
+                // Back: the waiting step restarts from now.
+                return Drift::Hold(None);
             } else if now - since <= TELEPORT_TIMEOUT_S {
                 // The re-teleport is still travelling to the server and back.
                 return Drift::Hold(None);
