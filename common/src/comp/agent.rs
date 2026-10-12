@@ -685,6 +685,7 @@ pub struct Agent {
     /// the same precision over a long-running server.
     pub disguise_suspicion_last_roll: f64,
     pub multi_pid_controllers: Option<PidControllers<16>>,
+    pub mark: Option<Mark>,
     /// Position from which to flee. Intended to be the agent's position plus a
     /// random position offset, to be used when a random flee direction is
     /// required and reset each time the flee timer is reset.
@@ -812,6 +813,7 @@ impl Agent {
             close_inspected_disguises: Vec::new(),
             disguise_suspicion_last_roll: 0.0,
             multi_pid_controllers: None,
+            mark: None,
             flee_from_pos: None,
             stay_pos: None,
             pet_command: PetCommand::default(),
