@@ -1500,6 +1500,12 @@ impl<V: RectRasterableVol> Terrain<V> {
 
     pub fn chunk_count(&self) -> usize { self.chunks.len() }
 
+    /// The chunk has a finished mesh and no pending (re)mesh job.
+    #[cfg(feature = "shot-script")]
+    pub fn is_meshed(&self, chunk_key: Vec2<i32>) -> bool {
+        self.chunks.contains_key(&chunk_key) && !self.mesh_todo.contains_key(&chunk_key)
+    }
+
     pub fn visible_chunk_count(&self) -> usize {
         self.chunks
             .iter()

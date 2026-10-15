@@ -55,6 +55,9 @@ pub const USERNAME: &str = "t13shot";
 pub const CHARACTER_ALIAS: &str = "t13shot";
 /// Process exit code for script, setup or login errors.
 pub const SETUP_EXIT_CODE: i32 = 2;
+/// Process exit code when the script ran to the end but at least one step
+/// failed.
+pub const STEP_FAILED_EXIT_CODE: i32 = 3;
 
 /// Everything the driver needs, validated once at startup.
 #[derive(Debug)]
@@ -339,6 +342,10 @@ pub fn active() -> Option<&'static ShotSetup> { ACTIVE.get() }
 /// Exit code the process must end with, once the run was aborted. `main`
 /// checks it after the normal shutdown, when the log writers can be flushed.
 pub fn exit_code() -> Option<i32> { EXIT_CODE.get().copied() }
+
+/// Set the exit code the process ends with (see [`exit_code`]). The first
+/// code set wins, so an earlier, more specific failure is kept.
+pub fn set_exit_code(code: i32) { let _ = EXIT_CODE.set(code); }
 
 /// Report a login failure and request shutdown with [`SETUP_EXIT_CODE`].
 /// The caller returns `PlayStateResult::Shutdown`.
