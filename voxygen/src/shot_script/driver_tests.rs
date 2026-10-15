@@ -1018,3 +1018,363 @@ fn camera_step_after_viewpoint_returns_to_the_player() {
     }
     assert_eq!(ctx.center_asked.get(), Some(None), "player-centred again");
 }
+
+// ---- report.json ----
+
+mod report_tests {
+    use super::*;
+    use crate::shot_script::report::{
+        self, FileFacts, REPORT_FILE, Report, RunInfo, StepStatus, build_report, file_facts,
+        write_report,
+    };
+    use std::path::{Path, PathBuf};
+
+    fn info(abort_exit_code: i32) -> RunInfo {
+        RunInfo {
+            script_name: Some("s.ron".into()),
+            script_sha256: Some("ab".repeat(32)),
+            server: "127.0.0.1:14004".into(),
+            started_at: "2026-10-15T10:00:00.000Z".into(),
+            ended_at: "2026-10-15T10:01:00.000Z".into(),
+            duration_s: 60.0,
+            tool_version: None,
+            engine_commit: Some("0123abcd".into()),
+            client_view_distance: Some(12),
+            abort_reason: None,
+            abort_exit_code,
+        }
+    }
+
+    fn no_files(_: &str) -> FileFacts { None }
+
+    fn scratch(tag: &str) -> PathBuf {
+        use std::os::unix::fs::DirBuilderExt;
+        let dir = std::env::temp_dir().join(format!(
+            "shot-report-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+        dir
+    }
+
+    /// Run `steps` with time and the shot outcome driven by the test until
+    /// the runner finishes.
+    fn run_mixed(shot: ShotOutcome) -> StepRunner {
+        let ctx = Fake::new();
+        ctx.terrain.set(READY);
+        ctx.tod.set(Some(3.0 * 3600.0));
+        let mut r = StepRunner::new(&script(
+            r#"Teleport(wpos: (10.0, 20.0, 100.0)), Time("dusk"), Screenshot(name: "a"), Sample(label: "end")"#,
+            0,
+        ));
+        for _ in 0..400 {
+            if let Some(a) = r.tick(&ctx) {
+                match a {
+                    Action::SendCommand(c) if c.to_string().starts_with("/goto") => {
+                        ctx.at(10.0, 20.0, 100.0 + 0.001);
+                        ctx.advance(0.1);
+                        ctx.at(10.0, 20.0, 100.0);
+                    },
+                    Action::Screenshot { .. } => *ctx.shot.borrow_mut() = Some(shot.clone()),
+                    _ => {},
+                }
+            }
+            ctx.advance(0.5);
+            if r.is_finished() {
+                break;
+            }
+        }
+        assert!(r.is_finished());
+        r
+    }
+
+    #[test]
+    fn mixed_run_reports_each_step() {
+        let dir = scratch("mixed");
+        let r = run_mixed(ShotOutcome::Written);
+        // Pretend the renderer wrote the file.
+        let png = b"png bytes";
+        std::fs::write(dir.join("001_a.png"), png).unwrap();
+        let rep = build_report(&r, &info(1), &|f| file_facts(&dir, f));
+        assert_eq!(rep.steps.len(), 4);
+        assert_eq!(rep.steps_ok, 3);
+        assert_eq!(rep.steps_failed, 1);
+        assert_eq!(rep.steps_skipped, 0);
+        assert_eq!(rep.steps_total, 4);
+        assert_eq!(Some(rep.exit_code), finished_exit_code(&r));
+        assert_eq!(rep.exit_code, STEP_FAILED_EXIT_CODE);
+        let tp = &rep.steps[0];
+        assert_eq!((tp.kind.as_str(), tp.status), ("Teleport", StepStatus::Ok));
+        assert_eq!(tp.position_before, Some([0.0, 0.0, 100.0]));
+        assert_eq!(tp.position_after, Some([10.0, 20.0, 100.0]));
+        let time = &rep.steps[1];
+        assert_eq!(time.status, StepStatus::Failed);
+        assert_eq!(time.name.as_deref(), Some("dusk"));
+        assert!(time.failure_reason.as_deref().unwrap().contains("dusk"));
+        assert_eq!(time.position_before, None, "positions are for teleports");
+        let shot = &rep.steps[2];
+        assert_eq!(shot.status, StepStatus::Ok);
+        let s = shot.screenshot.as_ref().unwrap();
+        assert_eq!(s.file, "001_a.png");
+        assert!(s.written);
+        assert_eq!(s.bytes, Some(png.len() as u64));
+        assert_eq!(s.sha256.as_deref(), Some(report::sha256_hex(png).as_str()));
+        let t = shot.terrain.as_ref().unwrap();
+        assert_eq!(
+            (t.chunks_total, t.chunks_loaded, t.chunks_meshed),
+            (10, 10, 10)
+        );
+        assert!(t.ready && !t.timed_out);
+        assert!(shot.duration_s.unwrap() >= 0.0);
+        assert_eq!(rep.view_distance.script, 12);
+        assert_eq!(rep.view_distance.client, Some(12));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn screenshot_failure_reports_exit_3_and_valid_json() {
+        let dir = scratch("exit3");
+        let r = run_mixed(ShotOutcome::Failed("disk full".into()));
+        let rep = build_report(&r, &info(1), &no_files);
+        assert_eq!(rep.exit_code, SCREENSHOT_FAILED_EXIT_CODE);
+        assert_eq!(Some(rep.exit_code), finished_exit_code(&r));
+        let shot = &rep.steps[2];
+        assert_eq!(shot.status, StepStatus::Failed);
+        assert_eq!(shot.failure_reason.as_deref(), Some("disk full"));
+        let s = shot.screenshot.as_ref().unwrap();
+        assert!(!s.written && s.bytes.is_none() && s.sha256.is_none());
+        let path = write_report(&dir, &rep).unwrap();
+        assert_eq!(path, dir.join(REPORT_FILE));
+        let back: Report =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).expect("valid json");
+        assert_eq!(back, rep);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn terrain_timeout_is_reported() {
+        let ctx = Fake::new();
+        ctx.terrain.set(NOT_READY);
+        let mut r = StepRunner::new(&script("WaitForTerrain(timeout_s: 5.0)", 0));
+        frames(&mut r, &ctx, 40, 0.5);
+        assert!(r.is_finished());
+        let rep = build_report(&r, &info(1), &no_files);
+        let t = rep.steps[0].terrain.as_ref().unwrap();
+        assert!(t.timed_out && !t.ready);
+        assert_eq!(
+            (t.chunks_total, t.chunks_loaded, t.chunks_meshed),
+            (10, 10, 7)
+        );
+        assert_eq!(rep.exit_code, STEP_FAILED_EXIT_CODE);
+    }
+
+    #[test]
+    fn unfinished_run_marks_the_rest_skipped_with_the_abort_code() {
+        let ctx = Fake::new();
+        let r = StepRunner::new(&script(r#"Time("noon"), WaitSeconds(1.0)"#, 0));
+        let mut i = info(2);
+        i.abort_reason = Some("login failed".into());
+        let rep = build_report(&r, &i, &no_files);
+        assert_eq!(rep.steps_skipped, 2);
+        assert_eq!(rep.steps_ok + rep.steps_failed, 0);
+        assert_eq!(rep.exit_code, 2);
+        assert_eq!(rep.abort_reason.as_deref(), Some("login failed"));
+        assert!(rep.steps.iter().all(|s| s.started_s.is_none()));
+        drop(ctx);
+    }
+
+    #[test]
+    fn running_step_is_aborted_not_skipped_and_codes_agree() {
+        let ctx = Fake::new();
+        ctx.terrain.set(READY);
+        let mut r = StepRunner::new(&script(
+            r#"Time("noon"), WaitSeconds(100.0), Sample(label: "z")"#,
+            0,
+        ));
+        ctx.tod.set(Some(12.0 * 3600.0));
+        for _ in 0..6 {
+            r.tick(&ctx);
+            ctx.advance(0.5);
+        }
+        assert!(!r.is_finished());
+        let reason = crate::shot_script::driver::abort_reason(&r);
+        assert!(
+            reason.as_deref().unwrap().contains("step index 1"),
+            "{reason:?}"
+        );
+        assert_eq!(
+            crate::shot_script::driver::abort_code(&r),
+            STEP_FAILED_EXIT_CODE
+        );
+        let mut i = info(crate::shot_script::driver::abort_code(&r));
+        i.abort_reason = reason;
+        let rep = build_report(&r, &i, &no_files);
+        let st: Vec<_> = rep.steps.iter().map(|s| s.status).collect();
+        assert_eq!(st, [
+            StepStatus::Ok,
+            StepStatus::Aborted,
+            StepStatus::Skipped
+        ]);
+        assert_eq!((rep.steps_aborted, rep.steps_skipped), (1, 1));
+        assert!(rep.steps[1].started_s.is_some() && rep.steps[1].ended_s.is_none());
+        assert!(rep.steps[1].failure_reason.is_some());
+        assert_eq!(rep.exit_code, 1);
+    }
+
+    #[test]
+    fn abort_code_agrees_with_the_report_on_early_ends() {
+        use crate::shot_script::driver::{abort_code, abort_reason};
+        // (a) a screenshot already failed, then the session ends early.
+        let mut r = run_mixed(ShotOutcome::Failed("disk full".into()));
+        assert!(r.is_finished());
+        assert_eq!(abort_code(&r), SCREENSHOT_FAILED_EXIT_CODE);
+        assert_eq!(abort_reason(&r), None, "a finished script is never aborted");
+        let rep = build_report(&r, &info(abort_code(&r)), &no_files);
+        assert_eq!(rep.exit_code, abort_code(&r));
+        // (b) finished in its last tick with every step ok: code 0, no abort.
+        let ctx = Fake::new();
+        r = StepRunner::new(&script("WaitSeconds(0.1)", 0));
+        for _ in 0..10 {
+            r.tick(&ctx);
+            ctx.advance(0.5);
+        }
+        assert!(r.is_finished());
+        assert_eq!((abort_code(&r), abort_reason(&r)), (0, None));
+        assert_eq!(build_report(&r, &info(1), &no_files).exit_code, 0);
+        // Unfinished with a failed screenshot recorded keeps code 3.
+        let ctx = Fake::new();
+        ctx.terrain.set(READY);
+        let mut r = StepRunner::new(&script(r#"Screenshot(name: "a"), WaitSeconds(100.0)"#, 0));
+        for _ in 0..40 {
+            if matches!(r.tick(&ctx), Some(Action::Screenshot { .. })) {
+                *ctx.shot.borrow_mut() = Some(ShotOutcome::Failed("x".into()));
+            }
+            ctx.advance(0.5);
+            if r.screenshot_failed() {
+                break;
+            }
+        }
+        assert!(!r.is_finished() && r.screenshot_failed());
+        assert_eq!(abort_code(&r), SCREENSHOT_FAILED_EXIT_CODE);
+        assert!(abort_reason(&r).is_some());
+    }
+
+    #[test]
+    fn engine_commit_maps_the_zero_hash_to_none() {
+        assert_eq!(report::engine_commit(0), None);
+        assert_eq!(report::engine_commit(0xabc).as_deref(), Some("00000abc"));
+    }
+
+    #[test]
+    fn json_has_the_documented_fields_and_leaks_no_paths() {
+        let dir = scratch("fields");
+        let r = run_mixed(ShotOutcome::Written);
+        let rep = build_report(&r, &info(1), &no_files);
+        let path = write_report(&dir, &rep).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        for k in [
+            "schema_version",
+            "script",
+            "server",
+            "started_at",
+            "ended_at",
+            "duration_s",
+            "tool_version",
+            "engine_commit",
+            "view_distance",
+            "steps_total",
+            "steps_ok",
+            "steps_failed",
+            "steps_skipped",
+            "steps_aborted",
+            "exit_code",
+            "abort_reason",
+            "steps",
+        ] {
+            assert!(v.get(k).is_some(), "missing {k}");
+        }
+        assert!(v["tool_version"].is_null());
+        for k in [
+            "index",
+            "kind",
+            "name",
+            "status",
+            "failure_reason",
+            "started_s",
+            "ended_s",
+            "duration_s",
+            "screenshot",
+            "terrain",
+            "position_before",
+            "position_after",
+        ] {
+            assert!(v["steps"][0].get(k).is_some(), "missing step.{k}");
+        }
+        assert_eq!(v["steps"][1]["status"], "failed");
+        let dir_str = dir.to_string_lossy();
+        assert!(!text.contains(&*dir_str), "out dir leaked");
+        assert!(!text.contains("/Users/") && !text.contains("/home/"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_is_atomic_private_and_replaces() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("atomic");
+        let r = run_mixed(ShotOutcome::Written);
+        let rep = build_report(&r, &info(1), &no_files);
+        std::fs::write(dir.join(REPORT_FILE), b"old").unwrap();
+        let path = write_report(&dir, &rep).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec![REPORT_FILE.to_string()], "no partial left");
+        // A stale partial of the same name fails cleanly and keeps the old
+        // report intact.
+        let partial = dir.join(format!("{REPORT_FILE}.{}.partial", std::process::id()));
+        std::fs::write(&partial, b"x").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(write_report(&dir, &rep).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_refuses_bad_directories_and_symlinked_targets() {
+        let dir = scratch("refuse");
+        let r = run_mixed(ShotOutcome::Written);
+        let rep = build_report(&r, &info(1), &no_files);
+        assert!(write_report(Path::new("relative/dir"), &rep).is_err());
+        assert!(write_report(&dir.join("..").join("x"), &rep).is_err());
+        // A symlink planted as report.json is replaced, never followed.
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"keep").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.join(REPORT_FILE)).unwrap();
+        write_report(&dir, &rep).unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        assert!(
+            serde_json::from_slice::<Report>(&std::fs::read(dir.join(REPORT_FILE)).unwrap())
+                .is_ok()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_facts_only_reads_plain_files_in_the_directory() {
+        let dir = scratch("facts");
+        std::fs::write(dir.join("a.png"), b"abc").unwrap();
+        assert_eq!(file_facts(&dir, "a.png").unwrap().0, 3);
+        assert!(file_facts(&dir, "missing.png").is_none());
+        assert!(file_facts(&dir, "../a.png").is_none());
+        assert!(file_facts(&dir, "").is_none());
+        std::os::unix::fs::symlink(dir.join("a.png"), dir.join("link.png")).unwrap();
+        assert!(file_facts(&dir, "link.png").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

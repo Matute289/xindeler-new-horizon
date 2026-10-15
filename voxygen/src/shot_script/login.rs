@@ -55,8 +55,9 @@ pub const USERNAME: &str = "t13shot";
 pub const CHARACTER_ALIAS: &str = "t13shot";
 /// Process exit code for script, setup or login errors.
 pub const SETUP_EXIT_CODE: i32 = 2;
-/// Process exit code when the script ran to the end but at least one step
-/// failed (the run continued and captured the rest).
+/// Process exit code when a step failed (the run continued and captured the
+/// rest) or the session ended before the last step (see the report's
+/// `abort_reason`).
 pub const STEP_FAILED_EXIT_CODE: i32 = 1;
 /// Process exit code when a screenshot could not be written.
 pub const SCREENSHOT_FAILED_EXIT_CODE: i32 = 3;
@@ -68,6 +69,10 @@ pub struct ShotSetup {
     pub server: SocketAddr,
     pub out_dir: PathBuf,
     pub connect_timeout: Duration,
+    /// File name (no directory) of the script, for the report.
+    pub script_name: Option<String>,
+    /// SHA-256 of the script file, for the report.
+    pub script_sha256: Option<String>,
 }
 
 #[derive(Debug)]
@@ -295,6 +300,8 @@ pub fn setup_with(
         server,
         out_dir,
         connect_timeout,
+        script_name: None,
+        script_sha256: None,
     })
 }
 
@@ -318,8 +325,17 @@ pub fn init_from_env() -> Result<(), i32> {
     let Some(script) = super::load_from_env() else {
         return Ok(());
     };
+    super::report::mark_run_start();
+    let (script, sha256) = match script {
+        Ok((script, sha)) => (Ok(script), Some(sha)),
+        Err(e) => (Err(e), None),
+    };
     match setup_with(script, |k| std::env::var_os(k)) {
-        Ok(setup) => {
+        Ok(mut setup) => {
+            if let Some(path) = super::script_path_from_env() {
+                setup.script_name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                setup.script_sha256 = sha256;
+            }
             info!(
                 server = %setup.server,
                 out_dir = %setup.out_dir.display(),
@@ -354,6 +370,7 @@ pub fn set_exit_code(code: i32) { let _ = EXIT_CODE.set(code); }
 fn fail(msg: &str) {
     report(&format!("shot script login failed: {msg}"));
     let _ = EXIT_CODE.set(SETUP_EXIT_CODE);
+    super::report::write_abort_report(msg, SETUP_EXIT_CODE);
 }
 
 /// The user's own `minimap_show` value, remembered before the script first
