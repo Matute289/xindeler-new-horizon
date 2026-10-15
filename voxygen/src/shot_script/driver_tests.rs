@@ -676,8 +676,8 @@ fn commands_match_the_command_table() {
 
 #[test]
 fn screenshot_file_names_are_plain() {
-    assert_eq!(screenshot_file_name(1, "deck_noon"), "01_deck_noon.png");
-    assert_eq!(screenshot_file_name(12, "a.b-c"), "12_a.b-c.png");
+    assert_eq!(screenshot_file_name(1, "deck_noon"), "001_deck_noon.png");
+    assert_eq!(screenshot_file_name(12, "a.b-c"), "012_a.b-c.png");
     for evil in [
         "../../etc/passwd",
         "a/b",
@@ -699,7 +699,7 @@ fn screenshot_file_names_are_plain() {
             "{n}"
         );
     }
-    assert_eq!(screenshot_file_name(1, ".x"), "01__x.png");
+    assert_eq!(screenshot_file_name(1, ".x"), "001__x.png");
 }
 
 #[test]
@@ -860,7 +860,7 @@ fn screenshot_hides_hud_waits_and_restores() {
     assert_eq!(
         saw,
         Some(Action::Screenshot {
-            file_name: "01_deck.png".into()
+            file_name: "001_deck.png".into()
         })
     );
     assert!(r.records().is_empty(), "waits for the file");
@@ -884,7 +884,7 @@ fn screenshot_without_hide_hud_sends_no_hud_actions() {
     assert_eq!(
         a,
         Some(Action::Screenshot {
-            file_name: "01_a.png".into()
+            file_name: "001_a.png".into()
         })
     );
     *ctx.shot.borrow_mut() = Some(ShotOutcome::Written);
@@ -965,4 +965,56 @@ fn screenshot_after_viewpoint_checks_terrain_around_the_camera() {
     }
     assert!(matches!(seen, Some(Action::Screenshot { .. })), "{seen:?}");
     assert_eq!(ctx.center_asked.get(), Some(Some(Vec2::new(500.0, 600.0))));
+}
+
+#[test]
+fn ordinals_sort_past_ninety_nine() {
+    assert_eq!(screenshot_file_name(100, "x"), "100_x.png");
+    assert!(screenshot_file_name(99, "x") < screenshot_file_name(100, "x"));
+}
+
+#[test]
+fn teleport_after_viewpoint_keeps_watching_the_camera() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    ctx.at(10.0, 10.0, 100.0);
+    let mut r = StepRunner::new(&script(
+        r#"Viewpoint(cam: (500.0, 600.0, 90.0), look_at: (500.0, 700.0, 80.0)),
+           Teleport(wpos: (10.0, 10.0, 100.0)),
+           Screenshot(name: "after")"#,
+        0,
+    ));
+    let mut saw_shot = false;
+    for _ in 0..80 {
+        ctx.advance(0.3);
+        if matches!(r.tick(&ctx), Some(Action::Screenshot { .. })) {
+            saw_shot = true;
+            break;
+        }
+    }
+    assert!(saw_shot);
+    assert_eq!(
+        ctx.center_asked.get(),
+        Some(Some(Vec2::new(500.0, 600.0))),
+        "the lens is still at the viewpoint"
+    );
+}
+
+#[test]
+fn camera_step_after_viewpoint_returns_to_the_player() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    let mut r = StepRunner::new(&script(
+        r#"Viewpoint(cam: (500.0, 600.0, 90.0), look_at: (500.0, 700.0, 80.0)),
+           Camera(yaw_deg: 0.0, pitch_deg: -10.0, distance: 8.0),
+           Screenshot(name: "back")"#,
+        0,
+    ));
+    for _ in 0..80 {
+        ctx.advance(0.3);
+        if matches!(r.tick(&ctx), Some(Action::Screenshot { .. })) {
+            break;
+        }
+    }
+    assert_eq!(ctx.center_asked.get(), Some(None), "player-centred again");
 }

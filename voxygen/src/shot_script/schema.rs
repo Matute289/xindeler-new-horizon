@@ -87,13 +87,18 @@ pub enum Step {
     },
     /// Orbit camera relative to the player. `yaw_deg` is the compass heading
     /// of the view direction (0 looks along +Y, 90 along +X); `pitch_deg` is
-    /// its elevation (negative looks down); `distance` is in blocks.
+    /// its elevation (negative looks down); `distance` is in blocks (at most
+    /// 500).
     Camera {
         yaw_deg: f32,
         pitch_deg: f32,
         distance: f32,
     },
     /// Free-flying camera at `cam`, looking at `look_at` (world positions).
+    /// Terrain is only streamed around the player, so a viewpoint farther
+    /// than the server view distance from the player never gets terrain:
+    /// `Teleport` the player near it first. The camera stays there (also
+    /// across `Teleport`) until a `Camera` step puts it behind the player.
     Viewpoint {
         cam: (f32, f32, f32),
         look_at: (f32, f32, f32),
@@ -332,6 +337,11 @@ fn validate_step(step: &Step) -> Result<(), String> {
             if *distance < 0.0 {
                 return Err(format!("distance must not be negative, got {distance}"));
             }
+            if *distance > MAX_CAMERA_DISTANCE {
+                return Err(format!(
+                    "distance must be at most {MAX_CAMERA_DISTANCE} blocks, got {distance}"
+                ));
+            }
         },
         Step::Viewpoint { cam, look_at } => {
             finite3("cam", *cam)?;
@@ -347,6 +357,9 @@ fn validate_step(step: &Step) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Largest accepted orbit-camera `distance`, in blocks.
+pub const MAX_CAMERA_DISTANCE: f32 = 500.0;
 
 /// Screenshot names become file names inside the output directory, so they
 /// must not be able to escape it. Specific reasons are reported for the

@@ -356,6 +356,32 @@ fn fail(msg: &str) {
     let _ = EXIT_CODE.set(SETUP_EXIT_CODE);
 }
 
+/// The user's own `minimap_show` value, remembered before the script first
+/// changed it, so that a run never leaves the minimap switched in the real
+/// settings (they are saved on exit).
+static MINIMAP_ORIGINAL: Mutex<Option<bool>> = Mutex::new(None);
+
+/// Remember `current` as the value to restore, unless one is already kept.
+pub fn remember_minimap(current: bool) {
+    if let Ok(mut g) = MINIMAP_ORIGINAL.lock() {
+        g.get_or_insert(current);
+    }
+}
+
+/// Put back what a script changed in the settings. Called right before the
+/// settings are saved on exit, so every shutdown path is covered.
+pub fn restore_settings(settings: &mut crate::settings::Settings) {
+    restore_minimap(&mut settings.interface.minimap_show);
+}
+
+pub(crate) fn restore_minimap(minimap_show: &mut bool) {
+    if let Ok(mut g) = MINIMAP_ORIGINAL.lock()
+        && let Some(original) = g.take()
+    {
+        *minimap_show = original;
+    }
+}
+
 /// Turn off settings that would open a modal nobody is there to close (the
 /// first-session intro). In memory only; the runner's config dir is scratch.
 pub fn suppress_modals(settings: &mut crate::settings::Settings) {

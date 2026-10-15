@@ -139,14 +139,28 @@ impl fmt::Display for ShotCommand {
     }
 }
 
+/// Decide how the HUD comes back when a step that hid it ends: in this tick
+/// when it has no other action, otherwise (an action cannot be replaced)
+/// flagged for the next tick.
+fn settle_hud(hidden: bool, action: Option<Action>, pending: &mut bool) -> Option<Action> {
+    match (hidden, action) {
+        (true, None) => Some(Action::Hud(true)),
+        (true, Some(a)) => {
+            *pending = true;
+            Some(a)
+        },
+        (false, a) => a,
+    }
+}
+
 /// Fixed-precision coordinate formatting (centimetres are plenty).
 fn coord(v: f32) -> String { format!("{v:.2}") }
 
-/// Name of a screenshot file: `NN_<name>.png`, where `NN` is the 1-based
-/// ordinal of the screenshot in the script. Anything outside
-/// `[A-Za-z0-9_.-]` becomes `_` and a leading `.` is replaced too, so the
-/// result is always a single plain file name (validated names already are;
-/// this is the second line of defence).
+/// Name of a screenshot file: `NNN_<name>.png`, where `NNN` is the 1-based
+/// ordinal (at least three digits so files sort correctly up to 999 shots) of
+/// the screenshot in the script. Anything outside `[A-Za-z0-9_.-]` becomes `_`
+/// and a leading `.` is replaced too, so the result is always a single plain
+/// file name (validated names already are; this is the second line of defence).
 pub fn screenshot_file_name(ordinal: u32, name: &str) -> String {
     let clean: String = name
         .chars()
@@ -159,7 +173,7 @@ pub fn screenshot_file_name(ordinal: u32, name: &str) -> String {
         .collect();
     // `..` can never appear, even inside a name.
     let clean = clean.replace("..", "_");
-    format!("{ordinal:02}_{clean}.png")
+    format!("{ordinal:03}_{clean}.png")
 }
 
 /// Orbit-camera orientation for a `Camera` step, as the camera's
@@ -397,8 +411,13 @@ pub struct StepRunner {
     anchor: Option<Anchor>,
     records: Vec<StepRecord>,
     /// World x/y the camera looks at after a `Viewpoint`; `None` while the
-    /// camera follows the player.
+    /// camera follows the player. Set by `Viewpoint` and cleared only by the
+    /// `Camera` step that restores the third-person camera: teleporting the
+    /// player does not move a free camera.
     view_center: Option<Vec2<f32>>,
+    /// The HUD must be shown again on the next tick (the step that hid it
+    /// ended on a tick that already had another action to emit).
+    pending_hud_restore: bool,
     /// Screenshots started so far (names the next file).
     shots_started: u32,
     shot: ShotState,
@@ -427,6 +446,7 @@ impl StepRunner {
             anchor: None,
             records: Vec::new(),
             view_center: None,
+            pending_hud_restore: false,
             shots_started: 0,
             shot: ShotState::default(),
             screenshot_failed: false,
@@ -454,6 +474,9 @@ impl StepRunner {
 
     /// Advance the current step by one frame.
     pub fn tick(&mut self, ctx: &impl RunnerContext) -> Option<Action> {
+        if std::mem::take(&mut self.pending_hud_restore) {
+            return Some(Action::Hud(true));
+        }
         let step = self.steps.get(self.index)?.clone();
         let (outcome, mut action) = if ctx.player_dead() && needs_live_player(&step) {
             (StepOutcome::Failed("the player is dead".into()), None)
@@ -484,9 +507,7 @@ impl StepRunner {
                 self.index += 1;
                 self.phase = Phase::Start;
                 // Whatever ended the step, the HUD comes back.
-                if std::mem::take(&mut self.shot.hud_hidden) && action.is_none() {
-                    action = Some(Action::Hud(true));
-                }
+                action = settle_hud(self.shot.hud_hidden, action, &mut self.pending_hud_restore);
                 self.shot = ShotState::default();
             },
         }
@@ -498,8 +519,11 @@ impl StepRunner {
         match step {
             Step::Time(name) => self.tick_time(name, now, ctx),
             Step::Teleport { wpos } => {
+                // `view_center` is deliberately kept: after a `Viewpoint` the
+                // lens stays at the viewpoint (the camera is still free)
+                // until a `Camera` step puts it back behind the player, and
+                // terrain waits and screenshots must watch where the lens is.
                 let target = Vec3::new(wpos.0, wpos.1, wpos.2);
-                self.view_center = None;
                 match self.phase {
                     Phase::Start => self.start_goto(target, now, ctx),
                     _ => self.tick_arriving(now, ctx),
@@ -510,7 +534,7 @@ impl StepRunner {
                 py,
                 z_above_ground,
             } => {
-                self.view_center = None;
+                // `view_center` is kept, see `Teleport`.
                 self.tick_cromatolis(*px, *py, *z_above_ground, now, ctx)
             },
             Step::WaitForTerrain {
@@ -1010,8 +1034,16 @@ impl StepRunner {
             let status = ctx.terrain_status(center, radius);
             (
                 StepOutcome::Failed(format!(
-                    "terrain not ready after {timeout:.0}s: {} of {} chunks loaded, {} meshed",
-                    status.loaded, status.total, status.meshed
+                    "terrain not ready after {timeout:.0}s: {} of {} chunks loaded, {} meshed{}",
+                    status.loaded,
+                    status.total,
+                    status.meshed,
+                    if center.is_some() {
+                        " (the viewpoint may be farther than the server view distance from the \
+                         player: teleport the player near it first)"
+                    } else {
+                        ""
+                    }
                 )),
                 None,
             )
@@ -1132,6 +1164,8 @@ pub struct SessionDriver {
     out_dir: PathBuf,
     shot_tx: crossbeam_channel::Sender<ShotResult>,
     shot_rx: crossbeam_channel::Receiver<ShotResult>,
+    /// File the outstanding screenshot request writes.
+    expected_shot: Option<PathBuf>,
 }
 
 /// What the session should do after the driver's tick.
@@ -1183,6 +1217,7 @@ impl SessionDriver {
                 out_dir: setup.out_dir.clone(),
                 shot_tx,
                 shot_rx,
+                expected_shot: None,
             }
         })
     }
@@ -1218,14 +1253,15 @@ impl SessionDriver {
         if client.position().is_none() {
             return (DriverStatus::Running, None);
         }
-        let screenshot = self.shot_rx.try_recv().ok().map(|r| match r {
-            Ok(path) => {
-                info!(path = %path.display(), "Shot screenshot written");
-                ShotOutcome::Written
-            },
-            Err(super::capture::ShotError::Dropped { .. }) => ShotOutcome::Dropped,
-            Err(e) => ShotOutcome::Failed(e.to_string()),
-        });
+        let screenshot =
+            take_matching_result(&self.shot_rx, self.expected_shot.as_deref()).map(|r| match r {
+                Ok(path) => {
+                    info!(path = %path.display(), "Shot screenshot written");
+                    ShotOutcome::Written
+                },
+                Err(super::capture::ShotError::Dropped { .. }) => ShotOutcome::Dropped,
+                Err(e) => ShotOutcome::Failed(e.to_string()),
+            });
         let ctx = LiveContext {
             client,
             terrain,
@@ -1262,14 +1298,44 @@ impl SessionDriver {
             Some(Action::Hud(show)) => Some(SessionEffect::Hud(show)),
             Some(Action::Screenshot { file_name }) => {
                 info!(file = %file_name, "Shot screenshot requested");
+                let path = self.out_dir.join(file_name);
+                // A late result of an earlier (timed out) request must not
+                // be taken for this one.
+                while self.shot_rx.try_recv().is_ok() {}
+                self.expected_shot = Some(path.clone());
                 Some(SessionEffect::Screenshot {
-                    path: self.out_dir.join(file_name),
+                    path,
                     done: self.shot_tx.clone(),
                 })
             },
         };
         (DriverStatus::Running, effect)
     }
+}
+
+/// Next screenshot result that belongs to `expected`; results for other
+/// files (late answers to abandoned requests) are discarded.
+fn take_matching_result(
+    rx: &crossbeam_channel::Receiver<ShotResult>,
+    expected: Option<&std::path::Path>,
+) -> Option<ShotResult> {
+    use super::capture::ShotError;
+    while let Ok(r) = rx.try_recv() {
+        let path = match &r {
+            Ok(p) => Some(p.as_path()),
+            Err(
+                ShotError::InvalidPath { path, .. }
+                | ShotError::Write { path, .. }
+                | ShotError::Dropped { path },
+            ) => Some(path.as_path()),
+            Err(ShotError::Readback(_)) => None,
+        };
+        if path.is_none_or(|p| Some(p) == expected) {
+            return Some(r);
+        }
+        warn!(path = ?path, "Ignoring a stale screenshot result");
+    }
+    None
 }
 
 struct LiveContext<'a> {
@@ -1356,4 +1422,39 @@ pub fn chunks_in_radius(
         .filter(move |d| d.x * d.x + d.y * d.y <= radius * radius)
         .map(move |d| center + d)
         .filter(move |k| k.x >= 0 && k.y >= 0 && k.x < size.x && k.y < size.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shot_script::capture::ShotError;
+
+    #[test]
+    fn hud_comes_back_next_tick_when_the_ending_tick_has_an_action() {
+        let mut pending = false;
+        assert_eq!(
+            settle_hud(true, None, &mut pending),
+            Some(Action::Hud(true))
+        );
+        assert!(!pending);
+        let a = Some(Action::Minimap(true));
+        assert_eq!(settle_hud(true, a.clone(), &mut pending), a);
+        assert!(pending, "restore is kept for the next tick");
+        let mut pending = false;
+        assert_eq!(settle_hud(false, None, &mut pending), None);
+        assert!(!pending);
+    }
+
+    #[test]
+    fn stale_screenshot_results_are_skipped() {
+        let (tx, rx) = crossbeam_channel::unbounded::<ShotResult>();
+        let old = PathBuf::from("/o/001_a.png");
+        let new = PathBuf::from("/o/002_b.png");
+        tx.send(Ok(old.clone())).unwrap();
+        tx.send(Err(ShotError::Dropped { path: old })).unwrap();
+        assert!(take_matching_result(&rx, Some(&new)).is_none());
+        tx.send(Ok(PathBuf::from("/o/001_a.png"))).unwrap();
+        tx.send(Ok(new.clone())).unwrap();
+        assert_eq!(take_matching_result(&rx, Some(&new)), Some(Ok(new)));
+    }
 }
