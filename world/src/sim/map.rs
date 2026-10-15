@@ -509,6 +509,29 @@ impl WorldSim {
     }
 }
 
+/// The base water colours of the world map, shallow to deep: the shade of a
+/// water cell is the first entry whose depth bound (`WATER_SHADE_DEPTHS_M`)
+/// it lies under, and the last entry past the final bound.
+pub(crate) const WATER_RGB: [[u8; 3]; 7] = [
+    [0, 0xa8, 0xc9],
+    [0, 0x91, 0xbd],
+    [0, 0x78, 0xab],
+    [0, 0x61, 0x99],
+    [0, 0x4b, 0x82],
+    [0, 0x36, 0x6b],
+    [0, 0x22, 0x52],
+];
+const WATER_SHADE_DEPTHS_M: [f64; 6] = [5.0, 15.0, 30.0, 70.0, 150.0, 300.0];
+
+/// The base water colour of the map for water `depth_m` metres deep.
+pub(crate) fn water_shade(depth_m: f64) -> [u8; 3] {
+    let bucket = WATER_SHADE_DEPTHS_M
+        .iter()
+        .position(|&bound| depth_m < bound)
+        .unwrap_or(WATER_SHADE_DEPTHS_M.len());
+    WATER_RGB[bucket]
+}
+
 /// Samples a MapSample at a chunk.
 ///
 /// You should generally pass a closure over this function into generate
@@ -676,6 +699,11 @@ pub fn sample_pos_with(
         });
 
     let downhill_wpos = downhill.unwrap_or(wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32));
+    // The altitude the frozen table draws this chunk at, read before a column
+    // sample replaces `alt`: the table paints a chunk as water when this lies
+    // below sea level (or it has a river kind), whatever the columns say.
+    let table_true_alt =
+        ((if is_basement { basement } else { alt }) as f64 - focus.z) / gain as f64;
     let alt = if is_basement {
         basement
     } else {
@@ -708,12 +736,12 @@ pub fn sample_pos_with(
     // Authored water the frozen table calls dry (a lake in a
     // `sea_fill: AuthoredOnly` region, below sea level or on table land) is
     // coloured as the water `chunk_water` reports, with its depth shade.
-    // Chunks the table already paints as water (a river kind, or an altitude
-    // below sea level), and every world without such a region, keep the
+    // Chunks the table already paints as water (a river kind, or a table
+    // altitude below sea level), and every world without such a region, keep the
     // table's colour byte for byte.
     if authored_ground
         && river_kind.is_none()
-        && colour_true_alt >= true_sea_level
+        && table_true_alt >= true_sea_level
         && let Some(water) = sampler.chunk_authored_only_wet(config, pos)
     {
         colour_river_kind = Some(RiverKind::Lake {
@@ -796,14 +824,9 @@ pub fn sample_pos_with(
                 );
                 Rgb::new((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
             },
-            (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => match colour_depth_m {
-                depth if depth < 5.0 => Rgb::new(0, 0xa8, 0xc9),
-                depth if depth < 15.0 => Rgb::new(0, 0x91, 0xbd),
-                depth if depth < 30.0 => Rgb::new(0, 0x78, 0xab),
-                depth if depth < 70.0 => Rgb::new(0, 0x61, 0x99),
-                depth if depth < 150.0 => Rgb::new(0, 0x4b, 0x82),
-                depth if depth < 300.0 => Rgb::new(0, 0x36, 0x6b),
-                _ => Rgb::new(0, 0x22, 0x52),
+            (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => {
+                let [r, g, b] = water_shade(colour_depth_m);
+                Rgb::new(r, g, b)
             },
         }
     };

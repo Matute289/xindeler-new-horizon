@@ -8,6 +8,8 @@ mod way;
 
 // Reexports
 use self::erosion::Compute;
+#[cfg(test)]
+pub(crate) use self::map::{WATER_RGB, water_shade};
 pub use self::{
     diffusion::diffusion,
     location::Location,

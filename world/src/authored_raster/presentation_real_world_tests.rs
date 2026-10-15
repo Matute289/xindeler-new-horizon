@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     CONFIG, World,
-    sim::{FileOpts, GenOpts, WorldOpts},
+    sim::{FileOpts, GenOpts, WATER_RGB, WorldOpts, water_shade},
     util::Sampler,
 };
 use common::{
@@ -166,17 +166,6 @@ fn lod_altitude_follows_the_ground_patch_at_the_sample_columns() {
     assert_eq!(other_changed, 0);
 }
 
-/// The base water colours of the world map, shallow to deep.
-const WATER_RGB: [[u8; 3]; 7] = [
-    [0, 0xa8, 0xc9],
-    [0, 0x91, 0xbd],
-    [0, 0x78, 0xab],
-    [0, 0x61, 0x99],
-    [0, 0x4b, 0x82],
-    [0, 0x36, 0x6b],
-    [0, 0x22, 0x52],
-];
-
 fn map_rgb(msg: &WorldMapMsg, pos: Vec2<i32>) -> [u8; 3] {
     let [r, g, b, _] = msg.rgba.get(pos).copied().unwrap().to_le_bytes();
     [r, g, b]
@@ -186,9 +175,11 @@ fn map_rgb(msg: &WorldMapMsg, pos: Vec2<i32>) -> [u8; 3] {
 /// `sea_fill: AuthoredOnly` half, never a real settlement): the dry pit at
 /// -10 m and the dry depression at -1500 m are not coloured as water on the
 /// world map (the table-only map paints them as water), the lake whose
-/// surface is 20 m below sea level keeps its water colour, and no other chunk
+/// surface is 20 m below sea level stays water-coloured (shaded by its
+/// authored depth, as it lies over table land), and no other chunk
 /// of the map changes colour, natural sea and the `Auto` region included,
-/// except authored water the table calls land, which turns water-coloured.
+/// except authored water the table calls land (here lakes over table land
+/// above sea level), which turns water-coloured.
 #[test]
 #[ignore]
 fn world_map_colours_dry_ground_below_sea_level_as_ground() {
@@ -227,10 +218,29 @@ fn world_map_colours_dry_ground_below_sea_level_as_ground() {
     }
 
     let lake = chunk(23488, 24928);
-    println!("lake -20 m: map colour {:?}", map_rgb(&new, lake));
+    println!(
+        "lake -20 m: map colour {:?}, table {:?}, table alt {:?} sea {}, river {:?}, depth {:?}",
+        map_rgb(&new, lake),
+        map_rgb(&old, lake),
+        sim.get(lake).map(|c| c.alt),
+        CONFIG.sea_level,
+        sim.get(lake).map(|c| c.river.river_kind.is_some()),
+        sim.chunk_water_depth(lake),
+    );
     assert!(!sim.chunk_is_authored_dry(lake));
     assert!(is_water(map_rgb(&new, lake)), "the lake keeps water colour");
-    assert_eq!(map_rgb(&new, lake), map_rgb(&old, lake));
+    // The table calls this chunk land (its altitude is above sea level, no
+    // river) though its authored lake and column sample lie below sea level:
+    // the table-only map draws water by the column altitude, with the depth
+    // of the table's water altitude over it; the presented map shades the
+    // authored depth, the same shade as any lake over table land.
+    assert!(sim.get(lake).unwrap().alt >= CONFIG.sea_level);
+    assert!(sim.get(lake).unwrap().river.river_kind.is_none());
+    assert_eq!(
+        map_rgb(&new, lake),
+        water_shade(sim.chunk_water_depth(lake).unwrap().max(0.0) as f64),
+        "the below-sea lake over table land has the authored depth shade"
+    );
 
     let (mut changed, mut changed_bad, mut to_water, mut water) = (0, 0, 0, 0);
     for posi in 0..sim.map_size_lg().chunks_len() {
@@ -249,20 +259,19 @@ fn world_map_colours_dry_ground_below_sea_level_as_ground() {
                 .is_some_and(|s| s.authored_only && s.wet_columns > 0)
                 && sim.get(pos).is_some_and(|c| c.river.river_kind.is_none())
                 && sim.chunk_water(pos).is_some_and(|w| w.wet())
-                && is_water(map_rgb(&new, pos))
-                && !is_water(map_rgb(&old, pos));
+                && is_water(map_rgb(&new, pos));
             if lake_ok && !dry_ok {
                 to_water += 1;
                 let depth = sim.chunk_water_depth(pos).unwrap().max(0.0);
-                let expect = match depth {
-                    d if d < 5.0 => WATER_RGB[0],
-                    d if d < 15.0 => WATER_RGB[1],
-                    d if d < 30.0 => WATER_RGB[2],
-                    d if d < 70.0 => WATER_RGB[3],
-                    d if d < 150.0 => WATER_RGB[4],
-                    d if d < 300.0 => WATER_RGB[5],
-                    _ => WATER_RGB[6],
-                };
+                let expect = water_shade(depth as f64);
+                // The table calls these chunks land: its altitude is at or
+                // above sea level and there is no river (the lake surface
+                // itself is 20 m below sea level).
+                let table_alt = sim.get(pos).unwrap().alt;
+                assert!(
+                    table_alt >= CONFIG.sea_level,
+                    "to-water chunk {pos:?} is table land (table alt {table_alt})"
+                );
                 println!(
                     "to-water chunk {pos:?}: depth {depth:.1} m, {:?}",
                     map_rgb(&new, pos)
@@ -286,7 +295,10 @@ fn world_map_colours_dry_ground_below_sea_level_as_ground() {
         "only authored dry chunks turned to ground and authored lakes the table calls land turned \
          to water change colour"
     );
-    assert_eq!(to_water, 3, "the authored lake over table land");
+    assert_eq!(
+        to_water, 9,
+        "the 3x3 chunks of the -20 m lake over table land turn water-coloured"
+    );
     assert!(water > 1000, "the natural sea keeps its water colour");
 }
 
