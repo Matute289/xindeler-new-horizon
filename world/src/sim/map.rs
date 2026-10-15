@@ -9,10 +9,11 @@ use crate::{
     site::SiteKind,
 };
 use common::{
+    store::Id,
     terrain::{
         CoordinateConversions, NEIGHBOR_DELTA, TerrainChunkSize,
         map::{Connection, ConnectionKind, MapConfig, MapSample},
-        vec2_as_uniform_idx,
+        uniform_idx_as_vec2, vec2_as_uniform_idx,
     },
     vol::RectVolSize,
 };
@@ -323,6 +324,35 @@ impl ChunkPresentation {
 }
 
 impl WorldSim {
+    /// Where a biome label named after the natural biome table may be shown.
+    ///
+    /// `loc` is the chunk the label was named at. If that chunk is not
+    /// authored dry ground it is returned unchanged (so a world without
+    /// authored rasters never moves a label). Otherwise the label moves to
+    /// the closest chunk of the same biome (`poi`) that is not authored dry,
+    /// ties broken by chunk index so the result is deterministic; with none
+    /// left the label is dropped (`None`). This only reads the table and the
+    /// authored dry rule, so it never perturbs the generation RNG.
+    pub fn biome_label_chunk(
+        &self,
+        config: &MapConfig,
+        poi: Id<crate::civ::PointOfInterest>,
+        loc: Vec2<i32>,
+    ) -> Option<Vec2<i32>> {
+        if !self.chunk_presentation(config, loc).authored_dry {
+            return Some(loc);
+        }
+        let size = self.map_size_lg();
+        self.chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, chunk)| chunk.poi == Some(poi))
+            .map(|(posi, _)| (posi, uniform_idx_as_vec2(size, posi)))
+            .filter(|(_, pos)| !self.chunk_presentation(config, *pos).authored_dry)
+            .min_by_key(|(posi, pos)| (loc.distance_squared(*pos), *posi))
+            .map(|(_, pos)| pos)
+    }
+
     /// How a presentation path must treat `chunk_pos` under `config`
     /// ([`ChunkPresentation`]). The basement map, chunks outside every
     /// region and worlds without authored rasters get

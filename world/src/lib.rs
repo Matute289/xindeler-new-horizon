@@ -291,19 +291,35 @@ impl World {
         let land = Land::from_sim(self.sim());
         threadpool.install(|| {
             WorldMapMsg {
-                pois: self
-                    .civs()
-                    .pois
-                    .iter()
-                    .map(|(_, poi)| world_msg::PoiInfo {
-                        name: poi.name.clone(),
-                        kind: match &poi.kind {
-                            civ::PoiKind::Peak(alt) => world_msg::PoiKind::Peak(*alt),
-                            civ::PoiKind::Biome(size) => world_msg::PoiKind::Lake(*size),
-                        },
-                        wpos: poi.loc * TerrainChunkSize::RECT_SIZE.map(|e| e as i32),
-                    })
-                    .collect(),
+                pois: {
+                    // Biome labels come from the natural biome table; keep
+                    // them off authored dry ground (moved to a wet chunk of
+                    // the same biome, or dropped when none is left).
+                    let label_config = common::terrain::map::MapConfig::orthographic(
+                        self.sim().map_size_lg(),
+                        0.0..=self.sim().max_height,
+                    );
+                    self.civs()
+                        .pois
+                        .iter()
+                        .filter_map(|(id, poi)| {
+                            let (kind, loc) = match &poi.kind {
+                                civ::PoiKind::Peak(alt) => {
+                                    (world_msg::PoiKind::Peak(*alt), poi.loc)
+                                },
+                                civ::PoiKind::Biome(size) => (
+                                    world_msg::PoiKind::Lake(*size),
+                                    self.sim().biome_label_chunk(&label_config, id, poi.loc)?,
+                                ),
+                            };
+                            Some(world_msg::PoiInfo {
+                                name: poi.name.clone(),
+                                kind,
+                                wpos: loc * TerrainChunkSize::RECT_SIZE.map(|e| e as i32),
+                            })
+                        })
+                        .collect()
+                },
                 sites: self
                     .civs()
                     .sites
