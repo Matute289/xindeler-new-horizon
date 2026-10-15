@@ -532,23 +532,6 @@ pub(crate) fn water_shade(depth_m: f64) -> [u8; 3] {
     WATER_RGB[bucket]
 }
 
-/// Test seam: lets a test build the map as it was before land colours were
-/// kept off red zero, to compare against it. Always on outside tests.
-#[cfg(test)]
-pub(crate) static LAND_RED_CLAMP_OFF: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-fn land_red_clamp_enabled() -> bool {
-    #[cfg(test)]
-    {
-        !LAND_RED_CLAMP_OFF.load(std::sync::atomic::Ordering::Relaxed)
-    }
-    #[cfg(not(test))]
-    {
-        true
-    }
-}
-
 /// Samples a MapSample at a chunk.
 ///
 /// You should generally pass a closure over this function into generate
@@ -596,6 +579,22 @@ pub fn sample_pos_with(
     samples: Option<&[Option<ColumnSample>]>,
     pos: Vec2<i32>,
     authored_ground: bool,
+) -> MapSample {
+    sample_pos_opts(config, sampler, index, samples, pos, authored_ground, true)
+}
+
+/// [`sample_pos_with`] with the land red clamp (land colours never have a zero
+/// red channel) selectable: `false` gives the colours as they were before the
+/// clamp, which tests compare against.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sample_pos_opts(
+    config: &MapConfig,
+    sampler: &WorldSim,
+    index: IndexRef,
+    samples: Option<&[Option<ColumnSample>]>,
+    pos: Vec2<i32>,
+    authored_ground: bool,
+    land_red_clamp: bool,
 ) -> MapSample {
     let map_size_lg = config.map_size_lg();
     let MapConfig {
@@ -716,9 +715,9 @@ pub fn sample_pos_with(
         });
 
     let downhill_wpos = downhill.unwrap_or(wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32));
-    // The altitude the frozen table draws this chunk at, read before a column
-    // sample replaces `alt`: the table paints a chunk as water when this lies
-    // below sea level (or it has a river kind), whatever the columns say.
+    // The table chunk altitude, read before a column sample replaces `alt`:
+    // below sea level the chunk already counts as water, whatever the columns
+    // say.
     let table_true_alt =
         ((if is_basement { basement } else { alt }) as f64 - focus.z) / gain as f64;
     let alt = if is_basement {
@@ -966,7 +965,7 @@ pub fn sample_pos_with(
     // Land never has a zero red channel (a dark, green or blue surface, a
     // tint or the shading could otherwise reach it and read as water on the
     // client). Water keeps its colour exactly.
-    let rgb = if paints_water || !land_red_clamp_enabled() {
+    let rgb = if paints_water || !land_red_clamp {
         rgb
     } else {
         Rgb::new(rgb.r.max(1), rgb.g, rgb.b)

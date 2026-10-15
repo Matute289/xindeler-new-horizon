@@ -7,9 +7,8 @@ mod util;
 mod way;
 
 // Reexports
-use self::erosion::Compute;
 #[cfg(test)]
-pub(crate) use self::map::{LAND_RED_CLAMP_OFF, WATER_RGB, water_shade};
+pub(crate) use self::map::{WATER_RGB, water_shade};
 pub use self::{
     diffusion::diffusion,
     location::Location,
@@ -20,6 +19,7 @@ pub use self::{
     util::get_horizon_map,
     way::{Path, Way},
 };
+use self::{erosion::Compute, map::sample_pos_opts};
 pub(crate) use self::{
     erosion::{
         Alt, RiverData, RiverKind, do_erosion, fill_sinks, get_lakes, get_multi_drainage,
@@ -4103,6 +4103,18 @@ impl WorldSim {
         calendar: Option<&Calendar>,
         authored_ground: bool,
     ) -> WorldMapMsg {
+        self.get_map_opts(index, calendar, authored_ground, true)
+    }
+
+    /// [`Self::get_map_with`] with the land red clamp selectable (`false` is
+    /// the map as it was before land colours were kept off red zero).
+    pub(crate) fn get_map_opts(
+        &self,
+        index: IndexRef,
+        calendar: Option<&Calendar>,
+        authored_ground: bool,
+        land_red_clamp: bool,
+    ) -> WorldMapMsg {
         prof_span!("WorldSim::get_map");
         let mut map_config = MapConfig::orthographic(
             self.map_size_lg(),
@@ -4189,13 +4201,14 @@ impl WorldSim {
         };
         map_config.generate(
             |pos| {
-                sample_pos_with(
+                sample_pos_opts(
                     &map_config,
                     self,
                     index,
                     Some(&samples_data),
                     pos,
                     authored_ground,
+                    land_red_clamp,
                 )
             },
             |pos| present_wpos(&map_config, pos),

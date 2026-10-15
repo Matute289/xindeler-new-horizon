@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     CONFIG, World,
-    sim::{FileOpts, GenOpts, LAND_RED_CLAMP_OFF, WATER_RGB, WorldOpts, water_shade},
+    sim::{FileOpts, GenOpts, WATER_RGB, WorldOpts, water_shade},
     util::Sampler,
 };
 use common::{
@@ -30,18 +30,9 @@ fn map_bytes(msg: &WorldMapMsg) -> Vec<u8> {
     bincode::serde::encode_to_vec(msg, bincode::config::legacy()).unwrap()
 }
 
-/// Held while a map is built, so the test seam that switches the land red
-/// clamp off never leaks into another test's map.
-static CLAMP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// The map as it was before land colours were kept off red zero.
 fn map_without_land_clamp(world: &World, index: crate::IndexRef, presented: bool) -> WorldMapMsg {
-    use std::sync::atomic::Ordering;
-    let _guard = CLAMP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    LAND_RED_CLAMP_OFF.store(true, Ordering::Relaxed);
-    let map = world.sim().get_map_with(index, None, presented);
-    LAND_RED_CLAMP_OFF.store(false, Ordering::Relaxed);
-    map
+    world.sim().get_map_opts(index, None, presented, false)
 }
 
 /// The world's current maps (presented and table-only) against the maps
@@ -64,6 +55,13 @@ fn assert_only_land_red_raised(world: &World, index: crate::IndexRef, what: &str
                     o[0] == 0 && n[0] == 1 && n[1] == o[1] && n[2] == o[2],
                     "{what}: {pos:?} changed beyond red 0 -> 1: {o:?} -> {n:?}"
                 );
+                // Why a River-coloured pixel may be clamped: land colours
+                // only change on chunks that are not water.
+                let c = sim.get(pos).expect("chunk");
+                assert!(
+                    c.river.river_kind.is_none() && c.alt >= CONFIG.sea_level,
+                    "{what}: {pos:?} changed on a water chunk"
+                );
                 assert!(
                     !WATER_RGB.contains(&o),
                     "{what}: {pos:?} water colour {o:?} changed"
@@ -85,7 +83,6 @@ fn assert_only_land_red_raised(world: &World, index: crate::IndexRef, what: &str
 
 /// The map message with and without authored ground presentation.
 fn both_maps(world: &World, index: crate::IndexRef) -> (WorldMapMsg, WorldMapMsg) {
-    let _guard = CLAMP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     (
         world.sim().get_map_with(index, None, true),
         world.sim().get_map_with(index, None, false),
