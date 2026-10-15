@@ -2997,6 +2997,23 @@ fn authored_map_columns_on_a_synthetic_raster() {
         },
     ]);
     own.sea_fill = SeaFill::AuthoredOnly;
+    // Chunks that straddle authored and natural columns: a sliver of lake in a
+    // natural sea chunk, and a few water columns beside mostly dry ground.
+    let mut partial = region("partial_wet", (2560, 1024), (2816, 1280), 0, vec![
+        PaintOp::Water {
+            shape: rect(2624.0, 1120.0, 2628.0, 1152.0),
+            surface_cm: 12_050,
+            bed_cm: 11_050,
+        },
+        ground(rect(2688.0, 1120.0, 2716.0, 1152.0), 13_050),
+        PaintOp::Water {
+            shape: rect(2716.0, 1120.0, 2720.0, 1152.0),
+            surface_cm: 12_050,
+            bed_cm: 11_050,
+        },
+    ]);
+    partial.sea_fill = SeaFill::AuthoredOnly;
+    partial.allow_partial = true;
     let auto = region("sea_floor", (1024, 1024), (1280, 1280), 0, vec![ground(
         rect(1056.0, 1056.0, 1248.0, 1248.0),
         13_050,
@@ -3028,10 +3045,33 @@ fn authored_map_columns_on_a_synthetic_raster() {
     }
 
     sim.set_authored_rasters_for_test(Some(
-        load(&[build_region(&own).unwrap(), build_region(&auto).unwrap()]).unwrap(),
+        load(&[
+            build_region(&own).unwrap(),
+            build_region(&partial).unwrap(),
+            build_region(&auto).unwrap(),
+        ])
+        .unwrap(),
     ));
     assert_eq!(cols(&sim, (2096, 1072)), (false, true), "dry pit");
+    assert!(
+        cols(&sim, (2624, 1120)).0,
+        "natural sea plus a sliver of authored water is wet_authored"
+    );
+    assert!(
+        !cols(&sim, (2688, 1120)).0,
+        "authored water in a mostly dry chunk that chunk_water calls dry"
+    );
     assert_eq!(cols(&sim, (2192, 1168)), (true, false), "wet lake");
     assert_eq!(cols(&sim, (3000, 3000)), (false, false), "outside");
     assert_eq!(cols(&sim, (1104, 1104)), (false, false), "Auto sea floor");
+    // The basement map presents neither column.
+    let basement = MapConfig {
+        is_basement: true,
+        ..config
+    };
+    assert!(!sim.chunk_wet_authored(&basement, Vec2::new(2192, 1168) / CHUNK));
+    assert!(
+        !sim.chunk_presentation(&basement, Vec2::new(2096, 1072) / CHUNK)
+            .authored_dry
+    );
 }

@@ -377,9 +377,11 @@ impl WorldSim {
         }
     }
 
-    /// Whether the presented water of `chunk_pos` is wet because of authored
-    /// water: the chunk holds authored water cells and
-    /// [`WorldSim::chunk_water`] reports river, lake or ocean for it.
+    /// Whether `chunk_pos` holds authored water cells and is presented wet:
+    /// [`WorldSim::chunk_water`] reports river, lake or ocean for it. The
+    /// wetness itself may be natural (a sea chunk with a sliver of authored
+    /// water counts); a chunk with authored water cells that `chunk_water`
+    /// calls dry does not.
     /// `false` for every chunk of a world without authored rasters and for
     /// chunks the rasters do not touch (their wetness, if any, is the
     /// procedural table's).
