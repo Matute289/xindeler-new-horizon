@@ -197,15 +197,18 @@ The magic (`TPROBE1`) and the 14-section layout never change within v1; two head
 | `format_rev` | written by | `flags_defined` | notes |
 |---|---|---|---|
 | 0 (key absent) | every dump before the field existed | 1..=32 (`0x3F`) | bits 1-16 are the first v1 (commit 59de1ec248); bit 32 landed in the review round before the field. A rev-0 file serialises byte-identically to the old writer (the golden-hash test pins it). |
-| 1 | this build | 1..=128 (`0xFF`, written explicitly) | adds `LAVA` (64) and `RIM_NO_SAMPLE` (128) |
+| 1 | builds before the presentation columns | 1..=128 (`0xFF`, written explicitly) | adds `LAVA` (64) and `RIM_NO_SAMPLE` (128) |
+| 2 | this build | 1..=128 (`0xFF`) | flags and sections unchanged; the `sim_csv` table gains two trailing columns, `wet_authored` and `authored_dry` (see below) |
 
-A newer reader reads every older dump. This reader **refuses** a dump with a higher `format_rev`, with `flags_defined` bits it does not know, or whose flags use bits outside its own `flags_defined` (a rev-0 file that carries bit 64 is mislabelled). The 8-bit flags lane is now **full**: the next flag bit needs revision 2.
+**Rev 2 `sim_csv` columns.** The header row is now `cx;cy;wx;wy;alt;water_alt;basement;chaos;river_kind;cross_w;cross_h;vel_x;vel_y;vel_z;rockiness;cliff_height;is_path;humidity;temp;tree_density;flux;underwater;wet_authored;authored_dry`. `wet_authored` is 1 when the chunk holds authored water cells and the presented chunk water (`WorldSim::chunk_water`) is river, lake or ocean (so a chunk of natural water plus any authored wet cell reports 1, and an `Auto` sea floor reports 0); `authored_dry` is `WorldSim::chunk_presentation(..).authored_dry` (authored dry ground: no water of any kind on the map). Both are 0 for every chunk of a world without authored rasters (an `Auto` sea floor reports 0/0 too), and no other column changes. Readers must accept `format_rev` 0, 1 and 2 and look the two columns up by name (old readers that ignore trailing columns keep working); in rev 0 and 1 the columns are absent, so treat them as 0.
 
-**v2 plan (task T21):** bump `format_rev` to 2 and either widen the flags lane to u16 (a new lane-shuffled section, readers of rev 2 take flags from it) or keep the u8 and add a `flags2` section; the unchanged sections stay byte-identical. The v2 list, from the verifier needs of the corner-case catalogue (F05, F16, F17):
+A newer reader reads every older dump. This reader **refuses** a dump with a higher `format_rev`, with `flags_defined` bits it does not know, or whose flags use bits outside its own `flags_defined` (a rev-0 file that carries bit 64 is mislabelled). The 8-bit flags lane is now **full**: the next flag bit needs revision 3.
+
+**v2 plan:** bump `format_rev` to 3 and either widen the flags lane to u16 (a new lane-shuffled section, readers of rev 3 take flags from it) or keep the u8 and add a `flags2` section; the unchanged sections stay byte-identical. The v2 list, from the verifier needs of the corner-case catalogue:
 
 - a per-block **liquid kind** (water / lava / future) instead of the per-column `LAVA` flag, e.g. a parallel run class or a `liquid_kind` section;
 - **solid sprites** (boulders, chests, solid plants) as their own class, so "solid" and "reproducible" stop being conflated;
-- **trees versus built structures** inside class 4 (canopies must not read as floating buildings), plus a `rim`/`clipped bottom` flag pair (EC-D27 has no clipped-bottom flag today).
+- **trees versus built structures** inside class 4 (canopies must not read as floating buildings), plus a `rim`/`clipped bottom` flag pair (there is no clipped-bottom flag today).
 
 ## Reading a dump from Python
 

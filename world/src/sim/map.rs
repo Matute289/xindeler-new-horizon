@@ -247,6 +247,12 @@ pub fn pack_map_alt(alt: f32) -> u32 { (((alt.clamp(0.0, 1.0) * 8191.0) as u32) 
 /// the chunk table unchanged. Paired with [`WorldSim::presented_wpos`]: with
 /// no column samples that altitude is [`sample_wpos`]'s, which keeps its
 /// `.max(water_alt)`, so dry ground still gets the table's water altitude.
+///
+/// This type covers only the dry rule. The converse rule, authored water the
+/// table calls land coloured as a lake, is applied in [`sample_pos_with`]
+/// from `chunk_authored_only_wet` (`AuthoredOnly` regions only; a table
+/// river chunk with an authored lake stays ground-coloured, and `Auto`
+/// regions stay table-only).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChunkPresentation {
     /// Authored dry ground: mostly dry by `chunk_water`'s majority rule in a
@@ -333,6 +339,9 @@ impl WorldSim {
     /// ties broken by chunk index so the result is deterministic; with none
     /// left the label is dropped (`None`). This only reads the table and the
     /// authored dry rule, so it never perturbs the generation RNG.
+    ///
+    /// The Lake size count of a biome still includes its dry chunks, and a
+    /// moved label keeps its original size (cosmetic, by design).
     pub fn biome_label_chunk(
         &self,
         config: &MapConfig,
@@ -372,6 +381,67 @@ impl WorldSim {
                     .and_then(|r| r.chunk_summary(chunk_pos))
                     .is_some_and(|s| s.authored_columns == TerrainChunkSize::RECT_SIZE.product()),
         }
+    }
+
+    /// The [`ChunkWater`](crate::authored_raster::queries::ChunkWater) of a
+    /// chunk that holds authored water cells (`wet_columns > 0`) and that
+    /// [`WorldSim::chunk_water`] reports wet: the one definition of that
+    /// predicate. `None` for the basement map, for worlds without authored
+    /// rasters, for chunks the rasters do not touch (their wetness, if any,
+    /// is the procedural table's) and for a chunk `chunk_water` calls dry.
+    /// With `authored_only_required` the chunk must also lie in a
+    /// `sea_fill: AuthoredOnly` region; otherwise (`Auto` regions included)
+    /// any region counts. Both read the same terrain-probe columns
+    /// (`wet_columns` of the chunk summary), so the two callers differ only
+    /// in that region filter.
+    fn chunk_wet_with_authored_cells(
+        &self,
+        config: &MapConfig,
+        chunk_pos: Vec2<i32>,
+        authored_only_required: bool,
+    ) -> Option<crate::authored_raster::queries::ChunkWater> {
+        if config.is_basement
+            || !self
+                .authored_rasters
+                .as_ref()?
+                .chunk_summary(chunk_pos)
+                .is_some_and(|s| s.wet_columns > 0 && (!authored_only_required || s.authored_only))
+        {
+            return None;
+        }
+        self.chunk_water(chunk_pos).filter(|w| w.wet())
+    }
+
+    /// Whether `chunk_pos` holds authored water cells and is presented wet:
+    /// [`WorldSim::chunk_water`] reports river, lake or ocean for it. The
+    /// wetness itself may be natural (a sea chunk with a sliver of authored
+    /// water counts); a chunk with authored water cells that `chunk_water`
+    /// calls dry does not.
+    /// `false` for every chunk of a world without authored rasters and for
+    /// chunks the rasters do not touch (their wetness, if any, is the
+    /// procedural table's).
+    ///
+    /// This is a statement about the sim, not about the map colour: in an
+    /// `Auto` region it can be `true` over table land (an authored lake on
+    /// a chunk the table calls dry) while the world map image still draws
+    /// ground there, to stay byte-identical to the table-only map. Only a
+    /// `sea_fill: AuthoredOnly` region recolours such a chunk as water
+    /// ([`sample_pos_with`]).
+    pub fn chunk_wet_authored(&self, config: &MapConfig, chunk_pos: Vec2<i32>) -> bool {
+        self.chunk_wet_with_authored_cells(config, chunk_pos, false)
+            .is_some()
+    }
+
+    /// The [`ChunkWater`](crate::authored_raster::queries::ChunkWater) of a
+    /// chunk of a `sea_fill: AuthoredOnly` region that holds authored water
+    /// cells and is presented wet; `None` for every other chunk and the
+    /// basement map.
+    fn chunk_authored_only_wet(
+        &self,
+        config: &MapConfig,
+        chunk_pos: Vec2<i32>,
+    ) -> Option<crate::authored_raster::queries::ChunkWater> {
+        self.chunk_wet_with_authored_cells(config, chunk_pos, true)
     }
 
     /// The map altitude presented at `wpos` ([`sample_wpos_presented`]): on
@@ -439,6 +509,29 @@ impl WorldSim {
     }
 }
 
+/// The base water colours of the world map, shallow to deep: the shade of a
+/// water cell is the first entry whose depth bound (`WATER_SHADE_DEPTHS_M`)
+/// it lies under, and the last entry past the final bound.
+pub(crate) const WATER_RGB: [[u8; 3]; 7] = [
+    [0, 0xa8, 0xc9],
+    [0, 0x91, 0xbd],
+    [0, 0x78, 0xab],
+    [0, 0x61, 0x99],
+    [0, 0x4b, 0x82],
+    [0, 0x36, 0x6b],
+    [0, 0x22, 0x52],
+];
+const WATER_SHADE_DEPTHS_M: [f64; 6] = [5.0, 15.0, 30.0, 70.0, 150.0, 300.0];
+
+/// The base water colour of the map for water `depth_m` metres deep.
+pub(crate) fn water_shade(depth_m: f64) -> [u8; 3] {
+    let bucket = WATER_SHADE_DEPTHS_M
+        .iter()
+        .position(|&bound| depth_m < bound)
+        .unwrap_or(WATER_SHADE_DEPTHS_M.len());
+    WATER_RGB[bucket]
+}
+
 /// Samples a MapSample at a chunk.
 ///
 /// You should generally pass a closure over this function into generate
@@ -463,11 +556,21 @@ pub fn sample_pos(
 }
 
 /// [`sample_pos`] for what the server presents (the world map image). With
-/// `authored_ground` true, a chunk of authored dry ground in a
-/// `sea_fill: AuthoredOnly` region ([`WorldSim::chunk_is_authored_dry`]) is
-/// coloured as the ground it is at any altitude: its table water (the frozen
-/// natural lake or sea) and an altitude below sea level no longer paint it as
-/// water. Everywhere else, and with `authored_ground` false, exactly
+/// `authored_ground` true:
+/// - a chunk of authored dry ground in a `sea_fill: AuthoredOnly` region
+///   ([`WorldSim::chunk_is_authored_dry`]) is coloured as the ground it is at
+///   any altitude: its table water (the frozen natural lake or sea) and an
+///   altitude below sea level no longer paint it as water;
+/// - a chunk of such a region that holds authored water cells, that
+///   `chunk_water` reports wet and that the table calls land (no river kind) is
+///   coloured as a lake, shaded by the authored depth
+///   ([`WorldSim::chunk_water_depth`]), with the lake's own flat surface. A
+///   chunk the table already calls water keeps its table colour, and a table
+///   `River` chunk with an authored lake stays ground-coloured. In an `Auto`
+///   region the map stays table-only even where
+///   [`WorldSim::chunk_wet_authored`] is `true` over table land.
+///
+/// Everywhere else, and with `authored_ground` false, exactly
 /// [`sample_pos`].
 pub fn sample_pos_with(
     config: &MapConfig,
@@ -476,6 +579,22 @@ pub fn sample_pos_with(
     samples: Option<&[Option<ColumnSample>]>,
     pos: Vec2<i32>,
     authored_ground: bool,
+) -> MapSample {
+    sample_pos_opts(config, sampler, index, samples, pos, authored_ground, true)
+}
+
+/// [`sample_pos_with`] with the land red clamp (land colours never have a zero
+/// red channel) selectable: `false` gives the colours as they were before the
+/// clamp, which tests compare against.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sample_pos_opts(
+    config: &MapConfig,
+    sampler: &WorldSim,
+    index: IndexRef,
+    samples: Option<&[Option<ColumnSample>]>,
+    pos: Vec2<i32>,
+    authored_ground: bool,
+    land_red_clamp: bool,
 ) -> MapSample {
     let map_size_lg = config.map_size_lg();
     let MapConfig {
@@ -596,6 +715,11 @@ pub fn sample_pos_with(
         });
 
     let downhill_wpos = downhill.unwrap_or(wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32));
+    // The table chunk altitude, read before a column sample replaces `alt`:
+    // below sea level the chunk already counts as water, whatever the columns
+    // say.
+    let table_true_alt =
+        ((if is_basement { basement } else { alt }) as f64 - focus.z) / gain as f64;
     let alt = if is_basement {
         basement
     } else {
@@ -616,15 +740,38 @@ pub fn sample_pos_with(
         ChunkPresentation::TABLE
     };
     let depth_m = (alt.max(water_alt) - alt).max(0.0) as f64;
-    let true_water_alt = (alt.max(water_alt) as f64 - focus.z) / gain as f64;
+    let mut true_water_alt = (alt.max(water_alt) as f64 - focus.z) / gain as f64;
     let true_alt = (alt as f64 - focus.z) / gain as f64;
     // What the colour decisions below read: on authored dry ground, no water
     // of any kind and no "below sea level"; elsewhere the values themselves.
-    let (colour_river_kind, colour_depth_m, colour_true_alt) = (
+    let (mut colour_river_kind, mut colour_depth_m, colour_true_alt) = (
         presentation.water_kind(river_kind),
         presentation.water_depth(depth_m),
         presentation.colour_alt(true_alt, true_sea_level),
     );
+    // Authored water the frozen table calls dry (a lake in a
+    // `sea_fill: AuthoredOnly` region, below sea level or on table land) is
+    // coloured as the water `chunk_water` reports, with its depth shade.
+    // Chunks the table already paints as water (a river kind, or a table
+    // altitude below sea level), and every world without such a region, keep the
+    // table's colour byte for byte.
+    if authored_ground
+        && river_kind.is_none()
+        && table_true_alt >= true_sea_level
+        && let Some(water) = sampler.chunk_authored_only_wet(config, pos)
+    {
+        colour_river_kind = Some(RiverKind::Lake {
+            neighbor_pass_pos: pos,
+        });
+        // The authored-aware depth the sim itself uses (`max_surface_block -
+        // min_ground_block` for a pure authored lake), not the natural land
+        // altitude, which is ~1 m under a pit lake whatever its bed.
+        colour_depth_m = sampler
+            .chunk_water_depth(pos)
+            .map_or(0.0, |d| d.max(0.0) as f64);
+        // A lake over land is a flat surface at its own altitude.
+        true_water_alt = (water.water_alt.max(water.alt) as f64 - focus.z) / gain as f64;
+    }
     let alt = true_alt.clamp(0.0, 1.0);
 
     let default_rgb = Rgb::new(
@@ -663,6 +810,9 @@ pub fn sample_pos_with(
                 });
             });
     };
+    // Whether the colour below is a water colour: the client tells water from
+    // land by a zero red channel, so land must never end at red zero.
+    let mut paints_water = false;
     let rgb = if presentation.shows_water(is_water)
         && is_ice
         && column_data.is_some_and(|(_, _, ice_depth, _, _, _)| ice_depth > 0.0)
@@ -693,14 +843,10 @@ pub fn sample_pos_with(
                 );
                 Rgb::new((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
             },
-            (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => match depth_m {
-                depth if depth < 5.0 => Rgb::new(0, 0xa8, 0xc9),
-                depth if depth < 15.0 => Rgb::new(0, 0x91, 0xbd),
-                depth if depth < 30.0 => Rgb::new(0, 0x78, 0xab),
-                depth if depth < 70.0 => Rgb::new(0, 0x61, 0x99),
-                depth if depth < 150.0 => Rgb::new(0, 0x4b, 0x82),
-                depth if depth < 300.0 => Rgb::new(0, 0x36, 0x6b),
-                _ => Rgb::new(0, 0x22, 0x52),
+            (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => {
+                paints_water = true;
+                let [r, g, b] = water_shade(colour_depth_m);
+                Rgb::new(r, g, b)
             },
         }
     };
@@ -815,6 +961,14 @@ pub fn sample_pos_with(
         out
     } else {
         rgb
+    };
+    // Land never has a zero red channel (a dark, green or blue surface, a
+    // tint or the shading could otherwise reach it and read as water on the
+    // client). Water keeps its colour exactly.
+    let rgb = if paints_water || !land_red_clamp {
+        rgb
+    } else {
+        Rgb::new(rgb.r.max(1), rgb.g, rgb.b)
     };
     let rgb = if is_bridge {
         Rgb::new(0x80, 0x80, 0x80)
