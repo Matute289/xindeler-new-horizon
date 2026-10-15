@@ -394,6 +394,27 @@ impl WorldSim {
             && self.chunk_water(chunk_pos).is_some_and(|w| w.wet())
     }
 
+    /// The [`ChunkWater`](crate::authored_raster::queries::ChunkWater) of a
+    /// chunk of a `sea_fill: AuthoredOnly` region that holds authored water
+    /// cells and is presented wet; `None` for every other chunk and the
+    /// basement map.
+    fn chunk_authored_only_wet(
+        &self,
+        config: &MapConfig,
+        chunk_pos: Vec2<i32>,
+    ) -> Option<crate::authored_raster::queries::ChunkWater> {
+        if config.is_basement
+            || !self
+                .authored_rasters
+                .as_ref()?
+                .chunk_summary(chunk_pos)
+                .is_some_and(|s| s.authored_only && s.wet_columns > 0)
+        {
+            return None;
+        }
+        self.chunk_water(chunk_pos).filter(|w| w.wet())
+    }
+
     /// The map altitude presented at `wpos` ([`sample_wpos_presented`]): on
     /// an authored ground cell at a chunk's sample column, the altitude of
     /// that chunk's column sample in `samples` (one per chunk, as `get_map`
@@ -640,11 +661,25 @@ pub fn sample_pos_with(
     let true_alt = (alt as f64 - focus.z) / gain as f64;
     // What the colour decisions below read: on authored dry ground, no water
     // of any kind and no "below sea level"; elsewhere the values themselves.
-    let (colour_river_kind, colour_depth_m, colour_true_alt) = (
+    let (mut colour_river_kind, mut colour_depth_m, colour_true_alt) = (
         presentation.water_kind(river_kind),
         presentation.water_depth(depth_m),
         presentation.colour_alt(true_alt, true_sea_level),
     );
+    // Authored water the frozen table calls dry (a lake in a
+    // `sea_fill: AuthoredOnly` region, below sea level or on table land) is
+    // coloured as the water `chunk_water` reports, with its depth shade.
+    // Chunks the table already calls water, and every world without such a
+    // region, keep the table's colour byte for byte.
+    if authored_ground
+        && river_kind.is_none()
+        && let Some(water) = sampler.chunk_authored_only_wet(config, pos)
+    {
+        colour_river_kind = Some(RiverKind::Lake {
+            neighbor_pass_pos: pos,
+        });
+        colour_depth_m = (water.water_alt.max(water.alt) - water.alt).max(0.0) as f64;
+    }
     let alt = true_alt.clamp(0.0, 1.0);
 
     let default_rgb = Rgb::new(

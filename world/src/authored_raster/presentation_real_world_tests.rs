@@ -187,7 +187,8 @@ fn map_rgb(msg: &WorldMapMsg, pos: Vec2<i32>) -> [u8; 3] {
 /// -10 m and the dry depression at -1500 m are not coloured as water on the
 /// world map (the table-only map paints them as water), the lake whose
 /// surface is 20 m below sea level keeps its water colour, and no other chunk
-/// of the map changes colour, natural sea and the `Auto` region included.
+/// of the map changes colour, natural sea and the `Auto` region included,
+/// except authored water the table calls land, which turns water-coloured.
 #[test]
 #[ignore]
 fn world_map_colours_dry_ground_below_sea_level_as_ground() {
@@ -237,7 +238,12 @@ fn world_map_colours_dry_ground_below_sea_level_as_ground() {
         water += usize::from(is_water(map_rgb(&new, pos)));
         if new.rgba.get(pos) != old.rgba.get(pos) {
             changed += 1;
-            changed_not_dry += usize::from(!sim.chunk_is_authored_dry(pos));
+            // Authored water the table calls land is the other recolouring:
+            // it becomes water-coloured.
+            let to_water = sim.chunk_water(pos).is_some_and(|w| w.wet())
+                && is_water(map_rgb(&new, pos))
+                && !is_water(map_rgb(&old, pos));
+            changed_not_dry += usize::from(!sim.chunk_is_authored_dry(pos) && !to_water);
         }
     }
     println!(
@@ -245,7 +251,10 @@ fn world_map_colours_dry_ground_below_sea_level_as_ground() {
          chunks: {water}"
     );
     assert!(changed >= 2, "the pit and the depression are recoloured");
-    assert_eq!(changed_not_dry, 0, "only authored dry chunks change colour");
+    assert_eq!(
+        changed_not_dry, 0,
+        "only authored dry chunks and authored water the table calls land change colour"
+    );
     assert!(water > 1000, "the natural sea keeps its water colour");
 }
 

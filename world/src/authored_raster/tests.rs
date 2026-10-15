@@ -2436,6 +2436,94 @@ fn map_colour_of_authored_dry_ground_below_sea_level_is_not_water() {
     }
 }
 
+/// The map colour of an authored lake whose surface lies below sea level:
+/// the chunk is water-coloured with the depth shade of the authored water
+/// altitude, whether the frozen table calls the chunk sea or dry land, and
+/// the presented and table colours agree.
+#[test]
+fn map_colour_of_authored_lake_below_sea_level_is_water() {
+    use crate::{
+        CONFIG,
+        index::{Index, IndexOwned},
+        sim::{RiverKind, WorldSim, sample_pos_with},
+    };
+    use common::terrain::{MapSizeLg, map::MapConfig, vec2_as_uniform_idx};
+
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let ground = |shape, ground_cm| PaintOp::Ground {
+        shape,
+        ground_cm,
+        weight: GROUND_EXACT,
+    };
+    // Two lakes, both with the surface 20 m below sea level and a 10 m depth.
+    let lake_sea = rect(2176.0, 1152.0, 2240.0, 1216.0);
+    let lake_land = rect(2176.0, 1056.0, 2240.0, 1120.0);
+    let mut own = region("lake_below_sea", (2048, 1024), (2304, 1280), 0, vec![
+        ground(rect(2080.0, 1040.0, 2272.0, 1248.0), 25_050),
+        PaintOp::ClearGround {
+            shape: lake_sea.clone(),
+        },
+        PaintOp::Water {
+            shape: lake_sea,
+            surface_cm: 12_050,
+            bed_cm: 11_050,
+        },
+        PaintOp::ClearGround {
+            shape: lake_land.clone(),
+        },
+        PaintOp::Water {
+            shape: lake_land,
+            surface_cm: 12_050,
+            bed_cm: 11_050,
+        },
+    ]);
+    own.sea_fill = SeaFill::AuthoredOnly;
+    let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
+    // The frozen table: deep sea (100 m) everywhere, except the chunks of
+    // the second lake, which are dry land 30 m above sea level.
+    for c in sim.chunks.iter_mut() {
+        c.alt = CONFIG.sea_level - 100.0;
+        c.water_alt = CONFIG.sea_level;
+        c.river.river_kind = Some(RiverKind::Ocean);
+    }
+    for (x, y) in [(2192, 1072), (2224, 1072), (2192, 1104), (2224, 1104)] {
+        let idx = vec2_as_uniform_idx(sim.map_size_lg(), Vec2::new(x, y) / CHUNK);
+        sim.chunks[idx].alt = CONFIG.sea_level + 30.0;
+        sim.chunks[idx].water_alt = CONFIG.sea_level + 30.0;
+        sim.chunks[idx].river.river_kind = None;
+    }
+    sim.set_authored_rasters_for_test(Some(load(&[build_region(&own).unwrap()]).unwrap()));
+    let config = MapConfig::orthographic(
+        sim.map_size_lg(),
+        CONFIG.sea_level..=CONFIG.sea_level + 1000.0,
+    );
+    let index = IndexOwned::new(Index::new(0));
+    let rgb = |wpos: (i32, i32), presented: bool| {
+        let c = Vec2::new(wpos.0, wpos.1) / CHUNK;
+        sample_pos_with(&config, &sim, index.as_index_ref(), None, c, presented).rgb
+    };
+    for (wpos, what) in [
+        ((2192, 1168), "lake over a table sea chunk"),
+        ((2192, 1072), "lake over a table land chunk"),
+    ] {
+        let c = Vec2::new(wpos.0, wpos.1) / CHUNK;
+        assert!(sim.chunk_wet_authored(&config, c), "{what}: wet");
+        // The depth shade of the authored water altitude (`chunk_water`).
+        let w = sim.chunk_water(c).unwrap();
+        let depth = w.water_alt.max(w.alt) - w.alt;
+        let shade = match depth {
+            d if d < 5.0 => Rgb::new(0, 0xa8, 0xc9),
+            d if d < 15.0 => Rgb::new(0, 0x91, 0xbd),
+            d if d < 30.0 => Rgb::new(0, 0x78, 0xab),
+            d if d < 70.0 => Rgb::new(0, 0x61, 0x99),
+            d if d < 150.0 => Rgb::new(0, 0x4b, 0x82),
+            d if d < 300.0 => Rgb::new(0, 0x36, 0x6b),
+            _ => Rgb::new(0, 0x22, 0x52),
+        };
+        assert_eq!(rgb(wpos, true), shade, "{what}: presented");
+    }
+}
+
 /// The dry rule is per chunk and follows the majority of its columns: a
 /// river or sea chunk a dry `sea_fill: AuthoredOnly` patch covers for more
 /// than half is coloured as ground, for less than half it keeps exactly the
