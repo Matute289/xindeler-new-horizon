@@ -2725,6 +2725,13 @@ fn chunk_presentation_on_a_synthetic_raster() {
     assert!(!dry.shows_water(true));
     assert!(!table.shows_water(false));
     assert_eq!(fully_dry.connection_kind(river), None);
+
+    // `table_alt` takes the caller's altitude: dry ground keeps it, a table
+    // chunk is raised to the water plane.
+    assert_eq!(dry.table_alt(5.0, 9.0), 5.0);
+    assert_eq!(fully_dry.table_alt(5.0, 9.0), 5.0);
+    assert_eq!(table.table_alt(5.0, 9.0), 9.0);
+    assert_eq!(table.table_alt(12.0, 9.0), 12.0);
 }
 
 #[test]
@@ -2732,7 +2739,7 @@ fn airship_route_map_presents_authored_dry_ground() {
     use crate::{
         CONFIG,
         index::{Index, IndexOwned},
-        sim::{RiverKind, WorldSim, sample_pos, sample_wpos},
+        sim::{ChunkPresentation, RiverKind, WorldSim, sample_pos, sample_wpos},
     };
     use common::terrain::{MapSizeLg, map::MapConfig};
 
@@ -2766,23 +2773,27 @@ fn airship_route_map_presents_authored_dry_ground() {
     let pit_wpos = pit * CHUNK;
     let outside_wpos = outside * CHUNK;
 
-    // No ground layer: the airship map is exactly the table-only one.
+    // The airship map is exactly the table-only one at `c`/`w`.
+    let check_same_at = |sim: &WorldSim, c: Vec2<i32>, w: Vec2<i32>, what: &str| {
+        let new = sim.presented_map_sample(&config, index.as_index_ref(), None, c);
+        let old = sample_pos(&config, sim, index.as_index_ref(), None, c);
+        assert_eq!(new.rgb, old.rgb, "{what}: colour");
+        assert_eq!(new.alt.to_bits(), old.alt.to_bits(), "{what}: alt");
+        assert_eq!(
+            new.connections.is_some(),
+            old.connections.is_some(),
+            "{what}: link"
+        );
+        assert_eq!(
+            sim.presented_table_wpos(&config, w).to_bits(),
+            sample_wpos(&config, sim, w).to_bits(),
+            "{what}: relief"
+        );
+    };
+    // No ground layer: identical everywhere.
     let check_identical = |sim: &WorldSim, what: &str| {
         for (c, w) in [(pit, pit_wpos), (outside, outside_wpos)] {
-            let new = sim.presented_map_sample(&config, index.as_index_ref(), None, c);
-            let old = sample_pos(&config, sim, index.as_index_ref(), None, c);
-            assert_eq!(new.rgb, old.rgb, "{what}: colour");
-            assert_eq!(new.alt.to_bits(), old.alt.to_bits(), "{what}: alt");
-            assert_eq!(
-                new.connections.is_some(),
-                old.connections.is_some(),
-                "{what}: link"
-            );
-            assert_eq!(
-                sim.presented_table_wpos(&config, w).to_bits(),
-                sample_wpos(&config, sim, w).to_bits(),
-                "{what}: relief"
-            );
+            check_same_at(sim, c, w, what);
         }
     };
     check_identical(&sim, "no ground layer");
@@ -2813,22 +2824,51 @@ fn airship_route_map_presents_authored_dry_ground() {
     );
     assert!(relief < water_plane, "not the table water plane");
     // Outside every region nothing changes.
-    check_identical_outside(&sim, &config, outside, outside_wpos, &index);
+    check_same_at(&sim, outside, outside_wpos, "outside every region");
 
-    fn check_identical_outside(
-        sim: &WorldSim,
-        config: &MapConfig,
-        c: Vec2<i32>,
-        w: Vec2<i32>,
-        index: &IndexOwned,
-    ) {
-        let new = sim.presented_map_sample(config, index.as_index_ref(), None, c);
-        let old = sample_pos(config, sim, index.as_index_ref(), None, c);
-        assert_eq!(new.rgb, old.rgb);
-        assert_eq!(new.connections.is_some(), old.connections.is_some());
-        assert_eq!(
-            sim.presented_table_wpos(config, w).to_bits(),
-            sample_wpos(config, sim, w).to_bits()
-        );
-    }
+    // The basement map presents the table unchanged, even over the dry pit.
+    let basement = MapConfig {
+        is_basement: true,
+        ..config
+    };
+    assert_eq!(
+        sim.chunk_presentation(&basement, pit),
+        ChunkPresentation::TABLE
+    );
+    assert_eq!(
+        sim.presented_table_wpos(&basement, pit_wpos).to_bits(),
+        sample_wpos(&basement, &sim, pit_wpos).to_bits()
+    );
+    let base_new = sim.presented_map_sample(&basement, index.as_index_ref(), None, pit);
+    let base_old = sample_pos(&basement, &sim, index.as_index_ref(), None, pit);
+    assert_eq!(base_new.rgb, base_old.rgb);
+    assert_eq!(
+        base_new.connections.is_some(),
+        base_old.connections.is_some()
+    );
+
+    // A chunk that is mostly (26 of 32 columns) but not fully dry keeps the
+    // table's river link.
+    let mut partial = region("partial", (2560, 1024), (2816, 1280), 0, vec![
+        PaintOp::Ground {
+            shape: rect(2624.0, 1120.0, 2650.0, 1152.0),
+            ground_cm: 13_050,
+            weight: GROUND_EXACT,
+        },
+    ]);
+    partial.sea_fill = SeaFill::AuthoredOnly;
+    partial.allow_partial = true;
+    sim.set_authored_rasters_for_test(Some(
+        load(&[build_region(&own).unwrap(), build_region(&partial).unwrap()]).unwrap(),
+    ));
+    let mostly = chunk_of(2624, 1120);
+    let presentation = sim.chunk_presentation(&config, mostly);
+    assert!(presentation.authored_dry && !presentation.authored_fully_dry);
+    let table = sample_pos(&config, &sim, index.as_index_ref(), None, mostly);
+    let new = sim.presented_map_sample(&config, index.as_index_ref(), None, mostly);
+    assert!(table.connections.is_some(), "the table draws a link");
+    assert!(
+        new.connections.is_some(),
+        "a mostly dry chunk keeps its link"
+    );
 }
