@@ -17,13 +17,14 @@
 //!   "duration_s": <f64>,
 //!   "tool_version": <string|null>, "engine_commit": <hex|null>,
 //!   "view_distance": { "script": <u32>, "client": <u32|null> },
-//!   "steps_total", "steps_ok", "steps_failed", "steps_skipped": <u32>,
+//!   "steps_total", "steps_ok", "steps_failed", "steps_skipped",
+//!   "steps_aborted": <u32>,                  // 0 or 1
 //!   "exit_code": <i32>,
 //!   "abort_reason": <string|null>,           // set when the run did not
 //!                                            // reach the end of the script
 //!   "steps": [ {
 //!     "index": <0-based>, "kind": "Teleport", "name": <string|null>,
-//!     "status": "ok" | "failed" | "skipped",
+//!     "status": "ok" | "failed" | "skipped" | "aborted",
 //!     "failure_reason": <string|null>,
 //!     "started_s", "ended_s", "duration_s": <f64|null>, // run clock
 //!     "screenshot": { "file", "written", "bytes", "sha256" } | null,
@@ -36,12 +37,26 @@
 //!
 //! `name` is the screenshot name, time-of-day name or sample label. Step times
 //! are seconds on the driver's clock, which starts when the player enters the
-//! world. `position_*` are filled for the two teleport kinds only. A skipped
-//! step never ran; its times and details are `null`. Only file names appear,
-//! never absolute paths.
+//! world (it is the only value that uses that injected clock; `started_at`,
+//! `ended_at` and `duration_s` are wall-clock). `position_*` are filled for
+//! the two teleport kinds only, and are `null` as a whole when any component
+//! is not finite. A skipped step never ran; its times and details are `null`.
+//! An aborted step was running when the run ended: it has `started_s` and a
+//! `failure_reason` but no end time. At most one step is aborted, and only
+//! when `abort_reason` is set. Only file names appear, never absolute paths.
 //!
-//! Frame-time percentiles and RSS are not part of this report (the runner
-//! samples RSS from outside the process).
+//! Consumers must check `abort_reason` first: when it is non-null the
+//! script did not run to its end and the step list is partial. `exit_code`
+//! is 0 all steps ok, 1 a step failed or the session ended early, 2 setup or
+//! login error, 3 a screenshot could not be written, 101 a panic.
+//! `engine_commit` is the truncated 32-bit git hash the build embeds, or
+//! `null` when the build has none.
+//!
+//! Reserved / not produced yet (consumers must not wait on them): camera pose
+//! per step, frame-time percentiles, pending mesh jobs, RSS (the runner
+//! samples RSS from outside the process) and a distinct "drift" or "died"
+//! failure kind (both currently appear as a `failed` step with a
+//! `failure_reason` text).
 
 use super::{
     driver::{StepOutcome, StepRecord, StepRunner, finished_exit_code},
@@ -51,7 +66,7 @@ use super::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    io::Write as _,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
     sync::OnceLock,
     time::Instant,
@@ -76,6 +91,8 @@ pub struct Report {
     pub steps_ok: u32,
     pub steps_failed: u32,
     pub steps_skipped: u32,
+    /// The step that was running when the run ended (0 or 1).
+    pub steps_aborted: u32,
     pub exit_code: i32,
     pub abort_reason: Option<String>,
     pub steps: Vec<StepReport>,
@@ -100,7 +117,10 @@ pub struct ViewDistance {
 pub enum StepStatus {
     Ok,
     Failed,
+    /// Never ran.
     Skipped,
+    /// Was running when the run ended.
+    Aborted,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -170,7 +190,14 @@ fn step_name(step: &Step) -> Option<String> {
 
 fn is_teleport(kind: &str) -> bool { matches!(kind, "Teleport" | "CromatolisTeleport") }
 
-fn pos(p: vek::Vec3<f32>) -> [f32; 3] { [p.x, p.y, p.z] }
+/// A position as an array; `None` as a whole if any component is not finite
+/// (JSON has no NaN, it would otherwise become a `null` inside the array).
+fn pos(p: vek::Vec3<f32>) -> Option<[f32; 3]> {
+    [p.x, p.y, p.z]
+        .iter()
+        .all(|c| c.is_finite())
+        .then_some([p.x, p.y, p.z])
+}
 
 fn count(n: usize) -> u32 { u32::try_from(n).unwrap_or(u32::MAX) }
 
@@ -210,8 +237,8 @@ fn step_report(
             ready: t.ready(),
             timed_out,
         }),
-        position_before: record.pos_before.filter(|_| teleport).map(pos),
-        position_after: record.pos_after.filter(|_| teleport).map(pos),
+        position_before: record.pos_before.filter(|_| teleport).and_then(pos),
+        position_after: record.pos_after.filter(|_| teleport).and_then(pos),
     }
 }
 
@@ -227,14 +254,20 @@ pub fn build_report(
         .iter()
         .map(|r| step_report(r, steps_def.get(r.index), facts))
         .collect();
+    let in_flight = runner.in_flight();
     for (index, step) in steps_def.iter().enumerate().skip(steps.len()) {
+        let running = in_flight.filter(|(i, _)| *i == index).map(|(_, s)| s);
         steps.push(StepReport {
             index: count(index),
             kind: step.kind().to_owned(),
             name: step_name(step),
-            status: StepStatus::Skipped,
-            failure_reason: None,
-            started_s: None,
+            status: if running.is_some() {
+                StepStatus::Aborted
+            } else {
+                StepStatus::Skipped
+            },
+            failure_reason: running.map(|_| "the run ended while this step was running".to_owned()),
+            started_s: running,
             ended_s: None,
             duration_s: None,
             screenshot: None,
@@ -248,11 +281,11 @@ pub fn build_report(
     // The same code the process exits with: an unfinished run (aborted)
     // uses the code of the abort unless a failed screenshot or step already
     // decided it.
-    let exit_code = match finished_exit_code(runner) {
-        Some(code) => code,
-        None if runner.is_finished() => 0,
-        None => info.abort_exit_code,
-    };
+    let exit_code = finished_exit_code(runner).unwrap_or(if runner.is_finished() {
+        0
+    } else {
+        info.abort_exit_code
+    });
     Report {
         schema_version: SCHEMA_VERSION,
         script: ScriptInfo {
@@ -273,6 +306,7 @@ pub fn build_report(
         steps_ok: of(StepStatus::Ok),
         steps_failed: of(StepStatus::Failed),
         steps_skipped: skipped,
+        steps_aborted: of(StepStatus::Aborted),
         exit_code,
         abort_reason: info.abort_reason.clone(),
         steps,
@@ -287,13 +321,37 @@ pub fn file_facts(out_dir: &Path, file: &str) -> FileFacts {
         return None;
     }
     let path = out_dir.join(file);
-    let meta = std::fs::symlink_metadata(&path).ok()?;
-    if !meta.is_file() {
+    let before = std::fs::symlink_metadata(&path).ok()?;
+    if !before.is_file() {
         return None;
     }
-    let bytes = std::fs::read(&path).ok()?;
-    Some((meta.len(), hex(&Sha256::digest(&bytes))))
+    let handle = std::fs::File::open(&path).ok()?;
+    // The opened handle must be the plain file seen above (not a symlink
+    // swapped in between the check and the open).
+    let opened = handle.metadata().ok()?;
+    if !opened.is_file() || opened.len() > MAX_FACTS_BYTES {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (opened.dev(), opened.ino()) != (before.dev(), before.ino()) {
+            return None;
+        }
+    }
+    let mut bytes = Vec::new();
+    handle
+        .take(MAX_FACTS_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_FACTS_BYTES {
+        return None;
+    }
+    Some((bytes.len() as u64, hex(&Sha256::digest(&bytes))))
 }
+
+/// Largest file `file_facts` reads (a screenshot is a few MiB).
+const MAX_FACTS_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Lower-case hex of `bytes`.
 pub fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
@@ -344,6 +402,10 @@ fn rfc3339(t: chrono::DateTime<chrono::Utc>) -> String {
     t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+/// Hex of the truncated 32-bit git hash a build embeds; the all-zero hash
+/// means the build had none, which is `None`.
+pub fn engine_commit(hash: u32) -> Option<String> { (hash != 0).then(|| format!("{hash:08x}")) }
+
 /// The run's facts for a report written now. `abort_reason` is `Some` when
 /// the script did not run to its end.
 pub fn run_info(
@@ -357,6 +419,16 @@ pub fn run_info(
         Some((instant, wall)) => (*wall, instant.elapsed().as_secs_f64()),
         None => (now, 0.0),
     };
+    // The version statics can panic on a malformed build environment; while
+    // unwinding that must not happen again (a panic inside `Drop`).
+    let (tool_version, engine_commit) = if std::thread::panicking() {
+        (None, None)
+    } else {
+        (
+            Some(common::util::DISPLAY_VERSION.clone()),
+            engine_commit(*common::util::GIT_HASH),
+        )
+    };
     RunInfo {
         script_name: setup.script_name.clone(),
         script_sha256: setup.script_sha256.clone(),
@@ -364,8 +436,8 @@ pub fn run_info(
         started_at: rfc3339(started),
         ended_at: rfc3339(now),
         duration_s,
-        tool_version: Some(common::util::DISPLAY_VERSION.clone()),
-        engine_commit: Some(format!("{:08x}", *common::util::GIT_HASH)),
+        tool_version,
+        engine_commit,
         client_view_distance,
         abort_reason,
         abort_exit_code,

@@ -493,6 +493,15 @@ impl StepRunner {
     /// Index of the step currently running.
     pub fn current_index(&self) -> usize { self.index }
 
+    /// Index and start time (driver clock) of the step that is running now:
+    /// `None` before the first tick, between steps and once finished.
+    pub fn in_flight(&self) -> Option<(usize, f64)> {
+        if self.is_finished() {
+            return None;
+        }
+        self.meta.as_ref().map(|m| (self.index, m.start_s))
+    }
+
     /// Finished steps, in order.
     pub fn records(&self) -> &[StepRecord] { &self.records }
 
@@ -1219,6 +1228,36 @@ pub fn finished_exit_code(runner: &StepRunner) -> Option<i32> {
     }
 }
 
+/// Exit code of a run that ends now, whether or not the script reached its
+/// end: the finished-run code if any, `0` for a completed script, and
+/// [`STEP_FAILED_EXIT_CODE`](super::login::STEP_FAILED_EXIT_CODE) for one cut
+/// short. The process exit code and the report both use this.
+pub fn abort_code(runner: &StepRunner) -> i32 {
+    finished_exit_code(runner).unwrap_or(if runner.is_finished() {
+        0
+    } else {
+        super::login::STEP_FAILED_EXIT_CODE
+    })
+}
+
+/// Why a run that ends now was cut short; `None` for a completed script.
+pub fn abort_reason(runner: &StepRunner) -> Option<String> {
+    if runner.is_finished() {
+        return None;
+    }
+    let index = runner.current_index();
+    Some(match runner.steps().get(index) {
+        Some(step) => format!(
+            "the session ended before the script finished (at step index {index}, {})",
+            step.kind()
+        ),
+        None => "the session ended before the script finished".to_owned(),
+    })
+}
+
+/// Exit code recorded for a panic (Rust's default for a panicking process).
+pub const PANIC_EXIT_CODE: i32 = 101;
+
 /// Feeds a [`StepRunner`] from the live session.
 pub struct SessionDriver {
     runner: StepRunner,
@@ -1316,7 +1355,7 @@ impl SessionDriver {
                 if let Some(code) = finished_exit_code(&self.runner) {
                     super::login::set_exit_code(code);
                 }
-                self.write_report(None);
+                self.write_report(None, None);
             }
             return (DriverStatus::Finished, None);
         }
@@ -1387,7 +1426,7 @@ impl SessionDriver {
 impl SessionDriver {
     /// Write `report.json`. `abort_reason` is `Some` when the script did not
     /// run to its end. Written once.
-    fn write_report(&mut self, abort_reason: Option<String>) {
+    fn write_report(&mut self, abort_reason: Option<String>, exit_code: Option<i32>) {
         use super::report;
         if std::mem::replace(&mut self.report_written, true) {
             return;
@@ -1402,24 +1441,39 @@ impl SessionDriver {
             super::login::STEP_FAILED_EXIT_CODE,
         );
         let out_dir = self.out_dir.clone();
-        let report = report::build_report(&self.runner, &info, &|file| {
+        let mut report = report::build_report(&self.runner, &info, &|file| {
             report::file_facts(&out_dir, file)
         });
+        if let Some(code) = exit_code {
+            report.exit_code = code;
+        }
         report::log_write(&self.out_dir, &report);
     }
 }
 
 impl Drop for SessionDriver {
-    /// The session ended before the script did (window closed, connection
-    /// lost): the run is a failure and still gets a report.
+    /// The session ended before the report was written (window closed,
+    /// connection lost, or a panic unwinding): the run still gets a report,
+    /// with the same exit code the process ends with. Never panics.
     fn drop(&mut self) {
         if self.report_written {
             return;
         }
-        super::login::set_exit_code(super::login::STEP_FAILED_EXIT_CODE);
-        self.write_report(Some(
-            "the session ended before the script finished".to_owned(),
-        ));
+        let panicking = std::thread::panicking();
+        let (reason, code) = if panicking {
+            ("panic".to_owned(), Some(PANIC_EXIT_CODE))
+        } else {
+            (abort_reason(&self.runner).unwrap_or_default(), None)
+        };
+        let reason = (!reason.is_empty()).then_some(reason);
+        let exit = code.unwrap_or_else(|| abort_code(&self.runner));
+        if exit != 0 {
+            super::login::set_exit_code(exit);
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.write_report(reason, Some(exit));
+        }));
+        drop(result);
     }
 }
 

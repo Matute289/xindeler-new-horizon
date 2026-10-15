@@ -159,6 +159,13 @@ impl std::error::Error for ScriptError {}
 impl ShotScript {
     /// Read, parse and validate a script file.
     pub fn load(path: &Path) -> Result<Self, ScriptError> {
+        Self::load_hashed(path).map(|(s, _)| s)
+    }
+
+    /// Like [`Self::load`], also returning the SHA-256 (hex) of the exact
+    /// bytes that were parsed.
+    pub fn load_hashed(path: &Path) -> Result<(Self, String), ScriptError> {
+        use std::io::Read as _;
         let file = path.display().to_string();
         let fail = |message: String| ScriptError {
             file: file.clone(),
@@ -174,9 +181,18 @@ impl ShotScript {
                 "script is {len} bytes; the limit is {MAX_SCRIPT_BYTES} bytes"
             )));
         }
-        let src =
-            std::fs::read_to_string(path).map_err(|e| fail(format!("cannot read script: {e}")))?;
-        Self::parse(&src, &file)
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|f| f.take(MAX_SCRIPT_BYTES + 1).read_to_end(&mut bytes))
+            .map_err(|e| fail(format!("cannot read script: {e}")))?;
+        if bytes.len() as u64 > MAX_SCRIPT_BYTES {
+            return Err(fail(format!(
+                "script is over the limit of {MAX_SCRIPT_BYTES} bytes"
+            )));
+        }
+        let sha = super::report::sha256_hex(&bytes);
+        let src = String::from_utf8(bytes).map_err(|e| fail(format!("cannot read script: {e}")))?;
+        Self::parse(&src, &file).map(|s| (s, sha))
     }
 
     /// Parse and validate script source. `file` is only used in errors.

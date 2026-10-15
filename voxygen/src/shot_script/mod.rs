@@ -11,11 +11,12 @@
 //! The schema, its validator, the named-screenshot capture, the unattended
 //! login, the executor for every step kind and the `report.json` writer exist.
 //!
-//! Process exit codes: 0 every step succeeded; 1 the script ran to the end
-//! but at least one step failed; 2 the run could not start (script, server or
-//! login error); 3 a screenshot could not be written. A panic ends with 101
-//! (Rust's default). Code 1 is produced only by [`driver::finished_exit_code`]
-//! for a failed step: the shot-script paths in `main` never return an `Err`
+//! Process exit codes: 0 every step succeeded; 1 a step failed, or the
+//! session ended before the last step (the report's `abort_reason` tells
+//! which); 2 the run could not start (script, server or login error); 3 a
+//! screenshot could not be written. A panic ends with 101 (Rust's default).
+//! Code 1 comes from [`driver::abort_code`] (and [`driver::finished_exit_code`]
+//! for a failed step): the shot-script paths in `main` never return an `Err`
 //! (which would also give 1), they exit through [`login::exit_code`].
 //!
 //! Screenshot files are named `NNN_<name>.png` (1-based, three digits).
@@ -43,8 +44,11 @@ pub fn script_path_from_env() -> Option<PathBuf> {
 
 /// Load and validate the script named by [`SCRIPT_ENV`]. `None` when the
 /// variable is unset, i.e. the shot driver stays inert.
-pub fn load_from_env() -> Option<Result<ShotScript, ScriptError>> {
-    script_path_from_env().map(|path| ShotScript::load(&path))
+///
+/// The script is read once; the second value is the SHA-256 (hex) of the
+/// bytes that were parsed.
+pub fn load_from_env() -> Option<Result<(ShotScript, String), ScriptError>> {
+    script_path_from_env().map(|path| ShotScript::load_hashed(&path))
 }
 
 #[cfg(test)] mod driver_tests;

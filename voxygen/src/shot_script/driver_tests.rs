@@ -1186,6 +1186,88 @@ mod report_tests {
     }
 
     #[test]
+    fn running_step_is_aborted_not_skipped_and_codes_agree() {
+        let ctx = Fake::new();
+        ctx.terrain.set(READY);
+        let mut r = StepRunner::new(&script(
+            r#"Time("noon"), WaitSeconds(100.0), Sample(label: "z")"#,
+            0,
+        ));
+        ctx.tod.set(Some(12.0 * 3600.0));
+        for _ in 0..6 {
+            r.tick(&ctx);
+            ctx.advance(0.5);
+        }
+        assert!(!r.is_finished());
+        let reason = crate::shot_script::driver::abort_reason(&r);
+        assert!(
+            reason.as_deref().unwrap().contains("step index 1"),
+            "{reason:?}"
+        );
+        assert_eq!(
+            crate::shot_script::driver::abort_code(&r),
+            STEP_FAILED_EXIT_CODE
+        );
+        let mut i = info(crate::shot_script::driver::abort_code(&r));
+        i.abort_reason = reason;
+        let rep = build_report(&r, &i, &no_files);
+        let st: Vec<_> = rep.steps.iter().map(|s| s.status).collect();
+        assert_eq!(st, [
+            StepStatus::Ok,
+            StepStatus::Aborted,
+            StepStatus::Skipped
+        ]);
+        assert_eq!((rep.steps_aborted, rep.steps_skipped), (1, 1));
+        assert!(rep.steps[1].started_s.is_some() && rep.steps[1].ended_s.is_none());
+        assert!(rep.steps[1].failure_reason.is_some());
+        assert_eq!(rep.exit_code, 1);
+    }
+
+    #[test]
+    fn abort_code_agrees_with_the_report_on_early_ends() {
+        use crate::shot_script::driver::{abort_code, abort_reason};
+        // (a) a screenshot already failed, then the session ends early.
+        let mut r = run_mixed(ShotOutcome::Failed("disk full".into()));
+        assert!(r.is_finished());
+        assert_eq!(abort_code(&r), SCREENSHOT_FAILED_EXIT_CODE);
+        assert_eq!(abort_reason(&r), None, "a finished script is never aborted");
+        let rep = build_report(&r, &info(abort_code(&r)), &no_files);
+        assert_eq!(rep.exit_code, abort_code(&r));
+        // (b) finished in its last tick with every step ok: code 0, no abort.
+        let ctx = Fake::new();
+        r = StepRunner::new(&script("WaitSeconds(0.1)", 0));
+        for _ in 0..10 {
+            r.tick(&ctx);
+            ctx.advance(0.5);
+        }
+        assert!(r.is_finished());
+        assert_eq!((abort_code(&r), abort_reason(&r)), (0, None));
+        assert_eq!(build_report(&r, &info(1), &no_files).exit_code, 0);
+        // Unfinished with a failed screenshot recorded keeps code 3.
+        let ctx = Fake::new();
+        ctx.terrain.set(READY);
+        let mut r = StepRunner::new(&script(r#"Screenshot(name: "a"), WaitSeconds(100.0)"#, 0));
+        for _ in 0..40 {
+            if matches!(r.tick(&ctx), Some(Action::Screenshot { .. })) {
+                *ctx.shot.borrow_mut() = Some(ShotOutcome::Failed("x".into()));
+            }
+            ctx.advance(0.5);
+            if r.screenshot_failed() {
+                break;
+            }
+        }
+        assert!(!r.is_finished() && r.screenshot_failed());
+        assert_eq!(abort_code(&r), SCREENSHOT_FAILED_EXIT_CODE);
+        assert!(abort_reason(&r).is_some());
+    }
+
+    #[test]
+    fn engine_commit_maps_the_zero_hash_to_none() {
+        assert_eq!(report::engine_commit(0), None);
+        assert_eq!(report::engine_commit(0xabc).as_deref(), Some("00000abc"));
+    }
+
+    #[test]
     fn json_has_the_documented_fields_and_leaks_no_paths() {
         let dir = scratch("fields");
         let r = run_mixed(ShotOutcome::Written);
@@ -1207,6 +1289,7 @@ mod report_tests {
             "steps_ok",
             "steps_failed",
             "steps_skipped",
+            "steps_aborted",
             "exit_code",
             "abort_reason",
             "steps",
@@ -1290,6 +1373,8 @@ mod report_tests {
         assert!(file_facts(&dir, "missing.png").is_none());
         assert!(file_facts(&dir, "../a.png").is_none());
         assert!(file_facts(&dir, "").is_none());
+        std::os::unix::fs::symlink(dir.join("a.png"), dir.join("link.png")).unwrap();
+        assert!(file_facts(&dir, "link.png").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
