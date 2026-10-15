@@ -3,7 +3,7 @@ use crate::{
     civ::airship_travel::{
         AirshipDockPlatform, AirshipRoute, AirshipSpawningLocation, Airships, DockNode,
     },
-    sim::{WorldSim, get_horizon_map, sample_pos, sample_wpos},
+    sim::{ChunkPresentation, WorldSim, get_horizon_map},
     util::{DHashMap, DHashSet},
 };
 use common::{
@@ -282,8 +282,35 @@ impl TinySkiaSpriteMap {
     }
 }
 
+/// The altitude each chunk casts into the horizon map, from `at(index)` =
+/// (presentation, basement altitude, table water altitude). Authored dry
+/// ground is not raised to the table water plane
+/// ([`ChunkPresentation::table_alt`]); elsewhere this is the old
+/// `basement.max(water_alt)`. Note the horizon reads `basement` while the
+/// relief of a dry chunk reads the column altitude, as before.
+fn horizon_altitudes(len: usize, at: impl Fn(usize) -> (ChunkPresentation, f32, f32)) -> Vec<f32> {
+    (0..len)
+        .map(|posi| {
+            let (presentation, basement, water_alt) = at(posi);
+            presentation.table_alt(basement, water_alt)
+        })
+        .collect()
+}
+
 /// Creates a basic world map as a tiny_skia::Pixmap
 fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim) -> Option<Pixmap> {
+    let mut map_config = MapConfig::orthographic(*image_size, 0.0..=sampler.max_height);
+    // The ray march reads each chunk's altitude many times, so resolve the
+    // presentation once per chunk, not once per read.
+    let horizon_alts = horizon_altitudes(image_size.chunks().product() as usize, |posi| {
+        let chunk = uniform_idx_as_vec2(*image_size, posi);
+        let sample = sampler.get(chunk).unwrap();
+        (
+            sampler.chunk_presentation(&map_config, chunk),
+            sample.basement,
+            sample.water_alt,
+        )
+    });
     let horizons = get_horizon_map(
         *image_size,
         Aabr {
@@ -292,11 +319,7 @@ fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim)
         },
         CONFIG.sea_level,
         CONFIG.sea_level + sampler.max_height,
-        |posi| {
-            let sample = sampler.get(uniform_idx_as_vec2(*image_size, posi)).unwrap();
-
-            sample.basement.max(sample.water_alt)
-        },
+        |posi| horizon_alts[posi],
         |a| a,
         |h| h,
     )
@@ -312,7 +335,6 @@ fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim)
         index,
     };
 
-    let mut map_config = MapConfig::orthographic(*image_size, 0.0..=sampler.max_height);
     map_config.horizons = horizons.as_ref();
     map_config.is_shaded = true;
     map_config.is_stylized_topo = true;
@@ -326,14 +348,15 @@ fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim)
         let pixel_data = pixmap.data_mut();
         map_config.generate(
             |pos| {
-                let default_sample = sample_pos(&map_config, sampler, index_ref, None, pos);
+                let default_sample =
+                    sampler.presented_map_sample(&map_config, index_ref, None, pos);
                 let [r, g, b, _a] = map.rgba[pos].to_le_bytes();
                 MapSample {
                     rgb: Rgb::new(r, g, b),
                     ..default_sample
                 }
             },
-            |wpos| sample_wpos(&map_config, sampler, wpos),
+            |wpos| sampler.presented_table_wpos(&map_config, wpos),
             |pos, (r, g, b, a)| {
                 let pixel_index = (map_h - pos.y - 1) * stride + pos.x * tiny_skia::BYTES_PER_PIXEL;
                 pixel_data[pixel_index] = r;
@@ -971,4 +994,36 @@ pub fn export_docknodes(
     pixmap
         .save_png(output_path)
         .map_err(|e| format!("Failed to save output image: {}", e))
+}
+
+#[cfg(test)]
+mod horizon_tests {
+    use super::*;
+
+    #[test]
+    fn horizon_altitudes_match_the_old_expression_without_a_ground_layer() {
+        let cases = [(5.0_f32, 9.0_f32), (12.0, 3.0), (7.0, 7.0), (-4.0, 0.0)];
+        let alts = horizon_altitudes(cases.len(), |i| {
+            (ChunkPresentation::TABLE, cases[i].0, cases[i].1)
+        });
+        for (alt, (basement, water_alt)) in alts.iter().zip(cases) {
+            assert_eq!(alt.to_bits(), basement.max(water_alt).to_bits());
+        }
+    }
+
+    #[test]
+    fn horizon_altitudes_keep_the_authored_altitude_on_a_dry_chunk() {
+        let dry = ChunkPresentation {
+            authored_dry: true,
+            authored_fully_dry: false,
+        };
+        let alts = horizon_altitudes(2, |i| {
+            if i == 0 {
+                (dry, 5.0, 9.0)
+            } else {
+                (ChunkPresentation::TABLE, 5.0, 9.0)
+            }
+        });
+        assert_eq!(alts, vec![5.0, 9.0]);
+    }
 }
