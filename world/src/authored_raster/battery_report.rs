@@ -5,25 +5,42 @@
 //! into `<path>` (a JSON array, one record per line). Without the variable
 //! nothing is read, written or stored: the tests behave exactly as before.
 //!
-//! Record schema (version 1):
+//! Record schema (version 2; readers should ignore unknown keys):
 //!
 //! ```text
-//! {"schema":1,
+//! {"schema":2,
 //!  "row":"B-T8",                       // battery row id
 //!  "fixture":"wilderness_river_3x3",   // arena or programmatic fixture
 //!  "test":"authored_raster::ground_seam_real_world_tests::exact_patch_...",
 //!  "metrics":{"seam_pairs":12,"walls":0,"refused_when_low":true},
 //!  "thresholds":{"walls_max":0},       // only what the test asserts
-//!  "pass":true}                        // false if the test panicked
+//!  "pass":true,                        // false if the test panicked
+//!  "engine_commit":"<sha>",            // XINDELER_BATTERY_ENGINE_COMMIT or null
+//!  "timestamp":1760000000}             // seconds since the Unix epoch
 //! ```
 //!
-//! `pass` is computed when the [`BatteryRow`] is dropped: a test that panics
-//! (an assertion failed) reports `false` with the metrics gathered up to that
-//! point; assertions themselves are untouched. A record is keyed by
-//! `(row, fixture, test)`; re-running replaces it, so separate `cargo test`
-//! invocations can write to the same file and the result is a merged set.
+//! `pass` means "the test did not panic", not "every threshold was met"; it
+//! is computed when the [`BatteryRow`] is dropped. A test that panics reports
+//! `false` with the metrics gathered up to that point (partial); assertions
+//! themselves are untouched. A record is keyed by `(row, fixture, test)`;
+//! re-running replaces it, so separate `cargo test` invocations can write to
+//! the same file and the result is a merged set. Records of removed or
+//! renamed tests persist (they keep their old key), so a runner doing a full
+//! run should delete the report file first.
+//!
+//! Concurrency: parallel tests of one process are serialised in-process, and
+//! other processes are guarded by an advisory `<path>.lock` file plus an
+//! atomic write (`<path>.tmp.<pid>` then rename), so a reader never sees a
+//! half-written file. Still, run one process per report file at a time
+//! (serially); a corrupt line found on read is reported on stderr and dropped.
 
-use std::{collections::BTreeMap, fmt::Write as _, path::PathBuf, sync::Mutex};
+use std::{
+    collections::BTreeMap,
+    fmt::Write as _,
+    path::{Path, PathBuf},
+    sync::Mutex,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 /// Serialises the read-modify-write of the report file between the parallel
 /// tests of one process.
@@ -69,7 +86,16 @@ fn string_field(line: &str, key: &str) -> Option<String> {
     while let Some(c) = chars.next() {
         match c {
             '"' => return Some(out),
-            '\\' => out.push(chars.next()?),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                'r' => out.push('\r'),
+                't' => out.push('\t'),
+                'u' => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+                },
+                c => out.push(c),
+            },
             c => out.push(c),
         }
     }
@@ -132,51 +158,116 @@ impl BatteryRow {
         self
     }
 
+    /// Whether a report is being collected. Callers gate expensive metric
+    /// computation on this so nothing is evaluated without the env var.
+    pub fn enabled(&self) -> bool { self.enabled }
+
     fn render(&self, pass: bool) -> String {
         let obj = |kv: &[(&str, String)]| {
             let body: Vec<String> = kv.iter().map(|(k, v)| format!("{}:{v}", esc(k))).collect();
             format!("{{{}}}", body.join(","))
         };
         format!(
-            "{{\"schema\":1,\"row\":{},\"fixture\":{},\"test\":{},\"metrics\":{},\"thresholds\":\
-             {},\"pass\":{pass}}}",
+            "{{\"schema\":2,\"row\":{},\"fixture\":{},\"test\":{},\"metrics\":{},\"thresholds\":\
+             {},\"pass\":{pass},\"engine_commit\":{},\"timestamp\":{}}}",
             esc(self.row),
             esc(self.fixture),
             esc(&self.test),
             obj(&self.metrics),
             obj(&self.thresholds),
+            std::env::var("XINDELER_BATTERY_ENGINE_COMMIT")
+                .ok()
+                .filter(|c| !c.is_empty())
+                .map_or_else(|| "null".to_string(), |c| esc(&c)),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
         )
     }
 
-    fn write(&self, path: &std::path::Path, pass: bool) -> std::io::Result<()> {
-        let _guard = FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mut records: BTreeMap<(String, String, String), String> = BTreeMap::new();
-        if let Ok(old) = std::fs::read_to_string(path) {
-            for line in old.lines() {
-                let line = line.trim().trim_end_matches(',');
-                if line.starts_with('{')
-                    && let Some(k) = record_key(line)
-                {
+    fn write(&self, path: &Path, pass: bool) -> std::io::Result<()> {
+        merge_record(path, &self.render(pass))
+    }
+}
+
+/// Advisory cross-process lock: `<path>.lock` created with `create_new`,
+/// retried for a bounded time, then taken over (a crashed run must not wedge
+/// the report forever).
+struct FileLock(PathBuf);
+
+impl FileLock {
+    fn acquire(path: &Path) -> Self {
+        let mut name = path.as_os_str().to_owned();
+        name.push(".lock");
+        let lock = PathBuf::from(name);
+        for _ in 0..200 {
+            if std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock)
+                .is_ok()
+            {
+                return Self(lock);
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        eprintln!(
+            "battery report: stale lock {} taken over after 5 s",
+            lock.display()
+        );
+        let _ = std::fs::write(&lock, b"");
+        Self(lock)
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+}
+
+/// Read the report at `path`, insert/replace `record`, and write it back
+/// atomically.
+fn merge_record(path: &Path, record: &str) -> std::io::Result<()> {
+    let _guard = FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    let _file_lock = FileLock::acquire(path);
+    let mut records: BTreeMap<(String, String, String), String> = BTreeMap::new();
+    if let Ok(old) = std::fs::read_to_string(path) {
+        for line in old.lines() {
+            let line = line.trim().trim_end_matches(',');
+            if line.is_empty() || line == "[" || line == "]" {
+                continue;
+            }
+            match record_key(line).filter(|_| line.starts_with('{') && line.ends_with('}')) {
+                Some(k) => {
                     records.insert(k, line.to_string());
-                }
+                },
+                None => eprintln!(
+                    "battery report: dropping a corrupt line in {}: {}",
+                    path.display(),
+                    line.chars().take(80).collect::<String>()
+                ),
             }
         }
-        let mine = self.render(pass);
-        if let Some(k) = record_key(&mine) {
-            records.insert(k, mine);
-        }
-        let mut out = String::from("[\n");
-        let n = records.len();
-        for (i, line) in records.values().enumerate() {
-            out.push_str(line);
-            out.push_str(if i + 1 < n { ",\n" } else { "\n" });
-        }
-        out.push_str("]\n");
-        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(path, out)
     }
+    if let Some(k) = record_key(record) {
+        records.insert(k, record.to_string());
+    }
+    let mut out = String::from("[\n");
+    let n = records.len();
+    for (i, line) in records.values().enumerate() {
+        out.push_str(line);
+        out.push_str(if i + 1 < n { ",\n" } else { "\n" });
+    }
+    out.push_str("]\n");
+    let mut tmp_name = path.as_os_str().to_owned();
+    tmp_name.push(format!(".tmp.{}", std::process::id()));
+    let tmp = PathBuf::from(tmp_name);
+    std::fs::write(&tmp, out)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 impl Drop for BatteryRow {
@@ -206,3 +297,83 @@ macro_rules! battery_row {
     }};
 }
 pub(crate) use battery_row;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("battery_report_{}_{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d.join("report.json")
+    }
+
+    fn row(test: &str) -> BatteryRow {
+        BatteryRow {
+            enabled: true,
+            row: "B-T0",
+            fixture: "fx",
+            test: test.to_string(),
+            metrics: Vec::new(),
+            thresholds: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn escapes_and_unicode_round_trip() {
+        let s = "a\"b\\c\u{1}\n\té";
+        let line = format!("{{\"test\":{}}}", esc(s));
+        assert_eq!(string_field(&line, "test").as_deref(), Some(s));
+        assert!(!line.contains('\n'));
+    }
+
+    #[test]
+    fn non_finite_numbers_are_null_and_record_is_valid_shape() {
+        let mut r = row("t");
+        r.metric("nan", f64::NAN)
+            .metric("inf", f64::INFINITY)
+            .metric("x", 1.5)
+            .fact("f", true);
+        let line = r.render(true);
+        assert!(line.contains("\"nan\":null,\"inf\":null,\"x\":1.5,\"f\":true"));
+        assert!(line.contains("\"schema\":2") && line.contains("\"timestamp\":"));
+        assert!(line.contains("\"engine_commit\":"));
+    }
+
+    #[test]
+    fn merge_replaces_same_key_and_keeps_others() {
+        let p = tmp("merge");
+        let mut a = row("a");
+        a.metric("v", 1);
+        merge_record(&p, &a.render(true)).unwrap();
+        merge_record(&p, &row("b").render(true)).unwrap();
+        let mut a2 = row("a");
+        a2.metric("v", 2);
+        merge_record(&p, &a2.render(false)).unwrap();
+        let txt = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(txt.lines().filter(|l| l.starts_with('{')).count(), 2);
+        assert!(txt.contains("\"v\":2") && !txt.contains("\"v\":1"));
+        assert!(txt.starts_with("[\n") && txt.ends_with("]\n"));
+        let mut lock = p.as_os_str().to_owned();
+        lock.push(".lock");
+        assert!(!PathBuf::from(lock).exists());
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn truncated_file_is_tolerated() {
+        let p = tmp("trunc");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let good = row("good").render(true);
+        std::fs::write(
+            &p,
+            format!("[\n{good},\n{{\"schema\":2,\"row\":\"B-T0\",\"fixt"),
+        )
+        .unwrap();
+        merge_record(&p, &row("new").render(true)).unwrap();
+        let txt = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(txt.lines().filter(|l| l.starts_with('{')).count(), 2);
+        assert!(!txt.contains("fixt\n"));
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+}

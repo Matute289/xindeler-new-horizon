@@ -619,8 +619,9 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
         .metric(
             "ring_under_site_when_listed",
             report.sites.ring_under_site.len() as f64,
-        )
-        .metric(
+        );
+    if rep.enabled() {
+        rep.metric(
             "levelled_exact_columns",
             report
                 .sites
@@ -629,6 +630,7 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
                 .map(|s| s.cells)
                 .sum::<usize>() as f64,
         );
+    }
     assert_eq!(report.sites.listed.len(), near.len());
     assert!(report.sites.unlisted.is_empty() && report.sites.ring_under_site.is_empty());
     println!(
@@ -665,6 +667,19 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
 /// NPCs and rtsim spawns stand on the patch; on a dry pit floor at -10 m
 /// (`AuthoredOnly`) the queries have no sea-level clamp, the chunk is dry for
 /// `chunk_water`, the generated pit holds no water and no aquatic animal.
+/// Report metric names are `&'static str`: build them from a closed table.
+fn name_for(prefix: &str, suffix: &str, tail: &str) -> &'static str {
+    match (prefix, suffix, tail) {
+        ("lift_", "plus_10m", "_to_block_plus_1") => "lift_plus_10m_to_block_plus_1",
+        ("lift_", "plus_90m", "_to_block_plus_1") => "lift_plus_90m_to_block_plus_1",
+        ("surface_alt_minus_block_", "plus_10m", "") => "surface_alt_minus_block_plus_10m",
+        ("surface_alt_minus_block_", "plus_90m", "") => "surface_alt_minus_block_plus_90m",
+        ("ground_alt_is_block_", "plus_10m", "") => "ground_alt_is_block_plus_10m",
+        ("ground_alt_is_block_", "plus_90m", "") => "ground_alt_is_block_plus_90m",
+        _ => panic!("unmapped report name {prefix}{suffix}{tail}"),
+    }
+}
+
 #[test]
 #[ignore]
 fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
@@ -727,17 +742,12 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
         // A player saved standing on the old ground is now inside it.
         let feet = c.with_z(old + 1);
         let lift = sim.buried_ground_lift(feet, true);
-        let tag = if block - old == 10 {
-            "plus_10m"
-        } else {
-            "plus_90m"
-        };
+        let (suffix, _) = *[("plus_10m", 10), ("plus_90m", 90)]
+            .iter()
+            .find(|(_, delta)| block - old == *delta)
+            .expect("an unmapped patch height delta: add it to the report name table");
         rep11.fact(
-            if tag == "plus_10m" {
-                "lift_plus_10m_to_block_plus_1"
-            } else {
-                "lift_plus_90m_to_block_plus_1"
-            },
+            name_for("lift_", suffix, "_to_block_plus_1"),
             lift == Some(block + 1),
         );
         assert_eq!(lift, Some(block + 1));
@@ -758,19 +768,11 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
         // Simulated NPCs (per-tick snap) and rtsim spawns.
         rep11
             .metric(
-                if tag == "plus_10m" {
-                    "surface_alt_minus_block_plus_10m"
-                } else {
-                    "surface_alt_minus_block_plus_90m"
-                },
+                name_for("surface_alt_minus_block_", suffix, ""),
                 sim.surface_alt_at(c) - block as f32,
             )
             .fact(
-                if tag == "plus_10m" {
-                    "ground_alt_is_block_plus_10m"
-                } else {
-                    "ground_alt_is_block_plus_90m"
-                },
+                name_for("ground_alt_is_block_", suffix, ""),
                 sim.ground_alt_at(c) == Some(top_block_alt(block)),
             );
         assert_eq!(sim.surface_alt_at(c), (block + 1) as f32);

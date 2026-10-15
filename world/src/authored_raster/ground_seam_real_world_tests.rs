@@ -529,12 +529,14 @@ fn exact_patch_beside_a_natural_river_in_a_partial_chunk() {
     rep.metric("seam_pairs", ok.pairs as f64)
         .metric("walls_at_water_top", ok.walls.len() as f64)
         .metric("other_columns_changed", changed as f64)
-        .metric("box_columns", box_cols.len() as f64)
-        .metric(
+        .metric("box_columns", box_cols.len() as f64);
+    if rep.enabled() {
+        rep.metric(
             "patch_tops_exact",
             patch_tops.iter().filter(|t| **t == water_top).count() as f64,
-        )
-        .threshold("seam_pairs_min", 1)
+        );
+    }
+    rep.threshold("seam_pairs_min", 1)
         .threshold("walls_max", 0)
         .threshold("other_columns_changed_max", 0)
         .threshold("patch_tops_exact", 9);
@@ -651,8 +653,7 @@ fn a_dry_pit_beside_the_sea_needs_a_dyke() {
         err.0
     );
     rep.metric("no_dyke_pairs", walls.pairs as f64)
-        .metric("no_dyke_walls", walls.walls.len() as f64)
-        .fact("no_dyke_refused", true);
+        .metric("no_dyke_walls", walls.walls.len() as f64);
     assert_eq!(walls.walls.len(), walls.pairs, "every pit edge is a wall");
     assert!(
         walls
@@ -701,10 +702,10 @@ fn a_dry_pit_beside_the_sea_needs_a_dyke() {
     rep.metric("dyke_pairs", ok.pairs as f64)
         .metric("dyke_walls", ok.walls.len() as f64)
         .metric("pit_floor_exact", floor_exact as f64)
-        .metric("pit_columns", 256)
         .metric("pit_water_columns", water_in_pit as f64)
         .metric("dyke_tops_exact", dyke_exact as f64)
-        .metric("dyke_columns", 144)
+        .threshold("pit_columns", 256)
+        .threshold("dyke_columns", 144)
         .threshold("pit_floor_exact_min", 250)
         .threshold("dyke_tops_exact_min", 140)
         .threshold("pit_water_columns_max", 0)
