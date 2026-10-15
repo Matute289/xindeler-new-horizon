@@ -1,3 +1,5 @@
+// Renders the sim table (`Land::from_sim`): it does not show authored ground,
+// which the map and the column sampler present instead.
 use image::{
     ImageBuffer, ImageEncoder,
     codecs::png::{CompressionType, FilterType, PngEncoder},
