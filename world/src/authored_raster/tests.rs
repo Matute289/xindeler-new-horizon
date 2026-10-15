@@ -2567,6 +2567,100 @@ fn map_colour_of_partly_authored_dry_chunks_follows_the_majority() {
 /// region's sea floor, a minority-dry chunk, a chunk outside every region and
 /// the basement map present the table unchanged; the helper's map sample and
 /// altitude without column samples equal the table-path functions there.
+
+#[test]
+fn biome_label_stays_off_authored_dry_ground() {
+    use crate::{
+        CONFIG,
+        civ::{PoiKind, PointOfInterest},
+        sim::{RiverKind, WorldSim},
+    };
+    use common::{
+        store::Store,
+        terrain::{MapSizeLg, map::MapConfig},
+    };
+
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let ground = |shape, ground_cm| PaintOp::Ground {
+        shape,
+        ground_cm,
+        weight: GROUND_EXACT,
+    };
+    // A dry pit carved 10 m below sea level into a natural sea.
+    let mut own = region("dry_below_sea", (2048, 1024), (2304, 1280), 0, vec![
+        ground(rect(2080.0, 1056.0, 2144.0, 1120.0), 13_050),
+    ]);
+    own.sea_fill = SeaFill::AuthoredOnly;
+    let auto = region("sea_floor", (2048, 1024), (2304, 1280), 0, vec![ground(
+        rect(2080.0, 1056.0, 2144.0, 1120.0),
+        13_050,
+    )]);
+
+    let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
+    for c in sim.chunks.iter_mut() {
+        c.alt = CONFIG.sea_level - 10.0;
+        c.water_alt = CONFIG.sea_level;
+        c.river.river_kind = Some(RiverKind::Ocean);
+    }
+    let mut pois = Store::<PointOfInterest>::default();
+    let sea = pois.insert(PointOfInterest {
+        name: "Sea".to_string(),
+        kind: PoiKind::Biome(1),
+        loc: Vec2::zero(),
+    });
+    let size = sim.map_size_lg();
+    let config = MapConfig::orthographic(size, CONFIG.sea_level..=CONFIG.sea_level + 1000.0);
+    let pit = Vec2::new(2096, 1072) / CHUNK;
+    let tag = |sim: &mut WorldSim, keep: &dyn Fn(Vec2<i32>) -> bool| {
+        for (posi, c) in sim.chunks.iter_mut().enumerate() {
+            let pos = common::terrain::uniform_idx_as_vec2(size, posi);
+            c.poi = keep(pos).then_some(sea);
+        }
+    };
+    let everywhere = |_: Vec2<i32>| true;
+
+    // Procedural (no rasters), and only an Auto region: every label stays put.
+    tag(&mut sim, &everywhere);
+    let labels = |sim: &WorldSim, loc| sim.biome_label_chunk(&config, sea, loc);
+    sim.set_authored_rasters_for_test(None);
+    assert_eq!(labels(&sim, pit), Some(pit), "no rasters");
+    sim.set_authored_rasters_for_test(Some(load(&[build_region(&auto).unwrap()]).unwrap()));
+    assert!(!sim.chunk_is_authored_dry(pit));
+    assert_eq!(labels(&sim, pit), Some(pit), "only an Auto region");
+
+    // With the authored dry region, the label named inside the pit moves to
+    // the nearest chunk of the same biome that is not dry.
+    sim.set_authored_rasters_for_test(Some(load(&[build_region(&own).unwrap()]).unwrap()));
+    assert!(sim.chunk_is_authored_dry(pit), "the pit is dry");
+    let moved = labels(&sim, pit).expect("a wet chunk of the biome exists");
+    assert!(
+        !sim.chunk_is_authored_dry(moved),
+        "the label left the dry pit"
+    );
+    assert_ne!(moved, pit);
+    for pos in (0..128).flat_map(|x| (0..128).map(move |y| Vec2::new(x, y))) {
+        if !sim.chunk_is_authored_dry(pos) {
+            assert!(
+                pit.distance_squared(moved) <= pit.distance_squared(pos),
+                "{pos:?} is not closer than {moved:?}"
+            );
+        }
+    }
+    // A label already on wet ground is untouched.
+    let wet = Vec2::new(1, 1);
+    assert_eq!(labels(&sim, wet), Some(wet));
+
+    // A biome made only of dry chunks has nowhere to put its label.
+    let only_dry = |p: Vec2<i32>| sim.chunk_is_authored_dry(p);
+    let dry_set: Vec<bool> = (0..128 * 128)
+        .map(|posi| only_dry(common::terrain::uniform_idx_as_vec2(size, posi)))
+        .collect();
+    for (posi, c) in sim.chunks.iter_mut().enumerate() {
+        c.poi = dry_set[posi].then_some(sea);
+    }
+    assert_eq!(labels(&sim, pit), None, "dropped");
+}
+
 #[test]
 fn chunk_presentation_on_a_synthetic_raster() {
     use crate::{
