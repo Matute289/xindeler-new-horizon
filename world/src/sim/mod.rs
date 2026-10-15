@@ -11,7 +11,10 @@ use self::erosion::Compute;
 pub use self::{
     diffusion::diffusion,
     location::Location,
-    map::{pack_map_alt, sample_pos, sample_pos_with, sample_wpos, sample_wpos_presented},
+    map::{
+        ChunkPresentation, pack_map_alt, sample_pos, sample_pos_with, sample_wpos,
+        sample_wpos_presented,
+    },
     util::get_horizon_map,
     way::{Path, Way},
 };
@@ -4176,23 +4179,11 @@ impl WorldSim {
         // rendered there (`samples_data`, authored-aware); identical to
         // `sample_wpos` everywhere else.
         let present_wpos = |map_config: &MapConfig, wpos: Vec2<i32>| {
-            if !authored_ground {
-                return sample_wpos(map_config, self, wpos);
+            if authored_ground {
+                self.presented_wpos(map_config, wpos, Some(&samples_data))
+            } else {
+                sample_wpos(map_config, self, wpos)
             }
-            sample_wpos_presented(map_config, self, wpos, || {
-                let chunk = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
-                if wpos.map2(chunk, |e, c| e.rem_euclid(c)) != Vec2::zero() {
-                    return None;
-                }
-                let pos = wpos.map2(chunk, |e, c| e.div_euclid(c));
-                let size = self.map_size_lg().chunks().map(|e| e as i32);
-                if pos.x < 0 || pos.y < 0 || pos.x >= size.x || pos.y >= size.y {
-                    return None;
-                }
-                samples_data[vec2_as_uniform_idx(self.map_size_lg(), pos)]
-                    .as_ref()
-                    .map(|s| s.alt)
-            })
         };
         map_config.generate(
             |pos| {
