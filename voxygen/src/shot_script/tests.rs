@@ -108,6 +108,17 @@ fn bad_numbers_are_rejected() {
         "Camera(yaw_deg: 0.0, pitch_deg: 0.0, distance: -1.0)",
     ));
     assert!(e.message.contains("distance"), "{e}");
+    let e = err(&script(
+        "Camera(yaw_deg: 0.0, pitch_deg: 0.0, distance: 500.5)",
+    ));
+    assert!(e.message.contains("at most 500"), "{e}");
+    assert!(
+        ShotScript::parse(
+            &script("Camera(yaw_deg: 0.0, pitch_deg: 0.0, distance: 500.0)"),
+            "t.ron"
+        )
+        .is_ok()
+    );
     let e = err(&script("WaitForTerrain(radius_chunks: 0)"));
     assert!(e.message.contains("radius_chunks"), "{e}");
     let e = err(&script("Time(\"noon\")").replace("(1920, 1080)", "(0, 1080)"));

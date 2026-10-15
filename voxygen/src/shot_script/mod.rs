@@ -8,9 +8,17 @@
 //! in neither `default` nor `default-publish`. Even when compiled in, it does
 //! nothing unless the [`SCRIPT_ENV`] environment variable names a script file.
 //!
-//! Currently the schema, its validator, the named-screenshot capture, the
-//! unattended login and the executor for the time, teleport and waiting steps
-//! exist; camera, minimap, sample and screenshot steps are not executed yet.
+//! The schema, its validator, the named-screenshot capture, the unattended
+//! login and the executor for every step kind exist.
+//!
+//! Process exit codes: 0 every step succeeded; 1 the script ran to the end
+//! but at least one step failed; 2 the run could not start (script, server or
+//! login error); 3 a screenshot could not be written. A panic ends with 101
+//! (Rust's default). Code 1 is produced only by [`driver::finished_exit_code`]
+//! for a failed step: the shot-script paths in `main` never return an `Err`
+//! (which would also give 1), they exit through [`login::exit_code`].
+//!
+//! Screenshot files are named `NNN_<name>.png` (1-based, three digits).
 
 pub mod capture;
 pub mod driver;

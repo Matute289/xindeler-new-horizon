@@ -1,14 +1,16 @@
 use super::{
     ShotScript,
     driver::{
-        Action, CROMATOLIS_MOVE_TIMEOUT_S, DRIFT_BLOCKS, MAX_RADIUS_CHUNKS, REST_FRAMES,
-        RunnerContext, ShotCommand, StepOutcome, StepRunner, TELEPORT_TIMEOUT_S, TIME_HOURS,
-        TIME_TIMEOUT_S, TerrainStatus, chunks_in_radius, finished_exit_code,
+        Action, CROMATOLIS_MOVE_TIMEOUT_S, DRIFT_BLOCKS, HUD_HIDE_FRAMES, MAX_RADIUS_CHUNKS,
+        REST_FRAMES, RunnerContext, SCREENSHOT_RETRIES, SCREENSHOT_TIMEOUT_S, ShotCommand,
+        ShotOutcome, StepOutcome, StepRunner, TELEPORT_TIMEOUT_S, TIME_HOURS, TIME_TIMEOUT_S,
+        TerrainStatus, camera_orientation, chunks_in_radius, finished_exit_code,
+        look_at_orientation, screenshot_file_name,
     },
-    login::STEP_FAILED_EXIT_CODE,
+    login::{SCREENSHOT_FAILED_EXIT_CODE, SETUP_EXIT_CODE, STEP_FAILED_EXIT_CODE},
     schema::TIME_NAMES,
 };
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use vek::{Vec2, Vec3};
 
 /// A fake world: the test moves the clock, the player and the terrain.
@@ -21,6 +23,9 @@ struct Fake {
     terrain: Cell<TerrainStatus>,
     radius_asked: Cell<Option<u32>>,
     ready_checks: Cell<u32>,
+    center_asked: Cell<Option<Option<Vec2<f32>>>>,
+    camera_settled: Cell<bool>,
+    shot: RefCell<Option<ShotOutcome>>,
 }
 
 impl Fake {
@@ -34,6 +39,9 @@ impl Fake {
             terrain: Cell::new(NOT_READY),
             radius_asked: Cell::new(None),
             ready_checks: Cell::new(0),
+            center_asked: Cell::new(None),
+            camera_settled: Cell::new(true),
+            shot: RefCell::new(None),
         }
     }
 
@@ -53,13 +61,20 @@ impl RunnerContext for Fake {
 
     fn view_distance(&self) -> Option<u32> { self.view_distance.get() }
 
-    fn terrain_ready(&self, radius_chunks: u32) -> bool {
+    fn terrain_ready(&self, center: Option<Vec2<f32>>, radius_chunks: u32) -> bool {
+        self.center_asked.set(Some(center));
         self.radius_asked.set(Some(radius_chunks));
         self.ready_checks.set(self.ready_checks.get() + 1);
         self.terrain.get().ready()
     }
 
-    fn terrain_status(&self, _radius_chunks: u32) -> TerrainStatus { self.terrain.get() }
+    fn terrain_status(&self, _center: Option<Vec2<f32>>, _radius: u32) -> TerrainStatus {
+        self.terrain.get()
+    }
+
+    fn camera_settled(&self) -> bool { self.camera_settled.get() }
+
+    fn screenshot_result(&self) -> Option<ShotOutcome> { self.shot.borrow().clone() }
 }
 
 const READY: TerrainStatus = TerrainStatus {
@@ -83,7 +98,10 @@ fn script(steps: &str, settle_frames: u32) -> ShotScript {
 }
 
 fn line(action: Option<Action>) -> Option<String> {
-    action.map(|Action::SendCommand(c)| c.to_string())
+    action.map(|a| match a {
+        Action::SendCommand(c) => c.to_string(),
+        other => format!("{other:?}"),
+    })
 }
 
 fn outcomes(r: &StepRunner) -> Vec<StepOutcome> {
@@ -527,19 +545,6 @@ fn steps_run_strictly_in_order_one_at_a_time() {
 }
 
 #[test]
-fn later_slice_steps_fail_without_commands() {
-    let ctx = Fake::new();
-    let mut r = StepRunner::new(&script(r#"Screenshot(name: "a"), Minimap(show: true)"#, 0));
-    assert_eq!(r.tick(&ctx), None);
-    assert_eq!(r.tick(&ctx), None);
-    assert!(
-        outcomes(&r)
-            .iter()
-            .all(|o| matches!(o, StepOutcome::Failed(_)))
-    );
-}
-
-#[test]
 fn exit_code_reflects_failed_steps() {
     let ctx = Fake::new();
     let mut ok = StepRunner::new(&script("WaitSeconds(0.1)", 0));
@@ -549,12 +554,48 @@ fn exit_code_reflects_failed_steps() {
     assert!(ok.is_finished());
     assert_eq!(finished_exit_code(&ok), None);
 
-    let mut bad = StepRunner::new(&script(r#"Screenshot(name: "a"), WaitSeconds(0.1)"#, 0));
-    frames(&mut bad, &ctx, 3, 1.0);
+    // A time that never shows up: a soft failure, the run goes on.
+    ctx.tod.set(Some(3.0 * 3600.0));
+    let mut bad = StepRunner::new(&script(r#"Time("dusk"), WaitSeconds(0.1)"#, 0));
+    frames(&mut bad, &ctx, 40, 1.0);
     assert!(bad.is_finished());
+    assert!(!bad.screenshot_failed());
     assert_eq!(finished_exit_code(&bad), Some(STEP_FAILED_EXIT_CODE));
-    assert_ne!(STEP_FAILED_EXIT_CODE, 0);
-    assert_ne!(STEP_FAILED_EXIT_CODE, super::login::SETUP_EXIT_CODE);
+}
+
+#[test]
+fn exit_code_table() {
+    assert_eq!(STEP_FAILED_EXIT_CODE, 1);
+    assert_eq!(SETUP_EXIT_CODE, 2);
+    assert_eq!(SCREENSHOT_FAILED_EXIT_CODE, 3);
+}
+
+#[test]
+fn unwritable_screenshot_gives_exit_3_over_step_failure() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    let mut r = StepRunner::new(&script(
+        r#"Screenshot(name: "a"), Time("dusk"), WaitSeconds(0.1)"#,
+        0,
+    ));
+    ctx.tod.set(Some(3.0 * 3600.0));
+    // Request the shot.
+    let mut sent = Vec::new();
+    for _ in 0..40 {
+        sent.extend(line(r.tick(&ctx)));
+        if sent.iter().any(|s| s.contains("Screenshot")) {
+            break;
+        }
+        ctx.advance(0.3);
+    }
+    assert!(sent.iter().any(|s| s.contains("Screenshot")), "{sent:?}");
+    *ctx.shot.borrow_mut() = Some(ShotOutcome::Failed("disk full".into()));
+    r.tick(&ctx);
+    *ctx.shot.borrow_mut() = None;
+    frames(&mut r, &ctx, 60, 1.0);
+    assert!(r.is_finished());
+    assert!(r.screenshot_failed());
+    assert_eq!(finished_exit_code(&r), Some(SCREENSHOT_FAILED_EXIT_CODE));
 }
 
 /// A time name that is not one of the whitelisted names never becomes a
@@ -629,4 +670,351 @@ fn commands_match_the_command_table() {
         let data = cmd.data();
         assert!(data.args.len() >= args, "/{keyword} argument count");
     }
+}
+
+// ---- camera, viewpoint, minimap, HUD and screenshot steps -----------------
+
+#[test]
+fn screenshot_file_names_are_plain() {
+    assert_eq!(screenshot_file_name(1, "deck_noon"), "001_deck_noon.png");
+    assert_eq!(screenshot_file_name(12, "a.b-c"), "012_a.b-c.png");
+    for evil in [
+        "../../etc/passwd",
+        "a/b",
+        "a\\b",
+        ".hidden",
+        "x\0y",
+        "C:\\x",
+        "a..b",
+    ] {
+        let n = screenshot_file_name(3, evil);
+        assert!(
+            !n.contains('/') && !n.contains('\\') && !n.contains(".."),
+            "{n}"
+        );
+        assert!(!n.starts_with('.') && n.ends_with(".png"), "{n}");
+        assert!(
+            n.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c)),
+            "{n}"
+        );
+    }
+    assert_eq!(screenshot_file_name(1, ".x"), "001__x.png");
+}
+
+#[test]
+fn camera_conventions() {
+    let (yaw, pitch) = camera_orientation(90.0, -20.0);
+    assert!((yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    // Looking down is a positive engine pitch.
+    assert!((pitch - 20f32.to_radians()).abs() < 1e-6);
+
+    // Straight north (+Y) and level.
+    let (y, p) = look_at_orientation(Vec3::zero(), Vec3::new(0.0, 10.0, 0.0)).unwrap();
+    assert!(y.abs() < 1e-6 && p.abs() < 1e-6);
+    // East (+X), 45 degrees down.
+    let (y, p) = look_at_orientation(Vec3::new(0.0, 0.0, 10.0), Vec3::new(10.0, 0.0, 0.0)).unwrap();
+    assert!((y - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+    assert!((p - std::f32::consts::FRAC_PI_4).abs() < 1e-5);
+    // Straight down stays finite.
+    let (_, p) = look_at_orientation(Vec3::new(0.0, 0.0, 5.0), Vec3::zero()).unwrap();
+    assert!((p - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+    assert!(look_at_orientation(Vec3::one(), Vec3::one()).is_none());
+}
+
+#[test]
+fn camera_step_applies_then_settles() {
+    let ctx = Fake::new();
+    ctx.camera_settled.set(false);
+    let mut r = StepRunner::new(&script(
+        "Camera(yaw_deg: 45.0, pitch_deg: -20.0, distance: 10.0), WaitSeconds(0.1)",
+        0,
+    ));
+    let a = r.tick(&ctx);
+    match a {
+        Some(Action::Camera {
+            yaw_rad,
+            pitch_rad,
+            distance,
+        }) => {
+            assert!((yaw_rad - 45f32.to_radians()).abs() < 1e-6);
+            assert!((pitch_rad - 20f32.to_radians()).abs() < 1e-6);
+            assert_eq!(distance, 10.0);
+        },
+        other => panic!("{other:?}"),
+    }
+    // Zoom not settled: waits, up to the cap, then moves on without failing.
+    for _ in 0..5 {
+        ctx.advance(0.1);
+        assert_eq!(r.tick(&ctx), None);
+    }
+    assert!(r.records().is_empty());
+    ctx.advance(super::driver::CAMERA_SETTLE_MAX_S);
+    r.tick(&ctx);
+    assert_eq!(outcomes(&r), vec![StepOutcome::Done]);
+}
+
+#[test]
+fn camera_step_continues_once_settled() {
+    let ctx = Fake::new();
+    let mut r = StepRunner::new(&script(
+        "Camera(yaw_deg: 0.0, pitch_deg: 0.0, distance: 5.0)",
+        0,
+    ));
+    assert!(r.tick(&ctx).is_some());
+    r.tick(&ctx);
+    r.tick(&ctx);
+    assert_eq!(outcomes(&r), vec![StepOutcome::Done]);
+}
+
+#[test]
+fn viewpoint_waits_for_terrain_around_the_camera() {
+    let ctx = Fake::new();
+    ctx.terrain.set(NOT_READY);
+    let mut r = StepRunner::new(&script(
+        "Viewpoint(cam: (100.0, 200.0, 300.0), look_at: (100.0, 300.0, 300.0))",
+        0,
+    ));
+    match r.tick(&ctx) {
+        Some(Action::Viewpoint {
+            cam,
+            yaw_rad,
+            pitch_rad,
+        }) => {
+            assert_eq!(cam, Vec3::new(100.0, 200.0, 300.0));
+            assert!(yaw_rad.abs() < 1e-6 && pitch_rad.abs() < 1e-6);
+        },
+        other => panic!("{other:?}"),
+    }
+    frames(&mut r, &ctx, 4, 0.3);
+    assert!(r.records().is_empty(), "terrain is not ready");
+    assert_eq!(
+        ctx.center_asked.get(),
+        Some(Some(Vec2::new(100.0, 200.0))),
+        "readiness is checked around the camera, not the player"
+    );
+    ctx.terrain.set(READY);
+    frames(&mut r, &ctx, 5, 0.3);
+    assert_eq!(outcomes(&r), vec![StepOutcome::Done]);
+}
+
+#[test]
+fn viewpoint_terrain_timeout_is_a_soft_failure() {
+    let ctx = Fake::new();
+    ctx.terrain.set(NOT_READY);
+    let mut r = StepRunner::new(&script(
+        "Viewpoint(cam: (1.0, 2.0, 3.0), look_at: (1.0, 3.0, 3.0)), WaitSeconds(0.1)",
+        0,
+    ));
+    r.tick(&ctx);
+    r.tick(&ctx);
+    ctx.advance(61.0);
+    r.tick(&ctx);
+    assert!(failed_with(&outcomes(&r)[0], "terrain not ready"));
+}
+
+#[test]
+fn minimap_and_sample_steps() {
+    let ctx = Fake::new();
+    let mut r = StepRunner::new(&script(
+        r#"Minimap(show: true), Sample(label: "on"), Minimap(show: false)"#,
+        0,
+    ));
+    assert_eq!(r.tick(&ctx), Some(Action::Minimap(true)));
+    assert_eq!(r.tick(&ctx), None);
+    assert_eq!(r.tick(&ctx), Some(Action::Minimap(false)));
+    assert!(r.is_finished());
+    assert_eq!(finished_exit_code(&r), None);
+}
+
+/// Tick until an action that is not `None` appears.
+fn next_action(r: &mut StepRunner, ctx: &Fake, max: u32, dt: f64) -> Option<Action> {
+    for _ in 0..max {
+        if let Some(a) = r.tick(ctx) {
+            return Some(a);
+        }
+        ctx.advance(dt);
+    }
+    None
+}
+
+#[test]
+fn screenshot_hides_hud_waits_and_restores() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    let mut r = StepRunner::new(&script(r#"Screenshot(name: "deck")"#, 2));
+    assert_eq!(r.tick(&ctx), Some(Action::Hud(false)));
+    // The capture is not requested before the HUD had its frames and the
+    // terrain settled.
+    let mut shots = 0;
+    let mut saw = None;
+    for _ in 0..(HUD_HIDE_FRAMES + 40) {
+        ctx.advance(0.3);
+        if let Some(a) = r.tick(&ctx) {
+            saw = Some(a);
+            shots += 1;
+            break;
+        }
+    }
+    assert_eq!(shots, 1);
+    assert_eq!(
+        saw,
+        Some(Action::Screenshot {
+            file_name: "001_deck.png".into()
+        })
+    );
+    assert!(r.records().is_empty(), "waits for the file");
+    *ctx.shot.borrow_mut() = Some(ShotOutcome::Written);
+    // Done, and the HUD comes back in the same tick.
+    assert_eq!(r.tick(&ctx), Some(Action::Hud(true)));
+    assert_eq!(outcomes(&r), vec![StepOutcome::Done]);
+    assert_eq!(finished_exit_code(&r), None);
+}
+
+#[test]
+fn screenshot_without_hide_hud_sends_no_hud_actions() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    let src = "ShotScript(version: 1, window: (1920, 1080), defaults: (view_distance: 12, \
+               terrain_radius_chunks: 6, terrain_timeout_s: 60.0, settle_frames: 0, hide_hud: \
+               false), steps: [Screenshot(name: \"a\")])";
+    let s = ShotScript::parse(src, "t.ron").unwrap();
+    let mut r = StepRunner::new(&s);
+    let a = next_action(&mut r, &ctx, 40, 0.3);
+    assert_eq!(
+        a,
+        Some(Action::Screenshot {
+            file_name: "001_a.png".into()
+        })
+    );
+    *ctx.shot.borrow_mut() = Some(ShotOutcome::Written);
+    assert_eq!(r.tick(&ctx), None);
+    assert!(r.is_finished());
+}
+
+#[test]
+fn screenshot_still_taken_when_terrain_times_out() {
+    let ctx = Fake::new();
+    ctx.terrain.set(NOT_READY);
+    let mut r = StepRunner::new(&script(r#"Screenshot(name: "late")"#, 0));
+    r.tick(&ctx); // hide hud
+    frames(&mut r, &ctx, HUD_HIDE_FRAMES, 0.1);
+    ctx.advance(61.0);
+    let a = next_action(&mut r, &ctx, 3, 0.1);
+    assert!(matches!(a, Some(Action::Screenshot { .. })), "{a:?}");
+    *ctx.shot.borrow_mut() = Some(ShotOutcome::Written);
+    r.tick(&ctx);
+    assert!(failed_with(&outcomes(&r)[0], "terrain not ready"));
+    // A terrain problem is a step failure, not a write failure.
+    assert_eq!(finished_exit_code(&r), Some(STEP_FAILED_EXIT_CODE));
+}
+
+#[test]
+fn dropped_screenshot_is_retried_then_fails_with_exit_3() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    let src = "ShotScript(version: 1, window: (1920, 1080), defaults: (view_distance: 12, \
+               terrain_radius_chunks: 6, terrain_timeout_s: 60.0, settle_frames: 0, hide_hud: \
+               false), steps: [Screenshot(name: \"a\")])";
+    let mut r = StepRunner::new(&ShotScript::parse(src, "t.ron").unwrap());
+    assert!(next_action(&mut r, &ctx, 40, 0.3).is_some());
+    *ctx.shot.borrow_mut() = Some(ShotOutcome::Dropped);
+    for _ in 0..SCREENSHOT_RETRIES {
+        assert!(matches!(r.tick(&ctx), Some(Action::Screenshot { .. })));
+    }
+    assert_eq!(r.tick(&ctx), None);
+    assert!(failed_with(&outcomes(&r)[0], "discarded"));
+    assert_eq!(finished_exit_code(&r), Some(SCREENSHOT_FAILED_EXIT_CODE));
+}
+
+#[test]
+fn screenshot_that_never_arrives_times_out_with_exit_3() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    let src = "ShotScript(version: 1, window: (1920, 1080), defaults: (view_distance: 12, \
+               terrain_radius_chunks: 6, terrain_timeout_s: 60.0, settle_frames: 0, hide_hud: \
+               false), steps: [Screenshot(name: \"a\")])";
+    let mut r = StepRunner::new(&ShotScript::parse(src, "t.ron").unwrap());
+    assert!(next_action(&mut r, &ctx, 40, 0.3).is_some());
+    ctx.advance(SCREENSHOT_TIMEOUT_S + 1.0);
+    r.tick(&ctx);
+    assert!(failed_with(&outcomes(&r)[0], "not written"));
+    assert_eq!(finished_exit_code(&r), Some(SCREENSHOT_FAILED_EXIT_CODE));
+}
+
+#[test]
+fn screenshot_after_viewpoint_checks_terrain_around_the_camera() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    let mut r = StepRunner::new(&script(
+        r#"Viewpoint(cam: (500.0, 600.0, 90.0), look_at: (500.0, 700.0, 80.0)),
+           Screenshot(name: "far")"#,
+        0,
+    ));
+    let a = next_action(&mut r, &ctx, 60, 0.3);
+    assert!(matches!(a, Some(Action::Viewpoint { .. })), "{a:?}");
+    let mut seen = None;
+    for _ in 0..60 {
+        ctx.advance(0.3);
+        if let Some(a) = r.tick(&ctx) {
+            seen = Some(a);
+            if matches!(seen, Some(Action::Screenshot { .. })) {
+                break;
+            }
+        }
+    }
+    assert!(matches!(seen, Some(Action::Screenshot { .. })), "{seen:?}");
+    assert_eq!(ctx.center_asked.get(), Some(Some(Vec2::new(500.0, 600.0))));
+}
+
+#[test]
+fn ordinals_sort_past_ninety_nine() {
+    assert_eq!(screenshot_file_name(100, "x"), "100_x.png");
+    assert!(screenshot_file_name(99, "x") < screenshot_file_name(100, "x"));
+}
+
+#[test]
+fn teleport_after_viewpoint_keeps_watching_the_camera() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    ctx.at(10.0, 10.0, 100.0);
+    let mut r = StepRunner::new(&script(
+        r#"Viewpoint(cam: (500.0, 600.0, 90.0), look_at: (500.0, 700.0, 80.0)),
+           Teleport(wpos: (10.0, 10.0, 100.0)),
+           Screenshot(name: "after")"#,
+        0,
+    ));
+    let mut saw_shot = false;
+    for _ in 0..80 {
+        ctx.advance(0.3);
+        if matches!(r.tick(&ctx), Some(Action::Screenshot { .. })) {
+            saw_shot = true;
+            break;
+        }
+    }
+    assert!(saw_shot);
+    assert_eq!(
+        ctx.center_asked.get(),
+        Some(Some(Vec2::new(500.0, 600.0))),
+        "the lens is still at the viewpoint"
+    );
+}
+
+#[test]
+fn camera_step_after_viewpoint_returns_to_the_player() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    let mut r = StepRunner::new(&script(
+        r#"Viewpoint(cam: (500.0, 600.0, 90.0), look_at: (500.0, 700.0, 80.0)),
+           Camera(yaw_deg: 0.0, pitch_deg: -10.0, distance: 8.0),
+           Screenshot(name: "back")"#,
+        0,
+    ));
+    for _ in 0..80 {
+        ctx.advance(0.3);
+        if matches!(r.tick(&ctx), Some(Action::Screenshot { .. })) {
+            break;
+        }
+    }
+    assert_eq!(ctx.center_asked.get(), Some(None), "player-centred again");
 }

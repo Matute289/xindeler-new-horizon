@@ -431,3 +431,31 @@ fn existing_out_dir_must_not_be_group_or_world_writable() {
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn exit_codes_are_distinct_and_never_clash_with_a_panic() {
+    // 1 is also the code of a failing Rust `main`; `main` returns `()` and
+    // leaves only through these constants, so 1 always means "a step failed".
+    let codes = [
+        STEP_FAILED_EXIT_CODE,
+        SETUP_EXIT_CODE,
+        SCREENSHOT_FAILED_EXIT_CODE,
+    ];
+    assert_eq!(codes, [1, 2, 3]);
+    assert!(!codes.contains(&101), "101 is the panic exit code");
+}
+
+#[test]
+fn minimap_setting_is_restored_after_the_script_changed_it() {
+    let mut shown = true;
+    // The script remembers the user's value, then overrides it.
+    remember_minimap(shown);
+    shown = false;
+    remember_minimap(shown); // a second change keeps the first original
+    restore_minimap(&mut shown);
+    assert!(shown);
+    // Nothing remembered: the setting is left alone.
+    shown = false;
+    restore_minimap(&mut shown);
+    assert!(!shown);
+}

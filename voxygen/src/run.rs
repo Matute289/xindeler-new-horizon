@@ -115,6 +115,10 @@ pub fn run(
                 global_state.window.handle_device_event(event)
             },
             winit::event::Event::LoopExiting => {
+                // An unattended shot script must not leave its temporary
+                // settings changes in the saved file.
+                #[cfg(feature = "shot-script")]
+                crate::shot_script::login::restore_settings(&mut global_state.settings);
                 // Save any unsaved changes to settings and profile
                 global_state
                     .settings

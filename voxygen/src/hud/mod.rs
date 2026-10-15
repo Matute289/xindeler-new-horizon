@@ -5910,6 +5910,10 @@ impl Hud {
         }
     }
 
+    /// Show or hide the whole HUD (the same state the "hide UI" key toggles).
+    #[cfg(feature = "shot-script")]
+    pub fn set_ui_visible(&mut self, visible: bool) { self.show.ui = visible; }
+
     pub fn free_look(&mut self, free_look: bool) { self.show.free_look = free_look; }
 
     pub fn auto_walk(&mut self, auto_walk: bool) { self.show.auto_walk = auto_walk; }

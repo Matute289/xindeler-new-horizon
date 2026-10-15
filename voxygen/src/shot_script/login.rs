@@ -56,8 +56,10 @@ pub const CHARACTER_ALIAS: &str = "t13shot";
 /// Process exit code for script, setup or login errors.
 pub const SETUP_EXIT_CODE: i32 = 2;
 /// Process exit code when the script ran to the end but at least one step
-/// failed.
-pub const STEP_FAILED_EXIT_CODE: i32 = 3;
+/// failed (the run continued and captured the rest).
+pub const STEP_FAILED_EXIT_CODE: i32 = 1;
+/// Process exit code when a screenshot could not be written.
+pub const SCREENSHOT_FAILED_EXIT_CODE: i32 = 3;
 
 /// Everything the driver needs, validated once at startup.
 #[derive(Debug)]
@@ -352,6 +354,32 @@ pub fn set_exit_code(code: i32) { let _ = EXIT_CODE.set(code); }
 fn fail(msg: &str) {
     report(&format!("shot script login failed: {msg}"));
     let _ = EXIT_CODE.set(SETUP_EXIT_CODE);
+}
+
+/// The user's own `minimap_show` value, remembered before the script first
+/// changed it, so that a run never leaves the minimap switched in the real
+/// settings (they are saved on exit).
+static MINIMAP_ORIGINAL: Mutex<Option<bool>> = Mutex::new(None);
+
+/// Remember `current` as the value to restore, unless one is already kept.
+pub fn remember_minimap(current: bool) {
+    if let Ok(mut g) = MINIMAP_ORIGINAL.lock() {
+        g.get_or_insert(current);
+    }
+}
+
+/// Put back what a script changed in the settings. Called right before the
+/// settings are saved on exit, so every shutdown path is covered.
+pub fn restore_settings(settings: &mut crate::settings::Settings) {
+    restore_minimap(&mut settings.interface.minimap_show);
+}
+
+pub(crate) fn restore_minimap(minimap_show: &mut bool) {
+    if let Ok(mut g) = MINIMAP_ORIGINAL.lock()
+        && let Some(original) = g.take()
+    {
+        *minimap_show = original;
+    }
 }
 
 /// Turn off settings that would open a modal nobody is there to close (the

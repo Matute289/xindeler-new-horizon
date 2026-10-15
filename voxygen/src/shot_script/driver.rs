@@ -10,10 +10,17 @@
 //! Commands are built only from validated, typed steps: the command name is a
 //! `'static` string from this file and every argument is either a number
 //! formatted here with fixed precision or a `'static` string from
-//! [`TIME_HOURS`]. No text from the script reaches the command path.
+//! [`TIME_HOURS`]. No text from the script reaches the command path. The
+//! camera, minimap, HUD and screenshot steps are not commands at all: they
+//! become typed [`Action`]s that the session applies directly, and a
+//! screenshot file name is built by [`screenshot_file_name`], which only ever
+//! emits `[A-Za-z0-9_.-]`.
 
-use super::schema::{Defaults, ShotScript, Step};
-use std::fmt;
+use super::{
+    capture::ShotResult,
+    schema::{Defaults, ShotScript, Step},
+};
+use std::{fmt, path::PathBuf};
 use tracing::{info, warn};
 use vek::{Vec2, Vec3};
 
@@ -52,6 +59,23 @@ pub const TIME_TIMEOUT_S: f64 = 10.0;
 /// time runs much faster than real time, so this leaves room for the delay
 /// between the server applying the command and the client seeing it.
 pub const TIME_TOLERANCE_S: f64 = 1800.0;
+
+/// Frames the HUD gets to disappear before a screenshot is requested.
+pub const HUD_HIDE_FRAMES: u32 = 3;
+
+/// Frames a camera change gets before the next step runs.
+pub const CAMERA_MIN_FRAMES: u32 = 2;
+
+/// Longest a camera change waits for the zoom to settle, in seconds. The
+/// camera pulls in on obstacles, so the requested distance may never be
+/// reached; the step then simply continues.
+pub const CAMERA_SETTLE_MAX_S: f64 = 3.0;
+
+/// How long to wait for the screenshot file to be written, in seconds.
+pub const SCREENSHOT_TIMEOUT_S: f64 = 30.0;
+
+/// Times a screenshot request is repeated when the renderer dropped it.
+pub const SCREENSHOT_RETRIES: u32 = 3;
 
 /// Time between terrain readiness checks, in seconds.
 pub const READINESS_INTERVAL_S: f64 = 0.25;
@@ -115,13 +139,97 @@ impl fmt::Display for ShotCommand {
     }
 }
 
+/// Decide how the HUD comes back when a step that hid it ends: in this tick
+/// when it has no other action, otherwise (an action cannot be replaced)
+/// flagged for the next tick.
+fn settle_hud(hidden: bool, action: Option<Action>, pending: &mut bool) -> Option<Action> {
+    match (hidden, action) {
+        (true, None) => Some(Action::Hud(true)),
+        (true, Some(a)) => {
+            *pending = true;
+            Some(a)
+        },
+        (false, a) => a,
+    }
+}
+
 /// Fixed-precision coordinate formatting (centimetres are plenty).
 fn coord(v: f32) -> String { format!("{v:.2}") }
 
+/// Name of a screenshot file: `NNN_<name>.png`, where `NNN` is the 1-based
+/// ordinal (at least three digits so files sort correctly up to 999 shots) of
+/// the screenshot in the script. Anything outside `[A-Za-z0-9_.-]` becomes `_`
+/// and a leading `.` is replaced too, so the result is always a single plain
+/// file name (validated names already are; this is the second line of defence).
+pub fn screenshot_file_name(ordinal: u32, name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .enumerate()
+        .map(|(i, c)| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '_' | '-' => c,
+            '.' if i > 0 => c,
+            _ => '_',
+        })
+        .collect();
+    // `..` can never appear, even inside a name.
+    let clean = clean.replace("..", "_");
+    format!("{ordinal:03}_{clean}.png")
+}
+
+/// Orbit-camera orientation for a `Camera` step, as the camera's
+/// `(yaw, pitch)` in radians. The script's yaw is the compass heading of the
+/// view direction (0 looks along +Y, 90 along +X); the script's pitch is the
+/// elevation of the view direction (negative looks down), which is the
+/// opposite sign of the camera's own pitch.
+pub fn camera_orientation(yaw_deg: f32, pitch_deg: f32) -> (f32, f32) {
+    (yaw_deg.to_radians(), -pitch_deg.to_radians())
+}
+
+/// Camera `(yaw, pitch)` in radians for a camera at `cam` looking at
+/// `look_at`, in the same convention as [`camera_orientation`]'s result.
+/// `None` when the two points coincide.
+pub fn look_at_orientation(cam: Vec3<f32>, look_at: Vec3<f32>) -> Option<(f32, f32)> {
+    let d = look_at - cam;
+    let len = d.magnitude();
+    if !(len.is_finite() && len > f32::EPSILON) {
+        return None;
+    }
+    let f = d / len;
+    Some((f.x.atan2(f.y), (-f.z).clamp(-1.0, 1.0).asin()))
+}
+
 /// What the session must do this frame.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     SendCommand(ShotCommand),
+    /// Orbit camera around the player.
+    Camera {
+        yaw_rad: f32,
+        pitch_rad: f32,
+        distance: f32,
+    },
+    /// Free-flying camera at `cam` looking along `(yaw_rad, pitch_rad)`.
+    Viewpoint {
+        cam: Vec3<f32>,
+        yaw_rad: f32,
+        pitch_rad: f32,
+    },
+    Minimap(bool),
+    /// Show (`true`) or hide (`false`) the whole HUD.
+    Hud(bool),
+    /// Write the next frame to `<out dir>/<file_name>`.
+    Screenshot {
+        file_name: String,
+    },
+}
+
+/// How a screenshot request ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShotOutcome {
+    Written,
+    /// The renderer discarded the request; asking again is fine.
+    Dropped,
+    Failed(String),
 }
 
 /// Result of ticking the current step.
@@ -162,11 +270,16 @@ pub trait RunnerContext {
     fn time_of_day(&self) -> Option<f64>;
     /// The client's terrain view distance in chunks, `None` if unknown.
     fn view_distance(&self) -> Option<u32>;
-    /// Every chunk within `radius_chunks` of the player is loaded and meshed
-    /// (and there is at least one). May stop at the first chunk that is not.
-    fn terrain_ready(&self, radius_chunks: u32) -> bool;
+    /// Every chunk within `radius_chunks` of `center` (the player when
+    /// `None`; world x/y) is loaded and meshed (and there is at least one).
+    /// May stop at the first chunk that is not.
+    fn terrain_ready(&self, center: Option<Vec2<f32>>, radius_chunks: u32) -> bool;
     /// Full counts, for failure messages only.
-    fn terrain_status(&self, radius_chunks: u32) -> TerrainStatus;
+    fn terrain_status(&self, center: Option<Vec2<f32>>, radius_chunks: u32) -> TerrainStatus;
+    /// The camera finished its zoom (distance and field of view).
+    fn camera_settled(&self) -> bool;
+    /// The result of the outstanding screenshot request, once known.
+    fn screenshot_result(&self) -> Option<ShotOutcome>;
 }
 
 /// Record of a finished step.
@@ -263,6 +376,22 @@ enum Phase {
     Waiting {
         since: f64,
     },
+    /// Camera change applied; letting it settle.
+    CameraSettle {
+        since: f64,
+        frames: u32,
+    },
+    /// Viewpoint applied; waiting for terrain around the camera.
+    ViewpointSent,
+    /// HUD hidden for a screenshot; letting it disappear.
+    HudHiding {
+        frames: u32,
+    },
+    /// Screenshot requested at `since`.
+    ShotWait {
+        since: f64,
+        attempts: u32,
+    },
     /// Terrain wait.
     Terrain {
         since: f64,
@@ -281,6 +410,28 @@ pub struct StepRunner {
     phase: Phase,
     anchor: Option<Anchor>,
     records: Vec<StepRecord>,
+    /// World x/y the camera looks at after a `Viewpoint`; `None` while the
+    /// camera follows the player. Set by `Viewpoint` and cleared only by the
+    /// `Camera` step that restores the third-person camera: teleporting the
+    /// player does not move a free camera.
+    view_center: Option<Vec2<f32>>,
+    /// The HUD must be shown again on the next tick (the step that hid it
+    /// ended on a tick that already had another action to emit).
+    pending_hud_restore: bool,
+    /// Screenshots started so far (names the next file).
+    shots_started: u32,
+    shot: ShotState,
+    /// A screenshot could not be written.
+    screenshot_failed: bool,
+}
+
+/// State of the screenshot step that is running.
+#[derive(Clone, Debug, Default)]
+struct ShotState {
+    /// The HUD was hidden for this shot and must be shown again.
+    hud_hidden: bool,
+    /// Why the terrain was not ready; the shot is still taken, then flagged.
+    soft_failure: Option<String>,
 }
 
 type Tick = (StepOutcome, Option<Action>);
@@ -294,8 +445,16 @@ impl StepRunner {
             phase: Phase::Start,
             anchor: None,
             records: Vec::new(),
+            view_center: None,
+            pending_hud_restore: false,
+            shots_started: 0,
+            shot: ShotState::default(),
+            screenshot_failed: false,
         }
     }
+
+    /// A screenshot could not be written (read-back or file error).
+    pub fn screenshot_failed(&self) -> bool { self.screenshot_failed }
 
     /// Every step has finished (successfully or not).
     pub fn is_finished(&self) -> bool { self.index >= self.steps.len() }
@@ -315,8 +474,11 @@ impl StepRunner {
 
     /// Advance the current step by one frame.
     pub fn tick(&mut self, ctx: &impl RunnerContext) -> Option<Action> {
+        if std::mem::take(&mut self.pending_hud_restore) {
+            return Some(Action::Hud(true));
+        }
         let step = self.steps.get(self.index)?.clone();
-        let (outcome, action) = if ctx.player_dead() && needs_live_player(&step) {
+        let (outcome, mut action) = if ctx.player_dead() && needs_live_player(&step) {
             (StepOutcome::Failed("the player is dead".into()), None)
         } else {
             self.tick_step(&step, ctx)
@@ -344,6 +506,9 @@ impl StepRunner {
                 });
                 self.index += 1;
                 self.phase = Phase::Start;
+                // Whatever ended the step, the HUD comes back.
+                action = settle_hud(self.shot.hud_hidden, action, &mut self.pending_hud_restore);
+                self.shot = ShotState::default();
             },
         }
         action
@@ -354,6 +519,10 @@ impl StepRunner {
         match step {
             Step::Time(name) => self.tick_time(name, now, ctx),
             Step::Teleport { wpos } => {
+                // `view_center` is deliberately kept: after a `Viewpoint` the
+                // lens stays at the viewpoint (the camera is still free)
+                // until a `Camera` step puts it back behind the player, and
+                // terrain waits and screenshots must watch where the lens is.
                 let target = Vec3::new(wpos.0, wpos.1, wpos.2);
                 match self.phase {
                     Phase::Start => self.start_goto(target, now, ctx),
@@ -364,14 +533,18 @@ impl StepRunner {
                 px,
                 py,
                 z_above_ground,
-            } => self.tick_cromatolis(*px, *py, *z_above_ground, now, ctx),
+            } => {
+                // `view_center` is kept, see `Teleport`.
+                self.tick_cromatolis(*px, *py, *z_above_ground, now, ctx)
+            },
             Step::WaitForTerrain {
                 radius_chunks,
                 timeout_s,
             } => {
                 let radius = radius_chunks.unwrap_or(self.defaults.terrain_radius_chunks);
                 let timeout = timeout_s.unwrap_or(self.defaults.terrain_timeout_s) as f64;
-                self.tick_terrain(radius, timeout, now, ctx)
+                let center = self.view_center;
+                self.tick_terrain(center, radius, timeout, now, ctx)
             },
             Step::WaitSeconds(s) => {
                 let since = match self.phase {
@@ -394,14 +567,201 @@ impl StepRunner {
                     (StepOutcome::Waiting, None)
                 }
             },
-            Step::Camera { .. }
-            | Step::Viewpoint { .. }
-            | Step::Minimap { .. }
-            | Step::Sample { .. }
-            | Step::Screenshot { .. } => (
-                StepOutcome::Failed("step kind not supported by this build yet".into()),
-                None,
-            ),
+            Step::Camera {
+                yaw_deg,
+                pitch_deg,
+                distance,
+            } => self.tick_camera(*yaw_deg, *pitch_deg, *distance, now, ctx),
+            Step::Viewpoint { cam, look_at } => self.tick_viewpoint(*cam, *look_at, now, ctx),
+            Step::Minimap { show } => (StepOutcome::Done, Some(Action::Minimap(*show))),
+            Step::Sample { label } => {
+                info!(label = %label, "Shot sample marker");
+                (StepOutcome::Done, None)
+            },
+            Step::Screenshot { name } => self.tick_screenshot(name, now, ctx),
+        }
+    }
+
+    /// Put the camera back behind the player at the given orbit, then give
+    /// the zoom a moment to settle.
+    fn tick_camera(
+        &mut self,
+        yaw_deg: f32,
+        pitch_deg: f32,
+        distance: f32,
+        now: f64,
+        ctx: &impl RunnerContext,
+    ) -> Tick {
+        match self.phase {
+            Phase::CameraSettle { since, frames } => {
+                let frames = frames.saturating_add(1);
+                if (frames >= CAMERA_MIN_FRAMES && ctx.camera_settled())
+                    || now - since >= CAMERA_SETTLE_MAX_S
+                {
+                    (StepOutcome::Done, None)
+                } else {
+                    self.phase = Phase::CameraSettle { since, frames };
+                    (StepOutcome::Waiting, None)
+                }
+            },
+            _ => {
+                self.view_center = None;
+                self.phase = Phase::CameraSettle {
+                    since: now,
+                    frames: 0,
+                };
+                let (yaw_rad, pitch_rad) = camera_orientation(yaw_deg, pitch_deg);
+                (
+                    StepOutcome::Waiting,
+                    Some(Action::Camera {
+                        yaw_rad,
+                        pitch_rad,
+                        distance,
+                    }),
+                )
+            },
+        }
+    }
+
+    /// Move the free camera to `cam`, then wait until the terrain around it
+    /// is loaded and meshed.
+    fn tick_viewpoint(
+        &mut self,
+        cam: (f32, f32, f32),
+        look_at: (f32, f32, f32),
+        now: f64,
+        ctx: &impl RunnerContext,
+    ) -> Tick {
+        let cam = Vec3::new(cam.0, cam.1, cam.2);
+        match self.phase {
+            Phase::ViewpointSent | Phase::Terrain { .. } => {
+                let radius = self.defaults.terrain_radius_chunks;
+                let timeout = self.defaults.terrain_timeout_s as f64;
+                let center = Some(cam.xy());
+                self.tick_terrain(center, radius, timeout, now, ctx)
+            },
+            _ => {
+                let Some((yaw_rad, pitch_rad)) = look_at_orientation(cam, Vec3::from(look_at))
+                else {
+                    return (StepOutcome::Failed("cam and look_at coincide".into()), None);
+                };
+                self.view_center = Some(cam.xy());
+                self.phase = Phase::ViewpointSent;
+                (
+                    StepOutcome::Waiting,
+                    Some(Action::Viewpoint {
+                        cam,
+                        yaw_rad,
+                        pitch_rad,
+                    }),
+                )
+            },
+        }
+    }
+
+    /// Hide the HUD (if the script asks), wait for terrain to be ready and
+    /// settled, request the capture and wait for the file. A terrain timeout
+    /// still takes the shot and is reported afterwards.
+    fn tick_screenshot(&mut self, name: &str, now: f64, ctx: &impl RunnerContext) -> Tick {
+        let _ = name;
+        let center = self.view_center;
+        let radius = self.defaults.terrain_radius_chunks;
+        let timeout = self.defaults.terrain_timeout_s as f64;
+        match self.phase {
+            Phase::Start => {
+                self.shots_started += 1;
+                if self.defaults.hide_hud {
+                    self.shot.hud_hidden = true;
+                    self.phase = Phase::HudHiding { frames: 0 };
+                    (StepOutcome::Waiting, Some(Action::Hud(false)))
+                } else {
+                    self.shot_terrain(name, center, radius, timeout, now, ctx)
+                }
+            },
+            Phase::HudHiding { frames } => {
+                if frames + 1 >= HUD_HIDE_FRAMES {
+                    self.phase = Phase::Start;
+                    self.shot_terrain(name, center, radius, timeout, now, ctx)
+                } else {
+                    self.phase = Phase::HudHiding { frames: frames + 1 };
+                    (StepOutcome::Waiting, None)
+                }
+            },
+            Phase::ShotWait { since, attempts } => match ctx.screenshot_result() {
+                Some(ShotOutcome::Written) => match self.shot.soft_failure.take() {
+                    Some(reason) => (StepOutcome::Failed(reason), None),
+                    None => (StepOutcome::Done, None),
+                },
+                Some(ShotOutcome::Dropped) if attempts < SCREENSHOT_RETRIES => {
+                    self.phase = Phase::ShotWait {
+                        since: now,
+                        attempts: attempts + 1,
+                    };
+                    (StepOutcome::Waiting, Some(self.shot_action(name)))
+                },
+                Some(ShotOutcome::Dropped) => {
+                    self.screenshot_failed = true;
+                    (
+                        StepOutcome::Failed(format!(
+                            "the renderer discarded the screenshot request {} times",
+                            attempts + 1
+                        )),
+                        None,
+                    )
+                },
+                Some(ShotOutcome::Failed(reason)) => {
+                    self.screenshot_failed = true;
+                    (StepOutcome::Failed(reason), None)
+                },
+                None if now - since > SCREENSHOT_TIMEOUT_S => {
+                    self.screenshot_failed = true;
+                    (
+                        StepOutcome::Failed(format!(
+                            "screenshot was not written within {SCREENSHOT_TIMEOUT_S:.0}s"
+                        )),
+                        None,
+                    )
+                },
+                None => (StepOutcome::Waiting, None),
+            },
+            _ => self.shot_terrain(name, center, radius, timeout, now, ctx),
+        }
+    }
+
+    /// Terrain wait of a screenshot step; once it ends (ready or timed out)
+    /// the capture is requested.
+    fn shot_terrain(
+        &mut self,
+        name: &str,
+        center: Option<Vec2<f32>>,
+        radius: u32,
+        timeout: f64,
+        now: f64,
+        ctx: &impl RunnerContext,
+    ) -> Tick {
+        let (outcome, action) = self.tick_terrain(center, radius, timeout, now, ctx);
+        match outcome {
+            StepOutcome::Waiting => (StepOutcome::Waiting, action),
+            ended => {
+                if let StepOutcome::Failed(reason) = ended {
+                    warn!(
+                        reason,
+                        "Terrain not ready for a screenshot; taking it anyway"
+                    );
+                    self.shot.soft_failure = Some(reason);
+                }
+                self.phase = Phase::ShotWait {
+                    since: now,
+                    attempts: 0,
+                };
+                (StepOutcome::Waiting, Some(self.shot_action(name)))
+            },
+        }
+    }
+
+    fn shot_action(&self, name: &str) -> Action {
+        Action::Screenshot {
+            file_name: screenshot_file_name(self.shots_started, name),
         }
     }
 
@@ -587,6 +947,7 @@ impl StepRunner {
     /// `settle_frames` more frames, re-checked at the end.
     fn tick_terrain(
         &mut self,
+        center: Option<Vec2<f32>>,
         radius: u32,
         timeout: f64,
         now: f64,
@@ -630,7 +991,7 @@ impl StepRunner {
             Drift::Ok => {
                 if last_check.is_none_or(|t| now - t >= READINESS_INTERVAL_S) {
                     last_check = Some(now);
-                    ready = ctx.terrain_ready(radius);
+                    ready = ctx.terrain_ready(center, radius);
                     if !ready {
                         ready_frames = 0;
                     }
@@ -655,7 +1016,7 @@ impl StepRunner {
         if ready && ready_frames > self.defaults.settle_frames {
             // Confirm right before finishing: chunks may have changed since
             // the last throttled check.
-            if ctx.terrain_ready(radius) {
+            if ctx.terrain_ready(center, radius) {
                 return (StepOutcome::Done, None);
             }
             ready = false;
@@ -670,11 +1031,19 @@ impl StepRunner {
             ready_frames,
         };
         if now - since > timeout {
-            let status = ctx.terrain_status(radius);
+            let status = ctx.terrain_status(center, radius);
             (
                 StepOutcome::Failed(format!(
-                    "terrain not ready after {timeout:.0}s: {} of {} chunks loaded, {} meshed",
-                    status.loaded, status.total, status.meshed
+                    "terrain not ready after {timeout:.0}s: {} of {} chunks loaded, {} meshed{}",
+                    status.loaded,
+                    status.total,
+                    status.meshed,
+                    if center.is_some() {
+                        " (the viewpoint may be farther than the server view distance from the \
+                         player: teleport the player near it first)"
+                    } else {
+                        ""
+                    }
                 )),
                 None,
             )
@@ -775,10 +1144,16 @@ pub fn report_step_failure(index: usize, kind: &str, reason: &str) {
 }
 
 /// Process exit code for a finished run: `None` when every step succeeded.
+///
+/// A screenshot that could not be written outranks plain step failures.
 pub fn finished_exit_code(runner: &StepRunner) -> Option<i32> {
-    runner
-        .any_failed()
-        .then_some(super::login::STEP_FAILED_EXIT_CODE)
+    if runner.screenshot_failed() {
+        Some(super::login::SCREENSHOT_FAILED_EXIT_CODE)
+    } else if runner.any_failed() {
+        Some(super::login::STEP_FAILED_EXIT_CODE)
+    } else {
+        None
+    }
 }
 
 /// Feeds a [`StepRunner`] from the live session.
@@ -786,6 +1161,11 @@ pub struct SessionDriver {
     runner: StepRunner,
     started: std::time::Instant,
     finished: bool,
+    out_dir: PathBuf,
+    shot_tx: crossbeam_channel::Sender<ShotResult>,
+    shot_rx: crossbeam_channel::Receiver<ShotResult>,
+    /// File the outstanding screenshot request writes.
+    expected_shot: Option<PathBuf>,
 }
 
 /// What the session should do after the driver's tick.
@@ -796,22 +1176,61 @@ pub enum DriverStatus {
     Finished,
 }
 
+/// A change the session applies to its scene, HUD or window.
+#[derive(Debug)]
+pub enum SessionEffect {
+    Camera {
+        yaw_rad: f32,
+        pitch_rad: f32,
+        distance: f32,
+    },
+    Viewpoint {
+        cam: Vec3<f32>,
+        yaw_rad: f32,
+        pitch_rad: f32,
+    },
+    Minimap(bool),
+    Hud(bool),
+    Screenshot {
+        path: PathBuf,
+        done: crossbeam_channel::Sender<ShotResult>,
+    },
+}
+
+/// Inputs the session supplies on top of the client.
+#[derive(Clone, Copy, Debug)]
+pub struct SceneState {
+    /// The camera finished its zoom.
+    pub camera_settled: bool,
+}
+
 impl SessionDriver {
     /// `Some` only while a shot script is active.
     pub fn from_active() -> Option<Self> {
-        super::login::active().map(|setup| Self {
-            runner: StepRunner::new(&setup.script),
-            started: std::time::Instant::now(),
-            finished: false,
+        super::login::active().map(|setup| {
+            // Room for every result that can be outstanding (one at a time).
+            let (shot_tx, shot_rx) = crossbeam_channel::bounded(4);
+            Self {
+                runner: StepRunner::new(&setup.script),
+                started: std::time::Instant::now(),
+                finished: false,
+                out_dir: setup.out_dir.clone(),
+                shot_tx,
+                shot_rx,
+                expected_shot: None,
+            }
         })
     }
 
     /// Run one frame of the script. Waits until the player is in the world.
+    /// The returned effect, if any, must be applied by the session before
+    /// the next frame.
     pub fn tick(
         &mut self,
         client: &mut client::Client,
         terrain: &crate::scene::terrain::Terrain<common::terrain::TerrainChunk>,
-    ) -> DriverStatus {
+        scene: SceneState,
+    ) -> (DriverStatus, Option<SessionEffect>) {
         if self.runner.is_finished() {
             if !self.finished {
                 self.finished = true;
@@ -829,38 +1248,118 @@ impl SessionDriver {
                     super::login::set_exit_code(code);
                 }
             }
-            return DriverStatus::Finished;
+            return (DriverStatus::Finished, None);
         }
         if client.position().is_none() {
-            return DriverStatus::Running;
+            return (DriverStatus::Running, None);
         }
+        let screenshot =
+            take_matching_result(&self.shot_rx, self.expected_shot.as_deref()).map(|r| match r {
+                Ok(path) => {
+                    info!(path = %path.display(), "Shot screenshot written");
+                    ShotOutcome::Written
+                },
+                Err(super::capture::ShotError::Dropped { .. }) => ShotOutcome::Dropped,
+                Err(e) => ShotOutcome::Failed(e.to_string()),
+            });
         let ctx = LiveContext {
             client,
             terrain,
             started: self.started,
+            camera_settled: scene.camera_settled,
+            screenshot,
         };
-        if let Some(Action::SendCommand(cmd)) = self.runner.tick(&ctx) {
-            info!(command = %cmd, "Shot script command");
-            client.send_command(cmd.name.to_owned(), cmd.args);
-        }
-        DriverStatus::Running
+        let effect = match self.runner.tick(&ctx) {
+            None => None,
+            Some(Action::SendCommand(cmd)) => {
+                info!(command = %cmd, "Shot script command");
+                client.send_command(cmd.name.to_owned(), cmd.args);
+                None
+            },
+            Some(Action::Camera {
+                yaw_rad,
+                pitch_rad,
+                distance,
+            }) => Some(SessionEffect::Camera {
+                yaw_rad,
+                pitch_rad,
+                distance,
+            }),
+            Some(Action::Viewpoint {
+                cam,
+                yaw_rad,
+                pitch_rad,
+            }) => Some(SessionEffect::Viewpoint {
+                cam,
+                yaw_rad,
+                pitch_rad,
+            }),
+            Some(Action::Minimap(show)) => Some(SessionEffect::Minimap(show)),
+            Some(Action::Hud(show)) => Some(SessionEffect::Hud(show)),
+            Some(Action::Screenshot { file_name }) => {
+                info!(file = %file_name, "Shot screenshot requested");
+                let path = self.out_dir.join(file_name);
+                // A late result of an earlier (timed out) request must not
+                // be taken for this one.
+                while self.shot_rx.try_recv().is_ok() {}
+                self.expected_shot = Some(path.clone());
+                Some(SessionEffect::Screenshot {
+                    path,
+                    done: self.shot_tx.clone(),
+                })
+            },
+        };
+        (DriverStatus::Running, effect)
     }
+}
+
+/// Next screenshot result that belongs to `expected`; results for other
+/// files (late answers to abandoned requests) are discarded.
+fn take_matching_result(
+    rx: &crossbeam_channel::Receiver<ShotResult>,
+    expected: Option<&std::path::Path>,
+) -> Option<ShotResult> {
+    use super::capture::ShotError;
+    while let Ok(r) = rx.try_recv() {
+        let path = match &r {
+            Ok(p) => Some(p.as_path()),
+            Err(
+                ShotError::InvalidPath { path, .. }
+                | ShotError::Write { path, .. }
+                | ShotError::Dropped { path },
+            ) => Some(path.as_path()),
+            Err(ShotError::Readback(_)) => None,
+        };
+        if path.is_none_or(|p| Some(p) == expected) {
+            return Some(r);
+        }
+        warn!(path = ?path, "Ignoring a stale screenshot result");
+    }
+    None
 }
 
 struct LiveContext<'a> {
     client: &'a client::Client,
     terrain: &'a crate::scene::terrain::Terrain<common::terrain::TerrainChunk>,
     started: std::time::Instant,
+    camera_settled: bool,
+    screenshot: Option<ShotOutcome>,
 }
 
 impl LiveContext<'_> {
-    /// Chunk keys around the player, or `None` while the position is unknown.
-    fn keys(&self, radius_chunks: u32) -> Option<impl Iterator<Item = Vec2<i32>>> {
+    /// Chunk keys around `center` (the player by default), or `None` while
+    /// the position is unknown.
+    fn keys(
+        &self,
+        center: Option<Vec2<f32>>,
+        radius_chunks: u32,
+    ) -> Option<impl Iterator<Item = Vec2<i32>>> {
         use common::terrain::CoordinateConversions;
-        let pos = self.client.position()?;
-        let center: Vec2<i32> = Vec2::<f32>::from(pos)
-            .wpos_to_cpos()
-            .map(|e| e.floor() as i32);
+        let center = match center {
+            Some(c) => c,
+            None => Vec2::<f32>::from(self.client.position()?),
+        };
+        let center: Vec2<i32> = center.wpos_to_cpos().map(|e| e.floor() as i32);
         let size = self.client.world_data().chunk_size().map(i32::from);
         Some(chunks_in_radius(center, radius_chunks as i32, size))
     }
@@ -877,8 +1376,8 @@ impl RunnerContext for LiveContext<'_> {
 
     fn view_distance(&self) -> Option<u32> { self.client.view_distance() }
 
-    fn terrain_ready(&self, radius_chunks: u32) -> bool {
-        let Some(keys) = self.keys(radius_chunks) else {
+    fn terrain_ready(&self, center: Option<Vec2<f32>>, radius_chunks: u32) -> bool {
+        let Some(keys) = self.keys(center, radius_chunks) else {
             return false;
         };
         let client_terrain = self.client.state().terrain();
@@ -892,9 +1391,9 @@ impl RunnerContext for LiveContext<'_> {
         any
     }
 
-    fn terrain_status(&self, radius_chunks: u32) -> TerrainStatus {
+    fn terrain_status(&self, center: Option<Vec2<f32>>, radius_chunks: u32) -> TerrainStatus {
         let mut status = TerrainStatus::default();
-        let Some(keys) = self.keys(radius_chunks) else {
+        let Some(keys) = self.keys(center, radius_chunks) else {
             return status;
         };
         let client_terrain = self.client.state().terrain();
@@ -905,6 +1404,10 @@ impl RunnerContext for LiveContext<'_> {
         }
         status
     }
+
+    fn camera_settled(&self) -> bool { self.camera_settled }
+
+    fn screenshot_result(&self) -> Option<ShotOutcome> { self.screenshot.clone() }
 }
 
 /// Chunk keys within `radius` (a disc) of `center`, inside a world of `size`
@@ -919,4 +1422,39 @@ pub fn chunks_in_radius(
         .filter(move |d| d.x * d.x + d.y * d.y <= radius * radius)
         .map(move |d| center + d)
         .filter(move |k| k.x >= 0 && k.y >= 0 && k.x < size.x && k.y < size.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shot_script::capture::ShotError;
+
+    #[test]
+    fn hud_comes_back_next_tick_when_the_ending_tick_has_an_action() {
+        let mut pending = false;
+        assert_eq!(
+            settle_hud(true, None, &mut pending),
+            Some(Action::Hud(true))
+        );
+        assert!(!pending);
+        let a = Some(Action::Minimap(true));
+        assert_eq!(settle_hud(true, a.clone(), &mut pending), a);
+        assert!(pending, "restore is kept for the next tick");
+        let mut pending = false;
+        assert_eq!(settle_hud(false, None, &mut pending), None);
+        assert!(!pending);
+    }
+
+    #[test]
+    fn stale_screenshot_results_are_skipped() {
+        let (tx, rx) = crossbeam_channel::unbounded::<ShotResult>();
+        let old = PathBuf::from("/o/001_a.png");
+        let new = PathBuf::from("/o/002_b.png");
+        tx.send(Ok(old.clone())).unwrap();
+        tx.send(Err(ShotError::Dropped { path: old })).unwrap();
+        assert!(take_matching_result(&rx, Some(&new)).is_none());
+        tx.send(Ok(PathBuf::from("/o/001_a.png"))).unwrap();
+        tx.send(Ok(new.clone())).unwrap();
+        assert_eq!(take_matching_result(&rx, Some(&new)), Some(Ok(new)));
+    }
 }
