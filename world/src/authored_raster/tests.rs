@@ -2965,3 +2965,73 @@ fn airship_route_map_presents_authored_dry_ground() {
         "a mostly dry chunk keeps its link"
     );
 }
+
+/// The two flags the terrain probe's sim table writes per chunk: authored dry
+/// ground (a pit), authored water (a lake) and a table chunk (outside every
+/// region, and an `Auto` sea floor); no rasters at all gives 0 and 0.
+#[test]
+fn authored_map_columns_on_a_synthetic_raster() {
+    use crate::{
+        CONFIG,
+        sim::{RiverKind, WorldSim},
+    };
+    use common::terrain::{MapSizeLg, map::MapConfig};
+
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let ground = |shape, ground_cm| PaintOp::Ground {
+        shape,
+        ground_cm,
+        weight: GROUND_EXACT,
+    };
+    let lake = rect(2176.0, 1152.0, 2240.0, 1216.0);
+    let mut own = region("dry_below_sea", (2048, 1024), (2304, 1280), 0, vec![
+        ground(rect(2080.0, 1056.0, 2272.0, 1248.0), 25_050),
+        ground(rect(2080.0, 1056.0, 2144.0, 1120.0), 13_050),
+        PaintOp::ClearGround {
+            shape: lake.clone(),
+        },
+        PaintOp::Water {
+            shape: lake,
+            surface_cm: 12_050,
+            bed_cm: 11_050,
+        },
+    ]);
+    own.sea_fill = SeaFill::AuthoredOnly;
+    let auto = region("sea_floor", (1024, 1024), (1280, 1280), 0, vec![ground(
+        rect(1056.0, 1056.0, 1248.0, 1248.0),
+        13_050,
+    )]);
+    let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
+    for c in sim.chunks.iter_mut() {
+        c.alt = CONFIG.sea_level - 10.0;
+        c.water_alt = CONFIG.sea_level;
+        c.river.river_kind = Some(RiverKind::Ocean);
+    }
+    let config = MapConfig::orthographic(sim.map_size_lg(), 0.0..=1.0);
+    let cols = |sim: &WorldSim, wpos: (i32, i32)| {
+        let c = Vec2::new(wpos.0, wpos.1) / CHUNK;
+        (
+            sim.chunk_wet_authored(&config, c),
+            sim.chunk_presentation(&config, c).authored_dry,
+        )
+    };
+    let probes = [
+        ((2096, 1072), "dry pit"),
+        ((2192, 1168), "wet lake"),
+        ((3000, 3000), "outside every region"),
+        ((1104, 1104), "Auto sea floor"),
+    ];
+
+    sim.set_authored_rasters_for_test(None);
+    for (wpos, what) in probes {
+        assert_eq!(cols(&sim, wpos), (false, false), "{what}: no rasters");
+    }
+
+    sim.set_authored_rasters_for_test(Some(
+        load(&[build_region(&own).unwrap(), build_region(&auto).unwrap()]).unwrap(),
+    ));
+    assert_eq!(cols(&sim, (2096, 1072)), (false, true), "dry pit");
+    assert_eq!(cols(&sim, (2192, 1168)), (true, false), "wet lake");
+    assert_eq!(cols(&sim, (3000, 3000)), (false, false), "outside");
+    assert_eq!(cols(&sim, (1104, 1104)), (false, false), "Auto sea floor");
+}

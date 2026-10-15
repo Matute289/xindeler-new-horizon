@@ -377,6 +377,21 @@ impl WorldSim {
         }
     }
 
+    /// Whether the presented water of `chunk_pos` is wet because of authored
+    /// water: the chunk holds authored water cells and
+    /// [`WorldSim::chunk_water`] reports river, lake or ocean for it.
+    /// `false` for every chunk of a world without authored rasters and for
+    /// chunks the rasters do not touch (their wetness, if any, is the
+    /// procedural table's).
+    pub fn chunk_wet_authored(&self, config: &MapConfig, chunk_pos: Vec2<i32>) -> bool {
+        !config.is_basement
+            && self.authored_rasters.as_ref().is_some_and(|r| {
+                r.chunk_summary(chunk_pos)
+                    .is_some_and(|s| s.wet_columns > 0)
+            })
+            && self.chunk_water(chunk_pos).is_some_and(|w| w.wet())
+    }
+
     /// The map altitude presented at `wpos` ([`sample_wpos_presented`]): on
     /// an authored ground cell at a chunk's sample column, the altitude of
     /// that chunk's column sample in `samples` (one per chunk, as `get_map`

@@ -94,12 +94,18 @@ pub mod flag {
 /// * rev 0 (no `format_rev` key; every dump written before the field existed):
 ///   flags `1..=32`. Bits 1-16 are the first v1 (commit 59de1ec248), bit 32
 ///   (`STRUCTURE_ABOVE_GROUND`) landed in the review round before the field.
-/// * rev 1 (this build): flags `1..=128` ([`FLAGS_DEFINED`]); adds `LAVA` and
+/// * rev 1: flags `1..=128` ([`FLAGS_DEFINED`]); adds `LAVA` and
 ///   `RIM_NO_SAMPLE`.
+/// * rev 2 (this build): the byte layout and flags are those of rev 1
+///   ([`FLAGS_DEFINED`] unchanged); the `sim_csv` table gains two trailing
+///   columns, `wet_authored` and `authored_dry` (0/1, how the server map
+///   presents the chunk; both 0 without authored rasters). A reader that
+///   addresses `sim_csv` columns by name or ignores unknown trailing columns
+///   reads rev 2 like rev 1.
 ///
 /// The 8-bit flags lane is now full: the next flag needs a new revision (see
 /// the README's v2 plan), which this reader refuses with a clear error.
-pub const FORMAT_REV: u32 = 1;
+pub const FORMAT_REV: u32 = 2;
 /// Flag bits that exist in this build (the whole byte).
 pub const FLAGS_DEFINED: u8 = 0xFF;
 /// Flag bits a rev-0 dump (no `flags_defined` key) may use.

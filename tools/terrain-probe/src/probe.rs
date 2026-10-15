@@ -757,7 +757,7 @@ fn cross_section(dbg: &str) -> Option<(f32, f32)> {
 
 pub const SIM_HEADER: &str = "cx;cy;wx;wy;alt;water_alt;basement;chaos;river_kind;cross_w;cross_h;\
                               vel_x;vel_y;vel_z;rockiness;cliff_height;is_path;humidity;temp;\
-                              tree_density;flux;underwater";
+                              tree_density;flux;underwater;wet_authored;authored_dry";
 
 /// Per-chunk sim table for the inclusive chunk range `[c0, c1]` (clamped to
 /// the map). Velocity is read from the column sampler at the chunk centre, as
@@ -767,6 +767,8 @@ pub fn sim_table(p: &Probe, c0: Vec2<i32>, c1: Vec2<i32>) -> String {
     let sim = p.world.sim();
     let ir = p.index.as_index_ref();
     let cg = p.world.sample_columns();
+    // Only `is_basement` is read from the config by the presentation helpers.
+    let map_config = common::terrain::map::MapConfig::orthographic(sim.map_size_lg(), 0.0..=1.0);
     let mut s = String::from(SIM_HEADER);
     s.push('\n');
     for cy in c0.y..=c1.y {
@@ -792,7 +794,7 @@ pub fn sim_table(p: &Probe, c0: Vec2<i32>, c1: Vec2<i32>) -> String {
             let _ = writeln!(
                 s,
                 "{cx};{cy};{};{};{:.3};{:.3};{:.3};{:.3};{kind};{cw:.2};{ch:.2};{:.3};{:.3};{:.3};\
-                 {:.3};{:.2};{};{:.3};{:.2};{:.3};{:.3};{}",
+                 {:.3};{:.2};{};{:.3};{:.2};{:.3};{:.3};{};{};{}",
                 cx * CHUNK,
                 cy * CHUNK,
                 c.alt,
@@ -810,6 +812,11 @@ pub fn sim_table(p: &Probe, c0: Vec2<i32>, c1: Vec2<i32>) -> String {
                 c.tree_density,
                 c.flux,
                 u8::from(c.is_underwater()),
+                u8::from(sim.chunk_wet_authored(&map_config, Vec2::new(cx, cy))),
+                u8::from(
+                    sim.chunk_presentation(&map_config, Vec2::new(cx, cy))
+                        .authored_dry
+                ),
             );
         }
     }
@@ -1384,6 +1391,39 @@ mod tests {
             }
         }
         rivers
+    }
+
+    /// The sim table's header ends with the two presentation columns and every
+    /// row has as many fields; a world without authored rasters writes 0 and 0.
+    #[test]
+    fn sim_table_has_presentation_columns_zero_without_rasters() {
+        let (world, index) = World::empty();
+        let p = Probe {
+            world,
+            index,
+            pool: rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .unwrap(),
+            seed: 0,
+            assets_root: PathBuf::new(),
+        };
+        let csv = sim_table(&p, Vec2::zero(), Vec2::zero());
+        let mut lines = csv.lines();
+        let header: Vec<_> = lines.next().unwrap().split(';').collect();
+        let n = header.len();
+        assert_eq!(&header[n - 3..], [
+            "underwater",
+            "wet_authored",
+            "authored_dry"
+        ]);
+        let rows: Vec<_> = lines.collect();
+        assert!(!rows.is_empty());
+        for row in rows {
+            let f: Vec<_> = row.split(';').collect();
+            assert_eq!(f.len(), n, "{row}");
+            assert_eq!(&f[n - 2..], ["0", "0"], "{row}");
+        }
     }
 
     /// Whole-world sim table: every river chunk has a finite, positive
