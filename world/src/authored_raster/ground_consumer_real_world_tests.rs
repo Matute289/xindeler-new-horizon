@@ -14,6 +14,7 @@
 
 use super::{
     AuthoredCell, RegionEntry, SeaFill,
+    battery_report::battery_row,
     format::GROUND_EXACT,
     post_civ::{check_ground_consumers, road_cliffs, site_ground_cells},
     real_world_tests::{
@@ -385,6 +386,7 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
         ),
         ("bt10_slope", Vec2::from(slope_origin), 12u8),
     ] {
+        let mut rep = battery_row!("B-T10", id, "bt10_towns_on_a_prepared_flat_and_on_a_slope");
         let id_site = place_town(&mut world, &mut index, origin, seed);
         let index_ref = index.as_index_ref();
         let site = &index_ref.sites[id_site];
@@ -411,6 +413,20 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
         );
         let (buildings, floating, buried) = grounding(&world, index_ref, site);
         println!("{id}: grounding: {buildings} buildings, {floating} floating, {buried} buried");
+        rep.metric("buildings", buildings as f64)
+            .metric("floating", floating as f64)
+            .metric("buried", buried as f64)
+            .metric("lots_off_base", row.misplaced as f64)
+            .metric("lots_off_base_on_table", row.misplaced_table as f64)
+            .metric("lot_columns", row.columns as f64)
+            .metric("lot_columns_off", row.off as f64)
+            .metric("ring_cells_under_site", cells.ring.len() as f64)
+            .metric("levelled_exact_columns", cells.levelled_exact.len() as f64)
+            .threshold("ring_cells_under_site_max", 0)
+            .threshold(
+                "floating_plus_buried_fraction_max",
+                if id == "bt10_flat" { 0.0 } else { 0.1 },
+            );
         assert!(row.buildings > 0 && buildings > 0);
         assert!(row.misplaced <= row.misplaced_table);
         let land = Land::from_sim(&world.sim);
@@ -453,6 +469,8 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
                 .max()
                 .unwrap_or(0);
             println!("{id}: levelling moves exact columns by at most {shift} block(s)");
+            rep.metric("levelling_max_shift_blocks", shift as f64)
+                .threshold("levelling_max_shift_blocks", 1);
             assert!(
                 shift <= 1,
                 "levelling on a flat moves a lot by {shift} blocks"
@@ -476,6 +494,8 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
             "{id}: ground_alt_at off the rendered top on {off} of {} levelled column(s)",
             cells.levelled_exact.len()
         );
+        rep.metric("ground_alt_at_off_rendered_top", off as f64)
+            .threshold("ground_alt_at_off_rendered_top_max", 0);
         assert_eq!(off, 0, "{id}: the ground query ignores plot levelling");
     }
 }
@@ -532,6 +552,11 @@ fn lonely_site(world: &World, index: crate::IndexRef) -> (String, Aabr<i32>) {
 #[test]
 #[ignore]
 fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
+    let mut rep = battery_row!(
+        "B-T10",
+        "procedural_site_on_exact_patch_unlisted_listed_short",
+        "bt10_unlisted_sites_and_sites_on_rings_are_refused"
+    );
     let (mut world, index) = generate_world();
     let index_ref = index.as_index_ref();
     let (key, b) = lonely_site(&world, index_ref);
@@ -570,6 +595,10 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
         .unwrap_err()
         .0;
     println!("unlisted: {err}");
+    rep.fact(
+        "unlisted_refused_naming_site",
+        err.contains(&key) && err.contains("does not list them"),
+    );
     assert!(err.contains(&key) && err.contains("does not list them"));
     // Every site near the region (the chosen one and its procedural
     // neighbours), as the exporter's pins would list them.
@@ -584,6 +613,22 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
         .sim
         .set_authored_rasters_for_test(Some(load_specs(&[spec(&near, whole)]).unwrap()));
     let report = check_ground_consumers(&world, index_ref, None).unwrap();
+    rep.metric("listed_sites", report.sites.listed.len() as f64)
+        .metric("expected_listed_sites", near.len() as f64)
+        .metric("unlisted_after_listing", report.sites.unlisted.len() as f64)
+        .metric(
+            "ring_under_site_when_listed",
+            report.sites.ring_under_site.len() as f64,
+        )
+        .metric(
+            "levelled_exact_columns",
+            report
+                .sites
+                .levelled_exact
+                .iter()
+                .map(|s| s.cells)
+                .sum::<usize>() as f64,
+        );
     assert_eq!(report.sites.listed.len(), near.len());
     assert!(report.sites.unlisted.is_empty() && report.sites.ring_under_site.is_empty());
     println!(
@@ -608,6 +653,10 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
         .unwrap_err()
         .0;
     println!("ring under site: {err}");
+    rep.fact(
+        "ring_under_site_refused_naming_site",
+        err.contains(&key) && err.contains("blend (ring)"),
+    );
     assert!(err.contains(&key) && err.contains("blend (ring)"));
 }
 
@@ -619,6 +668,16 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
 #[test]
 #[ignore]
 fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
+    let mut rep11 = battery_row!(
+        "B-T11",
+        "raised_patches_plus_10m_plus_90m",
+        "bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches"
+    );
+    let mut rep14 = battery_row!(
+        "B-T14a",
+        "dry_pit_floor_minus_10m_authored_only_128m",
+        "bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches"
+    );
     let (mut world, index) = generate_world();
     let index_ref = index.as_index_ref();
     let p10 = Vec2::new(22900, 24800);
@@ -667,7 +726,21 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
         let c = p + 48;
         // A player saved standing on the old ground is now inside it.
         let feet = c.with_z(old + 1);
-        assert_eq!(sim.buried_ground_lift(feet, true), Some(block + 1));
+        let lift = sim.buried_ground_lift(feet, true);
+        let tag = if block - old == 10 {
+            "plus_10m"
+        } else {
+            "plus_90m"
+        };
+        rep11.fact(
+            if tag == "plus_10m" {
+                "lift_plus_10m_to_block_plus_1"
+            } else {
+                "lift_plus_90m_to_block_plus_1"
+            },
+            lift == Some(block + 1),
+        );
+        assert_eq!(lift, Some(block + 1));
         // The generated column: solid ground at the block, air above.
         let cpos = c.map(|e| e.div_euclid(32));
         let (chunk, _) = world
@@ -683,6 +756,23 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
         assert!(at(block).is_solid(), "ground at the patch block");
         assert!(!at(block + 1).is_solid(), "free air where the player lands");
         // Simulated NPCs (per-tick snap) and rtsim spawns.
+        rep11
+            .metric(
+                if tag == "plus_10m" {
+                    "surface_alt_minus_block_plus_10m"
+                } else {
+                    "surface_alt_minus_block_plus_90m"
+                },
+                sim.surface_alt_at(c) - block as f32,
+            )
+            .fact(
+                if tag == "plus_10m" {
+                    "ground_alt_is_block_plus_10m"
+                } else {
+                    "ground_alt_is_block_plus_90m"
+                },
+                sim.ground_alt_at(c) == Some(top_block_alt(block)),
+            );
         assert_eq!(sim.surface_alt_at(c), (block + 1) as f32);
         assert_eq!(sim.ground_alt_at(c), Some(top_block_alt(block)));
         println!(
@@ -694,10 +784,20 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
     }
     // The pit floor.
     let c = Vec2::new(pit.0 + 64, pit.1 + 64);
+    rep14
+        .fact(
+            "ground_alt_at_is_129_5",
+            sim.ground_alt_at(c) == Some(129.5),
+        )
+        .fact(
+            "surface_alt_at_is_130_no_clamp",
+            sim.surface_alt_at(c) == 130.0,
+        );
     assert_eq!(sim.ground_alt_at(c), Some(129.5));
     assert_eq!(sim.surface_alt_at(c), 130.0);
     let pit_chunk = c.map(|e| e.div_euclid(32));
     let w = sim.chunk_water(pit_chunk).unwrap();
+    rep14.fact("chunk_water_dry_not_ocean", !w.wet() && !w.ocean);
     assert!(!w.wet() && !w.ocean, "{w:?}");
     let mut aquatic = 0;
     let mut spawns = 0;
@@ -737,6 +837,12 @@ fn bt11_bt14_positions_npcs_and_wildlife_on_raised_and_pit_patches() {
         }
     }
     println!("pit: chunk_water {w:?}; {water} water blocks; {spawns} spawn(s), {aquatic} aquatic");
+    rep14
+        .metric("water_blocks", water as f64)
+        .metric("aquatic_spawns", aquatic as f64)
+        .metric("spawns", spawns as f64)
+        .threshold("water_blocks_max", 0)
+        .threshold("aquatic_spawns_max", 0);
     assert_eq!(water, 0);
     assert_eq!(aquatic, 0);
 }
