@@ -333,6 +333,9 @@ impl WorldSim {
     /// ties broken by chunk index so the result is deterministic; with none
     /// left the label is dropped (`None`). This only reads the table and the
     /// authored dry rule, so it never perturbs the generation RNG.
+    ///
+    /// The Lake size count of a biome still includes its dry chunks, and a
+    /// moved label keeps its original size (cosmetic, by design).
     pub fn biome_label_chunk(
         &self,
         config: &MapConfig,

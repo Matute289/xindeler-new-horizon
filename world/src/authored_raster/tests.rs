@@ -2561,13 +2561,6 @@ fn map_colour_of_partly_authored_dry_chunks_follows_the_majority() {
     same(outside, "chunk outside the region");
 }
 
-/// The shared presentation helper on a tiny synthetic raster: authored dry
-/// ground of a `sea_fill: AuthoredOnly` region (fully or mostly covered
-/// chunks) is presented dry, the region's lake below sea level, an `Auto`
-/// region's sea floor, a minority-dry chunk, a chunk outside every region and
-/// the basement map present the table unchanged; the helper's map sample and
-/// altitude without column samples equal the table-path functions there.
-
 #[test]
 fn biome_label_stays_off_authored_dry_ground() {
     use crate::{
@@ -2661,6 +2654,12 @@ fn biome_label_stays_off_authored_dry_ground() {
     assert_eq!(labels(&sim, pit), None, "dropped");
 }
 
+/// The shared presentation helper on a tiny synthetic raster: authored dry
+/// ground of a `sea_fill: AuthoredOnly` region (fully or mostly covered
+/// chunks) is presented dry, the region's lake below sea level, an `Auto`
+/// region's sea floor, a minority-dry chunk, a chunk outside every region and
+/// the basement map present the table unchanged; the helper's map sample and
+/// altitude without column samples equal the table-path functions there.
 #[test]
 fn chunk_presentation_on_a_synthetic_raster() {
     use crate::{
