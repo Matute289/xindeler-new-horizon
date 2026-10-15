@@ -532,6 +532,23 @@ pub(crate) fn water_shade(depth_m: f64) -> [u8; 3] {
     WATER_RGB[bucket]
 }
 
+/// Test seam: lets a test build the map as it was before land colours were
+/// kept off red zero, to compare against it. Always on outside tests.
+#[cfg(test)]
+pub(crate) static LAND_RED_CLAMP_OFF: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn land_red_clamp_enabled() -> bool {
+    #[cfg(test)]
+    {
+        !LAND_RED_CLAMP_OFF.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(not(test))]
+    {
+        true
+    }
+}
+
 /// Samples a MapSample at a chunk.
 ///
 /// You should generally pass a closure over this function into generate
@@ -794,6 +811,9 @@ pub fn sample_pos_with(
                 });
             });
     };
+    // Whether the colour below is a water colour: the client tells water from
+    // land by a zero red channel, so land must never end at red zero.
+    let mut paints_water = false;
     let rgb = if presentation.shows_water(is_water)
         && is_ice
         && column_data.is_some_and(|(_, _, ice_depth, _, _, _)| ice_depth > 0.0)
@@ -825,6 +845,7 @@ pub fn sample_pos_with(
                 Rgb::new((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
             },
             (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => {
+                paints_water = true;
                 let [r, g, b] = water_shade(colour_depth_m);
                 Rgb::new(r, g, b)
             },
@@ -941,6 +962,14 @@ pub fn sample_pos_with(
         out
     } else {
         rgb
+    };
+    // Land never has a zero red channel (a dark, green or blue surface, a
+    // tint or the shading could otherwise reach it and read as water on the
+    // client). Water keeps its colour exactly.
+    let rgb = if paints_water || !land_red_clamp_enabled() {
+        rgb
+    } else {
+        Rgb::new(rgb.r.max(1), rgb.g, rgb.b)
     };
     let rgb = if is_bridge {
         Rgb::new(0x80, 0x80, 0x80)

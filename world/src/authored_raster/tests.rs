@@ -2601,6 +2601,108 @@ fn map_colour_of_authored_lake_below_sea_over_table_land_with_samples() {
     );
 }
 
+/// The client tells water from land by a zero red channel
+/// (`r == 0 && (g > 8 || b > 8)`), so no land chunk of the map may be painted
+/// with red zero, authored dry ground included, while real water (the table's
+/// sea, an authored lake) keeps red zero. The map is sampled unshaded with no
+/// column samples, so the land base colour is the altitude-green default,
+/// whose red channel is zero.
+#[test]
+fn land_on_the_map_never_has_a_zero_red_channel() {
+    use crate::{
+        CONFIG,
+        index::{Index, IndexOwned},
+        sim::{RiverKind, WorldSim, sample_pos_with},
+    };
+    use common::terrain::{MapSizeLg, map::MapConfig, vec2_as_uniform_idx};
+
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let ground = |shape, ground_cm| PaintOp::Ground {
+        shape,
+        ground_cm,
+        weight: GROUND_EXACT,
+    };
+    let lake = rect(2176.0, 1152.0, 2240.0, 1216.0);
+    let mut own = region("zero_red", (2048, 1024), (2304, 1280), 0, vec![
+        // High dry land, a dry pit at -10 m and a dry depression at -1500 m.
+        ground(rect(2080.0, 1056.0, 2272.0, 1248.0), 75_050),
+        ground(rect(2080.0, 1056.0, 2144.0, 1120.0), 13_050),
+        ground(rect(2176.0, 1056.0, 2240.0, 1120.0), -135_950),
+        PaintOp::ClearGround {
+            shape: lake.clone(),
+        },
+        PaintOp::Water {
+            shape: lake,
+            surface_cm: 12_050,
+            bed_cm: 11_050,
+        },
+    ]);
+    own.sea_fill = SeaFill::AuthoredOnly;
+    let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
+    // A table of sea with a patch of high table land (no river) among it.
+    for (i, c) in sim.chunks.iter_mut().enumerate() {
+        if i % 5 == 0 {
+            c.alt = CONFIG.sea_level + 400.0;
+            c.water_alt = CONFIG.sea_level;
+            c.river.river_kind = None;
+        } else {
+            c.alt = CONFIG.sea_level - 10.0;
+            c.water_alt = CONFIG.sea_level;
+            c.river.river_kind = Some(RiverKind::Ocean);
+        }
+    }
+    let pit = vec2_as_uniform_idx(sim.map_size_lg(), Vec2::new(2096, 1072) / CHUNK);
+    sim.chunks[pit].river.river_kind = None;
+    sim.set_authored_rasters_for_test(Some(load(&[build_region(&own).unwrap()]).unwrap()));
+    let mut config = MapConfig::orthographic(
+        sim.map_size_lg(),
+        CONFIG.sea_level..=CONFIG.sea_level + 1000.0,
+    );
+    config.is_shaded = false;
+    let index = IndexOwned::new(Index::new(0));
+    let client_water = |c: Rgb<u8>| c.r == 0 && (c.g > 8 || c.b > 8);
+
+    let (mut land, mut water, mut lake_water) = (0, 0, 0);
+    for y in 0..128 {
+        for x in 0..128 {
+            let c = Vec2::new(x, y);
+            let idx = vec2_as_uniform_idx(sim.map_size_lg(), c);
+            for presented in [false, true] {
+                let rgb =
+                    sample_pos_with(&config, &sim, index.as_index_ref(), None, c, presented).rgb;
+                // The table paints the pit (below sea level, no river) as water.
+                let table_water = sim.chunks[idx].river.river_kind.is_some() || idx == pit;
+                let dry = presented && sim.chunk_is_authored_dry(c);
+                // An authored lake over table land is water once presented.
+                let lake = presented
+                    && !table_water
+                    && !dry
+                    && sim.chunk_water(c).is_some_and(|w| w.wet());
+                let is_water = (table_water && !dry) || lake;
+                if is_water {
+                    water += 1;
+                    lake_water += usize::from(lake);
+                    assert!(
+                        client_water(rgb),
+                        "{c:?} (presented {presented}) water lost its zero red: {rgb:?}"
+                    );
+                } else {
+                    land += 1;
+                    assert_ne!(rgb.r, 0, "{c:?} (presented {presented}) land has red zero");
+                    assert!(
+                        !client_water(rgb),
+                        "{c:?} (presented {presented}) reads as water"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        land > 1000 && water > 1000 && lake_water > 0,
+        "land {land}, water {water}, lake {lake_water}"
+    );
+}
+
 /// The dry rule is per chunk and follows the majority of its columns: a
 /// river or sea chunk a dry `sea_fill: AuthoredOnly` patch covers for more
 /// than half is coloured as ground, for less than half it keeps exactly the

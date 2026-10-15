@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     CONFIG, World,
-    sim::{FileOpts, GenOpts, WATER_RGB, WorldOpts, water_shade},
+    sim::{FileOpts, GenOpts, LAND_RED_CLAMP_OFF, WATER_RGB, WorldOpts, water_shade},
     util::Sampler,
 };
 use common::{
@@ -30,8 +30,62 @@ fn map_bytes(msg: &WorldMapMsg) -> Vec<u8> {
     bincode::serde::encode_to_vec(msg, bincode::config::legacy()).unwrap()
 }
 
+/// Held while a map is built, so the test seam that switches the land red
+/// clamp off never leaks into another test's map.
+static CLAMP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The map as it was before land colours were kept off red zero.
+fn map_without_land_clamp(world: &World, index: crate::IndexRef, presented: bool) -> WorldMapMsg {
+    use std::sync::atomic::Ordering;
+    let _guard = CLAMP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    LAND_RED_CLAMP_OFF.store(true, Ordering::Relaxed);
+    let map = world.sim().get_map_with(index, None, presented);
+    LAND_RED_CLAMP_OFF.store(false, Ordering::Relaxed);
+    map
+}
+
+/// The world's current maps (presented and table-only) against the maps
+/// before the land red clamp: the only differences are land pixels with red
+/// zero raised to one (same green and blue), and water pixels are untouched.
+/// Returns the number of changed chunks of the presented map.
+fn assert_only_land_red_raised(world: &World, index: crate::IndexRef, what: &str) -> usize {
+    let (new_p, new_t) = both_maps(world, index);
+    let mut changed_first = 0;
+    for (presented, new) in [(true, new_p), (false, new_t)] {
+        let old = map_without_land_clamp(world, index, presented);
+        let sim = world.sim();
+        let mut changed = 0usize;
+        for posi in 0..sim.map_size_lg().chunks_len() {
+            let pos = uniform_idx_as_vec2(sim.map_size_lg(), posi);
+            let (n, o) = (map_rgb(&new, pos), map_rgb(&old, pos));
+            if n != o {
+                changed += 1;
+                assert!(
+                    o[0] == 0 && n[0] == 1 && n[1] == o[1] && n[2] == o[2],
+                    "{what}: {pos:?} changed beyond red 0 -> 1: {o:?} -> {n:?}"
+                );
+                assert!(
+                    !WATER_RGB.contains(&o),
+                    "{what}: {pos:?} water colour {o:?} changed"
+                );
+            }
+            // Same alpha and everything else but those pixels.
+            assert_eq!(
+                new.rgba.get(pos).map(|v| v >> 24),
+                old.rgba.get(pos).map(|v| v >> 24)
+            );
+        }
+        println!("{what} (presented {presented}): {changed} chunks of land raised red 0 -> 1");
+        if presented {
+            changed_first = changed;
+        }
+    }
+    changed_first
+}
+
 /// The map message with and without authored ground presentation.
 fn both_maps(world: &World, index: crate::IndexRef) -> (WorldMapMsg, WorldMapMsg) {
+    let _guard = CLAMP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     (
         world.sim().get_map_with(index, None, true),
         world.sim().get_map_with(index, None, false),
@@ -326,4 +380,83 @@ fn map_image_is_byte_identical_with_only_auto_regions() {
         new.rgba.raw() == old.rgba.raw(),
         "map image changed with Auto regions"
     );
+}
+
+/// Keeping land off red zero changes the map of a procedural world only by
+/// raising red 0 -> 1 on land pixels.
+#[test]
+#[ignore]
+fn land_red_clamp_only_raises_red_procedural() {
+    let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+    let (world, index) = World::generate(
+        0,
+        WorldOpts {
+            seed_elements: true,
+            world_file: FileOpts::Generate(GenOpts {
+                x_lg: 7,
+                y_lg: 7,
+                ..GenOpts::default()
+            }),
+            calendar: None,
+        },
+        &threadpool,
+        &|_| {},
+    );
+    assert_only_land_red_raised(&world, index.as_index_ref(), "procedural");
+}
+
+/// The same for Cromatolis without a manifest (no authored rasters).
+#[test]
+#[ignore]
+fn land_red_clamp_only_raises_red_cromatolis_no_manifest() {
+    let (mut world, index) = generate_world();
+    world.sim.set_authored_rasters_for_test(None);
+    let n = assert_only_land_red_raised(&world, index.as_index_ref(), "Cromatolis no manifest");
+    assert!(n > 0, "the real profile has land with red zero");
+}
+
+/// The same with only `Auto` regions loaded.
+#[test]
+#[ignore]
+fn land_red_clamp_only_raises_red_auto_only() {
+    let (mut world, index) = generate_world();
+    let mut specs = super::ground_real_world_tests::ground_battery_specs();
+    specs.retain(|s| s.sea_fill == super::SeaFill::Auto);
+    world
+        .sim
+        .set_authored_rasters_for_test(Some(load_specs(&specs).unwrap()));
+    assert_only_land_red_raised(&world, index.as_index_ref(), "Auto only");
+}
+
+/// The client reads a map pixel as water when its red channel is zero (and it
+/// is not black). On the real Cromatolis profile map, every pixel it would
+/// read as water is a water colour (the depth palette, or the river colour
+/// the map draws over a connection): land never reads as water.
+#[test]
+#[ignore]
+fn world_map_land_never_reads_as_water_on_the_client() {
+    let (world, index) = generate_world();
+    let map = both_maps(&world, index.as_index_ref()).0;
+    let sim = world.sim();
+    let river = [0, 64, 128];
+    let (mut water, mut land) = (0usize, 0usize);
+    for posi in 0..sim.map_size_lg().chunks_len() {
+        let pos = uniform_idx_as_vec2(sim.map_size_lg(), posi);
+        let rgb = map_rgb(&map, pos);
+        if rgb[0] == 0 && (rgb[1] > 8 || rgb[2] > 8) {
+            water += 1;
+            assert!(
+                WATER_RGB.contains(&rgb) || rgb == river,
+                "{pos:?} reads as water on the client but is not a water colour: {rgb:?}"
+            );
+            assert!(
+                !sim.chunk_is_authored_dry(pos),
+                "{pos:?} authored dry ground reads as water: {rgb:?}"
+            );
+        } else {
+            land += 1;
+        }
+    }
+    println!("water {water}, land {land}");
+    assert!(water > 1000 && land > 1000);
 }
