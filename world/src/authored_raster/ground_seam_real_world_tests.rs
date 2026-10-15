@@ -13,6 +13,7 @@
 
 use super::{
     AuthoredCell, SEA_TOP_BLOCK, SeaFill,
+    battery_report::battery_row,
     format::GROUND_EXACT,
     queries::{check_ground_seams, ground_seams},
     real_world_tests::{
@@ -428,6 +429,11 @@ fn natural_columns(
 #[test]
 #[ignore]
 fn exact_patch_beside_a_natural_river_in_a_partial_chunk() {
+    let mut rep = battery_row!(
+        "B-T8",
+        "wilderness_river_3x3_patch_partial_chunk",
+        "exact_patch_beside_a_natural_river_in_a_partial_chunk"
+    );
     let (mut world, index) = generate_world();
     let index_ref = index.as_index_ref();
     // Wilderness river chunks, far from every site, until one has a 3 x 3
@@ -520,6 +526,20 @@ fn exact_patch_beside_a_natural_river_in_a_partial_chunk() {
         ok.walls.len(),
         box_cols.len()
     );
+    rep.metric("seam_pairs", ok.pairs as f64)
+        .metric("walls_at_water_top", ok.walls.len() as f64)
+        .metric("other_columns_changed", changed as f64)
+        .metric("box_columns", box_cols.len() as f64);
+    if rep.enabled() {
+        rep.metric(
+            "patch_tops_exact",
+            patch_tops.iter().filter(|t| **t == water_top).count() as f64,
+        );
+    }
+    rep.threshold("seam_pairs_min", 1)
+        .threshold("walls_max", 0)
+        .threshold("other_columns_changed_max", 0)
+        .threshold("patch_tops_exact", 9);
     assert!(ok.pairs >= 1, "the patch meets the natural map");
     assert!(ok.walls.is_empty(), "{:?}", ok.walls);
     assert!(
@@ -542,6 +562,12 @@ fn exact_patch_beside_a_natural_river_in_a_partial_chunk() {
         low.walls.len(),
         err.0
     );
+    rep.metric("walls_two_blocks_low", low.walls.len() as f64)
+        .threshold("walls_two_blocks_low_min", 1)
+        .fact(
+            "refused_naming_walls",
+            err.0.contains("would stand as a wall"),
+        );
     assert!(!low.walls.is_empty());
     assert!(low.walls.iter().all(|w| w.water_top > w.ground_top));
     assert!(err.0.contains("would stand as a wall"), "{err}");
@@ -560,6 +586,11 @@ fn exact_patch_beside_a_natural_river_in_a_partial_chunk() {
 #[test]
 #[ignore]
 fn a_dry_pit_beside_the_sea_needs_a_dyke() {
+    let mut rep = battery_row!(
+        "B-T14d",
+        "open_sea_dry_pit_minus_10m_with_and_without_dyke",
+        "a_dry_pit_beside_the_sea_needs_a_dyke"
+    );
     let (mut world, index) = generate_world();
     let index_ref = index.as_index_ref();
     let sea = (40..980)
@@ -621,6 +652,8 @@ fn a_dry_pit_beside_the_sea_needs_a_dyke() {
         walls.walls.len(),
         err.0
     );
+    rep.metric("no_dyke_pairs", walls.pairs as f64)
+        .metric("no_dyke_walls", walls.walls.len() as f64);
     assert_eq!(walls.walls.len(), walls.pairs, "every pit edge is a wall");
     assert!(
         walls
@@ -666,6 +699,17 @@ fn a_dry_pit_beside_the_sea_needs_a_dyke() {
         ok.pairs,
         ok.walls.len()
     );
+    rep.metric("dyke_pairs", ok.pairs as f64)
+        .metric("dyke_walls", ok.walls.len() as f64)
+        .metric("pit_floor_exact", floor_exact as f64)
+        .metric("pit_water_columns", water_in_pit as f64)
+        .metric("dyke_tops_exact", dyke_exact as f64)
+        .threshold("pit_columns", 256)
+        .threshold("dyke_columns", 144)
+        .threshold("pit_floor_exact_min", 250)
+        .threshold("dyke_tops_exact_min", 140)
+        .threshold("pit_water_columns_max", 0)
+        .threshold("dyke_walls_max", 0);
     assert!(ok.pairs > 0 && ok.walls.is_empty());
     assert_eq!(water_in_pit, 0, "the pit is dry");
     assert!(floor_exact >= 250, "pit floor exact ({floor_exact}/256)");

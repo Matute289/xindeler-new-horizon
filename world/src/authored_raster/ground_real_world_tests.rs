@@ -10,6 +10,7 @@
 
 use super::{
     AuthoredCell, SEA_TOP_BLOCK, SeaFill,
+    battery_report::battery_row,
     format::GROUND_EXACT,
     queries::column_is_ocean,
     real_world_tests::{
@@ -424,6 +425,11 @@ fn ground_battery_renders_exactly_in_the_arena() {
 #[test]
 #[ignore]
 fn sea_floor_below_sea_level_in_ocean_chunks_and_refused_inland() {
+    let mut rep = battery_row!(
+        "B-T12",
+        "open_sea_floor_96m_and_inland_arena",
+        "sea_floor_below_sea_level_in_ocean_chunks_and_refused_inland"
+    );
     let (mut world, index) = generate_world();
     let index_ref = index.as_index_ref();
     let far_from_sites = |c: Vec2<i32>| {
@@ -478,6 +484,14 @@ fn sea_floor_below_sea_level_in_ocean_chunks_and_refused_inland() {
     let (table, examples, _) = judge(&world, index_ref, &[sea]);
     println!("sea floor at chunk {sea:?}: {table:#?} {examples:#?}");
     let r = &table["none"];
+    rep.metric("columns", r.columns)
+        .metric("sampler_exact", r.sampler_exact)
+        .metric("top_exact", r.top_exact)
+        .metric("carved", r.carved)
+        .metric("decorated", r.decorated)
+        .metric("raised", r.raised)
+        .threshold("columns", 32 * 32)
+        .threshold("raised_max", 0);
     assert_eq!(r.columns, 32 * 32);
     assert_eq!(r.sampler_exact, r.columns);
     assert_eq!(r.raised, 0);
@@ -486,6 +500,9 @@ fn sea_floor_below_sea_level_in_ocean_chunks_and_refused_inland() {
         .sample_columns()
         .get((sea * 32 + 16, index_ref, None))
         .unwrap();
+    rep.metric("water_over_floor_m", col.water_level - col.alt)
+        .threshold("water_over_floor_min_m", 18)
+        .fact("column_is_ocean", column_is_ocean(&col));
     assert!(col.water_level > col.alt + 18.0, "sea water over the floor");
     assert!(column_is_ocean(&col), "a sea floor is ocean");
     // The water queries agree with the rendered sea.
@@ -493,11 +510,17 @@ fn sea_floor_below_sea_level_in_ocean_chunks_and_refused_inland() {
     assert!(w.wet, "{w:?}");
     assert_eq!(w.bed_alt, Some(121.0));
     let cw = world.sim.chunk_water(sea).unwrap();
+    rep.fact("water_at_wet", w.wet)
+        .fact("chunk_water_ocean_underwater", cw.ocean && cw.underwater);
     assert!(cw.ocean && cw.underwater, "{cw:?}");
     // The same patch inland (the arena plateau): refused, naming the fix.
     let inland = load_specs(&[floor("inland", Vec2::new(23200, 25100) / 32)]).unwrap();
     let e = inland
         .check_consistency_with_sim("test", &world.sim)
         .unwrap_err();
+    rep.fact(
+        "inland_refused_naming_authored_only",
+        e.0.contains("sea_fill: AuthoredOnly"),
+    );
     assert!(e.0.contains("sea_fill: AuthoredOnly"), "{e}");
 }
