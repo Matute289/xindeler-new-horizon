@@ -288,6 +288,28 @@ pub struct StepRecord {
     pub index: usize,
     pub kind: &'static str,
     pub outcome: StepOutcome,
+    /// Runner clock (seconds) when the step first ran.
+    pub start_s: f64,
+    /// Runner clock (seconds) when the step ended.
+    pub end_s: f64,
+    /// Player position when the step started, if known.
+    pub pos_before: Option<Vec3<f32>>,
+    /// Player position when the step ended, if known.
+    pub pos_after: Option<Vec3<f32>>,
+    /// Terrain readiness where the step waited for terrain, with whether
+    /// that wait timed out.
+    pub terrain: Option<(TerrainStatus, bool)>,
+    /// File name (not path) of the screenshot the step requested.
+    pub screenshot: Option<String>,
+}
+
+/// What is known about the step that is running.
+#[derive(Clone, Debug)]
+struct StepMeta {
+    start_s: f64,
+    pos_before: Option<Vec3<f32>>,
+    terrain: Option<(TerrainStatus, bool)>,
+    screenshot: Option<String>,
 }
 
 /// Tracks whether the player has come to rest.
@@ -423,6 +445,8 @@ pub struct StepRunner {
     shot: ShotState,
     /// A screenshot could not be written.
     screenshot_failed: bool,
+    /// Bookkeeping for the report, for the step that is running.
+    meta: Option<StepMeta>,
 }
 
 /// State of the screenshot step that is running.
@@ -450,8 +474,15 @@ impl StepRunner {
             shots_started: 0,
             shot: ShotState::default(),
             screenshot_failed: false,
+            meta: None,
         }
     }
+
+    /// Every step of the script, in order (finished or not).
+    pub fn steps(&self) -> &[Step] { &self.steps }
+
+    /// The script's defaults.
+    pub fn defaults(&self) -> &Defaults { &self.defaults }
 
     /// A screenshot could not be written (read-back or file error).
     pub fn screenshot_failed(&self) -> bool { self.screenshot_failed }
@@ -478,6 +509,14 @@ impl StepRunner {
             return Some(Action::Hud(true));
         }
         let step = self.steps.get(self.index)?.clone();
+        if self.meta.is_none() {
+            self.meta = Some(StepMeta {
+                start_s: ctx.now_s(),
+                pos_before: ctx.player_pos(),
+                terrain: None,
+                screenshot: None,
+            });
+        }
         let (outcome, mut action) = if ctx.player_dead() && needs_live_player(&step) {
             (StepOutcome::Failed("the player is dead".into()), None)
         } else {
@@ -499,10 +538,22 @@ impl StepRunner {
                 } else {
                     info!(step = self.index + 1, kind = step.kind(), "Shot step done");
                 }
+                let meta = self.meta.take().unwrap_or(StepMeta {
+                    start_s: ctx.now_s(),
+                    pos_before: None,
+                    terrain: None,
+                    screenshot: None,
+                });
                 self.records.push(StepRecord {
                     index: self.index,
                     kind: step.kind(),
                     outcome,
+                    start_s: meta.start_s,
+                    end_s: ctx.now_s(),
+                    pos_before: meta.pos_before,
+                    pos_after: ctx.player_pos(),
+                    terrain: meta.terrain,
+                    screenshot: meta.screenshot,
                 });
                 self.index += 1;
                 self.phase = Phase::Start;
@@ -759,9 +810,18 @@ impl StepRunner {
         }
     }
 
-    fn shot_action(&self, name: &str) -> Action {
-        Action::Screenshot {
-            file_name: screenshot_file_name(self.shots_started, name),
+    fn shot_action(&mut self, name: &str) -> Action {
+        let file_name = screenshot_file_name(self.shots_started, name);
+        if let Some(meta) = &mut self.meta {
+            meta.screenshot = Some(file_name.clone());
+        }
+        Action::Screenshot { file_name }
+    }
+
+    /// Remember the terrain readiness the running step ended with.
+    fn note_terrain(&mut self, status: TerrainStatus, timed_out: bool) {
+        if let Some(meta) = &mut self.meta {
+            meta.terrain = Some((status, timed_out));
         }
     }
 
@@ -1017,6 +1077,8 @@ impl StepRunner {
             // Confirm right before finishing: chunks may have changed since
             // the last throttled check.
             if ctx.terrain_ready(center, radius) {
+                let status = ctx.terrain_status(center, radius);
+                self.note_terrain(status, false);
                 return (StepOutcome::Done, None);
             }
             ready = false;
@@ -1032,6 +1094,7 @@ impl StepRunner {
         };
         if now - since > timeout {
             let status = ctx.terrain_status(center, radius);
+            self.note_terrain(status, true);
             (
                 StepOutcome::Failed(format!(
                     "terrain not ready after {timeout:.0}s: {} of {} chunks loaded, {} meshed{}",
@@ -1166,6 +1229,10 @@ pub struct SessionDriver {
     shot_rx: crossbeam_channel::Receiver<ShotResult>,
     /// File the outstanding screenshot request writes.
     expected_shot: Option<PathBuf>,
+    /// The report was written (the run is over).
+    report_written: bool,
+    /// The client's view distance, last seen.
+    last_view_distance: Option<u32>,
 }
 
 /// What the session should do after the driver's tick.
@@ -1218,6 +1285,8 @@ impl SessionDriver {
                 shot_tx,
                 shot_rx,
                 expected_shot: None,
+                report_written: false,
+                last_view_distance: None,
             }
         })
     }
@@ -1247,12 +1316,14 @@ impl SessionDriver {
                 if let Some(code) = finished_exit_code(&self.runner) {
                     super::login::set_exit_code(code);
                 }
+                self.write_report(None);
             }
             return (DriverStatus::Finished, None);
         }
         if client.position().is_none() {
             return (DriverStatus::Running, None);
         }
+        self.last_view_distance = client.view_distance();
         let screenshot =
             take_matching_result(&self.shot_rx, self.expected_shot.as_deref()).map(|r| match r {
                 Ok(path) => {
@@ -1310,6 +1381,45 @@ impl SessionDriver {
             },
         };
         (DriverStatus::Running, effect)
+    }
+}
+
+impl SessionDriver {
+    /// Write `report.json`. `abort_reason` is `Some` when the script did not
+    /// run to its end. Written once.
+    fn write_report(&mut self, abort_reason: Option<String>) {
+        use super::report;
+        if std::mem::replace(&mut self.report_written, true) {
+            return;
+        }
+        let Some(setup) = super::login::active() else {
+            return;
+        };
+        let info = report::run_info(
+            setup,
+            self.last_view_distance,
+            abort_reason,
+            super::login::STEP_FAILED_EXIT_CODE,
+        );
+        let out_dir = self.out_dir.clone();
+        let report = report::build_report(&self.runner, &info, &|file| {
+            report::file_facts(&out_dir, file)
+        });
+        report::log_write(&self.out_dir, &report);
+    }
+}
+
+impl Drop for SessionDriver {
+    /// The session ended before the script did (window closed, connection
+    /// lost): the run is a failure and still gets a report.
+    fn drop(&mut self) {
+        if self.report_written {
+            return;
+        }
+        super::login::set_exit_code(super::login::STEP_FAILED_EXIT_CODE);
+        self.write_report(Some(
+            "the session ended before the script finished".to_owned(),
+        ));
     }
 }
 

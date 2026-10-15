@@ -9,7 +9,7 @@
 //! nothing unless the [`SCRIPT_ENV`] environment variable names a script file.
 //!
 //! The schema, its validator, the named-screenshot capture, the unattended
-//! login and the executor for every step kind exist.
+//! login, the executor for every step kind and the `report.json` writer exist.
 //!
 //! Process exit codes: 0 every step succeeded; 1 the script ran to the end
 //! but at least one step failed; 2 the run could not start (script, server or
@@ -23,6 +23,7 @@
 pub mod capture;
 pub mod driver;
 pub mod login;
+pub mod report;
 pub mod schema;
 
 pub use capture::{ShotError, ShotJob, ShotResult};

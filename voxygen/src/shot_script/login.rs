@@ -68,6 +68,10 @@ pub struct ShotSetup {
     pub server: SocketAddr,
     pub out_dir: PathBuf,
     pub connect_timeout: Duration,
+    /// File name (no directory) of the script, for the report.
+    pub script_name: Option<String>,
+    /// SHA-256 of the script file, for the report.
+    pub script_sha256: Option<String>,
 }
 
 #[derive(Debug)]
@@ -295,6 +299,8 @@ pub fn setup_with(
         server,
         out_dir,
         connect_timeout,
+        script_name: None,
+        script_sha256: None,
     })
 }
 
@@ -318,8 +324,15 @@ pub fn init_from_env() -> Result<(), i32> {
     let Some(script) = super::load_from_env() else {
         return Ok(());
     };
+    super::report::mark_run_start();
     match setup_with(script, |k| std::env::var_os(k)) {
-        Ok(setup) => {
+        Ok(mut setup) => {
+            if let Some(path) = super::script_path_from_env() {
+                setup.script_name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                setup.script_sha256 = std::fs::read(&path)
+                    .ok()
+                    .map(|b| super::report::sha256_hex(&b));
+            }
             info!(
                 server = %setup.server,
                 out_dir = %setup.out_dir.display(),
@@ -354,6 +367,7 @@ pub fn set_exit_code(code: i32) { let _ = EXIT_CODE.set(code); }
 fn fail(msg: &str) {
     report(&format!("shot script login failed: {msg}"));
     let _ = EXIT_CODE.set(SETUP_EXIT_CODE);
+    super::report::write_abort_report(msg, SETUP_EXIT_CODE);
 }
 
 /// The user's own `minimap_show` value, remembered before the script first
