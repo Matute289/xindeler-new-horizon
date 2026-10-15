@@ -232,29 +232,61 @@ fn world_map_colours_dry_ground_below_sea_level_as_ground() {
     assert!(is_water(map_rgb(&new, lake)), "the lake keeps water colour");
     assert_eq!(map_rgb(&new, lake), map_rgb(&old, lake));
 
-    let (mut changed, mut changed_not_dry, mut water) = (0, 0, 0);
+    let (mut changed, mut changed_bad, mut to_water, mut water) = (0, 0, 0, 0);
     for posi in 0..sim.map_size_lg().chunks_len() {
         let pos = uniform_idx_as_vec2(sim.map_size_lg(), posi);
         water += usize::from(is_water(map_rgb(&new, pos)));
         if new.rgba.get(pos) != old.rgba.get(pos) {
             changed += 1;
+            let dry_ok = sim.chunk_is_authored_dry(pos) && !is_water(map_rgb(&new, pos));
             // Authored water the table calls land is the other recolouring:
-            // it becomes water-coloured.
-            let to_water = sim.chunk_water(pos).is_some_and(|w| w.wet())
+            // a lake of an `AuthoredOnly` region becomes water-coloured, with
+            // the shade of the authored depth the sim reports.
+            let lake_ok = sim
+                .authored_rasters
+                .as_ref()
+                .and_then(|r| r.chunk_summary(pos))
+                .is_some_and(|s| s.authored_only && s.wet_columns > 0)
+                && sim.get(pos).is_some_and(|c| c.river.river_kind.is_none())
+                && sim.chunk_water(pos).is_some_and(|w| w.wet())
                 && is_water(map_rgb(&new, pos))
                 && !is_water(map_rgb(&old, pos));
-            changed_not_dry += usize::from(!sim.chunk_is_authored_dry(pos) && !to_water);
+            if lake_ok && !dry_ok {
+                to_water += 1;
+                let depth = sim.chunk_water_depth(pos).unwrap().max(0.0);
+                let expect = match depth {
+                    d if d < 5.0 => WATER_RGB[0],
+                    d if d < 15.0 => WATER_RGB[1],
+                    d if d < 30.0 => WATER_RGB[2],
+                    d if d < 70.0 => WATER_RGB[3],
+                    d if d < 150.0 => WATER_RGB[4],
+                    d if d < 300.0 => WATER_RGB[5],
+                    _ => WATER_RGB[6],
+                };
+                println!(
+                    "to-water chunk {pos:?}: depth {depth:.1} m, {:?}",
+                    map_rgb(&new, pos)
+                );
+                assert_eq!(
+                    map_rgb(&new, pos),
+                    expect,
+                    "shade of the authored depth at {pos:?}"
+                );
+            }
+            changed_bad += usize::from(!(dry_ok || lake_ok));
         }
     }
     println!(
-        "chunks recoloured: {changed} (not authored dry: {changed_not_dry}); water-coloured \
-         chunks: {water}"
+        "chunks recoloured: {changed} (unexplained: {changed_bad}); to water: {to_water}; \
+         water-coloured chunks: {water}"
     );
     assert!(changed >= 2, "the pit and the depression are recoloured");
     assert_eq!(
-        changed_not_dry, 0,
-        "only authored dry chunks and authored water the table calls land change colour"
+        changed_bad, 0,
+        "only authored dry chunks turned to ground and authored lakes the table calls land turned \
+         to water change colour"
     );
+    assert_eq!(to_water, 3, "the authored lake over table land");
     assert!(water > 1000, "the natural sea keeps its water colour");
 }
 

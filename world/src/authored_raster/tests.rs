@@ -2508,20 +2508,19 @@ fn map_colour_of_authored_lake_below_sea_level_is_water() {
     ] {
         let c = Vec2::new(wpos.0, wpos.1) / CHUNK;
         assert!(sim.chunk_wet_authored(&config, c), "{what}: wet");
-        // The depth shade of the authored water altitude (`chunk_water`).
-        let w = sim.chunk_water(c).unwrap();
-        let depth = w.water_alt.max(w.alt) - w.alt;
-        let shade = match depth {
-            d if d < 5.0 => Rgb::new(0, 0xa8, 0xc9),
-            d if d < 15.0 => Rgb::new(0, 0x91, 0xbd),
-            d if d < 30.0 => Rgb::new(0, 0x78, 0xab),
-            d if d < 70.0 => Rgb::new(0, 0x61, 0x99),
-            d if d < 150.0 => Rgb::new(0, 0x4b, 0x82),
-            d if d < 300.0 => Rgb::new(0, 0x36, 0x6b),
-            _ => Rgb::new(0, 0x22, 0x52),
-        };
-        assert_eq!(rgb(wpos, true), shade, "{what}: presented");
     }
+    // Over the table sea the table already draws water, so the presented and
+    // table colours are the same bytes (the table's 100 m sea shade).
+    assert_eq!(rgb((2192, 1168), true), Rgb::new(0, 0x4b, 0x82));
+    assert_eq!(
+        rgb((2192, 1168), true),
+        rgb((2192, 1168), false),
+        "lake over a table sea chunk: presented == table"
+    );
+    // Over land the authored depth (10 m bed to surface) picks the bucket,
+    // not the ~1 m of natural altitude under the surface.
+    assert_eq!(rgb((2192, 1072), true), Rgb::new(0, 0x91, 0xbd));
+    assert_ne!(rgb((2192, 1072), true), rgb((2192, 1072), false));
 }
 
 /// The dry rule is per chunk and follows the majority of its columns: a
