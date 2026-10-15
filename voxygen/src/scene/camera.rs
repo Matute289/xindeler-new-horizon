@@ -571,6 +571,14 @@ impl Camera {
         self.tgt_dist = self.tgt_dist.min(cap);
     }
 
+    /// The zoom and field of view have reached their targets (what `update`
+    /// treats as converged). The distance may never get there when the
+    /// camera is pulled in by an obstacle.
+    #[cfg(feature = "shot-script")]
+    pub fn is_settled(&self) -> bool {
+        (self.dist - self.tgt_dist).abs() <= 0.01 && (self.fov - self.tgt_fov).abs() <= 0.01
+    }
+
     /// Get the distance of the camera from the focus
     pub fn get_distance(&self) -> f32 { self.dist }
 

@@ -56,8 +56,10 @@ pub const CHARACTER_ALIAS: &str = "t13shot";
 /// Process exit code for script, setup or login errors.
 pub const SETUP_EXIT_CODE: i32 = 2;
 /// Process exit code when the script ran to the end but at least one step
-/// failed.
-pub const STEP_FAILED_EXIT_CODE: i32 = 3;
+/// failed (the run continued and captured the rest).
+pub const STEP_FAILED_EXIT_CODE: i32 = 1;
+/// Process exit code when a screenshot could not be written.
+pub const SCREENSHOT_FAILED_EXIT_CODE: i32 = 3;
 
 /// Everything the driver needs, validated once at startup.
 #[derive(Debug)]

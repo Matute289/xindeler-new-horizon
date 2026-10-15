@@ -666,6 +666,49 @@ impl SessionState {
     }
 }
 
+#[cfg(feature = "shot-script")]
+impl SessionState {
+    /// Apply a camera, HUD or screenshot change requested by the shot script.
+    fn apply_shot_effect(
+        &mut self,
+        effect: crate::shot_script::driver::SessionEffect,
+        global_state: &mut GlobalState,
+    ) {
+        use crate::shot_script::driver::SessionEffect;
+        match effect {
+            SessionEffect::Camera {
+                yaw_rad,
+                pitch_rad,
+                distance,
+            } => {
+                let cam = self.scene.camera_mut();
+                // Back to the player, snapping out of a free camera.
+                cam.set_mode(CameraMode::ThirdPerson);
+                cam.reset_focus();
+                cam.set_orientation_instant(Vec3::new(yaw_rad, pitch_rad, 0.0));
+                cam.set_distance(distance.max(camera::MIN_ZOOM));
+            },
+            SessionEffect::Viewpoint {
+                cam: pos,
+                yaw_rad,
+                pitch_rad,
+            } => {
+                let cam = self.scene.camera_mut();
+                cam.set_mode(CameraMode::Freefly);
+                cam.force_focus_pos(pos);
+                cam.set_orientation_instant(Vec3::new(yaw_rad, pitch_rad, 0.0));
+            },
+            SessionEffect::Minimap(show) => {
+                global_state.settings.interface.minimap_show = show;
+            },
+            SessionEffect::Hud(show) => self.hud.set_ui_visible(show),
+            SessionEffect::Screenshot { path, done } => {
+                global_state.window.take_screenshot_to(path, done);
+            },
+        }
+    }
+}
+
 impl PlayState for SessionState {
     fn enter(&mut self, global_state: &mut GlobalState, _: Direction) {
         // Trap the cursor.
@@ -2714,11 +2757,21 @@ impl PlayState for SessionState {
             // Unattended shot script: run its current step; end the session
             // once every step has finished.
             #[cfg(feature = "shot-script")]
-            if let Some(driver) = &mut self.shot_driver
-                && driver.tick(&mut self.client.borrow_mut(), self.scene.terrain())
-                    == crate::shot_script::driver::DriverStatus::Finished
-            {
-                return PlayStateResult::Shutdown;
+            if let Some(driver) = &mut self.shot_driver {
+                let scene_state = crate::shot_script::driver::SceneState {
+                    camera_settled: self.scene.camera().is_settled(),
+                };
+                let (status, effect) = driver.tick(
+                    &mut self.client.borrow_mut(),
+                    self.scene.terrain(),
+                    scene_state,
+                );
+                if let Some(effect) = effect {
+                    self.apply_shot_effect(effect, global_state);
+                }
+                if status == crate::shot_script::driver::DriverStatus::Finished {
+                    return PlayStateResult::Shutdown;
+                }
             }
 
             PlayStateResult::Continue

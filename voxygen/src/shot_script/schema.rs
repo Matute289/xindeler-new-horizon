@@ -85,7 +85,9 @@ pub enum Step {
         #[serde(default)]
         timeout_s: Option<f32>,
     },
-    /// Orbit camera relative to the player.
+    /// Orbit camera relative to the player. `yaw_deg` is the compass heading
+    /// of the view direction (0 looks along +Y, 90 along +X); `pitch_deg` is
+    /// its elevation (negative looks down); `distance` is in blocks.
     Camera {
         yaw_deg: f32,
         pitch_deg: f32,
