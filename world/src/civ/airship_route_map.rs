@@ -3,7 +3,7 @@ use crate::{
     civ::airship_travel::{
         AirshipDockPlatform, AirshipRoute, AirshipSpawningLocation, Airships, DockNode,
     },
-    sim::{WorldSim, get_horizon_map, sample_pos, sample_wpos},
+    sim::{WorldSim, get_horizon_map},
     util::{DHashMap, DHashSet},
 };
 use common::{
@@ -284,6 +284,7 @@ impl TinySkiaSpriteMap {
 
 /// Creates a basic world map as a tiny_skia::Pixmap
 fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim) -> Option<Pixmap> {
+    let mut map_config = MapConfig::orthographic(*image_size, 0.0..=sampler.max_height);
     let horizons = get_horizon_map(
         *image_size,
         Aabr {
@@ -295,7 +296,11 @@ fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim)
         |posi| {
             let sample = sampler.get(uniform_idx_as_vec2(*image_size, posi)).unwrap();
 
-            sample.basement.max(sample.water_alt)
+            // XINDELER: authored dry ground is not raised to the table water plane.
+            let chunk = uniform_idx_as_vec2(*image_size, posi);
+            sampler
+                .chunk_presentation(&map_config, chunk)
+                .table_alt(sample.basement, sample.water_alt)
         },
         |a| a,
         |h| h,
@@ -312,7 +317,6 @@ fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim)
         index,
     };
 
-    let mut map_config = MapConfig::orthographic(*image_size, 0.0..=sampler.max_height);
     map_config.horizons = horizons.as_ref();
     map_config.is_shaded = true;
     map_config.is_stylized_topo = true;
@@ -326,14 +330,15 @@ fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim)
         let pixel_data = pixmap.data_mut();
         map_config.generate(
             |pos| {
-                let default_sample = sample_pos(&map_config, sampler, index_ref, None, pos);
+                let default_sample =
+                    sampler.presented_map_sample(&map_config, index_ref, None, pos);
                 let [r, g, b, _a] = map.rgba[pos].to_le_bytes();
                 MapSample {
                     rgb: Rgb::new(r, g, b),
                     ..default_sample
                 }
             },
-            |wpos| sample_wpos(&map_config, sampler, wpos),
+            |wpos| sampler.presented_table_wpos(&map_config, wpos),
             |pos, (r, g, b, a)| {
                 let pixel_index = (map_h - pos.y - 1) * stride + pos.x * tiny_skia::BYTES_PER_PIXEL;
                 pixel_data[pixel_index] = r;

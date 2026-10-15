@@ -299,6 +299,18 @@ impl ChunkPresentation {
         }
     }
 
+    /// The altitude a table-only path (no column samples) presents for a
+    /// chunk: on authored dry ground the table's `alt` itself, never raised
+    /// to the frozen table water plane; elsewhere `alt.max(water_alt)`, as
+    /// [`sample_wpos`] does.
+    pub fn table_alt(&self, alt: f32, water_alt: f32) -> f32 {
+        if self.authored_dry {
+            alt
+        } else {
+            alt.max(water_alt)
+        }
+    }
+
     /// Whether a map that draws water (`MapConfig::is_water`) may draw it
     /// over this chunk (ice colour, shading altitude at the water surface):
     /// never on authored dry ground.
@@ -361,6 +373,22 @@ impl WorldSim {
                 .as_ref()
                 .map(|s| s.alt)
         })
+    }
+
+    /// [`sample_wpos`] for table-only paths that present authored dry ground
+    /// ([`ChunkPresentation::table_alt`]): the chunk's own altitude on dry
+    /// ground, exactly [`sample_wpos`] everywhere else (and for the
+    /// basement map, or a map that does not draw water).
+    pub fn presented_table_wpos(&self, config: &MapConfig, wpos: Vec2<i32>) -> f32 {
+        let chunk = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+        let presentation =
+            self.chunk_presentation(config, wpos.map2(chunk, |e, c| e.div_euclid(c)));
+        match self.get_wpos(wpos) {
+            Some(s) if presentation.authored_dry => {
+                (presentation.table_alt(s.alt, s.water_alt) - config.focus.z as f32) / config.gain
+            },
+            _ => sample_wpos(config, self, wpos),
+        }
     }
 
     /// The map sample presented for chunk `pos`: [`sample_pos_with`] with

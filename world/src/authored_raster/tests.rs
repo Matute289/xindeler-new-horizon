@@ -2726,3 +2726,109 @@ fn chunk_presentation_on_a_synthetic_raster() {
     assert!(!table.shows_water(false));
     assert_eq!(fully_dry.connection_kind(river), None);
 }
+
+#[test]
+fn airship_route_map_presents_authored_dry_ground() {
+    use crate::{
+        CONFIG,
+        index::{Index, IndexOwned},
+        sim::{RiverKind, WorldSim, sample_pos, sample_wpos},
+    };
+    use common::terrain::{MapSizeLg, map::MapConfig};
+
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let mut own = region("dry_pit", (2048, 1024), (2304, 1280), 0, vec![
+        PaintOp::Ground {
+            shape: rect(2080.0, 1056.0, 2272.0, 1248.0),
+            ground_cm: 25_050,
+            weight: GROUND_EXACT,
+        },
+        // A dry pit at -10 m.
+        PaintOp::Ground {
+            shape: rect(2080.0, 1056.0, 2144.0, 1120.0),
+            ground_cm: 13_050,
+            weight: GROUND_EXACT,
+        },
+    ]);
+    own.sea_fill = SeaFill::AuthoredOnly;
+    let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
+    // The frozen table: sea everywhere, 10 m below sea level.
+    for c in sim.chunks.iter_mut() {
+        c.alt = CONFIG.sea_level - 10.0;
+        c.water_alt = CONFIG.sea_level;
+        c.river.river_kind = Some(RiverKind::Ocean);
+    }
+    let config = MapConfig::orthographic(sim.map_size_lg(), 0.0..=1000.0);
+    let index = IndexOwned::new(Index::new(0));
+    let chunk_of = |x: i32, y: i32| Vec2::new(x, y) / CHUNK;
+    let pit = chunk_of(2096, 1072);
+    let outside = chunk_of(3000, 3000);
+    let pit_wpos = pit * CHUNK;
+    let outside_wpos = outside * CHUNK;
+
+    // No ground layer: the airship map is exactly the table-only one.
+    let check_identical = |sim: &WorldSim, what: &str| {
+        for (c, w) in [(pit, pit_wpos), (outside, outside_wpos)] {
+            let new = sim.presented_map_sample(&config, index.as_index_ref(), None, c);
+            let old = sample_pos(&config, sim, index.as_index_ref(), None, c);
+            assert_eq!(new.rgb, old.rgb, "{what}: colour");
+            assert_eq!(new.alt.to_bits(), old.alt.to_bits(), "{what}: alt");
+            assert_eq!(
+                new.connections.is_some(),
+                old.connections.is_some(),
+                "{what}: link"
+            );
+            assert_eq!(
+                sim.presented_table_wpos(&config, w).to_bits(),
+                sample_wpos(&config, sim, w).to_bits(),
+                "{what}: relief"
+            );
+        }
+    };
+    check_identical(&sim, "no ground layer");
+    // Only an `Auto` region: nothing is authored dry.
+    let auto = region("sea_floor", (2048, 1024), (2304, 1280), 0, vec![
+        PaintOp::Ground {
+            shape: rect(2080.0, 1056.0, 2272.0, 1248.0),
+            ground_cm: 13_050,
+            weight: GROUND_EXACT,
+        },
+    ]);
+    sim.set_authored_rasters_for_test(Some(load(&[build_region(&auto).unwrap()]).unwrap()));
+    check_identical(&sim, "only an Auto region");
+
+    // With the dry region: the fully dry pit draws no river link and its
+    // relief is its own altitude, not the table water plane.
+    sim.set_authored_rasters_for_test(Some(load(&[build_region(&own).unwrap()]).unwrap()));
+    assert!(sim.chunk_presentation(&config, pit).authored_fully_dry);
+    let table = sample_pos(&config, &sim, index.as_index_ref(), None, pit);
+    assert!(table.connections.is_some(), "the table draws a link");
+    let new = sim.presented_map_sample(&config, index.as_index_ref(), None, pit);
+    assert!(new.connections.is_none(), "no link on a fully dry chunk");
+    let relief = sim.presented_table_wpos(&config, pit_wpos);
+    let water_plane = sample_wpos(&config, &sim, pit_wpos);
+    assert_eq!(
+        relief.to_bits(),
+        ((CONFIG.sea_level - 10.0) / config.gain).to_bits()
+    );
+    assert!(relief < water_plane, "not the table water plane");
+    // Outside every region nothing changes.
+    check_identical_outside(&sim, &config, outside, outside_wpos, &index);
+
+    fn check_identical_outside(
+        sim: &WorldSim,
+        config: &MapConfig,
+        c: Vec2<i32>,
+        w: Vec2<i32>,
+        index: &IndexOwned,
+    ) {
+        let new = sim.presented_map_sample(config, index.as_index_ref(), None, c);
+        let old = sample_pos(config, sim, index.as_index_ref(), None, c);
+        assert_eq!(new.rgb, old.rgb);
+        assert_eq!(new.connections.is_some(), old.connections.is_some());
+        assert_eq!(
+            sim.presented_table_wpos(config, w).to_bits(),
+            sample_wpos(config, sim, w).to_bits()
+        );
+    }
+}
