@@ -1808,38 +1808,23 @@ impl ColumnSample<'_> {
     /// position hash, then `Rock` in the natural stone colour of exposed
     /// cliffs (a warm grey tinted by the column, banded like the engine's
     /// cliff faces) -- never the engine's underground blue (`stone_col`). A
-    /// very sparse speckle of the rock is tinted as ore.
+    /// very sparse speckle of the rock is tinted as ore. The flecks are
+    /// cosmetic: they are plain `Rock`-kind blocks and yield nothing when
+    /// mined.
     pub fn dry_wall_block(&self, wpos: Vec3<i32>) -> common::terrain::Block {
-        let grass_depth = (1.5 + 2.0 * self.chaos).min(self.alt - self.basement);
-        let depth = self.alt - grass_depth - wpos.z as f32;
-        let soil = if self.surface_block_override == Some(BlockKind::Rock) {
-            0.0
-        } else {
-            (self.alt - self.basement).clamp(0.0, WALL_MAX_SOIL)
-        };
-        let mix = RandomField::new(WALL_MIX_SEED).get_f32(wpos);
-        let jitter = RandomField::new(WALL_JITTER_SEED).get_f32(wpos);
-        let layer = wall_layer(
-            depth,
-            soil,
-            mix,
-            RandomField::new(WALL_ORE_SEED).get_f32(wpos),
-            RandomField::new(WALL_ORE_KIND_SEED).get_f32(wpos),
-        );
-        // Engine-style horizontal banding of an exposed face.
-        let band = (wpos.z as f32 - self.basement * 0.3).div(2.0).sin() * 0.5 + 0.5;
-        let shade = Lerp::lerp(1.0, 0.7, band) * (0.94 + 0.12 * jitter);
-        let to_u8 = |c: Rgb<f32>| c.map(|e| (e * 255.0).clamp(0.0, 255.0) as u8);
-        match layer {
-            WallLayer::Earth => {
-                common::terrain::Block::new(BlockKind::Earth, to_u8(self.sub_surface_color * shade))
-            },
-            WallLayer::Rock => {
-                let stone = Rgb::lerp(WALL_STONE, self.sub_surface_color, WALL_STONE_TINT);
-                common::terrain::Block::new(BlockKind::Rock, to_u8(stone * shade))
-            },
-            WallLayer::Ore(col) => common::terrain::Block::new(BlockKind::Rock, col),
-        }
+        self.wall_strata().block(wpos)
+    }
+
+    /// The per-column invariants of [`Self::dry_wall_block`], to be built once
+    /// per column and reused for every wall block of it.
+    pub fn wall_strata(&self) -> WallStrata {
+        WallStrata::new(
+            self.alt,
+            self.basement,
+            self.chaos,
+            self.surface_block_override == Some(BlockKind::Rock),
+            self.sub_surface_color,
+        )
     }
 
     /// Whether procedural decorations (boulders, trees, scatter) must not be
@@ -2078,7 +2063,7 @@ const WALL_STONE: Rgb<f32> = Rgb::new(0.47, 0.44, 0.41);
 /// How much of the column's sub-surface colour tints the wall stone.
 const WALL_STONE_TINT: f32 = 0.3;
 /// Chance that a rock block of a pit wall is an ore fleck.
-pub const WALL_ORE_CHANCE: f32 = 0.004;
+pub(crate) const WALL_ORE_CHANCE: f32 = 0.004;
 /// Position-hash seeds of the wall's earth/stone mix, colour jitter and ore.
 const WALL_MIX_SEED: u32 = 0x57a1_0001;
 const WALL_JITTER_SEED: u32 = 0x57a1_0002;
@@ -2089,25 +2074,93 @@ const WALL_ORES: [(u8, u8, u8); 4] = [(150, 92, 62), (92, 150, 100), (212, 178, 
 
 /// What a pit wall block is at a depth below the surface layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WallLayer {
+pub(crate) enum WallLayer {
     Earth,
     Rock,
     Ore(Rgb<u8>),
 }
 
 /// The layer of an exposed pit wall `depth` blocks under its surface layer for
-/// a column with `soil` blocks of earth. `mix`, `ore` and `ore_kind` are
-/// position hashes in `[0, 1)`: the earth/stone blend is probabilistic over a
-/// band of [`WALL_BLEND_BAND`] blocks centred on the soil depth.
-pub fn wall_layer(depth: f32, soil: f32, mix: f32, ore: f32, ore_kind: f32) -> WallLayer {
+/// a column with `soil` blocks of earth. `mix` is a position hash in `[0, 1)`:
+/// the earth/stone blend is probabilistic over a band of [`WALL_BLEND_BAND`]
+/// blocks centred on the soil depth. `ore` and `ore_kind` are position-hash
+/// thunks in `[0, 1)`, evaluated only when the block is rock (and, for
+/// `ore_kind`, only on an ore hit). A column without soil never has earth.
+pub(crate) fn wall_layer(
+    depth: f32,
+    soil: f32,
+    mix: f32,
+    ore: impl FnOnce() -> f32,
+    ore_kind: impl FnOnce() -> f32,
+) -> WallLayer {
     let earth_p = ((soil - depth) / WALL_BLEND_BAND + 0.5).clamp(0.0, 1.0);
-    if mix < earth_p {
+    if soil > 0.0 && mix < earth_p {
         WallLayer::Earth
-    } else if ore < WALL_ORE_CHANCE {
-        let i = ((ore_kind * WALL_ORES.len() as f32) as usize).min(WALL_ORES.len() - 1);
+    } else if ore() < WALL_ORE_CHANCE {
+        let i = ((ore_kind() * WALL_ORES.len() as f32) as usize).min(WALL_ORES.len() - 1);
         WallLayer::Ore(WALL_ORES[i].into())
     } else {
         WallLayer::Rock
+    }
+}
+
+/// The per-column constants of an exposed pit wall's strata.
+#[derive(Clone, Copy, Debug)]
+pub struct WallStrata {
+    alt: f32,
+    grass_depth: f32,
+    soil: f32,
+    band_base: f32,
+    earth: Rgb<f32>,
+    stone: Rgb<f32>,
+}
+
+impl WallStrata {
+    fn new(
+        alt: f32,
+        basement: f32,
+        chaos: f32,
+        bare_rock: bool,
+        sub_surface_color: Rgb<f32>,
+    ) -> Self {
+        Self {
+            alt,
+            grass_depth: (1.5 + 2.0 * chaos).min(alt - basement),
+            soil: if bare_rock {
+                0.0
+            } else {
+                (alt - basement).clamp(0.0, WALL_MAX_SOIL)
+            },
+            band_base: basement * 0.3,
+            earth: sub_surface_color,
+            stone: Rgb::lerp(WALL_STONE, sub_surface_color, WALL_STONE_TINT),
+        }
+    }
+
+    /// The wall block at `wpos`.
+    pub fn block(&self, wpos: Vec3<i32>) -> common::terrain::Block {
+        let depth = self.alt - self.grass_depth - wpos.z as f32;
+        let mix = RandomField::new(WALL_MIX_SEED).get_f32(wpos);
+        let layer = wall_layer(
+            depth,
+            self.soil,
+            mix,
+            || RandomField::new(WALL_ORE_SEED).get_f32(wpos),
+            || RandomField::new(WALL_ORE_KIND_SEED).get_f32(wpos),
+        );
+        let to_u8 = |c: Rgb<f32>| c.map(|e| (e * 255.0).clamp(0.0, 255.0) as u8);
+        let shaded = |c: Rgb<f32>| {
+            // Engine-style horizontal banding of an exposed face.
+            let jitter = RandomField::new(WALL_JITTER_SEED).get_f32(wpos);
+            let band = (wpos.z as f32 - self.band_base).div(2.0).sin() * 0.5 + 0.5;
+            let shade = Lerp::lerp(1.0, 0.7, band) * (0.94 + 0.12 * jitter);
+            to_u8(c * shade)
+        };
+        match layer {
+            WallLayer::Earth => common::terrain::Block::new(BlockKind::Earth, shaded(self.earth)),
+            WallLayer::Rock => common::terrain::Block::new(BlockKind::Rock, shaded(self.stone)),
+            WallLayer::Ore(col) => common::terrain::Block::new(BlockKind::Rock, col),
+        }
     }
 }
 
@@ -2115,9 +2168,13 @@ pub fn wall_layer(depth: f32, soil: f32, mix: f32, ore: f32, ore_kind: f32) -> W
 mod wall_layer_tests {
     use super::*;
 
+    fn at(depth: f32, soil: f32, mix: f32) -> WallLayer {
+        wall_layer(depth, soil, mix, || 0.9, || 0.0)
+    }
+
     #[test]
     fn a_deep_soil_column_shows_earth_then_stone() {
-        let at = |depth, mix| wall_layer(depth, 12.0, mix, 0.9, 0.0);
+        let at = |depth, mix| at(depth, 12.0, mix);
         assert_eq!(at(0.0, 0.5), WallLayer::Earth);
         assert_eq!(at(8.0, 0.5), WallLayer::Earth);
         assert_eq!(at(20.0, 0.5), WallLayer::Rock);
@@ -2129,7 +2186,17 @@ mod wall_layer_tests {
     #[test]
     fn a_stone_heavy_column_is_stone_from_the_start() {
         for depth in [4.0, 10.0, 300.0] {
-            assert_eq!(wall_layer(depth, 0.0, 0.5, 0.9, 0.0), WallLayer::Rock);
+            assert_eq!(at(depth, 0.0, 0.5), WallLayer::Rock);
+        }
+    }
+
+    #[test]
+    fn a_soilless_column_has_no_earth_even_at_the_surface() {
+        for depth in [0.0, 1.0, 2.0, 2.9] {
+            for i in 0..100 {
+                let mix = i as f32 / 100.0;
+                assert_ne!(at(depth, 0.0, mix), WallLayer::Earth, "{depth} {mix}");
+            }
         }
     }
 
@@ -2144,8 +2211,8 @@ mod wall_layer_tests {
                     50.0,
                     0.0,
                     RandomField::new(WALL_MIX_SEED).get_f32(p),
-                    RandomField::new(WALL_ORE_SEED).get_f32(p),
-                    RandomField::new(WALL_ORE_KIND_SEED).get_f32(p),
+                    || RandomField::new(WALL_ORE_SEED).get_f32(p),
+                    || RandomField::new(WALL_ORE_KIND_SEED).get_f32(p),
                 )
             };
             assert_eq!(l(p), l(p));
@@ -2156,6 +2223,133 @@ mod wall_layer_tests {
             (rate - WALL_ORE_CHANCE).abs() < WALL_ORE_CHANCE * 0.3,
             "{rate}"
         );
-        assert_eq!(wall_layer(0.0, 9.0, 0.1, 0.0, 0.0), WallLayer::Earth);
+        assert_eq!(at(0.0, 9.0, 0.1), WallLayer::Earth);
+    }
+
+    /// The pre-hoisting implementation (all four hashes on every block, the
+    /// invariants recomputed per block), kept as the reference.
+    #[allow(clippy::too_many_arguments)]
+    fn reference_block(
+        alt: f32,
+        basement: f32,
+        chaos: f32,
+        bare_rock: bool,
+        sub_surface_color: Rgb<f32>,
+        wpos: Vec3<i32>,
+    ) -> common::terrain::Block {
+        let grass_depth = (1.5 + 2.0 * chaos).min(alt - basement);
+        let depth = alt - grass_depth - wpos.z as f32;
+        let soil = if bare_rock {
+            0.0
+        } else {
+            (alt - basement).clamp(0.0, WALL_MAX_SOIL)
+        };
+        let mix = RandomField::new(WALL_MIX_SEED).get_f32(wpos);
+        let jitter = RandomField::new(WALL_JITTER_SEED).get_f32(wpos);
+        let ore = RandomField::new(WALL_ORE_SEED).get_f32(wpos);
+        let ore_kind = RandomField::new(WALL_ORE_KIND_SEED).get_f32(wpos);
+        let earth_p = ((soil - depth) / WALL_BLEND_BAND + 0.5).clamp(0.0, 1.0);
+        let layer = if mix < earth_p {
+            WallLayer::Earth
+        } else if ore < WALL_ORE_CHANCE {
+            let i = ((ore_kind * WALL_ORES.len() as f32) as usize).min(WALL_ORES.len() - 1);
+            WallLayer::Ore(WALL_ORES[i].into())
+        } else {
+            WallLayer::Rock
+        };
+        let band = (wpos.z as f32 - basement * 0.3).div(2.0).sin() * 0.5 + 0.5;
+        let shade = Lerp::lerp(1.0, 0.7, band) * (0.94 + 0.12 * jitter);
+        let to_u8 = |c: Rgb<f32>| c.map(|e| (e * 255.0).clamp(0.0, 255.0) as u8);
+        match layer {
+            WallLayer::Earth => {
+                common::terrain::Block::new(BlockKind::Earth, to_u8(sub_surface_color * shade))
+            },
+            WallLayer::Rock => {
+                let stone = Rgb::lerp(WALL_STONE, sub_surface_color, WALL_STONE_TINT);
+                common::terrain::Block::new(BlockKind::Rock, to_u8(stone * shade))
+            },
+            WallLayer::Ore(col) => common::terrain::Block::new(BlockKind::Rock, col),
+        }
+    }
+
+    fn columns() -> Vec<(f32, f32, f32, bool, Rgb<f32>)> {
+        let mut v = Vec::new();
+        for (i, &(alt, basement)) in [
+            (130.0, 124.0),
+            (131.5, 123.0),
+            (140.0, 100.0),
+            (90.0, 89.5),
+            (200.0, 120.0),
+            (100.0, 100.0),
+        ]
+        .iter()
+        .enumerate()
+        {
+            for (j, &sub) in [
+                Rgb::new(0.35, 0.28, 0.2),
+                Rgb::new(0.45, 0.4, 0.3),
+                Rgb::new(0.6, 0.55, 0.5),
+                Rgb::new(0.2, 0.25, 0.4),
+            ]
+            .iter()
+            .enumerate()
+            {
+                v.push((alt, basement, 0.1 + 0.2 * j as f32, (i + j) % 5 == 0, sub));
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn the_hoisted_strata_match_the_reference_bit_for_bit() {
+        let mut n = 0;
+        for (alt, basement, chaos, bare, sub) in columns() {
+            let strata = WallStrata::new(alt, basement, chaos, bare, sub);
+            for i in 0..200 {
+                let wpos = Vec3::new(1000 + i * 13, -400 + i * 7, alt as i32 - 1 - (i % 60));
+                let new = strata.block(wpos);
+                let old = reference_block(alt, basement, chaos, bare, sub, wpos);
+                // A column without soil no longer has earth in its first
+                // blocks (it was a bug); everything else is unchanged.
+                if old.kind() == BlockKind::Earth
+                    && (bare || alt <= basement)
+                    && new.kind() != BlockKind::Earth
+                {
+                    continue;
+                }
+                assert_eq!(new, old, "{alt} {basement} {bare} {wpos:?}");
+                n += 1;
+            }
+        }
+        assert!(n > 4000, "{n}");
+    }
+
+    #[test]
+    fn wall_blocks_are_never_blue() {
+        let blue_minus_red = |c: Rgb<u8>| c.b as i32 - c.r as i32;
+        for sub in [
+            Rgb::new(0.35, 0.28, 0.2),
+            Rgb::new(0.45, 0.4, 0.3),
+            Rgb::new(0.6, 0.55, 0.5),
+            Rgb::new(0.3, 0.32, 0.3),
+        ] {
+            for bare in [false, true] {
+                let strata = WallStrata::new(130.0, 123.0, 0.3, bare, sub);
+                for depth in 0..80 {
+                    for k in 0..40 {
+                        let wpos = Vec3::new(k * 5, k * 3, 129 - depth);
+                        let b = strata.block(wpos);
+                        let c = b.get_color().unwrap();
+                        if matches!(b.kind(), BlockKind::Earth | BlockKind::Rock)
+                            && !WALL_ORES.iter().any(|o| Rgb::from(*o) == c)
+                        {
+                            assert!(blue_minus_red(c) <= 30, "{c:?} {sub:?}");
+                            // The engine's old deep-rock blue (`stone_col`).
+                            assert_ne!((c.r, c.g, c.b), (90, 110, 150));
+                        }
+                    }
+                }
+            }
+        }
     }
 }

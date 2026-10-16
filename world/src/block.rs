@@ -1,6 +1,6 @@
 use crate::{
     CONFIG, IndexRef,
-    column::{ColumnGen, ColumnSample},
+    column::{ColumnGen, ColumnSample, WallStrata},
     util::{FastNoise, RandomField, Sampler, SmallCache},
 };
 use common::{
@@ -108,13 +108,9 @@ impl<'a> BlockGen<'a> {
             // strata (earth, then natural stone with rare ore flecks) instead
             // of the engine's blue underground rock colour.
             let wall = exposed_wall_floor.is_some_and(|f| wposf.z as f32 > f);
-            let solid = |kind: BlockKind, col: Rgb<u8>| {
-                if wall {
-                    sample.dry_wall_block(wpos)
-                } else {
-                    Block::new(kind, col)
-                }
-            };
+            let strata = wall.then(|| sample.wall_strata());
+            let solid =
+                |kind: BlockKind, col: Rgb<u8>| solid_block(strata.as_ref(), wpos, kind, col);
 
             if stone_factor >= 0.5 {
                 if wposf.z as f32 > alt - cliff_offset.max(0.0) {
@@ -211,6 +207,21 @@ impl ZCache<'_> {
         let max = ground_max.max(self.sample.water_level + 2.0 + self.sample.ice_depth);
 
         (min, max)
+    }
+}
+
+/// A solid underground block: the generic `kind`/`col` one, or, on the
+/// exposed wall of an authored dry pit (`strata` is `Some`), the column's own
+/// wall strata.
+fn solid_block(
+    strata: Option<&WallStrata>,
+    wpos: Vec3<i32>,
+    kind: BlockKind,
+    col: Rgb<u8>,
+) -> Block {
+    match strata {
+        Some(strata) => strata.block(wpos),
+        None => Block::new(kind, col),
     }
 }
 
@@ -531,6 +542,22 @@ mod keyhole_cfg_tests {
                 assert_eq!(item, "common.items.keys.quarry_keys.miner_key");
             },
             other => panic!("expected UnlockKind::Consumes(Simple(..)), got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod solid_block_tests {
+    use super::*;
+
+    #[test]
+    fn without_a_wall_the_generic_block_is_unchanged() {
+        for kind in [BlockKind::Rock, BlockKind::Earth] {
+            for i in 0..50 {
+                let col = Rgb::new(90 + i as u8, 110, 150);
+                let wpos = Vec3::new(i, 2 * i, 100 - i);
+                assert_eq!(solid_block(None, wpos, kind, col), Block::new(kind, col));
+            }
         }
     }
 }

@@ -716,11 +716,12 @@ impl World {
                     .sample
                     .exposed_wall_floor
                     .map(|f| f.floor() as i32 + 1);
+                let strata = wall_from.map(|_| z_cache.sample.wall_strata());
                 (base_z..min_z as i32).for_each(|z| {
-                    let block = match wall_from {
-                        Some(from) if z >= from => z_cache
-                            .sample
-                            .dry_wall_block(Vec3::from(chunk_wpos2d) + Vec3::new(x, y, z)),
+                    let block = match (wall_from, &strata) {
+                        (Some(from), Some(strata)) if z >= from => {
+                            strata.block(Vec3::from(chunk_wpos2d) + Vec3::new(x, y, z))
+                        },
                         _ => stone,
                     };
                     let _ = chunk.set(Vec3::new(x, y, z), block);

@@ -127,7 +127,11 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
                         }
                         if beside {
                             w.scanned_columns += 1;
-                            let hi = col.alt as i32 - 6;
+                            // Columns whose basement sits above the surface (negative
+                            // grass depth) have no sub-surface layer to scan.
+                            let grass =
+                                (1.5 + 2.0 * col.chaos).min(col.alt - col.basement).max(0.0);
+                            let hi = (col.alt - grass - 1.0).floor() as i32;
                             for z in lo.max(z0)..=hi.min(z1 - 1) {
                                 let b = block(z);
                                 if matches!(b.kind(), BlockKind::Rock | BlockKind::Earth)
