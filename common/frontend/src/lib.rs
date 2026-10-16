@@ -59,28 +59,69 @@ static FILE_FLUSH_HANDLES: Mutex<Vec<FlushHandle>> = Mutex::new(Vec::new());
 #[cfg(feature = "logging-verbose")]
 static TELEMETRY_FLUSH: Mutex<Option<TelemetryFlushHandle>> = Mutex::new(None);
 
-/// Flush the log writers: the non-blocking stdout writer (dropping a
-/// `WorkerGuard` waits for its queued lines), the log files, and the telemetry
-/// drain. Safe to call more than once and from a panic hook: it never blocks
-/// on a lock. If the panicking thread was itself mid-write it may hold a file
-/// writer's lock; that file is then skipped (its buffered tail stays
-/// unflushed) rather than deadlocking the hook.
+/// Flush the log writers for a normal shutdown: the non-blocking stdout writer
+/// (dropping a `WorkerGuard` waits for its queued lines), the log files, and
+/// the telemetry drain. Blocking: it waits for a file writer's lock if a logger
+/// thread is mid-write, so the tail is never silently skipped. Safe to call
+/// more than once.
+///
+/// Must never be called from inside a tracing event callback (a `Layer` or
+/// `MakeWriter`) on a thread that is writing to these sinks: it would wait on a
+/// lock that same thread holds. Use [`flush_logs_best_effort`] from a panic
+/// hook.
 pub fn flush_logs() {
+    let guards = std::mem::take(&mut *WORKER_GUARDS.lock().unwrap_or_else(|e| e.into_inner()));
+    drop(guards);
+
+    let handles: Vec<FlushHandle> = FILE_FLUSH_HANDLES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    for h in handles {
+        h.flush();
+    }
+
+    #[cfg(feature = "logging-verbose")]
+    {
+        let h = TELEMETRY_FLUSH
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(h) = h
+            && !h.flush()
+        {
+            eprintln!("[log] telemetry flush timed out");
+        }
+    }
+}
+
+/// Like [`flush_logs`] but for a panic hook: it never blocks on a lock. If the
+/// panicking thread was itself mid-write it may hold a file writer's lock; that
+/// file is then skipped (its buffered tail stays unflushed, reported on stderr)
+/// rather than deadlocking the hook. Telemetry waits at most 1s.
+pub fn flush_logs_best_effort() {
     let guards = match WORKER_GUARDS.try_lock() {
         Ok(mut g) => std::mem::take(&mut *g),
         Err(std::sync::TryLockError::Poisoned(e)) => std::mem::take(&mut *e.into_inner()),
-        Err(std::sync::TryLockError::WouldBlock) => Vec::new(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            eprintln!("[log] stdout writer guards busy, skipped");
+            Vec::new()
+        },
     };
     drop(guards);
 
     let handles: Vec<FlushHandle> = match FILE_FLUSH_HANDLES.try_lock() {
         Ok(g) => g.clone(),
         Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().clone(),
-        Err(std::sync::TryLockError::WouldBlock) => Vec::new(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            eprintln!("[log] file flush handles busy, skipped");
+            Vec::new()
+        },
     };
     for h in handles {
-        // A busy writer (lock held) is skipped on purpose; see above.
-        let _ = h.try_flush();
+        if !h.try_flush() {
+            eprintln!("[log] a log file was busy or failed to flush, its tail may be lost");
+        }
     }
 
     #[cfg(feature = "logging-verbose")]
@@ -90,8 +131,10 @@ pub fn flush_logs() {
             Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().clone(),
             Err(std::sync::TryLockError::WouldBlock) => None,
         };
-        if let Some(h) = h {
-            h.flush_bounded();
+        if let Some(h) = h
+            && !h.flush_bounded()
+        {
+            eprintln!("[log] telemetry flush skipped or timed out");
         }
     }
 }
@@ -350,9 +393,7 @@ pub fn init_split_logs(prefix: &str, logs_dir: &Path) -> LogGuards {
         match TelemetryLayer::new(logs_dir, prefix) {
             Some(t) => {
                 let h = t.flush_handle();
-                if let Ok(mut g) = TELEMETRY_FLUSH.lock() {
-                    *g = Some(h.clone());
-                }
+                *TELEMETRY_FLUSH.lock().unwrap_or_else(|e| e.into_inner()) = Some(h);
                 Some(t.boxed())
             },
             None => None,
@@ -377,11 +418,14 @@ pub fn init_split_logs(prefix: &str, logs_dir: &Path) -> LogGuards {
         .with(telemetry_layer)
         .init();
 
-    if let Ok(mut g) = WORKER_GUARDS.lock() {
-        g.extend(worker_guards);
-    }
-    if let Ok(mut g) = FILE_FLUSH_HANDLES.lock() {
-        g.extend(file_flush);
+    WORKER_GUARDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .extend(worker_guards);
+    {
+        let mut handles = FILE_FLUSH_HANDLES.lock().unwrap_or_else(|e| e.into_inner());
+        handles.clear();
+        handles.extend(file_flush);
     }
 
     LogGuards {

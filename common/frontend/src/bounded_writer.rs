@@ -68,6 +68,18 @@ impl FlushHandle {
         };
         state.writer.flush().is_ok()
     }
+
+    /// Flush the buffered bytes to the file, waiting for the lock if a thread
+    /// is mid-write. For the normal shutdown path, where skipping a busy
+    /// writer would silently lose the log tail. A poisoned lock is recovered.
+    /// Returns whether the flush succeeded.
+    ///
+    /// Must not be called from inside a tracing event callback on a thread
+    /// that is currently writing to this same writer (it would self-deadlock).
+    pub fn flush(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.writer.flush().is_ok()
+    }
 }
 
 /// Held by the caller to keep the compression thread alive.
@@ -326,6 +338,40 @@ mod tests {
         );
         assert!(handle.try_flush());
         assert!(read_all().contains("hello tail"));
+    }
+
+    #[test]
+    fn blocking_flush_waits_for_a_held_lock_while_try_flush_skips() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (writer, _guard) = BoundedMakeWriter::new(dir.path(), "bf", Rotation::Daily, 1_000_000);
+        let handle = writer.flush_handle();
+        {
+            let mut w = writer.make_writer();
+            w.write_all(b"late tail\n").unwrap();
+        }
+        let read_all = || {
+            fs::read_dir(dir.path())
+                .unwrap()
+                .flatten()
+                .map(|e| fs::read_to_string(e.path()).unwrap_or_default())
+                .collect::<String>()
+        };
+
+        let state = Arc::clone(&handle.state);
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _held = state.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+        });
+        locked_rx.recv().unwrap();
+
+        assert!(!handle.try_flush(), "try_flush must skip a held lock");
+        assert!(!read_all().contains("late tail"));
+        assert!(handle.flush(), "blocking flush waits for the lock");
+        assert!(read_all().contains("late tail"));
+        holder.join().unwrap();
     }
 
     /// Regression test for the production shutdown hang (2026-09-06):
