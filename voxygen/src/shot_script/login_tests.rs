@@ -408,23 +408,32 @@ fn owner_and_mode_rules() {
     assert_eq!(owner_mode_problem(501, 0o700, 501), None);
     assert_eq!(owner_mode_problem(501, 0o755, 501), None);
     assert!(owner_mode_problem(0, 0o700, 501).is_some());
-    assert!(owner_mode_problem(501, 0o770, 501).is_some());
+    // Group-writable is accepted; only world-writable is refused.
+    assert_eq!(owner_mode_problem(501, 0o770, 501), None);
+    assert_eq!(owner_mode_problem(501, 0o775, 501), None);
     assert!(owner_mode_problem(501, 0o707, 501).is_some());
+    assert!(owner_mode_problem(501, 0o702, 501).is_some());
     assert!(owner_mode_problem(501, 0o1777, 501).is_some());
 }
 
 #[cfg(unix)]
 #[test]
-fn existing_out_dir_must_not_be_group_or_world_writable() {
+fn existing_out_dir_must_not_be_world_writable() {
     use std::os::unix::fs::PermissionsExt;
     let dir = scratch("mode");
     std::fs::create_dir_all(&dir).unwrap();
-    for (mode, accepted) in [(0o700, true), (0o755, true), (0o775, false), (0o777, false)] {
+    for (mode, accepted) in [
+        (0o700, true),
+        (0o755, true),
+        (0o775, true),
+        (0o777, false),
+        (0o772, false),
+    ] {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
         let got = prepare_out_dir(dir.as_os_str());
         assert_eq!(got.is_ok(), accepted, "mode {mode:o}: {got:?}");
         if let Err(e) = got {
-            assert!(e.to_string().contains("group or others"), "{e}");
+            assert!(e.to_string().contains("writable by others"), "{e}");
         }
     }
     // The owner probe leaves nothing behind.
@@ -470,4 +479,81 @@ fn script_view_distance_overrides_terrain_and_caps_entities() {
     assert_eq!((vd.terrain, vd.entity), (12, 6));
     let vd = script_view_distances(3, settings);
     assert_eq!((vd.terrain, vd.entity), (3, 3));
+}
+
+#[test]
+fn intro_and_settings_are_not_persisted_by_a_shot_run() {
+    // The decision is a pure function of "is a script active".
+    assert!(!super::login::persist_decision_for_test(true));
+    assert!(super::login::persist_decision_for_test(false));
+}
+
+#[test]
+fn phase_deadlines_use_the_injected_clock() {
+    let t0 = Instant::now();
+    let limit = Duration::from_secs(60);
+    assert!(!phase_expired(t0, t0 + Duration::from_secs(60), limit));
+    assert!(phase_expired(t0, t0 + Duration::from_secs(61), limit));
+    // Never earlier than the connect deadline.
+    assert_eq!(
+        char_select_limit(Duration::from_secs(30)),
+        Duration::from_secs(CHAR_SELECT_TIMEOUT_S)
+    );
+    assert_eq!(
+        char_select_limit(Duration::from_secs(300)),
+        Duration::from_secs(300)
+    );
+    assert_eq!(
+        world_entry_limit(Duration::from_secs(30)),
+        Duration::from_secs(WORLD_ENTRY_TIMEOUT_S)
+    );
+}
+
+#[test]
+fn char_select_expires_without_progress() {
+    let mut d = CharSelectDriver::default();
+    let t0 = Instant::now();
+    let limit = Duration::from_secs(60);
+    // The clock starts at the first call.
+    assert!(!d.expired(t0, limit));
+    assert!(!d.expired(t0 + Duration::from_secs(59), limit));
+    assert!(d.expired(t0 + Duration::from_secs(61), limit));
+}
+
+#[test]
+fn stale_run_outputs_are_recognised_and_removed() {
+    for name in [
+        "001_a.png",
+        "123_deck.noon.png",
+        "1000_x.png",
+        "report.json",
+        "report.json.42.partial",
+    ] {
+        assert!(is_run_output(name), "{name}");
+    }
+    for name in [
+        "notes.txt",
+        "01_a.png",
+        "a_001.png",
+        "001.png",
+        "001_a.jpg",
+        "x.json",
+    ] {
+        assert!(!is_run_output(name), "{name}");
+    }
+    let dir = scratch("stale");
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in ["001_a.png", "report.json", "keep.txt"] {
+        std::fs::write(dir.join(f), b"x").unwrap();
+    }
+    // A directory with a matching name is left alone.
+    std::fs::create_dir(dir.join("002_dir.png")).unwrap();
+    assert_eq!(clean_run_outputs(&dir).unwrap(), 2);
+    let mut left: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["002_dir.png", "keep.txt"]);
+    std::fs::remove_dir_all(&dir).unwrap();
 }

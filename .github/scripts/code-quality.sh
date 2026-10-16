@@ -2,6 +2,41 @@
 # cargo clippy is a superset of cargo check,
 # so we don't check manually.
 
+# Dev-only features must stay opt-in. `shot-script` (unattended screenshot
+# driver) may only be enabled explicitly: never by another feature of
+# xindeler-voxygen (in particular `default` / `default-publish`), and never by
+# another workspace manifest depending on xindeler-voxygen with it. The Rust
+# test `feature_guard_tests` checks the transitive case; this dependency-free
+# gate makes the common mistakes fail before anything compiles.
+check_explicit_only_features() {
+    local manifest=voxygen/Cargo.toml status=0 offenders other
+    # Any quoted "shot-script" inside [features] other than the definition
+    # `shot-script = []` itself would make some other feature enable it.
+    offenders=$(awk '
+        /^\[/ { in_features = ($0 ~ /^\[features\]/); next }
+        in_features {
+            line = $0; sub(/#.*/, "", line)
+            if (line ~ /"shot-script"/) print NR ": " $0
+        }' "$manifest")
+    if [ -n "$offenders" ]; then
+        echo "error: a feature of $manifest enables \"shot-script\" (it must stay explicit-only):" >&2
+        echo "$offenders" >&2
+        status=1
+    fi
+    # Other manifests naming xindeler-voxygen together with the feature.
+    other=$(grep -rl --include=Cargo.toml 'xindeler-voxygen' . 2>/dev/null \
+        | grep -v -e '^\./voxygen/Cargo.toml$' -e '^\./target/' \
+        | xargs -r grep -l 'shot-script' 2>/dev/null)
+    if [ -n "$other" ]; then
+        echo "error: these manifests depend on xindeler-voxygen with \"shot-script\":" >&2
+        echo "$other" >&2
+        status=1
+    fi
+    return $status
+}
+
+check_explicit_only_features &&
+
 time cargo clippy \
     --all-targets \
     --locked \

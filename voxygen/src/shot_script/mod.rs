@@ -13,13 +13,18 @@
 //!
 //! Process exit codes: 0 every step succeeded; 1 a step failed, or the
 //! session ended before the last step (the report's `abort_reason` tells
-//! which); 2 the run could not start (script, server or login error); 3 a
-//! screenshot could not be written. A panic ends with 101 (Rust's default).
+//! which); 2 the run could not start or progress (script, server, login or
+//! world-entry error, including a phase deadline); 3 a screenshot could not
+//! be written; 101 a panic. The shipped profiles abort on panic (no
+//! unwinding, no `Drop`), so the 101 comes from the panic hook (see
+//! [`on_panic`]), which also skips the crash dialog nobody could close.
 //! Code 1 comes from [`driver::abort_code`] (and [`driver::finished_exit_code`]
 //! for a failed step): the shot-script paths in `main` never return an `Err`
 //! (which would also give 1), they exit through [`login::exit_code`].
 //!
-//! Screenshot files are named `NNN_<name>.png` (1-based, three digits).
+//! Screenshot files are named `NNN_<name>.png` (1-based, three digits; a script
+//! may therefore hold at most 999 `Screenshot` steps). Files of that shape and
+//! `report.json` are deleted from the output directory when a run starts.
 
 pub mod capture;
 pub mod driver;
@@ -28,6 +33,19 @@ pub mod report;
 pub mod schema;
 
 pub use capture::{ShotError, ShotJob, ShotResult};
+/// Panic hook part: with a shot script active, write the abort report
+/// (`abort_reason: "panic"`, exit code 101) and end the process with 101
+/// instead of showing a modal crash dialog. Returns when no script is active.
+pub fn on_panic(reason: &str) {
+    if login::active().is_none() {
+        return;
+    }
+    // Never leave the hook unattended-hostile: report what is known, then go.
+    eprintln!("error: shot script run panicked: {reason}");
+    let _ = report::write_panic_report();
+    std::process::exit(driver::PANIC_EXIT_CODE);
+}
+
 pub use schema::{Defaults, ScriptError, ShotScript, Step};
 
 use std::path::PathBuf;

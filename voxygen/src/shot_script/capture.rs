@@ -57,6 +57,32 @@ impl fmt::Display for ShotError {
 
 impl std::error::Error for ShotError {}
 
+impl ShotError {
+    /// The error as it may appear in `report.json`: only file names, never
+    /// the absolute paths that [`Display`](fmt::Display) (for the log) shows.
+    pub fn report_reason(&self) -> String {
+        let name = |path: &Path| {
+            path.file_name()
+                .map_or_else(|| "<unnamed>".into(), |n| n.to_string_lossy().into_owned())
+        };
+        match self {
+            ShotError::InvalidPath { path, reason } => {
+                format!("refused screenshot path {}: {reason}", name(path))
+            },
+            ShotError::Readback(e) => format!("GPU read-back failed: {e}"),
+            ShotError::Write { path, error } => {
+                // The underlying error text may repeat the full path.
+                let file = name(path);
+                let error = error.replace(&path.display().to_string(), &file);
+                format!("couldn't write screenshot {file}: {error}")
+            },
+            ShotError::Dropped { path } => {
+                format!("screenshot request for {} was discarded", name(path))
+            },
+        }
+    }
+}
+
 /// Basic sanity check of a screenshot target: the path must be absolute,
 /// contain no `..` component, name a `.png` file, and its parent directory
 /// must already exist (no directory is ever created here).

@@ -15,10 +15,19 @@
 //!   environment.
 //! - [`OUT_ENV`]: absolute output directory for screenshots and the report.
 //!   Created owner-only if missing; refused if it is a symlink, not a
-//!   directory, not owned by this user or writable by group/others.
+//!   directory, not owned by this user or world-writable. Files from an earlier
+//!   run (`NNN_*.png`, `report.json`) are deleted at startup.
 //! - [`CONNECT_TIMEOUT_ENV`]: optional overall connect deadline in seconds
 //!   (default [`DEFAULT_CONNECT_TIMEOUT_S`]), so a scratch server that is not
 //!   running fails the run quickly instead of after the menu's long retries.
+//!
+//! Phase deadlines keep an unattended run from hanging: the connect deadline
+//! above, [`CHAR_SELECT_TIMEOUT_S`] for character selection and
+//! [`WORLD_ENTRY_TIMEOUT_S`] for the player to appear in the world (each
+//! raised to the connect deadline if that is larger). Missing one ends the run
+//! with [`SETUP_EXIT_CODE`] and an abort report.
+//!
+//! A shot run never writes the user's settings or profile at exit.
 //!
 //! Setup or login failures end the run with [`SETUP_EXIT_CODE`]: at startup
 //! directly, later through a normal shutdown (see [`exit_code`]) so the logs
@@ -46,6 +55,12 @@ pub const OUT_ENV: &str = "XINDELER_SHOT_OUT";
 pub const CONNECT_TIMEOUT_ENV: &str = "XINDELER_SHOT_CONNECT_TIMEOUT_S";
 /// Connect deadline when [`CONNECT_TIMEOUT_ENV`] is unset.
 pub const DEFAULT_CONNECT_TIMEOUT_S: u64 = 30;
+/// How long character selection may take, from its first frame to entering
+/// the world, in seconds (never less than the connect deadline).
+pub const CHAR_SELECT_TIMEOUT_S: u64 = 60;
+/// How long the player may take to appear in the world once the session
+/// started, in seconds (never less than the connect deadline).
+pub const WORLD_ENTRY_TIMEOUT_S: u64 = 120;
 /// Largest accepted connect deadline.
 pub const MAX_CONNECT_TIMEOUT_S: u64 = 600;
 /// Username sent to the scratch server (which runs without authentication).
@@ -169,6 +184,27 @@ pub fn parse_loopback_server(value: &str) -> Result<SocketAddr, SetupError> {
     Ok(addr)
 }
 
+/// A phase deadline: the default, raised to the connect deadline when the
+/// operator set that higher (a slow machine needs both).
+fn phase_limit(default_s: u64, connect_timeout: Duration) -> Duration {
+    Duration::from_secs(default_s).max(connect_timeout)
+}
+
+/// Deadline of character selection.
+pub fn char_select_limit(connect_timeout: Duration) -> Duration {
+    phase_limit(CHAR_SELECT_TIMEOUT_S, connect_timeout)
+}
+
+/// Deadline for the player to appear in the world.
+pub fn world_entry_limit(connect_timeout: Duration) -> Duration {
+    phase_limit(WORLD_ENTRY_TIMEOUT_S, connect_timeout)
+}
+
+/// Has `limit` passed since `started`? (`now` is injected for tests.)
+pub fn phase_expired(started: Instant, now: Instant, limit: Duration) -> bool {
+    now.saturating_duration_since(started) > limit
+}
+
 /// Parse the optional connect deadline.
 pub fn parse_connect_timeout(value: Option<&OsStr>) -> Result<Duration, SetupError> {
     let Some(value) = value.filter(|v| !v.is_empty()) else {
@@ -185,12 +221,14 @@ pub fn parse_connect_timeout(value: Option<&OsStr>) -> Result<Duration, SetupErr
 }
 
 /// Problem with a directory's owner or mode, if any: it must belong to `me`
-/// and must not be writable by group or others.
+/// and must not be writable by others. Group-writable is accepted (a shared
+/// group on a developer machine is common, e.g. macOS's `staff`); only the
+/// world-writable case lets an unrelated user plant or replace files.
 pub fn owner_mode_problem(dir_uid: u32, mode: u32, me: u32) -> Option<&'static str> {
     if dir_uid != me {
         Some("is not owned by the current user")
-    } else if mode & 0o022 != 0 {
-        Some("is writable by group or others")
+    } else if mode & 0o002 != 0 {
+        Some("is writable by others")
     } else {
         None
     }
@@ -201,7 +239,7 @@ pub fn owner_mode_problem(dir_uid: u32, mode: u32, me: u32) -> Option<&'static s
 /// The path must be absolute, without `..` components, and its last component
 /// must not be a symlink. Parent directories may be symlinks: on macOS the
 /// system temp directories themselves live behind one. On unix the directory
-/// must be owned by this process's user and not writable by group/others.
+/// must be owned by this process's user and not world-writable.
 pub fn prepare_out_dir(raw: &OsStr) -> Result<PathBuf, SetupError> {
     let path = PathBuf::from(raw);
     let refuse = |reason: String| SetupError::OutDir {
@@ -234,9 +272,6 @@ pub fn prepare_out_dir(raw: &OsStr) -> Result<PathBuf, SetupError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if meta.mode() & 0o022 != 0 {
-            return Err(refuse("is writable by group or others".into()));
-        }
         let me = current_uid(&path).map_err(|e| refuse(format!("isn't writable: {e}")))?;
         if let Some(problem) = owner_mode_problem(meta.uid(), meta.mode(), me) {
             return Err(refuse(problem.into()));
@@ -277,6 +312,42 @@ fn create_private_dir(path: &Path) -> io::Result<()> {
         builder.mode(0o700);
     }
     builder.create(path)
+}
+
+/// Is `name` an output of an earlier run: a numbered screenshot
+/// (`NNN_<name>.png`, at least three digits) or the report (or a leftover
+/// temporary report file)?
+pub fn is_run_output(name: &str) -> bool {
+    if name == super::report::REPORT_FILE
+        || (name.starts_with("report.json.") && name.ends_with(".partial"))
+    {
+        return true;
+    }
+    let digits = name.bytes().take_while(u8::is_ascii_digit).count();
+    digits >= 3 && name[digits..].starts_with('_') && name.ends_with(".png")
+}
+
+/// Delete the outputs of an earlier run from `dir` (only regular files
+/// directly inside it that [`is_run_output`] names, never symlinks), so a
+/// report can never list a stale file as written. Returns how many files
+/// were removed.
+pub fn clean_run_outputs(dir: &Path) -> io::Result<usize> {
+    let mut removed = 0;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !is_run_output(&name) {
+            continue;
+        }
+        let meta = std::fs::symlink_metadata(entry.path())?;
+        if meta.file_type().is_file() {
+            std::fs::remove_file(entry.path())?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 /// Build the setup from a loaded script and an environment lookup.
@@ -343,6 +414,16 @@ pub fn init_from_env() -> Result<(), i32> {
                 steps = setup.script.steps.len(),
                 "Shot script active: unattended login to the scratch server"
             );
+            match clean_run_outputs(&setup.out_dir) {
+                Ok(0) => {},
+                Ok(n) => info!(removed = n, "Removed the outputs of an earlier shot run"),
+                Err(e) => {
+                    report(&format!(
+                        "couldn't clear the output directory of earlier results: {e}"
+                    ));
+                    return Err(SETUP_EXIT_CODE);
+                },
+            }
             // A second call would be a programming error; keep the first.
             let _ = ACTIVE.set(setup);
             Ok(())
@@ -385,10 +466,31 @@ pub fn remember_minimap(current: bool) {
     }
 }
 
-/// Put back what a script changed in the settings. Called right before the
-/// settings are saved on exit, so every shutdown path is covered.
+/// The user's own `intro_show`, remembered before `suppress_modals` changed it.
+static INTRO_ORIGINAL: Mutex<Option<crate::hud::Intro>> = Mutex::new(None);
+
+/// Put back what a script changed in the settings, as defence in depth: a
+/// shot run does not save the settings at all (see [`persist_on_exit`]), so
+/// this only matters if something else saves them.
 pub fn restore_settings(settings: &mut crate::settings::Settings) {
     restore_minimap(&mut settings.interface.minimap_show);
+    if let Ok(mut g) = INTRO_ORIGINAL.lock()
+        && let Some(original) = g.take()
+    {
+        settings.interface.intro_show = original;
+    }
+}
+
+/// Whether the settings and profile are written back when the client exits.
+/// A shot run changes settings in memory only (window size, minimap, intro
+/// modal, view distance), so it must not write the user's real files at all.
+pub fn persist_on_exit() -> bool { persist_decision(active().is_some()) }
+
+fn persist_decision(shot_script_active: bool) -> bool { !shot_script_active }
+
+#[cfg(test)]
+pub(crate) fn persist_decision_for_test(shot_script_active: bool) -> bool {
+    persist_decision(shot_script_active)
 }
 
 pub(crate) fn restore_minimap(minimap_show: &mut bool) {
@@ -400,10 +502,20 @@ pub(crate) fn restore_minimap(minimap_show: &mut bool) {
 }
 
 /// Turn off settings that would open a modal nobody is there to close (the
-/// first-session intro). In memory only; the runner's config dir is scratch.
+/// first-session intro), and apply the script's window size. In memory only:
+/// the settings file is not written during a shot run.
 pub fn suppress_modals(settings: &mut crate::settings::Settings) {
-    if active().is_some() {
+    if let Some(setup) = active() {
+        if let Ok(mut g) = INTRO_ORIGINAL.lock() {
+            g.get_or_insert(settings.interface.intro_show);
+        }
         settings.interface.intro_show = crate::hud::Intro::Never;
+        // The window is created from these settings. In memory only: with a
+        // shot script active nothing is saved (see `persist_on_exit`).
+        let (w, h) = setup.script.window;
+        settings.graphics.window.size = [w, h];
+        settings.graphics.window.maximised = false;
+        settings.graphics.fullscreen.enabled = false;
     }
 }
 
@@ -511,6 +623,8 @@ pub enum CharAction {
 pub struct CharSelectDriver {
     create_requested: bool,
     play_requested: bool,
+    /// First frame of character selection, for the deadline.
+    started: Option<Instant>,
 }
 
 impl CharSelectDriver {
@@ -545,12 +659,27 @@ impl CharSelectDriver {
         }
     }
 
+    /// Has character selection taken longer than `limit`? The clock starts at
+    /// the first call. (`now` is injected for tests.)
+    pub fn expired(&mut self, now: Instant, limit: Duration) -> bool {
+        let started = *self.started.get_or_insert(now);
+        phase_expired(started, now, limit)
+    }
+
     /// Run one step against the client. No-op when no shot script is active.
     /// Returns `true` when the run must shut down.
     pub fn tick(&mut self, client: &mut Client, settings_distances: common::ViewDistances) -> bool {
         let Some(setup) = active() else {
             return false;
         };
+        let limit = char_select_limit(setup.connect_timeout);
+        if self.expired(Instant::now(), limit) {
+            fail(&format!(
+                "character selection did not finish within {} s",
+                limit.as_secs()
+            ));
+            return true;
+        }
         if !client.registered() {
             return false;
         }

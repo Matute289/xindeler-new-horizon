@@ -17,6 +17,9 @@
 //!   "duration_s": <f64>,
 //!   "tool_version": <string|null>, "engine_commit": <hex|null>,
 //!   "view_distance": { "script": <u32>, "client": <u32|null> },
+//!   "window": { "requested": [w, h],          // logical pixels (the script)
+//!               "actual": [w, h] | null,      // renderer resolution, physical
+//!               "scale_factor": <f64|null> }, // physical / logical
 //!   "steps_total", "steps_ok", "steps_failed", "steps_skipped",
 //!   "steps_aborted": <u32>,                  // 0 or 1
 //!   "exit_code": <i32>,
@@ -68,7 +71,10 @@ use sha2::{Digest, Sha256};
 use std::{
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
@@ -87,6 +93,7 @@ pub struct Report {
     pub tool_version: Option<String>,
     pub engine_commit: Option<String>,
     pub view_distance: ViewDistance,
+    pub window: WindowReport,
     pub steps_total: u32,
     pub steps_ok: u32,
     pub steps_failed: u32,
@@ -110,6 +117,17 @@ pub struct ViewDistance {
     pub script: u32,
     /// What the client reported when the run ended.
     pub client: Option<u32>,
+}
+
+/// The window size the script asked for and what the renderer got.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WindowReport {
+    /// `window` of the script, in logical pixels.
+    pub requested: [u32; 2],
+    /// The renderer's resolution in physical pixels when the run ended;
+    /// equals `requested` times `scale_factor` when the request was honoured.
+    pub actual: Option<[u32; 2]>,
+    pub scale_factor: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +187,10 @@ pub struct RunInfo {
     pub tool_version: Option<String>,
     pub engine_commit: Option<String>,
     pub client_view_distance: Option<u32>,
+    /// `window` of the script (logical pixels).
+    pub window_requested: [u32; 2],
+    /// Renderer resolution (physical pixels) and scale factor, last seen.
+    pub window_actual: Option<([u32; 2], f64)>,
     /// Why the run ended before the script did, if it did.
     pub abort_reason: Option<String>,
     /// Exit code to record for an aborted run (ignored once the runner is
@@ -302,6 +324,11 @@ pub fn build_report(
             script: runner.defaults().view_distance,
             client: info.client_view_distance,
         },
+        window: WindowReport {
+            requested: info.window_requested,
+            actual: info.window_actual.map(|(size, _)| size),
+            scale_factor: info.window_actual.map(|(_, f)| f),
+        },
         steps_total: count(steps.len()),
         steps_ok: of(StepStatus::Ok),
         steps_failed: of(StepStatus::Failed),
@@ -411,6 +438,7 @@ pub fn engine_commit(hash: u32) -> Option<String> { (hash != 0).then(|| format!(
 pub fn run_info(
     setup: &login::ShotSetup,
     client_view_distance: Option<u32>,
+    window_actual: Option<([u32; 2], f64)>,
     abort_reason: Option<String>,
     abort_exit_code: i32,
 ) -> RunInfo {
@@ -439,6 +467,8 @@ pub fn run_info(
         tool_version,
         engine_commit,
         client_view_distance,
+        window_requested: [setup.script.window.0, setup.script.window.1],
+        window_actual,
         abort_reason,
         abort_exit_code,
     }
@@ -449,8 +479,13 @@ pub fn run_info(
 /// logged.
 pub fn write_abort_report(reason: &str, exit_code: i32) {
     let Some(setup) = login::active() else { return };
+    // A report that already exists (a run that was cut short writes its own,
+    // with the steps that did run) is never replaced by an all-skipped one.
+    if !claim_report() {
+        return;
+    }
     let runner = StepRunner::new(&setup.script);
-    let info = run_info(setup, None, Some(reason.to_owned()), exit_code);
+    let info = run_info(setup, None, None, Some(reason.to_owned()), exit_code);
     let report = build_report(&runner, &info, &|_| None);
     log_write(&setup.out_dir, &report);
 }
@@ -461,4 +496,60 @@ pub fn log_write(out_dir: &Path, report: &Report) {
         Ok(path) => tracing::info!(path = %path.display(), "Shot report written"),
         Err(e) => tracing::error!(?e, "Couldn't write the shot report"),
     }
+}
+
+/// Set once a report was written (or is being written) for this run; the
+/// first writer wins, so a later abort path can neither replace a report nor
+/// make it disagree with the process exit code.
+static REPORT_CLAIMED: AtomicBool = AtomicBool::new(false);
+
+/// Claim the right to write the run's report. `true` for the first caller
+/// only.
+pub fn claim_report() -> bool { claim(&REPORT_CLAIMED) }
+
+fn claim(flag: &AtomicBool) -> bool { !flag.swap(true, Ordering::SeqCst) }
+
+#[cfg(test)]
+pub(crate) fn claim_for_test(flag: &AtomicBool) -> bool { claim(flag) }
+
+/// `abort_reason` recorded for a panic.
+pub const PANIC_REASON: &str = "panic";
+
+/// The report as of the last finished step, kept so the panic hook (which
+/// cannot reach the session driver) can still write the steps that ran.
+static SNAPSHOT: Mutex<Option<Report>> = Mutex::new(None);
+
+/// Keep `report` for [`write_panic_report`].
+pub fn set_snapshot(report: Report) {
+    if let Ok(mut g) = SNAPSHOT.lock() {
+        *g = Some(report);
+    }
+}
+
+/// Turn a report into the one a panic ends with.
+pub fn finalize_panic(report: &mut Report, ended_at: String, duration_s: f64) {
+    report.abort_reason = Some(PANIC_REASON.to_owned());
+    report.exit_code = super::driver::PANIC_EXIT_CODE;
+    report.ended_at = ended_at;
+    report.duration_s = duration_s;
+}
+
+/// Write the report of a run that ended in a panic, from the panic hook.
+/// Uses the last snapshot, or an all-skipped report when there is none. Writes
+/// even if a report exists: the process is about to exit with code 101, and
+/// the report must say so. Returns whether a report was written. Never panics.
+pub fn write_panic_report() -> bool {
+    std::panic::catch_unwind(|| {
+        let setup = login::active()?;
+        let info = run_info(setup, None, None, Some(PANIC_REASON.to_owned()), 101);
+        let snapshot = SNAPSHOT.lock().ok().and_then(|g| g.clone());
+        let mut report = snapshot
+            .unwrap_or_else(|| build_report(&StepRunner::new(&setup.script), &info, &|_| None));
+        finalize_panic(&mut report, info.ended_at.clone(), info.duration_s);
+        REPORT_CLAIMED.store(true, Ordering::SeqCst);
+        Some(write_report(&setup.out_dir, &report).is_ok())
+    })
+    .ok()
+    .flatten()
+    .unwrap_or(false)
 }

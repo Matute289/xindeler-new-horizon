@@ -5,7 +5,8 @@
 // file stems (ASCII letters, digits, '_', '-', '.') and must be unique.
 ShotScript(
     version: 1,
-    window: (1920, 1080),                 // fixed so screenshots diff run to run
+    window: (1920, 1080),                 // logical px, applied in memory only; the
+                                          // report records the actual size
     defaults: (
         view_distance: 12,                // chunks; terrain + entity
         terrain_radius_chunks: 6,         // what WaitForTerrain waits for
