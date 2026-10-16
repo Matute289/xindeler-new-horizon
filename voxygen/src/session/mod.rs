@@ -699,8 +699,9 @@ impl SessionState {
                 cam.set_orientation_instant(Vec3::new(yaw_rad, pitch_rad, 0.0));
             },
             SessionEffect::Minimap(show) => {
-                // Settings are saved on exit; the original value is put
-                // back first (see `shot_script::login::restore_settings`).
+                // A shot run does not save the settings (see
+                // `shot_script::login::persist_on_exit`); the original value
+                // is still remembered so `restore_settings` can put it back.
                 crate::shot_script::login::remember_minimap(
                     global_state.settings.interface.minimap_show,
                 );

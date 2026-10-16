@@ -12,7 +12,7 @@ pub use telemetry_layer::{TelemetryFlushHandle, TelemetryLayer};
 #[cfg(not(feature = "tracy"))] use std::fs;
 use std::{
     path::Path,
-    sync::{Arc, atomic::AtomicBool},
+    sync::{Arc, Mutex, atomic::AtomicBool},
     time::Duration,
 };
 
@@ -41,14 +41,34 @@ const SERVER_RETENTION: Duration = Duration::from_secs(30 * 24 * 3600);
 pub struct LogGuards {
     pub has_errors: Arc<AtomicBool>,
     pub lifecycle: LogLifecycleManager,
-    _worker_guards: Vec<WorkerGuard>,
     _compress_guards: Vec<CompressionGuard>,
     #[cfg(feature = "logging-verbose")]
     telemetry_flush: Option<TelemetryFlushHandle>,
 }
 
+/// The non-blocking writers' guards. They live in a static (not in
+/// [`LogGuards`]) so a panic hook that must end the process with `exit` --
+/// which skips every destructor -- can still flush the log files, via
+/// [`flush_logs`].
+static WORKER_GUARDS: Mutex<Vec<WorkerGuard>> = Mutex::new(Vec::new());
+
+/// Flush and stop the log writers: dropping a `WorkerGuard` waits for its
+/// queued lines to be written. Safe to call more than once and from a panic
+/// hook (it never blocks on a lock held by the panicking thread: if the lock
+/// is busy it does nothing).
+pub fn flush_logs() {
+    let guards = match WORKER_GUARDS.try_lock() {
+        Ok(mut g) => std::mem::take(&mut *g),
+        Err(std::sync::TryLockError::Poisoned(e)) => std::mem::take(&mut *e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => return,
+    };
+    drop(guards);
+}
+
 impl Drop for LogGuards {
     fn drop(&mut self) {
+        // Flush the writers first, then the compress guards (field drop) exit.
+        flush_logs();
         #[cfg(feature = "logging-verbose")]
         if let Some(h) = &self.telemetry_flush {
             h.flush();
@@ -326,10 +346,13 @@ pub fn init_split_logs(prefix: &str, logs_dir: &Path) -> LogGuards {
         .with(telemetry_layer)
         .init();
 
+    if let Ok(mut g) = WORKER_GUARDS.lock() {
+        g.extend(worker_guards);
+    }
+
     LogGuards {
         has_errors,
         lifecycle,
-        _worker_guards: worker_guards,
         _compress_guards: compress_guards,
         #[cfg(feature = "logging-verbose")]
         telemetry_flush,

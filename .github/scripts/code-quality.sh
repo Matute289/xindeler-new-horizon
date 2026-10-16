@@ -10,13 +10,15 @@
 # gate makes the common mistakes fail before anything compiles.
 check_explicit_only_features() {
     local manifest=voxygen/Cargo.toml status=0 offenders other
-    # Any quoted "shot-script" inside [features] other than the definition
-    # `shot-script = []` itself would make some other feature enable it.
+    # Any quoted "shot-script" (basic "..." or literal '...' TOML string, also
+    # as "xindeler-voxygen/shot-script" or similar) inside [features] other
+    # than the definition `shot-script = []` itself would make some other
+    # feature enable it.
     offenders=$(awk '
         /^\[/ { in_features = ($0 ~ /^\[features\]/); next }
         in_features {
             line = $0; sub(/#.*/, "", line)
-            if (line ~ /"shot-script"/) print NR ": " $0
+            if (line ~ /["\047]([^"\047]*\/)?shot-script["\047]/) print NR ": " $0
         }' "$manifest")
     if [ -n "$offenders" ]; then
         echo "error: a feature of $manifest enables \"shot-script\" (it must stay explicit-only):" >&2
@@ -26,7 +28,7 @@ check_explicit_only_features() {
     # Other manifests naming xindeler-voxygen together with the feature.
     other=$(grep -rl --include=Cargo.toml 'xindeler-voxygen' . 2>/dev/null \
         | grep -v -e '^\./voxygen/Cargo.toml$' -e '^\./target/' \
-        | xargs -r grep -l 'shot-script' 2>/dev/null)
+        | while IFS= read -r f; do grep -l 'shot-script' "$f" 2>/dev/null; done)
     if [ -n "$other" ]; then
         echo "error: these manifests depend on xindeler-voxygen with \"shot-script\":" >&2
         echo "$other" >&2

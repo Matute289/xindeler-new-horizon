@@ -23,8 +23,10 @@
 //! (which would also give 1), they exit through [`login::exit_code`].
 //!
 //! Screenshot files are named `NNN_<name>.png` (1-based, three digits; a script
-//! may therefore hold at most 999 `Screenshot` steps). Files of that shape and
-//! `report.json` are deleted from the output directory when a run starts.
+//! may therefore hold at most 999 `Screenshot` steps). When a run starts, the
+//! previous run's `report.json` and the screenshots it names are deleted from
+//! the output directory; a non-empty directory without a `report.json` is
+//! refused (exit 2) rather than cleaned.
 
 pub mod capture;
 pub mod driver;
@@ -41,8 +43,15 @@ pub fn on_panic(reason: &str) {
         return;
     }
     // Never leave the hook unattended-hostile: report what is known, then go.
-    eprintln!("error: shot script run panicked: {reason}");
+    // The `error!` line above goes through a non-blocking writer that `exit`
+    // would not flush, so the reason and a backtrace also go to stderr, and
+    // the log writers are flushed before exiting.
+    eprintln!(
+        "error: shot script run panicked: {reason}\n{}",
+        std::backtrace::Backtrace::force_capture()
+    );
     let _ = report::write_panic_report();
+    common_frontend::flush_logs();
     std::process::exit(driver::PANIC_EXIT_CODE);
 }
 

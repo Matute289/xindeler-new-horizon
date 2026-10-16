@@ -63,7 +63,9 @@ pub struct ShotScript {
     /// comparable run to run. Applied in memory only (never saved to the
     /// user's settings); the report records the size the renderer actually
     /// ended up with, which is physical pixels and so larger on a HiDPI
-    /// display.
+    /// display (a 1920x1080 request gives 3840x2160 screenshots at scale
+    /// factor 2; the report notes a `mismatch` when the size differs from
+    /// `window * scale_factor`).
     pub window: (u32, u32),
     pub defaults: Defaults,
     pub steps: Vec<Step>,

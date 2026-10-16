@@ -327,23 +327,60 @@ pub fn is_run_output(name: &str) -> bool {
     digits >= 3 && name[digits..].starts_with('_') && name.ends_with(".png")
 }
 
-/// Delete the outputs of an earlier run from `dir` (only regular files
-/// directly inside it that [`is_run_output`] names, never symlinks), so a
-/// report can never list a stale file as written. Returns how many files
-/// were removed.
+/// The screenshot files a previous `report.json` names (bare file names).
+fn files_named_by_report(report: &[u8]) -> Option<Vec<String>> {
+    let value: serde_json::Value = serde_json::from_slice(report).ok()?;
+    let steps = value.get("steps")?.as_array()?;
+    Some(
+        steps
+            .iter()
+            .filter_map(|s| s.get("screenshot")?.get("file")?.as_str())
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// Delete the outputs of an earlier run from `dir`, so a report can never list
+/// a stale file as written. Only regular files directly inside it (never
+/// symlinks) that the previous `report.json` names, plus that report and its
+/// leftover temporary files, are removed. A non-empty directory without a
+/// readable `report.json` is refused: it is not known to be a shot output
+/// directory, and nothing in it is deleted. Returns how many files were
+/// removed.
 pub fn clean_run_outputs(dir: &Path) -> io::Result<usize> {
-    let mut removed = 0;
+    let mut names = Vec::new();
     for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        if !is_run_output(&name) {
+        if let Some(name) = entry?.file_name().to_str() {
+            names.push(name.to_owned());
+        } else {
+            names.push(String::from("<non-unicode name>"));
+        }
+    }
+    if names.is_empty() {
+        return Ok(0);
+    }
+    let named = std::fs::read(dir.join(super::report::REPORT_FILE))
+        .ok()
+        .and_then(|bytes| files_named_by_report(&bytes));
+    let Some(named) = named else {
+        return Err(io::Error::other(format!(
+            "{} is not empty and has no readable {}: refusing to delete anything; use an empty \
+             directory or remove the old files yourself",
+            dir.display(),
+            super::report::REPORT_FILE
+        )));
+    };
+    let mut removed = 0;
+    for name in names {
+        let ours = name == super::report::REPORT_FILE
+            || (name.starts_with("report.json.") && name.ends_with(".partial"))
+            || (is_run_output(&name) && named.contains(&name));
+        if !ours {
             continue;
         }
-        let meta = std::fs::symlink_metadata(entry.path())?;
-        if meta.file_type().is_file() {
-            std::fs::remove_file(entry.path())?;
+        let path = dir.join(&name);
+        if std::fs::symlink_metadata(&path)?.file_type().is_file() {
+            std::fs::remove_file(&path)?;
             removed += 1;
         }
     }
@@ -503,9 +540,17 @@ pub(crate) fn restore_minimap(minimap_show: &mut bool) {
 
 /// Turn off settings that would open a modal nobody is there to close (the
 /// first-session intro), and apply the script's window size. In memory only:
-/// the settings file is not written during a shot run.
+/// the settings file is not written during a shot run. Call it through
+/// [`prepare_settings`], which fixes the order against the first-run setup.
 pub fn suppress_modals(settings: &mut crate::settings::Settings) {
-    if let Some(setup) = active() {
+    suppress_modals_with(active(), settings);
+}
+
+pub(crate) fn suppress_modals_with(
+    setup: Option<&ShotSetup>,
+    settings: &mut crate::settings::Settings,
+) {
+    if let Some(setup) = setup {
         if let Ok(mut g) = INTRO_ORIGINAL.lock() {
             g.get_or_insert(settings.interface.intro_show);
         }
@@ -517,6 +562,36 @@ pub fn suppress_modals(settings: &mut crate::settings::Settings) {
         settings.graphics.window.maximised = false;
         settings.graphics.fullscreen.enabled = false;
     }
+}
+
+/// Startup settings preparation: the first-run graphics preset first (saved to
+/// disk through `save`), then the shot script's in-memory overrides.
+///
+/// The order is load-bearing. Applying the overrides first would let the
+/// first-run preset overwrite the script's window size, and the first-run
+/// save would write the overrides (such as `intro_show = Never`) into the
+/// user's settings file. `detect` is only called on a first run.
+pub fn prepare_settings(
+    settings: &mut crate::settings::Settings,
+    is_first_run: bool,
+    detect: impl FnOnce() -> Option<crate::settings::GraphicsSettings>,
+    save: impl FnOnce(&crate::settings::Settings),
+) {
+    prepare_settings_with(active(), settings, is_first_run, detect, save);
+}
+
+pub(crate) fn prepare_settings_with(
+    setup: Option<&ShotSetup>,
+    settings: &mut crate::settings::Settings,
+    is_first_run: bool,
+    detect: impl FnOnce() -> Option<crate::settings::GraphicsSettings>,
+    save: impl FnOnce(&crate::settings::Settings),
+) {
+    if is_first_run && let Some(graphics) = detect() {
+        settings.graphics = graphics;
+        save(settings);
+    }
+    suppress_modals_with(setup, settings);
 }
 
 /// What the main menu should do this frame.

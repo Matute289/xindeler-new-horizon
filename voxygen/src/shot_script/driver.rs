@@ -1576,6 +1576,15 @@ impl SessionDriver {
     /// scale factor, for the report.
     pub fn note_window(&mut self, resolution: [u32; 2], scale_factor: f64) {
         self.window_actual = Some((resolution, scale_factor));
+        if let Some(setup) = super::login::active()
+            && let Some(note) = super::report::window_mismatch(
+                [setup.script.window.0, setup.script.window.1],
+                Some(resolution),
+                Some(scale_factor),
+            )
+        {
+            tracing::warn!("shot window size differs from the request: {note}");
+        }
     }
 
     /// Keep a report of the finished steps for the panic hook.

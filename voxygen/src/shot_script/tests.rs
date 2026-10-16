@@ -336,3 +336,23 @@ fn screenshot_count_is_capped_at_the_ordinal_width() {
     let e = err(&script(&too_many));
     assert!(e.message.contains("999"), "{e}");
 }
+
+#[test]
+fn window_mismatch_notes_a_size_the_window_manager_changed() {
+    use super::report::window_mismatch;
+    assert_eq!(
+        window_mismatch([1920, 1080], Some([1920, 1080]), Some(1.0)),
+        None
+    );
+    // HiDPI honouring the request: no mismatch.
+    assert_eq!(
+        window_mismatch([1920, 1080], Some([3840, 2160]), Some(2.0)),
+        None
+    );
+    assert_eq!(window_mismatch([1920, 1080], None, None), None);
+    let note = window_mismatch([1920, 1080], Some([2560, 1440]), Some(1.0)).unwrap();
+    assert!(
+        note.contains("2560x1440") && note.contains("1920x1080"),
+        "{note}"
+    );
+}

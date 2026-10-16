@@ -543,9 +543,14 @@ fn stale_run_outputs_are_recognised_and_removed() {
     }
     let dir = scratch("stale");
     std::fs::create_dir_all(&dir).unwrap();
-    for f in ["001_a.png", "report.json", "keep.txt"] {
+    for f in ["001_a.png", "keep.txt"] {
         std::fs::write(dir.join(f), b"x").unwrap();
     }
+    std::fs::write(
+        dir.join("report.json"),
+        report_json(&["001_a.png", "002_dir.png"]),
+    )
+    .unwrap();
     // A directory with a matching name is left alone.
     std::fs::create_dir(dir.join("002_dir.png")).unwrap();
     assert_eq!(clean_run_outputs(&dir).unwrap(), 2);
@@ -556,4 +561,120 @@ fn stale_run_outputs_are_recognised_and_removed() {
     left.sort();
     assert_eq!(left, ["002_dir.png", "keep.txt"]);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn report_json(files: &[&str]) -> String {
+    let steps: Vec<String> = files
+        .iter()
+        .map(|f| format!(r#"{{"screenshot":{{"file":"{f}"}}}}"#))
+        .collect();
+    format!(r#"{{"steps":[{}]}}"#, steps.join(","))
+}
+
+#[test]
+fn only_files_named_by_the_previous_report_are_removed() {
+    let dir = scratch("named");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("report.json"), report_json(&["001_a.png"])).unwrap();
+    for f in [
+        "001_a.png",
+        "002_mine.png",
+        "report.json.7.partial",
+        "keep.txt",
+    ] {
+        std::fs::write(dir.join(f), b"x").unwrap();
+    }
+    // report.json, its partial and the named screenshot; the user's own
+    // look-alike screenshot stays.
+    assert_eq!(clean_run_outputs(&dir).unwrap(), 3);
+    let mut left: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["002_mine.png", "keep.txt"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_non_empty_directory_without_a_report_is_refused() {
+    let dir = scratch("refuse");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("001_mine.png"), b"x").unwrap();
+    let err = clean_run_outputs(&dir).expect_err("must refuse");
+    assert!(err.to_string().contains("report.json"), "{err}");
+    assert!(dir.join("001_mine.png").exists());
+    // An unreadable report counts as none.
+    std::fs::write(dir.join("report.json"), b"not json").unwrap();
+    assert!(clean_run_outputs(&dir).is_err());
+    assert!(dir.join("001_mine.png").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+    // An empty directory is fine.
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(clean_run_outputs(&dir).unwrap(), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn test_setup() -> ShotSetup {
+    let out = scratch("prep");
+    let out_s = out.to_str().unwrap().to_owned();
+    let s = setup_with(
+        Ok(example()),
+        env(&[(SERVER_ENV, "127.0.0.1:14004"), (OUT_ENV, &out_s)]),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&out).ok();
+    s
+}
+
+#[test]
+fn first_run_preset_does_not_overwrite_the_script_window_or_persist_overrides() {
+    use crate::settings::{GraphicsSettings, Settings};
+    let setup = test_setup();
+    let mut settings = Settings::default();
+    let user_intro = settings.interface.intro_show;
+    let mut saved: Option<Settings> = None;
+    prepare_settings_with(
+        Some(&setup),
+        &mut settings,
+        true,
+        || {
+            let mut g = GraphicsSettings::default();
+            g.window.size = [333, 222];
+            g.window.maximised = true;
+            Some(g)
+        },
+        |s| saved = Some(s.clone()),
+    );
+    // In memory: the script's window survived the preset.
+    let (w, h) = setup.script.window;
+    assert_eq!(settings.graphics.window.size, [w, h]);
+    assert!(!settings.graphics.window.maximised);
+    assert!(matches!(
+        settings.interface.intro_show,
+        crate::hud::Intro::Never
+    ));
+    // On disk: the preset was saved, none of the overrides were.
+    let saved = saved.expect("first run saves the preset");
+    assert_eq!(saved.graphics.window.size, [333, 222]);
+    assert!(saved.graphics.window.maximised);
+    assert!(!matches!(
+        saved.interface.intro_show,
+        crate::hud::Intro::Never
+    ));
+    let _ = user_intro;
+    restore_settings(&mut settings);
+}
+
+#[test]
+fn later_runs_neither_detect_nor_save() {
+    use crate::settings::Settings;
+    let mut settings = Settings::default();
+    prepare_settings_with(
+        None,
+        &mut settings,
+        false,
+        || panic!("not a first run"),
+        |_| panic!("not a first run"),
+    );
 }

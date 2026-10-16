@@ -19,7 +19,11 @@
 //!   "view_distance": { "script": <u32>, "client": <u32|null> },
 //!   "window": { "requested": [w, h],          // logical pixels (the script)
 //!               "actual": [w, h] | null,      // renderer resolution, physical
-//!               "scale_factor": <f64|null> }, // physical / logical
+//!               "scale_factor": <f64|null>,   // physical / logical
+//!               "mismatch": <string|null> },  // set when actual differs from
+//!                                             // requested * scale_factor
+//!   // Sizes the script asks for are logical pixels: on a HiDPI display a
+//!   // 1920x1080 request gives 3840x2160 screenshots at scale factor 2.
 //!   "steps_total", "steps_ok", "steps_failed", "steps_skipped",
 //!   "steps_aborted": <u32>,                  // 0 or 1
 //!   "exit_code": <i32>,
@@ -128,6 +132,29 @@ pub struct WindowReport {
     /// equals `requested` times `scale_factor` when the request was honoured.
     pub actual: Option<[u32; 2]>,
     pub scale_factor: Option<f64>,
+    /// A note when `actual` is not `requested * scale_factor` (the window
+    /// manager gave another size); `null` when it matches or is unknown.
+    #[serde(default)]
+    pub mismatch: Option<String>,
+}
+
+/// Describe a difference between the requested window (logical pixels) and
+/// the renderer's resolution (physical pixels), `None` when they agree to
+/// within a pixel of rounding.
+pub fn window_mismatch(
+    requested: [u32; 2],
+    actual: Option<[u32; 2]>,
+    scale_factor: Option<f64>,
+) -> Option<String> {
+    let (actual, scale) = (actual?, scale_factor?);
+    let expected = requested.map(|v| (f64::from(v) * scale).round());
+    let ok = (0..2).all(|i| (f64::from(actual[i]) - expected[i]).abs() <= 1.0);
+    (!ok).then(|| {
+        format!(
+            "renderer is {}x{} but {}x{} logical at scale factor {scale} would be {}x{}",
+            actual[0], actual[1], requested[0], requested[1], expected[0], expected[1]
+        )
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -328,6 +355,11 @@ pub fn build_report(
             requested: info.window_requested,
             actual: info.window_actual.map(|(size, _)| size),
             scale_factor: info.window_actual.map(|(_, f)| f),
+            mismatch: window_mismatch(
+                info.window_requested,
+                info.window_actual.map(|(size, _)| size),
+                info.window_actual.map(|(_, f)| f),
+            ),
         },
         steps_total: count(steps.len()),
         steps_ok: of(StepStatus::Ok),
@@ -521,9 +553,7 @@ static SNAPSHOT: Mutex<Option<Report>> = Mutex::new(None);
 
 /// Keep `report` for [`write_panic_report`].
 pub fn set_snapshot(report: Report) {
-    if let Ok(mut g) = SNAPSHOT.lock() {
-        *g = Some(report);
-    }
+    *SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner()) = Some(report);
 }
 
 /// Turn a report into the one a panic ends with.
@@ -537,12 +567,15 @@ pub fn finalize_panic(report: &mut Report, ended_at: String, duration_s: f64) {
 /// Write the report of a run that ended in a panic, from the panic hook.
 /// Uses the last snapshot, or an all-skipped report when there is none. Writes
 /// even if a report exists: the process is about to exit with code 101, and
-/// the report must say so. Returns whether a report was written. Never panics.
+/// the report must say so. Returns whether a report was written. Best effort:
+/// it avoids panicking itself and a poisoned snapshot lock still yields the
+/// steps, but `catch_unwind` is a no-op under `panic=abort` (the shipped
+/// profiles), so a panic in here would abort rather than be caught.
 pub fn write_panic_report() -> bool {
     std::panic::catch_unwind(|| {
         let setup = login::active()?;
         let info = run_info(setup, None, None, Some(PANIC_REASON.to_owned()), 101);
-        let snapshot = SNAPSHOT.lock().ok().and_then(|g| g.clone());
+        let snapshot = SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let mut report = snapshot
             .unwrap_or_else(|| build_report(&StepRunner::new(&setup.script), &info, &|_| None));
         finalize_panic(&mut report, info.ended_at.clone(), info.duration_s);
