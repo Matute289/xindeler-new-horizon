@@ -710,8 +710,18 @@ impl World {
 
                 let (min_z, max_z) = z_cache.get_z_limits();
 
+                // The deep stone fill; the exposed wall of an authored dry
+                // pit is the ground's own material (`BlockGen`).
+                let wall_from = z_cache
+                    .sample
+                    .exposed_wall_floor
+                    .map(|f| f.floor() as i32 + 1);
                 (base_z..min_z as i32).for_each(|z| {
-                    let _ = chunk.set(Vec3::new(x, y, z), stone);
+                    let block = match wall_from {
+                        Some(from) if z >= from => z_cache.sample.dry_wall_block(),
+                        _ => stone,
+                    };
+                    let _ = chunk.set(Vec3::new(x, y, z), block);
                 });
 
                 (min_z as i32..max_z as i32).for_each(|z| {

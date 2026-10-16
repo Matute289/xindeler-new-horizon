@@ -76,6 +76,7 @@ impl<'a> BlockGen<'a> {
             ice_depth,
             surface_block_override,
             flood_block,
+            exposed_wall_floor,
             ..
         } = sample;
 
@@ -102,6 +103,18 @@ impl<'a> BlockGen<'a> {
             )
             .map(|e| (e * 255.0) as u8);
 
+            // The exposed side of an authored dry pit's wall (the column
+            // stands above neighbouring authored dry ground): the ground's own
+            // material instead of the engine's deep stone and earth strata.
+            let wall = exposed_wall_floor.is_some_and(|f| wposf.z as f32 > f);
+            let solid = |kind: BlockKind, col: Rgb<u8>| {
+                if wall {
+                    sample.dry_wall_block()
+                } else {
+                    Block::new(kind, col)
+                }
+            };
+
             if stone_factor >= 0.5 {
                 if wposf.z as f32 > alt - cliff_offset.max(0.0) {
                     if cliff_offset.max(0.0)
@@ -120,13 +133,13 @@ impl<'a> BlockGen<'a> {
                             (wposf.z as f32 - basement * 0.3).div(2.0).sin() * 0.5 + 0.5,
                         )
                         .map(|e| e as u8);
-                        Some(Block::new(BlockKind::Rock, col))
+                        Some(solid(BlockKind::Rock, col))
                     }
                 } else {
-                    Some(Block::new(BlockKind::Rock, col))
+                    Some(solid(BlockKind::Rock, col))
                 }
             } else {
-                Some(Block::new(BlockKind::Earth, col))
+                Some(solid(BlockKind::Earth, col))
             }
         } else if wposf.z as i32 <= alt as i32 {
             let grass_factor = (wposf.z as f32 - (alt - grass_depth))

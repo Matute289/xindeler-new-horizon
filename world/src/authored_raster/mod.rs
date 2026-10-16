@@ -762,7 +762,8 @@ impl AuthoredColumn {
         }
     }
 
-    /// An unauthored column of an owned chunk: no water above sea level;
+    /// An unauthored column of an owned chunk: no water above sea level (none
+    /// at all in a [`SeaFill::AuthoredOnly`] region);
     /// terrain blended by the feather weight from the engine's (with the sim
     /// water's carving) to the engine's *dry* terrain (same noise and warp,
     /// faded by the distance to the authored water instead of the sim's).
@@ -784,9 +785,19 @@ impl AuthoredColumn {
                 (a, b) => a.or(b),
             }
         };
+        let alt = Lerp::lerp(engine.alt, dry_alt, w);
         EngineColumn {
-            alt: Lerp::lerp(engine.alt, dry_alt, w),
-            water_level: dry.base_sea_level,
+            alt,
+            // `Auto`: the sea fills what lies below it. `AuthoredOnly`: the
+            // region's only water is authored, so a column below sea level is
+            // dry too -- the feather and the chunk table's interpolation can
+            // leave one there beside a pit (its level at the ground, as on
+            // every other dry column of the region). Columns above the sea
+            // keep its level: nothing else about them changes.
+            water_level: match self.settings.sea_fill {
+                SeaFill::Auto => dry.base_sea_level,
+                SeaFill::AuthoredOnly => dry.base_sea_level.min(alt),
+            },
             water_dist,
             warp_factor: Lerp::lerp(engine.warp_factor, dry_wf, w),
             cliff_offset: engine.cliff_offset,
@@ -2462,6 +2473,7 @@ fn validate_region(
 #[cfg(test)] mod ground_consumer_real_world_tests;
 #[cfg(test)] mod ground_real_world_tests;
 #[cfg(test)] mod ground_seam_real_world_tests;
+#[cfg(test)] mod pit_wall_real_world_tests;
 #[cfg(test)] mod presentation_real_world_tests;
 #[cfg(test)] mod real_world_tests;
 #[cfg(test)] mod tests;

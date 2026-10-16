@@ -3342,3 +3342,42 @@ fn authored_map_columns_on_a_synthetic_raster() {
             .authored_dry
     );
 }
+
+/// An unauthored column of an owned chunk beside a pit whose engine altitude
+/// (the chunk table's interpolation, feathered toward the dry terrain) is below
+/// sea level: `Auto` lets the sea fill it; in `AuthoredOnly` the region's only
+/// water is authored, so it is dry at any altitude.
+#[test]
+fn unauthored_columns_below_sea_level_stay_dry_in_authored_only_regions() {
+    let low = EngineColumn {
+        alt: 131.0,
+        water_level: 139.01,
+        ..engine()
+    };
+    // A feathered edge: weight 0.3 keeps most of the low engine altitude.
+    let low_dry = DryTerrain {
+        riverless_alt: 120.0,
+        riverless_alt_delta: 0.0,
+        warp: 0.0,
+        ..dry()
+    };
+    let auto = ground_col(AuthoredCell::None, SeaFill::Auto).resolve(low, low_dry);
+    let own = ground_col(AuthoredCell::None, SeaFill::AuthoredOnly).resolve(low, low_dry);
+    assert!(
+        own.alt < 139.0,
+        "the column really is below the sea: {}",
+        own.alt
+    );
+    assert_eq!(auto.water_level, 139.01, "Auto: the sea fills it");
+    assert_eq!(own.water_level, own.alt, "AuthoredOnly: dry, no fill");
+    assert_eq!(auto.alt, own.alt, "only the water level differs");
+    // Above the sea nothing changes: the sea's level stays, as before.
+    let high = ground_col(AuthoredCell::None, SeaFill::AuthoredOnly).resolve(engine(), dry());
+    let high_auto = ground_col(AuthoredCell::None, SeaFill::Auto).resolve(engine(), dry());
+    assert_eq!(high, high_auto);
+    assert_eq!(high.water_level, 139.01);
+    // A natural (partial-chunk) column is the engine's own, in both.
+    let mut natural = ground_col(AuthoredCell::None, SeaFill::AuthoredOnly);
+    natural.natural = true;
+    assert_eq!(natural.resolve(low, low_dry), low);
+}

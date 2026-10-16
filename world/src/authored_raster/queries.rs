@@ -121,6 +121,48 @@ impl WorldSim {
     /// outside the map.
     pub fn is_wet_at(&self, wpos: Vec2<i32>) -> Option<bool> { self.water_at(wpos).map(|w| w.wet) }
 
+    /// The wall of an authored dry pit: in a [`SeaFill::AuthoredOnly`] region,
+    /// the altitude of the lowest 4-neighbouring column that a column of
+    /// altitude `alt` stands more than a block above, `None` when there is
+    /// none. A neighbour counts when it is authored dry ground (exact, blend or
+    /// bank), or, for a column that is itself authored ground (`own_ground`),
+    /// an unauthored column of the region (the table's interpolation leaves a
+    /// dip beside a pit: its altitude is the table's, less a margin for the
+    /// engine's relief, which only lowers the floor into the neighbour's solid
+    /// ground). The blocks of the column above it are the exposed side of the
+    /// wall; world generation gives them the ground's material instead of the
+    /// engine's deep stone (`BlockGen::get_with_z_cache`).
+    pub fn dry_wall_floor_at(&self, wpos: Vec2<i32>, alt: f32, own_ground: bool) -> Option<f32> {
+        /// How far below the table's altitude an unauthored neighbour's
+        /// rendered top may lie.
+        const RELIEF_MARGIN: f32 = 6.0;
+        let rasters = self.authored_rasters.as_ref()?;
+        let mut floor: Option<f32> = None;
+        for d in [
+            Vec2::new(1, 0),
+            Vec2::new(-1, 0),
+            Vec2::new(0, 1),
+            Vec2::new(0, -1),
+        ] {
+            let n = wpos + d;
+            let Some((cell, SeaFill::AuthoredOnly, partial)) = rasters.cell_detail_at(n) else {
+                continue;
+            };
+            let margin = match cell {
+                AuthoredCell::Ground { .. } | AuthoredCell::Bank { .. } => 0.0,
+                AuthoredCell::None if own_ground && !partial => RELIEF_MARGIN,
+                _ => continue,
+            };
+            let Some(top) = self.ground_alt_at(n).map(|t| t - margin) else {
+                continue;
+            };
+            if top + 1.5 < alt {
+                floor = Some(floor.map_or(top, |f| f.min(top)));
+            }
+        }
+        floor
+    }
+
     /// The authored-aware ground altitude at a column: the single
     /// implementation every consumer that must stand on the real ground reads
     /// (`Land::ground_alt_at`, so site and plot generation, rtsim spawns, LOD

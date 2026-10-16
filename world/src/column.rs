@@ -1629,6 +1629,19 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             flood_block,
             governing_biome_profile: biome_profile,
             authored,
+            exposed_wall_floor: authored
+                .filter(|a| {
+                    a.settings.sea_fill == authored_raster::SeaFill::AuthoredOnly
+                        && !a.cell.is_wet()
+                })
+                .and_then(|a| {
+                    let own_ground = matches!(
+                        a.cell,
+                        authored_raster::AuthoredCell::Ground { .. }
+                            | authored_raster::AuthoredCell::Bank { .. }
+                    );
+                    sim.dry_wall_floor_at(wpos, alt, own_ground)
+                }),
 
             chunk: sim_chunk,
         })
@@ -1773,11 +1786,31 @@ pub struct ColumnSample<'a> {
     /// XINDELER: the authored raster column here (`None` outside every
     /// authored region). See `crate::authored_raster`.
     pub authored: Option<authored_raster::AuthoredColumn>,
+    /// XINDELER: the altitude of the lowest neighbouring authored dry ground
+    /// that this column stands more than a block above, in a
+    /// `sea_fill: AuthoredOnly` region (the wall of an authored dry pit);
+    /// `None` everywhere else. Blocks of the column above it are the wall's
+    /// exposed face and take the ground's material
+    /// (`world/src/block.rs`, `WorldSim::dry_wall_floor_at`).
+    pub exposed_wall_floor: Option<f32>,
 
     pub chunk: &'a SimChunk,
 }
 
 impl ColumnSample<'_> {
+    /// The block of an authored dry pit's exposed wall
+    /// ([`Self::exposed_wall_floor`]): the ground's own surface block of this
+    /// column (its kind and colour), so the wall reads as the same material
+    /// as the ground and not as the engine's deep stone.
+    pub fn dry_wall_block(&self) -> common::terrain::Block {
+        let kind = self.surface_block_override.unwrap_or(if self.snow_cover {
+            BlockKind::Snow
+        } else {
+            BlockKind::Grass
+        });
+        common::terrain::Block::new(kind, self.surface_color.map(|e| (e * 255.0) as u8))
+    }
+
     /// Whether procedural decorations (boulders, trees, scatter) must not be
     /// rooted here: authored water of a region that suppresses them.
     pub fn authored_procedural_suppressed(&self) -> bool {
