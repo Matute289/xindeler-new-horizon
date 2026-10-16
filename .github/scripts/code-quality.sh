@@ -37,11 +37,14 @@ time cargo clippy -p xindeler-world --locked \
 # first, but only when it really is a pointer (a local run with LFS must not
 # have its canary rewritten). The tests that need the `.vox` binaries are
 # `#[ignore]`d with that reason, and the chunk-generation golden test skips
-# itself without them.
+# itself without them. `economy::context::tests::test_economy_moderate_standalone`
+# is an upstream simulation that took ~4 minutes alone without the LFS assets
+# (it guards the economy, not this code) and is skipped here.
 if head -c 7 assets/common/canary.canary | grep -q '^version'; then
     printf 'VELOREN_CANARY_MAGIC\n' > assets/common/canary.canary
 fi &&
-time cargo test --locked -p xindeler-world --lib &&
+time cargo test --locked -p xindeler-world --lib \
+    -- --skip test_economy_moderate_standalone &&
 # terrain-probe is a binary crate: its tests are the bin's.
 time cargo test --locked -p xindeler-terrain-probe --bins &&
 
