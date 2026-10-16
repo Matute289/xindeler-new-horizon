@@ -374,7 +374,15 @@ pub enum SeaFill {
     /// ground and bank cells are dry at any altitude (a dry pit below 0 m)
     /// and wet cells may have a surface below sea level (a lake below 0 m).
     /// Unauthored cells keep the Stage-1 rule (engine terrain, no water
-    /// above sea level).
+    /// above sea level), and are dry below it too: an unauthored column is
+    /// never sea-filled, so a region that touches the natural ocean or an
+    /// authored sea must have its shore columns *authored* (wet or ground);
+    /// otherwise a dry strip meets a vertical water face at the region's
+    /// edge. The exporter owes this for every `AuthoredOnly` region that
+    /// borders the sea. Beside authored ground, a column standing more than a
+    /// block and a half above it is an exposed wall and takes the ground's
+    /// surface material (`WorldSim::dry_wall_floor_at`): the rule covers
+    /// every authored-ground edge of the region, ordinary cliffs included.
     AuthoredOnly,
 }
 

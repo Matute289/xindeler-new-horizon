@@ -48,6 +48,24 @@ pub struct WaterAt {
     pub source: WaterSource,
 }
 
+/// How much higher than a neighbouring authored dry column a column must
+/// stand, in blocks, for its side to count as an exposed wall
+/// ([`WorldSim::dry_wall_floor_at`]). One block is a step, not a wall; the
+/// extra half block keeps the one-block rounding of two columns' top blocks
+/// (`top_block_alt` and the engine's floor) from flagging flat ground. At a
+/// 4-neighbour spacing of one block this is a slope of about 56 degrees.
+const WALL_MIN_DROP: f32 = 1.5;
+
+/// How far below the chunk table's altitude an unauthored column's rendered
+/// top may lie, in blocks, when it is the neighbour of an authored ground
+/// column. The table's altitude is the base the engine's relief (noise, warp,
+/// cliff offset) is added to, and that relief only ever lowers the rendered
+/// top toward the solid ground of the neighbour. The value is an empirical
+/// bound measured on the calibration arena (no unflagged wall block in the
+/// whole-box scan of the pit-wall tests); too large a value only lowers the
+/// floor, so more of the wall takes the ground's material, never less.
+const UNAUTHORED_RELIEF_MARGIN: f32 = 6.0;
+
 impl WorldSim {
     /// The authored column at `wpos` (cell, feather, distance to water,
     /// region settings), `None` outside every authored region.
@@ -132,10 +150,18 @@ impl WorldSim {
     /// ground). The blocks of the column above it are the exposed side of the
     /// wall; world generation gives them the ground's material instead of the
     /// engine's deep stone (`BlockGen::get_with_z_cache`).
+    ///
+    /// The rule is deliberately **not pit-specific**: any column of an
+    /// `AuthoredOnly` region that stands more than `WALL_MIN_DROP` above an
+    /// authored ground or bank neighbour gets the surface material over the
+    /// whole height from that neighbour's top, so an ordinary cliff steeper
+    /// than about 56 degrees (or a terrace, or a shore bank beside unauthored
+    /// relief) next to authored ground is covered too. The requirement is that
+    /// a pit wall be the ground's material; keeping the rule generic avoids a
+    /// second, pit-only classification of authored ground. The interior blocks
+    /// of a flagged column become surface blocks too (grass is found when
+    /// digging into such a wall).
     pub fn dry_wall_floor_at(&self, wpos: Vec2<i32>, alt: f32, own_ground: bool) -> Option<f32> {
-        /// How far below the table's altitude an unauthored neighbour's
-        /// rendered top may lie.
-        const RELIEF_MARGIN: f32 = 6.0;
         let rasters = self.authored_rasters.as_ref()?;
         let mut floor: Option<f32> = None;
         for d in [
@@ -150,13 +176,13 @@ impl WorldSim {
             };
             let margin = match cell {
                 AuthoredCell::Ground { .. } | AuthoredCell::Bank { .. } => 0.0,
-                AuthoredCell::None if own_ground && !partial => RELIEF_MARGIN,
+                AuthoredCell::None if own_ground && !partial => UNAUTHORED_RELIEF_MARGIN,
                 _ => continue,
             };
             let Some(top) = self.ground_alt_at(n).map(|t| t - margin) else {
                 continue;
             };
-            if top + 1.5 < alt {
+            if top + WALL_MIN_DROP < alt {
                 floor = Some(floor.map_or(top, |f| f.min(top)));
             }
         }
