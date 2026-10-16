@@ -1,5 +1,5 @@
 mod bounded_writer;
-pub use bounded_writer::{BoundedMakeWriter, CompressionGuard, Rotation};
+pub use bounded_writer::{BoundedMakeWriter, CompressionGuard, FlushHandle, Rotation};
 
 mod lifecycle;
 pub use lifecycle::{ErrorDetectorLayer, LogLifecycleManager};
@@ -12,7 +12,7 @@ pub use telemetry_layer::{TelemetryFlushHandle, TelemetryLayer};
 #[cfg(not(feature = "tracy"))] use std::fs;
 use std::{
     path::Path,
-    sync::{Arc, atomic::AtomicBool},
+    sync::{Arc, Mutex, atomic::AtomicBool},
     time::Duration,
 };
 
@@ -41,18 +41,108 @@ const SERVER_RETENTION: Duration = Duration::from_secs(30 * 24 * 3600);
 pub struct LogGuards {
     pub has_errors: Arc<AtomicBool>,
     pub lifecycle: LogLifecycleManager,
-    _worker_guards: Vec<WorkerGuard>,
     _compress_guards: Vec<CompressionGuard>,
+}
+
+/// The non-blocking writers' guards. They live in a static (not in
+/// [`LogGuards`]) so a panic hook that must end the process with `exit` --
+/// which skips every destructor -- can still flush the log files, via
+/// [`flush_logs`].
+static WORKER_GUARDS: Mutex<Vec<WorkerGuard>> = Mutex::new(Vec::new());
+
+/// Flush handles of the synchronous file writers (`_err.log`, `_info.log`).
+/// Those buffer in a `BufWriter` owned by the global subscriber, which is never
+/// dropped, so without these the tail of the file is lost on `exit`.
+static FILE_FLUSH_HANDLES: Mutex<Vec<FlushHandle>> = Mutex::new(Vec::new());
+
+/// Flush handle of the telemetry drain thread, if the telemetry sink exists.
+#[cfg(feature = "logging-verbose")]
+static TELEMETRY_FLUSH: Mutex<Option<TelemetryFlushHandle>> = Mutex::new(None);
+
+/// Flush the log writers for a normal shutdown: the non-blocking stdout writer
+/// (dropping a `WorkerGuard` waits for its queued lines), the log files, and
+/// the telemetry drain. Blocking: it waits for a file writer's lock if a logger
+/// thread is mid-write, so the tail is never silently skipped. Safe to call
+/// more than once.
+///
+/// Must never be called from inside a tracing event callback (a `Layer` or
+/// `MakeWriter`) on a thread that is writing to these sinks: it would wait on a
+/// lock that same thread holds. Use [`flush_logs_best_effort`] from a panic
+/// hook.
+pub fn flush_logs() {
+    let guards = std::mem::take(&mut *WORKER_GUARDS.lock().unwrap_or_else(|e| e.into_inner()));
+    drop(guards);
+
+    let handles: Vec<FlushHandle> = FILE_FLUSH_HANDLES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    for h in handles {
+        h.flush();
+    }
+
     #[cfg(feature = "logging-verbose")]
-    telemetry_flush: Option<TelemetryFlushHandle>,
+    {
+        let h = TELEMETRY_FLUSH
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(h) = h
+            && !h.flush()
+        {
+            eprintln!("[log] telemetry flush timed out");
+        }
+    }
+}
+
+/// Like [`flush_logs`] but for a panic hook: it never blocks on a lock. If the
+/// panicking thread was itself mid-write it may hold a file writer's lock; that
+/// file is then skipped (its buffered tail stays unflushed, reported on stderr)
+/// rather than deadlocking the hook. Telemetry waits at most 1s.
+pub fn flush_logs_best_effort() {
+    let guards = match WORKER_GUARDS.try_lock() {
+        Ok(mut g) => std::mem::take(&mut *g),
+        Err(std::sync::TryLockError::Poisoned(e)) => std::mem::take(&mut *e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            eprintln!("[log] stdout writer guards busy, skipped");
+            Vec::new()
+        },
+    };
+    drop(guards);
+
+    let handles: Vec<FlushHandle> = match FILE_FLUSH_HANDLES.try_lock() {
+        Ok(g) => g.clone(),
+        Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().clone(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            eprintln!("[log] file flush handles busy, skipped");
+            Vec::new()
+        },
+    };
+    for h in handles {
+        if !h.try_flush() {
+            eprintln!("[log] a log file was busy or failed to flush, its tail may be lost");
+        }
+    }
+
+    #[cfg(feature = "logging-verbose")]
+    {
+        let h = match TELEMETRY_FLUSH.try_lock() {
+            Ok(g) => g.clone(),
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().clone(),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        };
+        if let Some(h) = h
+            && !h.flush_bounded()
+        {
+            eprintln!("[log] telemetry flush skipped or timed out");
+        }
+    }
 }
 
 impl Drop for LogGuards {
     fn drop(&mut self) {
-        #[cfg(feature = "logging-verbose")]
-        if let Some(h) = &self.telemetry_flush {
-            h.flush();
-        }
+        // Flush the writers first, then the compress guards (field drop) exit.
+        flush_logs();
     }
 }
 
@@ -265,6 +355,8 @@ pub fn init_split_logs(prefix: &str, logs_dir: &Path) -> LogGuards {
         BoundedMakeWriter::new(logs_dir, &format!("{prefix}_err"), Rotation::Daily, err_max);
 
     #[allow(unused_mut)]
+    let mut file_flush: Vec<FlushHandle> = vec![err_writer.flush_handle()];
+    #[allow(unused_mut)]
     let mut worker_guards: Vec<WorkerGuard> = vec![term_guard];
     #[allow(unused_mut)]
     let mut compress_guards: Vec<CompressionGuard> = vec![err_compress];
@@ -284,6 +376,7 @@ pub fn init_split_logs(prefix: &str, logs_dir: &Path) -> LogGuards {
             info_max,
         );
         compress_guards.push(info_compress);
+        file_flush.push(info_writer.flush_handle());
         Some(
             fmt_layer()
                 .with_writer(info_writer)
@@ -296,16 +389,15 @@ pub fn init_split_logs(prefix: &str, logs_dir: &Path) -> LogGuards {
 
     // Optional telemetry sink (logging-verbose only)
     #[cfg(feature = "logging-verbose")]
-    let (telemetry_layer, telemetry_flush): (
-        Option<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>>,
-        Option<TelemetryFlushHandle>,
-    ) = match TelemetryLayer::new(logs_dir, prefix) {
-        Some(t) => {
-            let h = t.flush_handle();
-            (Some(t.boxed()), Some(h))
-        },
-        None => (None, None),
-    };
+    let telemetry_layer: Option<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> =
+        match TelemetryLayer::new(logs_dir, prefix) {
+            Some(t) => {
+                let h = t.flush_handle();
+                *TELEMETRY_FLUSH.lock().unwrap_or_else(|e| e.into_inner()) = Some(h);
+                Some(t.boxed())
+            },
+            None => None,
+        };
     #[cfg(not(feature = "logging-verbose"))]
     let telemetry_layer: Option<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = None;
 
@@ -326,13 +418,20 @@ pub fn init_split_logs(prefix: &str, logs_dir: &Path) -> LogGuards {
         .with(telemetry_layer)
         .init();
 
+    WORKER_GUARDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .extend(worker_guards);
+    {
+        let mut handles = FILE_FLUSH_HANDLES.lock().unwrap_or_else(|e| e.into_inner());
+        handles.clear();
+        handles.extend(file_flush);
+    }
+
     LogGuards {
         has_errors,
         lifecycle,
-        _worker_guards: worker_guards,
         _compress_guards: compress_guards,
-        #[cfg(feature = "logging-verbose")]
-        telemetry_flush,
     }
 }
 

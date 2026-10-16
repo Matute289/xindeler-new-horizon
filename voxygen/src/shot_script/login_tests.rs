@@ -408,23 +408,32 @@ fn owner_and_mode_rules() {
     assert_eq!(owner_mode_problem(501, 0o700, 501), None);
     assert_eq!(owner_mode_problem(501, 0o755, 501), None);
     assert!(owner_mode_problem(0, 0o700, 501).is_some());
-    assert!(owner_mode_problem(501, 0o770, 501).is_some());
+    // Group-writable is accepted; only world-writable is refused.
+    assert_eq!(owner_mode_problem(501, 0o770, 501), None);
+    assert_eq!(owner_mode_problem(501, 0o775, 501), None);
     assert!(owner_mode_problem(501, 0o707, 501).is_some());
+    assert!(owner_mode_problem(501, 0o702, 501).is_some());
     assert!(owner_mode_problem(501, 0o1777, 501).is_some());
 }
 
 #[cfg(unix)]
 #[test]
-fn existing_out_dir_must_not_be_group_or_world_writable() {
+fn existing_out_dir_must_not_be_world_writable() {
     use std::os::unix::fs::PermissionsExt;
     let dir = scratch("mode");
     std::fs::create_dir_all(&dir).unwrap();
-    for (mode, accepted) in [(0o700, true), (0o755, true), (0o775, false), (0o777, false)] {
+    for (mode, accepted) in [
+        (0o700, true),
+        (0o755, true),
+        (0o775, true),
+        (0o777, false),
+        (0o772, false),
+    ] {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
         let got = prepare_out_dir(dir.as_os_str());
         assert_eq!(got.is_ok(), accepted, "mode {mode:o}: {got:?}");
         if let Err(e) = got {
-            assert!(e.to_string().contains("group or others"), "{e}");
+            assert!(e.to_string().contains("writable by others"), "{e}");
         }
     }
     // The owner probe leaves nothing behind.
@@ -470,4 +479,202 @@ fn script_view_distance_overrides_terrain_and_caps_entities() {
     assert_eq!((vd.terrain, vd.entity), (12, 6));
     let vd = script_view_distances(3, settings);
     assert_eq!((vd.terrain, vd.entity), (3, 3));
+}
+
+#[test]
+fn intro_and_settings_are_not_persisted_by_a_shot_run() {
+    // The decision is a pure function of "is a script active".
+    assert!(!super::login::persist_decision_for_test(true));
+    assert!(super::login::persist_decision_for_test(false));
+}
+
+#[test]
+fn phase_deadlines_use_the_injected_clock() {
+    let t0 = Instant::now();
+    let limit = Duration::from_secs(60);
+    assert!(!phase_expired(t0, t0 + Duration::from_secs(60), limit));
+    assert!(phase_expired(t0, t0 + Duration::from_secs(61), limit));
+    // Never earlier than the connect deadline.
+    assert_eq!(
+        char_select_limit(Duration::from_secs(30)),
+        Duration::from_secs(CHAR_SELECT_TIMEOUT_S)
+    );
+    assert_eq!(
+        char_select_limit(Duration::from_secs(300)),
+        Duration::from_secs(300)
+    );
+    assert_eq!(
+        world_entry_limit(Duration::from_secs(30)),
+        Duration::from_secs(WORLD_ENTRY_TIMEOUT_S)
+    );
+}
+
+#[test]
+fn char_select_expires_without_progress() {
+    let mut d = CharSelectDriver::default();
+    let t0 = Instant::now();
+    let limit = Duration::from_secs(60);
+    // The clock starts at the first call.
+    assert!(!d.expired(t0, limit));
+    assert!(!d.expired(t0 + Duration::from_secs(59), limit));
+    assert!(d.expired(t0 + Duration::from_secs(61), limit));
+}
+
+#[test]
+fn stale_run_outputs_are_recognised_and_removed() {
+    for name in [
+        "001_a.png",
+        "123_deck.noon.png",
+        "1000_x.png",
+        "report.json",
+        "report.json.42.partial",
+    ] {
+        assert!(is_run_output(name), "{name}");
+    }
+    for name in [
+        "notes.txt",
+        "01_a.png",
+        "a_001.png",
+        "001.png",
+        "001_a.jpg",
+        "x.json",
+    ] {
+        assert!(!is_run_output(name), "{name}");
+    }
+    let dir = scratch("stale");
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in ["001_a.png", "keep.txt"] {
+        std::fs::write(dir.join(f), b"x").unwrap();
+    }
+    std::fs::write(
+        dir.join("report.json"),
+        report_json(&["001_a.png", "002_dir.png"]),
+    )
+    .unwrap();
+    // A directory with a matching name is left alone.
+    std::fs::create_dir(dir.join("002_dir.png")).unwrap();
+    assert_eq!(clean_run_outputs(&dir).unwrap(), 2);
+    let mut left: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["002_dir.png", "keep.txt"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn report_json(files: &[&str]) -> String {
+    let steps: Vec<String> = files
+        .iter()
+        .map(|f| format!(r#"{{"screenshot":{{"file":"{f}"}}}}"#))
+        .collect();
+    format!(r#"{{"steps":[{}]}}"#, steps.join(","))
+}
+
+#[test]
+fn only_files_named_by_the_previous_report_are_removed() {
+    let dir = scratch("named");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("report.json"), report_json(&["001_a.png"])).unwrap();
+    for f in [
+        "001_a.png",
+        "002_mine.png",
+        "report.json.7.partial",
+        "keep.txt",
+    ] {
+        std::fs::write(dir.join(f), b"x").unwrap();
+    }
+    // report.json, its partial and the named screenshot; the user's own
+    // look-alike screenshot stays.
+    assert_eq!(clean_run_outputs(&dir).unwrap(), 3);
+    let mut left: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["002_mine.png", "keep.txt"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_non_empty_directory_without_a_report_is_refused() {
+    let dir = scratch("refuse");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("001_mine.png"), b"x").unwrap();
+    let err = clean_run_outputs(&dir).expect_err("must refuse");
+    assert!(err.to_string().contains("report.json"), "{err}");
+    assert!(dir.join("001_mine.png").exists());
+    // An unreadable report counts as none.
+    std::fs::write(dir.join("report.json"), b"not json").unwrap();
+    assert!(clean_run_outputs(&dir).is_err());
+    assert!(dir.join("001_mine.png").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+    // An empty directory is fine.
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(clean_run_outputs(&dir).unwrap(), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn test_setup() -> ShotSetup {
+    let out = scratch("prep");
+    let out_s = out.to_str().unwrap().to_owned();
+    let s = setup_with(
+        Ok(example()),
+        env(&[(SERVER_ENV, "127.0.0.1:14004"), (OUT_ENV, &out_s)]),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&out).ok();
+    s
+}
+
+#[test]
+fn first_run_preset_does_not_overwrite_the_script_window_or_persist_overrides() {
+    use crate::settings::{GraphicsSettings, Settings};
+    let setup = test_setup();
+    let mut settings = Settings::default();
+    let user_intro = settings.interface.intro_show;
+    let mut saved: Option<Settings> = None;
+    prepare_settings_with(
+        Some(&setup),
+        &mut settings,
+        true,
+        || {
+            let mut g = GraphicsSettings::default();
+            g.window.size = [333, 222];
+            g.window.maximised = true;
+            Some(g)
+        },
+        |s| saved = Some(s.clone()),
+    );
+    // In memory: the script's window survived the preset.
+    let (w, h) = setup.script.window;
+    assert_eq!(settings.graphics.window.size, [w, h]);
+    assert!(!settings.graphics.window.maximised);
+    assert!(matches!(
+        settings.interface.intro_show,
+        crate::hud::Intro::Never
+    ));
+    // On disk: the preset was saved, none of the overrides were.
+    let saved = saved.expect("first run saves the preset");
+    assert_eq!(saved.graphics.window.size, [333, 222]);
+    assert!(saved.graphics.window.maximised);
+    assert!(!matches!(
+        saved.interface.intro_show,
+        crate::hud::Intro::Never
+    ));
+    let _ = user_intro;
+    restore_settings(&mut settings);
+}
+
+#[test]
+fn later_runs_neither_detect_nor_save() {
+    use crate::settings::Settings;
+    let mut settings = Settings::default();
+    prepare_settings_with(
+        None,
+        &mut settings,
+        false,
+        || panic!("not a first run"),
+        |_| panic!("not a first run"),
+    );
 }

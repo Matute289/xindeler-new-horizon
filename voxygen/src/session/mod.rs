@@ -699,8 +699,9 @@ impl SessionState {
                 cam.set_orientation_instant(Vec3::new(yaw_rad, pitch_rad, 0.0));
             },
             SessionEffect::Minimap(show) => {
-                // Settings are saved on exit; the original value is put
-                // back first (see `shot_script::login::restore_settings`).
+                // A shot run does not save the settings (see
+                // `shot_script::login::persist_on_exit`); the original value
+                // is still remembered so `restore_settings` can put it back.
                 crate::shot_script::login::remember_minimap(
                     global_state.settings.interface.minimap_show,
                 );
@@ -2766,6 +2767,11 @@ impl PlayState for SessionState {
                 let scene_state = crate::shot_script::driver::SceneState {
                     camera_settled: self.scene.camera().is_settled(),
                 };
+                let resolution = global_state.window.renderer().resolution();
+                driver.note_window(
+                    [resolution.x, resolution.y],
+                    global_state.window.scale_factor(),
+                );
                 let (status, effect) = driver.tick(
                     &mut self.client.borrow_mut(),
                     self.scene.terrain(),
@@ -2774,7 +2780,7 @@ impl PlayState for SessionState {
                 if let Some(effect) = effect {
                     self.apply_shot_effect(effect, global_state);
                 }
-                if status == crate::shot_script::driver::DriverStatus::Finished {
+                if status != crate::shot_script::driver::DriverStatus::Running {
                     return PlayStateResult::Shutdown;
                 }
             }

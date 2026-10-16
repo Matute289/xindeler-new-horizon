@@ -119,13 +119,21 @@ pub fn run(
                 // settings changes in the saved file.
                 #[cfg(feature = "shot-script")]
                 crate::shot_script::login::restore_settings(&mut global_state.settings);
+                // An unattended shot run changes settings in memory only and
+                // never writes the user's settings or profile.
+                #[cfg(feature = "shot-script")]
+                let persist = crate::shot_script::login::persist_on_exit();
+                #[cfg(not(feature = "shot-script"))]
+                let persist = true;
                 // Save any unsaved changes to settings and profile
-                global_state
-                    .settings
-                    .save_to_file_warn(&global_state.config_dir);
-                global_state
-                    .profile
-                    .save_to_file_warn(&global_state.config_dir);
+                if persist {
+                    global_state
+                        .settings
+                        .save_to_file_warn(&global_state.config_dir);
+                    global_state
+                        .profile
+                        .save_to_file_warn(&global_state.config_dir);
+                }
             },
             _ => {},
         }

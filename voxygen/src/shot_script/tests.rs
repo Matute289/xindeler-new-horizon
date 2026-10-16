@@ -299,3 +299,60 @@ fn time_names_match_time_command() {
     server_names.sort();
     assert_eq!(ours, server_names, "TIME_NAMES vs server /time arms");
 }
+
+#[test]
+fn positions_and_counts_are_bounded() {
+    for (step, needle) in [
+        ("Teleport(wpos: (99999999.0, 2.0, 3.0))", "wpos.x"),
+        ("Teleport(wpos: (1.0, -5.0, 3.0))", "wpos.y"),
+        ("Teleport(wpos: (1.0, 2.0, 1.0e9))", "wpos.z"),
+        (
+            "Viewpoint(cam: (1.0, 2.0, 1.0e9), look_at: (1.0, 5.0, 3.0))",
+            "cam.z",
+        ),
+        (
+            "CromatolisTeleport(px: 70000, py: 2, z_above_ground: 2.0)",
+            "map pixel",
+        ),
+        ("WaitSeconds(100000.0)", "seconds"),
+        ("WaitForTerrain(timeout_s: 100000.0)", "timeout_s"),
+    ] {
+        let e = err(&script(step));
+        assert!(e.message.contains(needle), "{step}: {e}");
+    }
+    let e = err(&script("Time(\"noon\")").replace("settle_frames: 30", "settle_frames: 100000"));
+    assert!(e.message.contains("settle_frames"), "{e}");
+    let e = err(&script("Time(\"noon\")").replace("view_distance: 12", "view_distance: 5000"));
+    assert!(e.message.contains("view_distance"), "{e}");
+}
+
+#[test]
+fn screenshot_count_is_capped_at_the_ordinal_width() {
+    let ok: String = (0..999)
+        .map(|i| format!("Screenshot(name: \"s{i}\"),"))
+        .collect();
+    assert!(ShotScript::parse(&script(&ok), "t.ron").is_ok());
+    let too_many = format!("{ok}Screenshot(name: \"one_more\"),");
+    let e = err(&script(&too_many));
+    assert!(e.message.contains("999"), "{e}");
+}
+
+#[test]
+fn window_mismatch_notes_a_size_the_window_manager_changed() {
+    use super::report::window_mismatch;
+    assert_eq!(
+        window_mismatch([1920, 1080], Some([1920, 1080]), Some(1.0)),
+        None
+    );
+    // HiDPI honouring the request: no mismatch.
+    assert_eq!(
+        window_mismatch([1920, 1080], Some([3840, 2160]), Some(2.0)),
+        None
+    );
+    assert_eq!(window_mismatch([1920, 1080], None, None), None);
+    let note = window_mismatch([1920, 1080], Some([2560, 1440]), Some(1.0)).unwrap();
+    assert!(
+        note.contains("2560x1440") && note.contains("1920x1080"),
+        "{note}"
+    );
+}

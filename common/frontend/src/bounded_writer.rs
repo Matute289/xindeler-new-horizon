@@ -47,6 +47,41 @@ pub struct BoundedMakeWriter {
     compress_tx: mpsc::SyncSender<CompressMsg>,
 }
 
+/// Cheap handle that flushes a [`BoundedMakeWriter`]'s file buffer without
+/// owning the writer (which lives inside the global subscriber and is never
+/// dropped, so its `BufWriter` is otherwise only flushed on rotation).
+#[derive(Clone)]
+pub struct FlushHandle {
+    state: Arc<Mutex<WriterState>>,
+}
+
+impl FlushHandle {
+    /// Flush the buffered bytes to the file. Never blocks: if the lock is held
+    /// (a thread is mid-write, possibly the panicking one) the flush is
+    /// skipped and `false` is returned.
+    pub fn try_flush(&self) -> bool {
+        use std::sync::TryLockError;
+        let mut state = match self.state.try_lock() {
+            Ok(s) => s,
+            Err(TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(TryLockError::WouldBlock) => return false,
+        };
+        state.writer.flush().is_ok()
+    }
+
+    /// Flush the buffered bytes to the file, waiting for the lock if a thread
+    /// is mid-write. For the normal shutdown path, where skipping a busy
+    /// writer would silently lose the log tail. A poisoned lock is recovered.
+    /// Returns whether the flush succeeded.
+    ///
+    /// Must not be called from inside a tracing event callback on a thread
+    /// that is currently writing to this same writer (it would self-deadlock).
+    pub fn flush(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.writer.flush().is_ok()
+    }
+}
+
 /// Held by the caller to keep the compression thread alive.
 pub struct CompressionGuard {
     handle: Option<thread::JoinHandle<()>>,
@@ -68,6 +103,13 @@ impl Drop for CompressionGuard {
 }
 
 impl BoundedMakeWriter {
+    /// A handle that can flush this writer's file buffer later.
+    pub fn flush_handle(&self) -> FlushHandle {
+        FlushHandle {
+            state: Arc::clone(&self.state),
+        }
+    }
+
     pub fn new(
         base_dir: &Path,
         prefix: &str,
@@ -273,6 +315,64 @@ impl<'a> MakeWriter<'a> for BoundedMakeWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flush_handle_writes_buffered_line_to_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (writer, _guard) = BoundedMakeWriter::new(dir.path(), "fh", Rotation::Daily, 1_000_000);
+        let handle = writer.flush_handle();
+        {
+            let mut w = writer.make_writer();
+            w.write_all(b"hello tail\n").unwrap();
+        }
+        let read_all = || {
+            fs::read_dir(dir.path())
+                .unwrap()
+                .flatten()
+                .map(|e| fs::read_to_string(e.path()).unwrap_or_default())
+                .collect::<String>()
+        };
+        assert!(
+            !read_all().contains("hello tail"),
+            "line should be buffered"
+        );
+        assert!(handle.try_flush());
+        assert!(read_all().contains("hello tail"));
+    }
+
+    #[test]
+    fn blocking_flush_waits_for_a_held_lock_while_try_flush_skips() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (writer, _guard) = BoundedMakeWriter::new(dir.path(), "bf", Rotation::Daily, 1_000_000);
+        let handle = writer.flush_handle();
+        {
+            let mut w = writer.make_writer();
+            w.write_all(b"late tail\n").unwrap();
+        }
+        let read_all = || {
+            fs::read_dir(dir.path())
+                .unwrap()
+                .flatten()
+                .map(|e| fs::read_to_string(e.path()).unwrap_or_default())
+                .collect::<String>()
+        };
+
+        let state = Arc::clone(&handle.state);
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _held = state.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+        });
+        locked_rx.recv().unwrap();
+
+        assert!(!handle.try_flush(), "try_flush must skip a held lock");
+        assert!(!read_all().contains("late tail"));
+        assert!(handle.flush(), "blocking flush waits for the lock");
+        assert!(read_all().contains("late tail"));
+        holder.join().unwrap();
+    }
 
     /// Regression test for the production shutdown hang (2026-09-06):
     /// `CompressionGuard::drop` used to `.join()` a thread whose loop

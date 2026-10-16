@@ -161,12 +161,12 @@ fn time_fails_when_the_server_ignores_it() {
 #[test]
 fn command_args_are_separate_and_fixed_precision() {
     let ctx = Fake::new();
-    let mut r = StepRunner::new(&script("Teleport(wpos: (16384.0, -2.125, 4150.333))", 0));
+    let mut r = StepRunner::new(&script("Teleport(wpos: (16384.0, 2.125, 4150.333))", 0));
     assert_eq!(
         r.tick(&ctx),
         Some(Action::SendCommand(ShotCommand {
             name: "goto",
-            args: vec!["16384.00".into(), "-2.12".into(), "4150.33".into()],
+            args: vec!["16384.00".into(), "2.12".into(), "4150.33".into()],
         }))
     );
 }
@@ -233,10 +233,15 @@ fn rejected_cromatolis_teleport_fails() {
 #[test]
 fn cromatolis_pixel_beyond_i32_is_refused_before_sending() {
     let ctx = Fake::new();
-    let mut r = StepRunner::new(&script(
-        "CromatolisTeleport(px: 3000000000, py: 1, z_above_ground: 2.0)",
-        0,
-    ));
+    // The schema bounds the pixel far below `i32::MAX`; the runner's own
+    // check is a second line of defence, so build the script unvalidated.
+    let mut script = script("Sample(label: \"x\")", 0);
+    script.steps = vec![crate::shot_script::Step::CromatolisTeleport {
+        px: 3_000_000_000,
+        py: 1,
+        z_above_ground: 2.0,
+    }];
+    let mut r = StepRunner::new(&script);
     assert_eq!(r.tick(&ctx), None);
     assert!(failed_with(&outcomes(&r)[0], "out of range"));
 }
@@ -1096,6 +1101,125 @@ fn camera_step_after_viewpoint_returns_to_the_player() {
     assert_eq!(ctx.center_asked.get(), Some(None), "player-centred again");
 }
 
+#[test]
+fn time_without_an_observable_time_of_day_fails_the_step() {
+    let ctx = Fake::new();
+    ctx.tod.set(None);
+    let mut r = StepRunner::new(&script(r#"Time("noon")"#, 0));
+    assert_eq!(line(r.tick(&ctx)).as_deref(), Some("/time noon"));
+    ctx.advance(0.1);
+    r.tick(&ctx);
+    assert!(failed_with(&outcomes(&r)[0], "no time of day"));
+}
+
+#[test]
+fn screenshot_resends_the_time_right_before_the_capture() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    ctx.tod.set(Some(12.0 * 3600.0));
+    let mut r = StepRunner::new(&script(
+        r#"Time("noon"), WaitSeconds(1.0), Screenshot(name: "a")"#,
+        0,
+    ));
+    assert_eq!(line(r.tick(&ctx)).as_deref(), Some("/time noon"));
+    ctx.advance(0.1);
+    r.tick(&ctx);
+    assert_eq!(outcomes(&r), vec![StepOutcome::Done]);
+    // Game time ran far past noon while the terrain was loading.
+    ctx.tod.set(Some(12.0 * 3600.0 + 20_000.0));
+    let mut sent = Vec::new();
+    let mut shot_at = None;
+    for i in 0..200 {
+        ctx.advance(0.3);
+        match r.tick(&ctx) {
+            Some(Action::SendCommand(c)) => {
+                sent.push(c.to_string());
+                // The server applies it.
+                ctx.tod.set(Some(12.0 * 3600.0));
+            },
+            Some(Action::Screenshot { .. }) => {
+                shot_at = Some(i);
+                break;
+            },
+            _ => {},
+        }
+    }
+    assert!(shot_at.is_some(), "capture requested");
+    assert_eq!(
+        sent,
+        vec!["/time noon".to_owned()],
+        "re-sent once, before the shot"
+    );
+}
+
+#[test]
+fn screenshot_waits_for_the_resent_time_then_flags_a_timeout() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    ctx.tod.set(Some(12.0 * 3600.0));
+    let mut r = StepRunner::new(&script(r#"Time("noon"), Screenshot(name: "a")"#, 0));
+    r.tick(&ctx);
+    ctx.advance(0.1);
+    r.tick(&ctx);
+    assert_eq!(outcomes(&r), vec![StepOutcome::Done]);
+    // The time drifts and the server ignores the second `/time`.
+    ctx.tod.set(Some(3.0 * 3600.0));
+    let mut saw_shot = false;
+    for _ in 0..400 {
+        ctx.advance(0.3);
+        if matches!(r.tick(&ctx), Some(Action::Screenshot { .. })) {
+            saw_shot = true;
+            *ctx.shot.borrow_mut() = Some(ShotOutcome::Written);
+        }
+        if r.is_finished() {
+            break;
+        }
+    }
+    assert!(saw_shot, "the shot is still taken");
+    assert!(failed_with(&outcomes(&r)[1], "time of day"));
+}
+
+#[test]
+fn viewpoint_with_no_settle_frames_still_waits_for_the_camera() {
+    let ctx = Fake::new();
+    ctx.terrain.set(READY);
+    ctx.camera_settled.set(false);
+    let mut r = StepRunner::new(&script(
+        "Viewpoint(cam: (100.0, 200.0, 300.0), look_at: (100.0, 300.0, 300.0))",
+        0,
+    ));
+    r.tick(&ctx);
+    frames(&mut r, &ctx, 12, 0.1);
+    assert!(r.records().is_empty(), "camera has not settled");
+    ctx.camera_settled.set(true);
+    frames(&mut r, &ctx, 3, 0.3);
+    assert_eq!(outcomes(&r), vec![StepOutcome::Done]);
+}
+
+#[test]
+fn screenshot_error_reasons_carry_file_names_only() {
+    use super::capture::ShotError;
+    use std::path::PathBuf;
+    let path = PathBuf::from("/Users/someone/private/out/001_a.png");
+    for e in [
+        ShotError::InvalidPath {
+            path: path.clone(),
+            reason: "bad",
+        },
+        ShotError::Write {
+            path: path.clone(),
+            error: format!("os error at {}", path.display()),
+        },
+        ShotError::Dropped { path: path.clone() },
+    ] {
+        let reason = e.report_reason();
+        assert!(!reason.contains("/Users"), "{reason}");
+        assert!(reason.contains("001_a.png"), "{reason}");
+        // The log keeps the full path.
+        assert!(e.to_string().contains("/Users/someone"), "{e}");
+    }
+}
+
 // ---- report.json ----
 
 mod report_tests {
@@ -1117,6 +1241,8 @@ mod report_tests {
             tool_version: None,
             engine_commit: Some("0123abcd".into()),
             client_view_distance: Some(12),
+            window_requested: [1920, 1080],
+            window_actual: Some(([3840, 2160], 2.0)),
             abort_reason: None,
             abort_exit_code,
         }
@@ -1439,6 +1565,47 @@ mod report_tests {
             serde_json::from_slice::<Report>(&std::fs::read(dir.join(REPORT_FILE)).unwrap())
                 .is_ok()
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn report_records_the_requested_and_actual_window() {
+        let r = StepRunner::new(&script("Sample(label: \"a\")", 0));
+        let rep = build_report(&r, &info(1), &no_files);
+        assert_eq!(rep.window.requested, [1920, 1080]);
+        assert_eq!(rep.window.actual, Some([3840, 2160]));
+        assert_eq!(rep.window.scale_factor, Some(2.0));
+        let mut i = info(1);
+        i.window_actual = None;
+        let rep = build_report(&r, &i, &no_files);
+        assert_eq!((rep.window.actual, rep.window.scale_factor), (None, None));
+    }
+
+    #[test]
+    fn only_the_first_report_writer_wins() {
+        // `claim_report` is process-global; the pure helper is what is
+        // exercised here through a fresh flag.
+        use std::sync::atomic::AtomicBool;
+        let flag = AtomicBool::new(false);
+        assert!(report::claim_for_test(&flag));
+        assert!(!report::claim_for_test(&flag), "a second writer is refused");
+    }
+
+    #[test]
+    fn panic_report_keeps_the_steps_that_ran_and_says_101() {
+        let r = run_mixed(ShotOutcome::Written);
+        let mut rep = build_report(&r, &info(1), &no_files);
+        let steps = rep.steps.clone();
+        report::finalize_panic(&mut rep, "2026-10-15T10:02:00.000Z".into(), 120.0);
+        assert_eq!(rep.abort_reason.as_deref(), Some("panic"));
+        assert_eq!(rep.exit_code, 101);
+        assert_eq!(rep.ended_at, "2026-10-15T10:02:00.000Z");
+        assert_eq!(rep.steps, steps);
+        // Still valid, round-trippable JSON.
+        let dir = scratch("panic");
+        let path = write_report(&dir, &rep).unwrap();
+        let back: Report = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(back.exit_code, 101);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

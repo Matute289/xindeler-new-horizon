@@ -35,12 +35,37 @@ pub const TIME_NAMES: &[&str] = &[
 const WINDOW_MIN: u32 = 320;
 const WINDOW_MAX: u32 = 7680;
 
+/// Horizontal world coordinates (`x`, `y`) a script may name, in blocks. A
+/// sanity bound well above the largest authored map, so a typo such as an
+/// extra digit is refused at load instead of teleporting into the void.
+pub const WORLD_COORD_MAX: f32 = 65_536.0;
+/// Vertical bounds for a world position, in blocks.
+pub const WORLD_Z_MIN: f32 = -1_024.0;
+pub const WORLD_Z_MAX: f32 = 16_384.0;
+/// Largest map pixel coordinate `CromatolisTeleport` accepts.
+pub const MAP_PIXEL_MAX: u32 = 65_535;
+/// Upper bound of `defaults.settle_frames`.
+pub const SETTLE_FRAMES_MAX: u32 = 600;
+/// Upper bound of `defaults.view_distance` (the client's selectable maximum).
+pub const VIEW_DISTANCE_MAX: u32 = client::MAX_SELECTABLE_VIEW_DISTANCE;
+/// Upper bound of any wait or timeout, in seconds.
+pub const SECONDS_MAX: f32 = 3_600.0;
+/// Most `Screenshot` steps a script may contain: file names carry a
+/// three-digit ordinal (`NNN_<name>.png`).
+pub const MAX_SCREENSHOTS: usize = 999;
+
 /// A complete shot script.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ShotScript {
     pub version: u32,
-    /// Window size in pixels, fixed so screenshots are comparable run to run.
+    /// Window size, in logical pixels, requested at startup so screenshots are
+    /// comparable run to run. Applied in memory only (never saved to the
+    /// user's settings); the report records the size the renderer actually
+    /// ended up with, which is physical pixels and so larger on a HiDPI
+    /// display (a 1920x1080 request gives 3840x2160 screenshots at scale
+    /// factor 2; the report notes a `mismatch` when the size differs from
+    /// `window * scale_factor`).
     pub window: (u32, u32),
     pub defaults: Defaults,
     pub steps: Vec<Step>,
@@ -66,7 +91,10 @@ pub struct Defaults {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub enum Step {
-    /// Set the time of day (one of [`TIME_NAMES`]).
+    /// Set the time of day (one of [`TIME_NAMES`]). The game clock keeps
+    /// running (much faster than real time), so the same time is sent again
+    /// right before every later `Screenshot`, which makes the shot show the
+    /// scripted time however long the terrain took to load.
     Time(String),
     /// Teleport the player to a world position.
     Teleport { wpos: (f32, f32, f32) },
@@ -234,8 +262,17 @@ impl ShotScript {
             )));
         }
         let d = &self.defaults;
-        if d.view_distance == 0 {
-            return Err(top("defaults.view_distance must be at least 1".into()));
+        if d.view_distance == 0 || d.view_distance > VIEW_DISTANCE_MAX {
+            return Err(top(format!(
+                "defaults.view_distance must be 1..={VIEW_DISTANCE_MAX}, got {}",
+                d.view_distance
+            )));
+        }
+        if d.settle_frames > SETTLE_FRAMES_MAX {
+            return Err(top(format!(
+                "defaults.settle_frames must be at most {SETTLE_FRAMES_MAX}, got {}",
+                d.settle_frames
+            )));
         }
         if d.terrain_radius_chunks == 0 {
             return Err(top(
@@ -243,6 +280,12 @@ impl ShotScript {
             ));
         }
         positive("defaults.terrain_timeout_s", d.terrain_timeout_s).map_err(top)?;
+        at_most(
+            "defaults.terrain_timeout_s",
+            d.terrain_timeout_s,
+            SECONDS_MAX,
+        )
+        .map_err(top)?;
         if self.steps.is_empty() {
             return Err(top("script has no steps".into()));
         }
@@ -250,6 +293,18 @@ impl ShotScript {
             return Err(top(format!(
                 "script has {} steps; the limit is {MAX_STEPS}",
                 self.steps.len()
+            )));
+        }
+
+        let shots = self
+            .steps
+            .iter()
+            .filter(|s| matches!(s, Step::Screenshot { .. }))
+            .count();
+        if shots > MAX_SCREENSHOTS {
+            return Err(top(format!(
+                "script has {shots} Screenshot steps; the limit is {MAX_SCREENSHOTS} (file names \
+                 carry a three-digit ordinal)"
             )));
         }
 
@@ -308,10 +363,28 @@ fn positive(what: &str, v: f32) -> Result<(), String> {
     }
 }
 
-fn finite3(what: &str, v: (f32, f32, f32)) -> Result<(), String> {
-    finite(&format!("{what}.x"), v.0)?;
-    finite(&format!("{what}.y"), v.1)?;
-    finite(&format!("{what}.z"), v.2)
+fn at_most(what: &str, v: f32, max: f32) -> Result<(), String> {
+    if v <= max {
+        Ok(())
+    } else {
+        Err(format!("{what} must be at most {max}, got {v}"))
+    }
+}
+
+fn within(what: &str, v: f32, min: f32, max: f32) -> Result<(), String> {
+    finite(what, v)?;
+    if (min..=max).contains(&v) {
+        Ok(())
+    } else {
+        Err(format!("{what} must be in {min}..={max}, got {v}"))
+    }
+}
+
+/// A world position: finite and inside the sanity bounds.
+fn world_pos(what: &str, v: (f32, f32, f32)) -> Result<(), String> {
+    within(&format!("{what}.x"), v.0, 0.0, WORLD_COORD_MAX)?;
+    within(&format!("{what}.y"), v.1, 0.0, WORLD_COORD_MAX)?;
+    within(&format!("{what}.z"), v.2, WORLD_Z_MIN, WORLD_Z_MAX)
 }
 
 fn validate_step(step: &Step) -> Result<(), String> {
@@ -324,9 +397,18 @@ fn validate_step(step: &Step) -> Result<(), String> {
                 ));
             }
         },
-        Step::Teleport { wpos } => finite3("wpos", *wpos)?,
-        Step::CromatolisTeleport { z_above_ground, .. } => {
-            finite("z_above_ground", *z_above_ground)?
+        Step::Teleport { wpos } => world_pos("wpos", *wpos)?,
+        Step::CromatolisTeleport {
+            px,
+            py,
+            z_above_ground,
+        } => {
+            if *px > MAP_PIXEL_MAX || *py > MAP_PIXEL_MAX {
+                return Err(format!(
+                    "map pixel ({px}, {py}) out of range: both must be at most {MAP_PIXEL_MAX}"
+                ));
+            }
+            within("z_above_ground", *z_above_ground, WORLD_Z_MIN, WORLD_Z_MAX)?
         },
         Step::WaitForTerrain {
             radius_chunks,
@@ -337,6 +419,7 @@ fn validate_step(step: &Step) -> Result<(), String> {
             }
             if let Some(t) = timeout_s {
                 positive("timeout_s", *t)?;
+                at_most("timeout_s", *t, SECONDS_MAX)?;
             }
         },
         Step::Camera {
@@ -360,14 +443,17 @@ fn validate_step(step: &Step) -> Result<(), String> {
             }
         },
         Step::Viewpoint { cam, look_at } => {
-            finite3("cam", *cam)?;
-            finite3("look_at", *look_at)?;
+            world_pos("cam", *cam)?;
+            world_pos("look_at", *look_at)?;
             if cam == look_at {
                 return Err("cam and look_at must differ".into());
             }
         },
         Step::Minimap { .. } => {},
-        Step::WaitSeconds(s) => positive("seconds", *s)?,
+        Step::WaitSeconds(s) => {
+            positive("seconds", *s)?;
+            at_most("seconds", *s, SECONDS_MAX)?
+        },
         Step::Sample { label } => check_name("label", label)?,
         Step::Screenshot { name } => check_name("name", name)?,
     }

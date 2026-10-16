@@ -69,6 +69,12 @@ pub fn set_panic_hook(log_filename: String, logs_dir: PathBuf) {
             backtrace::Backtrace::new(),
         );
 
+        // An unattended shot script has nobody to close a modal dialog and
+        // the profiles abort on panic (no unwinding, no `Drop`): write the
+        // run's report from here and exit with the panic code instead.
+        #[cfg(feature = "shot-script")]
+        crate::shot_script::on_panic(reason);
+
         #[cfg(feature = "native-dialog")]
         {
             use native_dialog::{DialogBuilder, MessageLevel};

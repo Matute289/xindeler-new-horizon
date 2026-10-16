@@ -44,12 +44,21 @@ pub struct TelemetryFlushHandle {
 
 impl TelemetryFlushHandle {
     /// Blocks until everything queued before this call is on disk (5s
-    /// timeout so a dead drain thread cannot hang process exit).
-    pub fn flush(&self) {
+    /// timeout so a dead drain thread cannot hang process exit). Returns
+    /// whether the drain thread acknowledged the flush.
+    pub fn flush(&self) -> bool {
         let (ack_tx, ack_rx) = bounded(1);
-        if self.tx.send(Msg::Flush(ack_tx)).is_ok() {
-            let _ = ack_rx.recv_timeout(Duration::from_secs(5));
-        }
+        self.tx.send(Msg::Flush(ack_tx)).is_ok()
+            && ack_rx.recv_timeout(Duration::from_secs(5)).is_ok()
+    }
+
+    /// Like [`flush`](Self::flush) but safe for a panic hook: never blocks on
+    /// a full queue (`try_send`) and waits at most 1s for the drain thread.
+    /// Returns whether the flush was queued and acknowledged.
+    pub fn flush_bounded(&self) -> bool {
+        let (ack_tx, ack_rx) = bounded(1);
+        self.tx.try_send(Msg::Flush(ack_tx)).is_ok()
+            && ack_rx.recv_timeout(Duration::from_secs(1)).is_ok()
     }
 }
 

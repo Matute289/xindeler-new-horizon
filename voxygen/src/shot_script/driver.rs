@@ -412,6 +412,13 @@ enum Phase {
     HudHiding {
         frames: u32,
     },
+    /// `/time` re-sent right before the capture (game time runs much faster
+    /// than real time, so the value set by an earlier `Time` step has drifted
+    /// by the time a long terrain wait ends); waiting for it to show up.
+    ShotTime {
+        since: f64,
+        hour: u32,
+    },
     /// Screenshot requested at `since`.
     ShotWait {
         since: f64,
@@ -450,6 +457,13 @@ pub struct StepRunner {
     screenshot_failed: bool,
     /// Bookkeeping for the report, for the step that is running.
     meta: Option<StepMeta>,
+    /// The time of day the last `Time` step set (name and hour); re-applied
+    /// right before every screenshot.
+    last_time: Option<(&'static str, u32)>,
+    /// When the running `Viewpoint` step started and how many frames it has
+    /// run; it may not end before the camera had a chance to settle.
+    viewpoint_since: f64,
+    viewpoint_frames: u32,
 }
 
 /// State of the screenshot step that is running.
@@ -478,6 +492,9 @@ impl StepRunner {
             shot: ShotState::default(),
             screenshot_failed: false,
             meta: None,
+            last_time: None,
+            viewpoint_since: 0.0,
+            viewpoint_frames: 0,
         }
     }
 
@@ -701,7 +718,19 @@ impl StepRunner {
                 let radius = self.defaults.terrain_radius_chunks;
                 let timeout = self.defaults.terrain_timeout_s as f64;
                 let center = Some(cam.xy());
-                self.tick_terrain(center, radius, timeout, now, ctx)
+                self.viewpoint_frames = self.viewpoint_frames.saturating_add(1);
+                let (outcome, action) = self.tick_terrain(center, radius, timeout, now, ctx);
+                // Even with `settle_frames: 0` the step must not end before
+                // the camera had its minimum frames and finished its zoom
+                // (bounded, like a `Camera` step).
+                let camera_ready = self.viewpoint_frames >= CAMERA_MIN_FRAMES
+                    && ctx.camera_settled()
+                    || now - self.viewpoint_since >= CAMERA_SETTLE_MAX_S;
+                if outcome == StepOutcome::Done && !camera_ready {
+                    (StepOutcome::Waiting, action)
+                } else {
+                    (outcome, action)
+                }
             },
             _ => {
                 let Some((yaw_rad, pitch_rad)) = look_at_orientation(cam, Vec3::from(look_at))
@@ -709,6 +738,8 @@ impl StepRunner {
                     return (StepOutcome::Failed("cam and look_at coincide".into()), None);
                 };
                 self.view_center = Some(cam.xy());
+                self.viewpoint_since = now;
+                self.viewpoint_frames = 0;
                 self.phase = Phase::ViewpointSent;
                 (
                     StepOutcome::Waiting,
@@ -726,7 +757,6 @@ impl StepRunner {
     /// settled, request the capture and wait for the file. A terrain timeout
     /// still takes the shot and is reported afterwards.
     fn tick_screenshot(&mut self, name: &str, now: f64, ctx: &impl RunnerContext) -> Tick {
-        let _ = name;
         let center = self.view_center;
         let radius = self.defaults.terrain_radius_chunks;
         let timeout = self.defaults.terrain_timeout_s as f64;
@@ -749,6 +779,32 @@ impl StepRunner {
                     self.phase = Phase::HudHiding { frames: frames + 1 };
                     (StepOutcome::Waiting, None)
                 }
+            },
+            Phase::ShotTime { since, hour } => {
+                let tod = ctx.time_of_day();
+                let reason = match tod {
+                    Some(tod) if day_distance(tod, hour as f64 * 3600.0) <= TIME_TOLERANCE_S => {
+                        None
+                    },
+                    Some(_) if now - since <= TIME_TIMEOUT_S => {
+                        return (StepOutcome::Waiting, None);
+                    },
+                    Some(_) => Some(format!(
+                        "time of day did not return to the scripted value within \
+                         {TIME_TIMEOUT_S:.0}s before the screenshot"
+                    )),
+                    None => Some("the client has no time of day to check".to_owned()),
+                };
+                // The shot is still taken; the step is flagged afterwards.
+                if let Some(reason) = reason {
+                    warn!(reason, "Time of day not confirmed for a screenshot");
+                    self.shot.soft_failure.get_or_insert(reason);
+                }
+                self.phase = Phase::ShotWait {
+                    since: now,
+                    attempts: 0,
+                };
+                (StepOutcome::Waiting, Some(self.shot_action(name)))
             },
             Phase::ShotWait { since, attempts } => match ctx.screenshot_result() {
                 Some(ShotOutcome::Written) => match self.shot.soft_failure.take() {
@@ -813,6 +869,15 @@ impl StepRunner {
                     );
                     self.shot.soft_failure = Some(reason);
                 }
+                // Game time runs much faster than real time: put the
+                // scripted time back right before the capture.
+                if let Some((time_name, hour)) = self.last_time {
+                    self.phase = Phase::ShotTime { since: now, hour };
+                    return (
+                        StepOutcome::Waiting,
+                        Some(Action::SendCommand(ShotCommand::time(time_name))),
+                    );
+                }
                 self.phase = Phase::ShotWait {
                     since: now,
                     attempts: 0,
@@ -841,9 +906,16 @@ impl StepRunner {
     fn tick_time(&mut self, name: &str, now: f64, ctx: &impl RunnerContext) -> Tick {
         match self.phase {
             Phase::TimeWait { since, hour } => match ctx.time_of_day() {
-                // Not observable: nothing to wait for.
-                None => (StepOutcome::Done, None),
+                None => (
+                    StepOutcome::Failed("the client has no time of day to check".into()),
+                    None,
+                ),
                 Some(tod) if day_distance(tod, hour as f64 * 3600.0) <= TIME_TOLERANCE_S => {
+                    // Only a time that took effect is re-applied before shots.
+                    self.last_time = TIME_HOURS
+                        .iter()
+                        .find(|(_, h)| *h == hour)
+                        .map(|(n, h)| (*n, *h));
                     (StepOutcome::Done, None)
                 },
                 Some(tod) if now - since > TIME_TIMEOUT_S => (
@@ -1307,6 +1379,15 @@ pub struct SessionDriver {
     report_written: bool,
     /// The client's view distance, last seen.
     last_view_distance: Option<u32>,
+    /// The renderer's resolution (physical pixels) and scale factor, last
+    /// reported by the session.
+    window_actual: Option<([u32; 2], f64)>,
+    /// The player was seen in the world (the world-entry deadline is over).
+    entered_world: bool,
+    /// How long the player may take to appear after the session started.
+    world_limit: std::time::Duration,
+    /// Finished steps at the last panic snapshot.
+    snapshot_len: usize,
 }
 
 /// What the session should do after the driver's tick.
@@ -1315,6 +1396,9 @@ pub enum DriverStatus {
     Running,
     /// Every step finished; the session should shut down.
     Finished,
+    /// The run could not continue (the player never entered the world); the
+    /// report and exit code are already set, the session should shut down.
+    Aborted,
 }
 
 /// A change the session applies to its scene, HUD or window.
@@ -1361,6 +1445,10 @@ impl SessionDriver {
                 expected_shot: None,
                 report_written: false,
                 last_view_distance: None,
+                window_actual: None,
+                entered_world: false,
+                world_limit: super::login::world_entry_limit(setup.connect_timeout),
+                snapshot_len: usize::MAX,
             }
         })
     }
@@ -1395,8 +1483,25 @@ impl SessionDriver {
             return (DriverStatus::Finished, None);
         }
         if client.position().is_none() {
+            if !self.entered_world
+                && super::login::phase_expired(
+                    self.started,
+                    std::time::Instant::now(),
+                    self.world_limit,
+                )
+            {
+                let reason = format!(
+                    "the player did not enter the world within {} s",
+                    self.world_limit.as_secs()
+                );
+                tracing::error!(reason, "Shot script aborted");
+                super::login::set_exit_code(super::login::SETUP_EXIT_CODE);
+                self.write_report(Some(reason), Some(super::login::SETUP_EXIT_CODE));
+                return (DriverStatus::Aborted, None);
+            }
             return (DriverStatus::Running, None);
         }
+        self.entered_world = true;
         self.last_view_distance = client.view_distance();
         let screenshot =
             take_matching_result(&self.shot_rx, self.expected_shot.as_deref()).map(|r| match r {
@@ -1405,7 +1510,11 @@ impl SessionDriver {
                     ShotOutcome::Written
                 },
                 Err(super::capture::ShotError::Dropped { .. }) => ShotOutcome::Dropped,
-                Err(e) => ShotOutcome::Failed(e.to_string()),
+                Err(e) => {
+                    // Full paths go to the log only; the report gets file names.
+                    warn!(error = %e, "Shot screenshot failed");
+                    ShotOutcome::Failed(e.report_reason())
+                },
             });
         let ctx = LiveContext {
             client,
@@ -1414,7 +1523,11 @@ impl SessionDriver {
             camera_settled: scene.camera_settled,
             screenshot,
         };
-        let effect = match self.runner.tick(&ctx) {
+        let action = self.runner.tick(&ctx);
+        if self.runner.records().len() != self.snapshot_len {
+            self.refresh_snapshot();
+        }
+        let effect = match action {
             None => None,
             Some(Action::SendCommand(cmd)) => {
                 info!(command = %cmd, "Shot script command");
@@ -1459,6 +1572,41 @@ impl SessionDriver {
 }
 
 impl SessionDriver {
+    /// Record the renderer's resolution (physical pixels) and the window's
+    /// scale factor, for the report.
+    pub fn note_window(&mut self, resolution: [u32; 2], scale_factor: f64) {
+        self.window_actual = Some((resolution, scale_factor));
+        if let Some(setup) = super::login::active()
+            && let Some(note) = super::report::window_mismatch(
+                [setup.script.window.0, setup.script.window.1],
+                Some(resolution),
+                Some(scale_factor),
+            )
+        {
+            tracing::warn!("shot window size differs from the request: {note}");
+        }
+    }
+
+    /// Keep a report of the finished steps for the panic hook.
+    fn refresh_snapshot(&mut self) {
+        use super::report;
+        self.snapshot_len = self.runner.records().len();
+        let Some(setup) = super::login::active() else {
+            return;
+        };
+        let info = report::run_info(
+            setup,
+            self.last_view_distance,
+            self.window_actual,
+            None,
+            super::login::STEP_FAILED_EXIT_CODE,
+        );
+        let out_dir = self.out_dir.clone();
+        report::set_snapshot(report::build_report(&self.runner, &info, &|file| {
+            report::file_facts(&out_dir, file)
+        }));
+    }
+
     /// Write `report.json`. `abort_reason` is `Some` when the script did not
     /// run to its end. Written once.
     fn write_report(&mut self, abort_reason: Option<String>, exit_code: Option<i32>) {
@@ -1469,9 +1617,16 @@ impl SessionDriver {
         let Some(setup) = super::login::active() else {
             return;
         };
+        // The first writer wins: a report that exists already (see
+        // `report::claim_report`) is never replaced, so it cannot disagree
+        // with the exit code the process ends with.
+        if !report::claim_report() {
+            return;
+        }
         let info = report::run_info(
             setup,
             self.last_view_distance,
+            self.window_actual,
             abort_reason,
             super::login::STEP_FAILED_EXIT_CODE,
         );
@@ -1487,9 +1642,15 @@ impl SessionDriver {
 }
 
 impl Drop for SessionDriver {
-    /// The session ended before the report was written (window closed,
-    /// connection lost, or a panic unwinding): the run still gets a report,
-    /// with the same exit code the process ends with. Never panics.
+    /// The session ended before the report was written (window closed or
+    /// connection lost): the run still gets a report, with the same exit code
+    /// the process ends with. Never panics.
+    ///
+    /// A panic does not reach this: the shipped profiles set `panic =
+    /// "abort"`, so nothing unwinds and no `Drop` runs. The panic hook
+    /// (`report::write_panic_report`) writes that report instead. The
+    /// `panicking` branch below only matters for an unwinding build, such as
+    /// the test harness.
     fn drop(&mut self) {
         if self.report_written {
             return;
@@ -1505,6 +1666,8 @@ impl Drop for SessionDriver {
         if exit != 0 {
             super::login::set_exit_code(exit);
         }
+        // Claimed by an earlier writer (a login failure after the session
+        // ended): that report and exit code stand.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.write_report(reason, Some(exit));
         }));
