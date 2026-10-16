@@ -1,6 +1,6 @@
 use crate::{
     CONFIG, IndexRef,
-    column::{ColumnGen, ColumnSample},
+    column::{ColumnGen, ColumnSample, WallStrata},
     util::{FastNoise, RandomField, Sampler, SmallCache},
 };
 use common::{
@@ -76,6 +76,7 @@ impl<'a> BlockGen<'a> {
             ice_depth,
             surface_block_override,
             flood_block,
+            exposed_wall_floor,
             ..
         } = sample;
 
@@ -93,6 +94,28 @@ impl<'a> BlockGen<'a> {
             _ => Rgb::zero(),
         });
         let grass_depth = (1.5 + 2.0 * chaos).min(alt - basement);
+        // Authored ground lowered below the sim's basement (`alt < basement`,
+        // so `grass_depth` is negative and the column is filled up to the
+        // basement): the filled blocks are unchanged, but they are coloured
+        // like real ground -- a grass/earth surface layer under `alt`, then the natural
+        // earth-and-stone strata -- instead of the engine's blue deep-rock
+        // ramp, which a negative depth reaches already next to the surface.
+        let below_basement = sample.lowered_below_basement();
+        let layer = 1.5 + 2.0 * chaos;
+        if below_basement && (wposf.z as f32) >= alt - layer && (wposf.z as f32) < basement {
+            return Some(lowered_surface_block(
+                surface_block_override,
+                water_level,
+                alt,
+                snow_cover,
+                surface_color,
+                sub_surface_color,
+                (wposf.z as f32 - (alt - layer))
+                    .div(layer)
+                    .clamp(0.0, 1.0)
+                    .sqrt(),
+            ));
+        }
         if (wposf.z as f32) < alt - grass_depth {
             let stone_factor = (alt - grass_depth - wposf.z as f32) * 0.15;
             let col = Lerp::lerp(
@@ -101,6 +124,15 @@ impl<'a> BlockGen<'a> {
                 stone_factor,
             )
             .map(|e| (e * 255.0) as u8);
+
+            // The exposed side of an authored dry pit's wall (the column
+            // stands above neighbouring authored dry ground): the column's own
+            // strata (earth, then natural stone with rare ore flecks) instead
+            // of the engine's blue underground rock colour.
+            let wall = exposed_wall_floor.is_some_and(|f| wposf.z as f32 > f);
+            let strata = (wall || below_basement).then(|| sample.wall_strata(wpos.xy()));
+            let solid =
+                |kind: BlockKind, col: Rgb<u8>| solid_block(strata.as_ref(), wpos, kind, col);
 
             if stone_factor >= 0.5 {
                 if wposf.z as f32 > alt - cliff_offset.max(0.0) {
@@ -120,13 +152,13 @@ impl<'a> BlockGen<'a> {
                             (wposf.z as f32 - basement * 0.3).div(2.0).sin() * 0.5 + 0.5,
                         )
                         .map(|e| e as u8);
-                        Some(Block::new(BlockKind::Rock, col))
+                        Some(solid(BlockKind::Rock, col))
                     }
                 } else {
-                    Some(Block::new(BlockKind::Rock, col))
+                    Some(solid(BlockKind::Rock, col))
                 }
             } else {
-                Some(Block::new(BlockKind::Earth, col))
+                Some(solid(BlockKind::Earth, col))
             }
         } else if wposf.z as i32 <= alt as i32 {
             let grass_factor = (wposf.z as f32 - (alt - grass_depth))
@@ -197,6 +229,55 @@ impl ZCache<'_> {
         let max = ground_max.max(self.sample.water_level + 2.0 + self.sample.ice_depth);
 
         (min, max)
+    }
+}
+
+/// The surface block of a lowered column (authored ground below the sim's
+/// basement) at `grass_factor` (0 at the bottom of the surface layer to 1 at
+/// its top). It repeats the generic surface decision of
+/// [`BlockGen::get_with_z_cache`] (kept inline there, to stay close to
+/// upstream) on plain values.
+fn lowered_surface_block(
+    surface_block_override: Option<BlockKind>,
+    water_level: f32,
+    alt: f32,
+    snow_cover: bool,
+    surface_color: Rgb<f32>,
+    sub_surface_color: Rgb<f32>,
+    grass_factor: f32,
+) -> Block {
+    if let Some(forced) = surface_block_override {
+        let col = Lerp::lerp(sub_surface_color, surface_color, grass_factor);
+        Block::new(forced, col.map(|e| (e * 255.0) as u8))
+    } else if water_level > alt.ceil() {
+        Block::new(
+            BlockKind::Sand,
+            sub_surface_color.map(|e| (e * 255.0) as u8),
+        )
+    } else {
+        let col = Lerp::lerp(sub_surface_color, surface_color, grass_factor);
+        if grass_factor < 0.7 {
+            Block::new(BlockKind::Earth, col.map(|e| (e * 255.0) as u8))
+        } else if snow_cover {
+            Block::new(BlockKind::Snow, col.map(|e| (e * 255.0) as u8))
+        } else {
+            Block::new(BlockKind::Grass, col.map(|e| (e * 255.0) as u8))
+        }
+    }
+}
+
+/// A solid underground block: the generic `kind`/`col` one, or, on the
+/// exposed wall of an authored dry pit (`strata` is `Some`), the column's own
+/// wall strata.
+fn solid_block(
+    strata: Option<&WallStrata>,
+    wpos: Vec3<i32>,
+    kind: BlockKind,
+    col: Rgb<u8>,
+) -> Block {
+    match strata {
+        Some(strata) => strata.block(wpos),
+        None => Block::new(kind, col),
     }
 }
 
@@ -518,5 +599,54 @@ mod keyhole_cfg_tests {
             },
             other => panic!("expected UnlockKind::Consumes(Simple(..)), got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod solid_block_tests {
+    use super::*;
+
+    #[test]
+    fn without_a_wall_the_generic_block_is_unchanged() {
+        for kind in [BlockKind::Rock, BlockKind::Earth] {
+            for i in 0..50 {
+                let col = Rgb::new(90 + i as u8, 110, 150);
+                let wpos = Vec3::new(i, 2 * i, 100 - i);
+                assert_eq!(solid_block(None, wpos, kind, col), Block::new(kind, col));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The new lowered-column branch's surface block follows the generic
+    /// surface decision. (`BlockGen::get_with_z_cache` itself needs a
+    /// `ColumnSample`, hence a `SimChunk`, so it is covered by the real-world
+    /// tests instead.)
+    #[test]
+    fn lowered_surface_block_follows_the_generic_surface_decision() {
+        let (surf, sub) = (Rgb::new(0.2, 0.6, 0.2), Rgb::new(0.4, 0.3, 0.2));
+        let at = |ov, water, snow, f| lowered_surface_block(ov, water, 100.0, snow, surf, sub, f);
+        assert_eq!(at(None, 0.0, false, 0.0).kind(), BlockKind::Earth);
+        assert_eq!(at(None, 0.0, false, 0.69).kind(), BlockKind::Earth);
+        assert_eq!(at(None, 0.0, false, 1.0).kind(), BlockKind::Grass);
+        assert_eq!(at(None, 0.0, true, 1.0).kind(), BlockKind::Snow);
+        assert_eq!(at(None, 105.0, false, 1.0).kind(), BlockKind::Sand);
+        assert_eq!(
+            at(Some(BlockKind::Rock), 105.0, false, 1.0).kind(),
+            BlockKind::Rock
+        );
+        // The colour runs from the sub-surface to the surface colour.
+        assert_eq!(
+            at(None, 0.0, false, 0.0).get_color(),
+            Some(sub.map(|e| (e * 255.0) as u8))
+        );
+        assert_eq!(
+            at(None, 0.0, false, 1.0).get_color(),
+            Some(surf.map(|e| (e * 255.0) as u8))
+        );
     }
 }

@@ -48,6 +48,24 @@ pub struct WaterAt {
     pub source: WaterSource,
 }
 
+/// How much higher than a neighbouring authored dry column a column must
+/// stand, in blocks, for its side to count as an exposed wall
+/// ([`WorldSim::dry_wall_floor_at`]). One block is a step, not a wall; the
+/// extra half block keeps the one-block rounding of two columns' top blocks
+/// (`top_block_alt` and the engine's floor) from flagging flat ground. At a
+/// 4-neighbour spacing of one block this is a slope of about 56 degrees.
+const WALL_MIN_DROP: f32 = 1.5;
+
+/// How far below the chunk table's altitude an unauthored column's rendered
+/// top may lie, in blocks, when it is the neighbour of an authored ground
+/// column. The table's altitude is the base the engine's relief (noise, warp,
+/// cliff offset) is added to, and that relief only ever lowers the rendered
+/// top toward the solid ground of the neighbour. The value is an empirical
+/// bound measured on the calibration arena (no unflagged wall block in the
+/// whole-box scan of the pit-wall tests); too large a value only lowers the
+/// floor, so more of the wall gets the column's own strata, never less.
+const UNAUTHORED_RELIEF_MARGIN: f32 = 6.0;
+
 impl WorldSim {
     /// The authored column at `wpos` (cell, feather, distance to water,
     /// region settings), `None` outside every authored region.
@@ -120,6 +138,57 @@ impl WorldSim {
     /// Whether the column at `wpos` is water ([`Self::water_at`]); `None`
     /// outside the map.
     pub fn is_wet_at(&self, wpos: Vec2<i32>) -> Option<bool> { self.water_at(wpos).map(|w| w.wet) }
+
+    /// The wall of an authored dry pit: in a [`SeaFill::AuthoredOnly`] region,
+    /// the altitude of the lowest 4-neighbouring column that a column of
+    /// altitude `alt` stands more than a block above, `None` when there is
+    /// none. A neighbour counts when it is authored dry ground (exact, blend or
+    /// bank), or, for a column that is itself authored ground (`own_ground`),
+    /// an unauthored column of the region (the table's interpolation leaves a
+    /// dip beside a pit: its altitude is the table's, less a margin for the
+    /// engine's relief, which only lowers the floor into the neighbour's solid
+    /// ground). The blocks of the column above it are the exposed side of the
+    /// wall; world generation gives them the column's own strata (earth, then
+    /// natural stone) instead of the engine's blue underground rock
+    /// (`BlockGen::get_with_z_cache`, `ColumnSample::dry_wall_block`).
+    ///
+    /// The rule is deliberately **not pit-specific**: any column of an
+    /// `AuthoredOnly` region that stands more than `WALL_MIN_DROP` above an
+    /// authored ground or bank neighbour gets the column's own strata over the
+    /// whole height from that neighbour's top, so an ordinary cliff steeper
+    /// than about 56 degrees (or a terrace, or a shore bank beside unauthored
+    /// relief) next to authored ground is covered too. The requirement is that
+    /// a pit wall show earth and stone, not blue rock; keeping the rule generic
+    /// avoids a second, pit-only classification of authored ground. The
+    /// interior blocks of a flagged column follow the same strata, so
+    /// digging into a wall finds earth and stone as it would in the ground.
+    pub fn dry_wall_floor_at(&self, wpos: Vec2<i32>, alt: f32, own_ground: bool) -> Option<f32> {
+        let rasters = self.authored_rasters.as_ref()?;
+        let mut floor: Option<f32> = None;
+        for d in [
+            Vec2::new(1, 0),
+            Vec2::new(-1, 0),
+            Vec2::new(0, 1),
+            Vec2::new(0, -1),
+        ] {
+            let n = wpos + d;
+            let Some((cell, SeaFill::AuthoredOnly, partial)) = rasters.cell_detail_at(n) else {
+                continue;
+            };
+            let margin = match cell {
+                AuthoredCell::Ground { .. } | AuthoredCell::Bank { .. } => 0.0,
+                AuthoredCell::None if own_ground && !partial => UNAUTHORED_RELIEF_MARGIN,
+                _ => continue,
+            };
+            let Some(top) = self.ground_alt_at(n).map(|t| t - margin) else {
+                continue;
+            };
+            if top + WALL_MIN_DROP < alt {
+                floor = Some(floor.map_or(top, |f| f.min(top)));
+            }
+        }
+        floor
+    }
 
     /// The authored-aware ground altitude at a column: the single
     /// implementation every consumer that must stand on the real ground reads
