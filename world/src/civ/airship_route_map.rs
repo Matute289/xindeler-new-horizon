@@ -297,12 +297,24 @@ fn horizon_altitudes(len: usize, at: impl Fn(usize) -> (ChunkPresentation, f32, 
         .collect()
 }
 
+/// [`horizon_altitudes`] for every chunk of a map of size `size`. The length is
+/// [`MapSizeLg::chunks_len`]: the product of the `u16` chunk counts of
+/// `chunks()` wraps to 0 for every power-of-two map of 256 x 256 chunks or
+/// more, which left the array empty and made the ray march index out of
+/// bounds.
+fn horizon_altitudes_for(
+    size: &MapSizeLg,
+    at: impl Fn(usize) -> (ChunkPresentation, f32, f32),
+) -> Vec<f32> {
+    horizon_altitudes(size.chunks_len(), at)
+}
+
 /// Creates a basic world map as a tiny_skia::Pixmap
 fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim) -> Option<Pixmap> {
     let mut map_config = MapConfig::orthographic(*image_size, 0.0..=sampler.max_height);
     // The ray march reads each chunk's altitude many times, so resolve the
     // presentation once per chunk, not once per read.
-    let horizon_alts = horizon_altitudes(image_size.chunks().product() as usize, |posi| {
+    let horizon_alts = horizon_altitudes_for(image_size, |posi| {
         let chunk = uniform_idx_as_vec2(*image_size, posi);
         let sample = sampler.get(chunk).unwrap();
         (
@@ -1009,6 +1021,16 @@ mod horizon_tests {
         for (alt, (basement, water_alt)) in alts.iter().zip(cases) {
             assert_eq!(alt.to_bits(), basement.max(water_alt).to_bits());
         }
+    }
+
+    #[test]
+    fn horizon_altitudes_cover_every_chunk_of_a_large_map() {
+        // 1024 x 1024 chunks (the Cromatolis map): 1 048 576 entries, not the
+        // `u16` product that wraps to 0.
+        let size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
+        let alts = horizon_altitudes_for(&size, |_| (ChunkPresentation::TABLE, 1.0, 2.0));
+        assert_eq!(alts.len(), 1 << 20);
+        assert_eq!(alts[(1 << 20) - 1], 2.0);
     }
 
     #[test]
