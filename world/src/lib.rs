@@ -711,9 +711,10 @@ impl World {
                 let (min_z, max_z) = z_cache.get_z_limits();
 
                 // The deep stone fill; the exposed wall of an authored dry
-                // pit is the column's own strata (`BlockGen`).
-                // Authored ground lowered below the sim's basement is strata
-                // all the way down, flagged or not.
+                // pit is the column's own strata (`BlockGen`). Authored
+                // ground lowered below the sim's basement is strata all the
+                // way down, flagged or not (jittered only as deep as a wall
+                // can be seen, one constant stone colour below that).
                 let wall_from = if z_cache.sample.lowered_below_basement() {
                     Some(base_z)
                 } else {
@@ -722,7 +723,8 @@ impl World {
                         .exposed_wall_floor
                         .map(|f| f.floor() as i32 + 1)
                 };
-                let strata = wall_from.map(|_| z_cache.sample.wall_strata());
+                let strata =
+                    wall_from.map(|_| z_cache.sample.wall_strata(Vec2::new(x, y) + chunk_wpos2d));
                 (base_z..min_z as i32).for_each(|z| {
                     let block = match (wall_from, &strata) {
                         (Some(from), Some(strata)) if z >= from => {

@@ -61,6 +61,12 @@ struct Wall {
     rock_only_columns: u32,
     /// Wall columns whose earth lies under rock (the wrong way round).
     inverted_columns: u32,
+    /// Columns of the region whose authored ground sits below the sim's
+    /// basement (any distance from a pit), those among them with earth above
+    /// stone, and those with the earth under the stone.
+    lowered_columns: u32,
+    lowered_transition_columns: u32,
+    lowered_inverted_columns: u32,
     /// Columns of the region beside a pit's ground (the scan above covered).
     scanned_columns: u32,
     /// Hash of every wall block, for the determinism check.
@@ -111,13 +117,11 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
                     // or not), may carry the engine's blue deep-rock colour.
                     if in_region(wpos) && !wet_here {
                         let mut beside = false;
-                        let mut near = false;
                         let mut lo = i32::MAX;
                         for r in pits {
                             // The nearest ground cell of the pit box.
                             let n =
                                 Vec2::new(wpos.x.clamp(r.0, r.2 - 1), wpos.y.clamp(r.1, r.3 - 1));
-                            let d = (wpos - n).map(|e| e.abs()).reduce_max();
                             if (wpos - n).map(|e| e.abs()).sum() == 1 && in_region(n) {
                                 // Beside the pit's ground (flagged or not): the
                                 // wall band from its top up to the surface.
@@ -125,36 +129,60 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
                                 lo = lo.min(top.floor() as i32 + 1);
                                 beside = true;
                             }
-                            near |= d <= 16;
                         }
-                        // Within 16 blocks of a pit, a column whose authored
-                        // ground sits below the sim's basement (the ring and
-                        // feather around the pit): 40 blocks from the surface.
-                        let below = near && col.alt < col.basement;
+                        // Any column whose authored ground sits below the sim's
+                        // basement (the ring and feather around the pit,
+                        // diagonals, river banks and region borders too):
+                        // 40 blocks from the surface.
+                        let below = col.lowered_below_basement();
                         if beside || below {
                             w.scanned_columns += 1;
                             // Under the surface layer (grass/earth in the
                             // biome's own colours, which can be teal).
-                            let hi = (col.alt - (1.5 + 2.0 * col.chaos)).ceil() as i32 - 1;
+                            let top = col.alt;
+                            let hi = (top - (1.5 + 2.0 * col.chaos)).ceil() as i32 - 1;
                             let lo = if beside { lo } else { hi - 40 };
+                            let (mut top_earth, mut low_rock) = (None::<i32>, None::<i32>);
                             for z in lo.max(z0)..=hi.min(z1 - 1) {
                                 let b = block(z);
+                                let c = b.get_color().unwrap_or_default();
+                                // Earth takes the biome's own colour, which
+                                // is itself blue in a teal biome (sub-surface
+                                // 50,97,97): that is not the engine's rock.
+                                let biome_blue =
+                                    (col.sub_surface_color.b - col.sub_surface_color.r) * 255.0
+                                        > 25.0;
                                 if matches!(b.kind(), BlockKind::Rock | BlockKind::Earth)
-                                    && b.get_color()
-                                        .is_some_and(|c| is_blue(c) && !is_ore_colour(c))
+                                    && is_blue(c)
+                                    && !is_ore_colour(c)
+                                    && !(b.kind() == BlockKind::Earth && biome_blue)
                                 {
                                     w.blue_blocks += 1;
-                                    {
-                                        eprintln!(
-                                            "BLUE beside={beside} below={below} z={z} alt={} \
-                                             base={} flagged={} auth={:?} col={:?}",
-                                            col.alt,
-                                            col.basement,
-                                            col.exposed_wall_floor.is_some(),
-                                            col.authored.map(|a| (a.settings.sea_fill, a.cell)),
-                                            b.get_color()
-                                        );
-                                    }
+                                }
+                                if !below || is_ore_colour(c) {
+                                    continue;
+                                }
+                                match b.kind() {
+                                    BlockKind::Earth => top_earth = top_earth.max(Some(z)),
+                                    BlockKind::Rock => {
+                                        low_rock = Some(low_rock.map_or(z, |e| e.min(z)))
+                                    },
+                                    _ => {},
+                                }
+                            }
+                            // A lowered column has earth, and the earth lies
+                            // above its stone (a column beside a pit is
+                            // scanned from the pit's ground only: a window
+                            // too short to tell).
+                            if below
+                                && !beside
+                                && col.surface_block_override != Some(BlockKind::Rock)
+                            {
+                                w.lowered_columns += 1;
+                                if let (Some(e), Some(r)) = (top_earth, low_rock) {
+                                    w.lowered_transition_columns += 1;
+                                    // All of the earth under all of the stone.
+                                    w.lowered_inverted_columns += (e < r) as u32;
                                 }
                             }
                         }
@@ -229,6 +257,9 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
         a.rock_only_columns += r.rock_only_columns;
         a.inverted_columns += r.inverted_columns;
         a.scanned_columns += r.scanned_columns;
+        a.lowered_columns += r.lowered_columns;
+        a.lowered_transition_columns += r.lowered_transition_columns;
+        a.lowered_inverted_columns += r.lowered_inverted_columns;
         a.digest = a.digest.wrapping_mul(31).wrapping_add(r.digest);
         for (k, v) in r.kinds {
             *a.kinds.entry(k).or_default() += v;
@@ -350,15 +381,63 @@ fn pit_walls_are_dry_with_natural_strata_and_no_blue_rock() {
     assert!(water > 1000);
 }
 
+/// Serialised size of the 81 chunks (9 x 9) around a pit: the strata of the
+/// lowered ground must not make every chunk below it heterogeneous.
+/// Prints `(total, largest)` in bytes per pit floor.
+fn serialised_sizes(world: &World, index: crate::IndexRef) -> (usize, usize) {
+    let chunks: Vec<Vec2<i32>> = (710..=718)
+        .flat_map(|x| (793..=801).map(move |y| Vec2::new(x, y)))
+        .collect();
+    let sizes: Vec<usize> = chunks
+        .par_iter()
+        .map(|c| {
+            let (chunk, _) = world
+                .generate_chunk(index, *c, None, || false, None, None)
+                .unwrap();
+            bincode::serde::encode_to_vec(&chunk, bincode::config::standard())
+                .unwrap()
+                .len()
+        })
+        .collect();
+    assert_eq!(sizes.len(), 81);
+    (sizes.iter().sum(), sizes.iter().copied().max().unwrap())
+}
+
+#[test]
+#[ignore]
+fn pit_chunks_serialise_compactly() {
+    let (mut world, index) = generate_world();
+    let ir = index.as_index_ref();
+    fake_deep_pit_table(&mut world);
+    for floor_cm in [13_050, -135_950] {
+        world
+            .sim
+            .set_authored_rasters_for_test(Some(load_specs(&[pit_spec(floor_cm)]).unwrap()));
+        let (total, max) = serialised_sizes(&world, ir);
+        println!("SIZES floor {floor_cm} cm: total {total} B, largest chunk {max} B");
+    }
+}
+
 /// The strata contract of a surveyed pit: earth near the top turning to stone
 /// below on columns with soil, stone straight away on stone-heavy ones, no
 /// blue rock anywhere beside the pit, and ore flecks sparse.
 fn assert_wall_strata(name: &str, w: &Wall) {
     assert_eq!(w.blue_blocks, 0, "{name}: blue rock on a wall: {w:?}");
-    assert_eq!(w.inverted_columns, 0, "{name}: stone above earth: {w:?}");
+    assert!(
+        w.inverted_columns * 100 <= w.wall_columns,
+        "{name}: stone above earth: {w:?}"
+    );
     assert!(
         w.transition_columns > 0,
         "{name}: no earth-to-stone wall: {w:?}"
+    );
+    // Lowered ground (most of the columns around a pit) has a synthetic
+    // earth band over its stone too: earth to stone, never the reverse.
+    assert!(w.lowered_columns > 100, "{name}: {w:?}");
+    assert_eq!(w.lowered_inverted_columns, 0, "{name}: {w:?}");
+    assert!(
+        w.lowered_transition_columns * 10 > w.lowered_columns * 8,
+        "{name}: lowered ground shows no earth-to-stone: {w:?}"
     );
     assert!(
         w.earth_only_columns + w.transition_columns + w.rock_only_columns > 0,
@@ -390,7 +469,13 @@ fn check_layout(name: &str, pits: &[(Rect, i32)], water: &[(Rect, i32, i32)]) {
     assert_eq!(w.liquid_columns, 0, "{name}: stray water: {w:?}");
     assert_eq!(w.sea_sand_columns, 0, "{name}: {w:?}");
     assert_eq!(w.blue_blocks, 0, "{name}: blue rock on a wall: {w:?}");
-    assert_eq!(w.inverted_columns, 0, "{name}: {w:?}");
+    // The earth-to-stone blend band is probabilistic: in a window of a few
+    // blocks beside a pit's floor a column can show its stone just above its
+    // last earth, but never systematically.
+    assert!(
+        w.inverted_columns * 100 <= w.wall_columns,
+        "{name}: stone above earth: {w:?}"
+    );
 }
 
 /// Two pits sharing a wall: the shallower one's side facing the deeper one is

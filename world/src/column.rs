@@ -1812,7 +1812,7 @@ impl ColumnSample<'_> {
     /// cosmetic: they are plain `Rock`-kind blocks and yield nothing when
     /// mined.
     pub fn dry_wall_block(&self, wpos: Vec3<i32>) -> common::terrain::Block {
-        self.wall_strata().block(wpos)
+        self.wall_strata(wpos.xy()).block(wpos)
     }
 
     /// Whether this column belongs to a `sea_fill: AuthoredOnly` authored
@@ -1822,8 +1822,6 @@ impl ColumnSample<'_> {
             .is_some_and(|a| a.settings.sea_fill == authored_raster::SeaFill::AuthoredOnly)
     }
 
-    /// The per-column invariants of [`Self::dry_wall_block`], to be built once
-    /// per column and reused for every wall block of it.
     /// Authored ground of a `sea_fill: AuthoredOnly` region that the raster
     /// lowered below the sim's basement (`alt < basement`). Never true for
     /// sim, no-manifest or `Auto`-region columns (`alt >= basement` there).
@@ -1831,13 +1829,20 @@ impl ColumnSample<'_> {
         lowered_below_basement(self.is_authored_only(), self.alt, self.basement)
     }
 
-    pub fn wall_strata(&self) -> WallStrata {
+    /// The per-column invariants of [`Self::dry_wall_block`], to be built once
+    /// per column and reused for every wall block of it. `col` is the
+    /// column's world position (it seeds the synthetic soil depth of a
+    /// lowered column).
+    pub fn wall_strata(&self, col: Vec2<i32>) -> WallStrata {
+        let lowered = self.lowered_below_basement();
         WallStrata::new(
             self.alt,
             self.basement,
             self.chaos,
             self.surface_block_override == Some(BlockKind::Rock),
             self.sub_surface_color,
+            lowered,
+            col,
         )
     }
 
@@ -2076,6 +2081,25 @@ const WALL_BLEND_BAND: f32 = 6.0;
 const WALL_STONE: Rgb<f32> = Rgb::new(0.47, 0.44, 0.41);
 /// How much of the column's sub-surface colour tints the wall stone.
 const WALL_STONE_TINT: f32 = 0.3;
+/// Synthetic soil depth, in blocks, of a lowered column (authored ground below
+/// the sim's basement, which has no real soil: `alt - basement` is negative).
+/// It mimics the engine's typical 5-8 block soil on rim columns, so the
+/// column shows earth and then stone; it varies per column by a position hash.
+const LOWERED_SOIL_MIN: f32 = 4.0;
+const LOWERED_SOIL_MAX: f32 = 10.0;
+/// Position-hash seed of a lowered column's soil depth.
+const LOWERED_SOIL_SEED: u32 = 0x57a1_0005;
+/// How deep, in blocks under the surface layer of a lowered column, its strata
+/// are jittered (colour noise and ore flecks). A wall of it can only be
+/// seen down to about the depth of a pit's rim above the neighbouring
+/// ground, and per-block noise makes every sub-chunk it touches heterogeneous
+/// (it roughly doubles the serialised chunk size when it runs to the bottom
+/// of the world); the stone below this is one constant colour (see
+/// [`WallStrata::deep_block`]).
+const LOWERED_JITTER_DEPTH: f32 = 14.0;
+/// Mean of the wall's banding shade (`1.0` to `0.7`, times jitter ~1): the
+/// constant shade of the deep stone of a lowered column.
+const DEEP_STONE_SHADE: f32 = 0.85;
 /// Chance that a rock block of a pit wall is an ore fleck.
 pub(crate) const WALL_ORE_CHANCE: f32 = 0.004;
 /// Position-hash seeds of the wall's earth/stone mix, colour jitter and ore.
@@ -2128,6 +2152,9 @@ pub struct WallStrata {
     alt: f32,
     grass_depth: f32,
     soil: f32,
+    /// Depth under the surface layer below which the stone is one constant
+    /// colour (lowered columns only).
+    deep_depth: f32,
     band_base: f32,
     earth: Rgb<f32>,
     stone: Rgb<f32>,
@@ -2140,12 +2167,30 @@ impl WallStrata {
         chaos: f32,
         bare_rock: bool,
         sub_surface_color: Rgb<f32>,
+        lowered: bool,
+        col: Vec2<i32>,
     ) -> Self {
+        // A lowered column's real surface is its `alt` (`alt - basement` is
+        // negative): the surface layer is the `1.5 + 2 chaos` blocks under
+        // it and the strata start right below.
+        let (alt, grass_depth) = if lowered {
+            (alt, 1.5 + 2.0 * chaos)
+        } else {
+            (alt, (1.5 + 2.0 * chaos).min(alt - basement))
+        };
         Self {
             alt,
-            grass_depth: (1.5 + 2.0 * chaos).min(alt - basement),
+            grass_depth,
+            deep_depth: if lowered {
+                LOWERED_JITTER_DEPTH
+            } else {
+                f32::INFINITY
+            },
             soil: if bare_rock {
                 0.0
+            } else if lowered {
+                let h = RandomField::new(LOWERED_SOIL_SEED).get_f32(col.with_z(0));
+                Lerp::lerp(LOWERED_SOIL_MIN, LOWERED_SOIL_MAX, h)
             } else {
                 (alt - basement).clamp(0.0, WALL_MAX_SOIL)
             },
@@ -2155,9 +2200,25 @@ impl WallStrata {
         }
     }
 
+    /// The stone far below the wall: the natural warm grey in one constant
+    /// colour, without jitter or ore, so it compresses like the engine's
+    /// generic deep fill. It is not tinted by the column either: a colour that
+    /// differs from column to column makes every sub-chunk it fills
+    /// heterogeneous (it adds about 20% to the serialised size of the chunks
+    /// around a deep pit).
+    fn deep_block(&self) -> common::terrain::Block {
+        common::terrain::Block::new(
+            BlockKind::Rock,
+            (WALL_STONE * DEEP_STONE_SHADE).map(|e| (e * 255.0).clamp(0.0, 255.0) as u8),
+        )
+    }
+
     /// The wall block at `wpos`.
     pub fn block(&self, wpos: Vec3<i32>) -> common::terrain::Block {
         let depth = self.alt - self.grass_depth - wpos.z as f32;
+        if depth > self.deep_depth {
+            return self.deep_block();
+        }
         let mix = RandomField::new(WALL_MIX_SEED).get_f32(wpos);
         let layer = wall_layer(
             depth,
@@ -2322,7 +2383,7 @@ mod wall_layer_tests {
     fn the_hoisted_strata_match_the_reference_bit_for_bit() {
         let mut n = 0;
         for (alt, basement, chaos, bare, sub) in columns() {
-            let strata = WallStrata::new(alt, basement, chaos, bare, sub);
+            let strata = WallStrata::new(alt, basement, chaos, bare, sub, false, Vec2::zero());
             for i in 0..200 {
                 let wpos = Vec3::new(1000 + i * 13, -400 + i * 7, alt as i32 - 1 - (i % 60));
                 let new = strata.block(wpos);
@@ -2343,11 +2404,12 @@ mod wall_layer_tests {
     }
 
     /// Authored ground lowered below the sim's basement (`alt < basement`):
-    /// every block under the surface layer is earth-then-stone, never the
-    /// engine's blue (`stone_col`), at any depth.
+    /// earth first, then stone, never the engine's blue (`stone_col`), at any
+    /// depth; the soil is the synthetic 4..10 blocks and varies per column.
     #[test]
-    fn columns_below_their_basement_have_no_blue_strata() {
+    fn columns_below_their_basement_show_earth_then_stone_and_no_blue() {
         let blue_minus_red = |c: Rgb<u8>| c.b as i32 - c.r as i32;
+        let mut soils = std::collections::BTreeSet::new();
         for sub in [
             Rgb::new(0.35, 0.28, 0.2),
             Rgb::new(0.6, 0.55, 0.5),
@@ -2355,22 +2417,43 @@ mod wall_layer_tests {
         ] {
             for (alt, basement) in [(131.4, 140.0), (120.0, 120.5), (95.0, 160.0)] {
                 for chaos in [0.0, 0.3, 1.0] {
-                    let strata = WallStrata::new(alt, basement, chaos, false, sub);
-                    for depth in 0..40 {
-                        for k in 0..30 {
-                            let z = alt as i32 - depth;
-                            let b = strata.block(Vec3::new(k * 7, k * 3, z));
+                    for k in 0..30 {
+                        let col = Vec2::new(k * 7, k * 3);
+                        let strata = WallStrata::new(alt, basement, chaos, false, sub, true, col);
+                        assert!((LOWERED_SOIL_MIN..=LOWERED_SOIL_MAX).contains(&strata.soil));
+                        soils.insert((strata.soil * 100.0) as i32);
+                        // The strata start under the surface layer, which
+                        // is `alt - layer`.
+                        let top = (alt - (1.5 + 2.0 * chaos)).floor() as i32;
+                        for depth in 0..60 {
+                            let b = strata.block(col.with_z(top - depth));
                             let c = b.get_color().unwrap();
                             assert!(matches!(b.kind(), BlockKind::Earth | BlockKind::Rock));
-                            if !WALL_ORES.iter().any(|o| Rgb::from(*o) == c) {
+                            // (Earth takes the biome's own colour, blue in
+                            // a teal biome; the stone is never blue.)
+                            if b.kind() == BlockKind::Rock
+                                && !WALL_ORES.iter().any(|o| Rgb::from(*o) == c)
+                            {
                                 assert!(blue_minus_red(c) <= 30, "{c:?} {sub:?}");
                                 assert_ne!((c.r, c.g, c.b), (90, 110, 150));
                             }
                         }
+                        // Earth right under the surface layer, stone below
+                        // the soil and its blend band.
+                        let kind_at = |depth| strata.block(col.with_z(top - depth)).kind();
+                        assert_eq!(kind_at(0), BlockKind::Earth);
+                        assert_eq!(kind_at(20), BlockKind::Rock);
+                        assert_eq!(kind_at(50), BlockKind::Rock);
+                        // Far below, the stone is one constant natural colour.
+                        let deep = |d| strata.block(col.with_z(top - d));
+                        assert_eq!(deep(60), deep(500));
+                        assert_eq!(deep(60).kind(), BlockKind::Rock);
+                        assert!(blue_minus_red(deep(60).get_color().unwrap()) <= 30);
                     }
                 }
             }
         }
+        assert!(soils.len() > 20, "the soil does not vary per column");
     }
 
     /// Only authored-only columns below their basement take the lowered
@@ -2399,7 +2482,7 @@ mod wall_layer_tests {
             Rgb::new(0.3, 0.32, 0.3),
         ] {
             for bare in [false, true] {
-                let strata = WallStrata::new(130.0, 123.0, 0.3, bare, sub);
+                let strata = WallStrata::new(130.0, 123.0, 0.3, bare, sub, false, Vec2::zero());
                 for depth in 0..80 {
                     for k in 0..40 {
                         let wpos = Vec3::new(k * 5, k * 3, 129 - depth);
