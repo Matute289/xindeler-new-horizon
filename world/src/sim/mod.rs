@@ -3915,13 +3915,22 @@ impl WorldSim {
             ) {
                 Ok(Some(rasters)) => {
                     if let Err(err) = rasters.check_consistency_with_sim(&source, &this) {
+                        tracing::error!("{err}");
                         panic!("{err}");
                     }
                     rasters.prewarm();
                     this.authored_rasters = Some(rasters);
                 },
-                Ok(None) => {},
-                Err(err) => panic!("{err}"),
+                Ok(None) => {
+                    tracing::warn!(
+                        "authored rasters: no manifest at {source}; this world is generated \
+                         without its authored water, ground and voids"
+                    );
+                },
+                Err(err) => {
+                    tracing::error!("{err}");
+                    panic!("{err}");
+                },
             }
         }
 
@@ -10156,7 +10165,7 @@ mod tests {
         // Whitekasing foothills sit in the painted tropical south.
         //
         // ⚠️ Re-baselined again 2026-10-03 for the height-profile adoption
-        // (NH-161 T24b: `heightmap_manual_v25`, profile `l16_v2_z0`). That is a
+        // (`heightmap_manual_v25`, profile `l16_v2_z0`). That is a
         // re-encode of the WHOLE master onto a 10.68 cm lattice, not a local
         // edit: every chunk's `alt` moves by -5.34..+5.07 cm (mean +1.09 cm,
         // the dominant +5.07 cm on the 99 m plateau gray), so it is the

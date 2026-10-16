@@ -94,10 +94,10 @@ fn ineligible_authored_settlements_never_appear_as_possible_starting_sites() {
     );
 }
 
-/// **COW-23 T20 — the post-flip measurement pass.**
+/// **The post-flip measurement pass.**
 ///
 /// `cromatolis_v0_procedural_layers.ron` shipped `caves: false, rocks:
-/// false` from COW-15 until COW-23's T15 flipped both. Everything Phases
+/// false` from COW-15 until the flip to `true` for both. Everything Phases
 /// 1–3 built exists to make that flip safe, and every number measured
 /// before it was measured through a *probe* — a read-only replica of a
 /// generation path, or a layer forced on for one chunk at a time. This is
@@ -166,8 +166,9 @@ fn cromatolis_procedural_layer_flip_adds_volume_without_costing_authored_void() 
     use crate::{layer::authored_regions::authored_voids_for, sim::AuthoredProceduralLayers};
 
     /// How many authored-void chunks to regenerate, three times each.
-    /// Matches the sample size `T12`/V8 used for the guard's cost, so the
-    /// two are talking about the same slice of the region.
+    /// Matches the sample size the earlier measurement pass used for the
+    /// guard's cost, so the two are talking about the same slice of the
+    /// region.
     const T20_CHUNK_SAMPLE: usize = 2_000;
     /// How far above a column's surface to look for boulder volume. The
     /// tallest rock kind the lattice places is far below this.
@@ -1082,7 +1083,7 @@ const EXPECTED_NAVAL_PORTS: &[(&str, PortClass)] = &[
     ("site.mazon_town", PortClass::Pier),
     ("site.portland", PortClass::Pier),
     ("site.rios_port", PortClass::Pier),
-    // Hita is Town/Large since NH-167 T40 (was Village/Small = Jetty).
+    // Hita is Town/Large since the settlement-size corrections (was Village/Small = Jetty).
     ("site.hita", PortClass::Pier),
     ("site.andiran", PortClass::Jetty),
     ("site.garens_town", PortClass::Jetty),
@@ -1509,6 +1510,12 @@ const EXPECTED_BERTH_CLASSES: &[(PortClass, &[BerthClass])] = &[
 /// revision (deepen the water under the Large finger's Port berth to at
 /// least 6 blocks), after which this row goes away. Re-measure if Dove
 /// City's waterfront or the heightmap there changes.
+///
+/// **Open item:** the content currently provides 3 berths here, not the
+/// tier's 4. The relaxed row above is a recorded gap in the authored
+/// coastline, not a design decision; it must be deleted (restoring the
+/// stricter expectation) once the Large finger's Port berth has 6 blocks of
+/// water.
 const EXPECTED_BERTH_CLASS_OVERRIDES: &[(&str, &[BerthClass])] = &[
     ("site.portland", &[BerthClass::Small]),
     ("site.dove_city", &[
@@ -1550,8 +1557,9 @@ const EXPECTED_JETTY_VILLAGES: &[&str] = &["site.andiran", "site.garens_town", "
 /// limits -- not an artifact of the lane-berth fix, which only supplied the
 /// tender berth the search needs to run at all.
 ///
-/// `site.hita` was the third exception until NH-167 T40 made it Town/Large: it
-/// is a `Pier` port now, outside this Jetty-village contract.
+/// `site.hita` was the third exception until the settlement-size corrections
+/// made it Town/Large: it is a `Pier` port now, outside this Jetty-village
+/// contract.
 const EXPECTED_ANCHORAGE_EXCEPTIONS: &[&str] = &["site.andiran", "site.timos"];
 
 /// **The berth contract, against the real authored region.**

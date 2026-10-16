@@ -60,7 +60,7 @@ const PROP_DENSITY_QUAY: f32 = 0.2;
 const PROP_DENSITY_HARBOUR: f32 = 0.3;
 
 /// Along-shore spacing (blocks) between night-lighting sprites for the two
-/// tiers that get them (task T18). `Jetty` gets no lighting at all -- the
+/// tiers that get them. `Jetty` gets no lighting at all -- the
 /// absence is deliberate and the cheapest tier difference to get wrong by
 /// accident, so there is no constant for it -- and `Pier` gets a single
 /// fixed lantern rather than a spaced run (see

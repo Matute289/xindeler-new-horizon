@@ -348,18 +348,56 @@ impl WorldSim {
         poi: Id<crate::civ::PointOfInterest>,
         loc: Vec2<i32>,
     ) -> Option<Vec2<i32>> {
-        if !self.chunk_presentation(config, loc).authored_dry {
-            return Some(loc);
+        self.biome_label_chunks(config, &[(poi, loc)])
+            .pop()
+            .flatten()
+    }
+
+    /// [`Self::biome_label_chunk`] for many labels at once: one pass over
+    /// the chunks however many labels sit on authored dry ground, instead of
+    /// one pass per label. The result is in the order of `labels`.
+    pub fn biome_label_chunks(
+        &self,
+        config: &MapConfig,
+        labels: &[(Id<crate::civ::PointOfInterest>, Vec2<i32>)],
+    ) -> Vec<Option<Vec2<i32>>> {
+        let mut out: Vec<Option<Vec2<i32>>> = labels.iter().map(|&(_, loc)| Some(loc)).collect();
+        // The labels that must move, by biome.
+        let mut moving: std::collections::HashMap<Id<crate::civ::PointOfInterest>, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, &(poi, loc)) in labels.iter().enumerate() {
+            if self.chunk_presentation(config, loc).authored_dry {
+                moving.entry(poi).or_default().push(i);
+                out[i] = None;
+            }
+        }
+        if moving.is_empty() {
+            return out;
         }
         let size = self.map_size_lg();
-        self.chunks
-            .iter()
-            .enumerate()
-            .filter(|(_, chunk)| chunk.poi == Some(poi))
-            .map(|(posi, _)| (posi, uniform_idx_as_vec2(size, posi)))
-            .filter(|(_, pos)| !self.chunk_presentation(config, *pos).authored_dry)
-            .min_by_key(|(posi, pos)| (loc.distance_squared(*pos), *posi))
-            .map(|(_, pos)| pos)
+        // Best (distance, chunk index) per moving label.
+        let mut best: Vec<Option<(i32, usize)>> = vec![None; labels.len()];
+        for (posi, chunk) in self.chunks.iter().enumerate() {
+            let Some(idxs) = chunk.poi.and_then(|poi| moving.get(&poi)) else {
+                continue;
+            };
+            let pos = uniform_idx_as_vec2(size, posi);
+            if self.chunk_presentation(config, pos).authored_dry {
+                continue;
+            }
+            for &i in idxs {
+                let key = (labels[i].1.distance_squared(pos), posi);
+                if best[i].is_none_or(|b| key < b) {
+                    best[i] = Some(key);
+                }
+            }
+        }
+        for idxs in moving.values() {
+            for &i in idxs {
+                out[i] = best[i].map(|(_, posi)| uniform_idx_as_vec2(size, posi));
+            }
+        }
+        out
     }
 
     /// How a presentation path must treat `chunk_pos` under `config`
@@ -379,7 +417,13 @@ impl WorldSim {
                     .authored_rasters
                     .as_ref()
                     .and_then(|r| r.chunk_summary(chunk_pos))
-                    .is_some_and(|s| s.authored_columns == TerrainChunkSize::RECT_SIZE.product()),
+                    .is_some_and(|s| {
+                        // Every column authored, none of them water: a
+                        // chunk whose authored columns include wet ones
+                        // still carries its river link.
+                        s.authored_columns == TerrainChunkSize::RECT_SIZE.product()
+                            && s.wet_columns == 0
+                    }),
         }
     }
 

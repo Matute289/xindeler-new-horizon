@@ -221,7 +221,7 @@ impl Box2 {
 /// altitude/water level, over the chunks the box touches **plus a one-chunk
 /// halo**: a column's altitude is a spline of the chunk knots `c-1..c+2`, so
 /// it is pulled towards the neighbouring chunks (next to a 500 m step, the
-/// chunks the box touches alone clipped 938 of 1024 columns, BUG-P8). Use
+/// chunks the box touches alone clipped 938 of 1024 columns). Use
 /// [`auto_z_range_for`] to also fold in the sampler's actual column values.
 pub fn auto_z_range(sim: &WorldSim, b: Box2) -> (i32, i32) {
     let (c0, c1) = b.chunk_range();

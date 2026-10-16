@@ -101,8 +101,8 @@ pub struct Civs {
 // ---------------------------------------------------------------------------
 
 /// Upper bound on one settlement's authored `npc_count`. A typo guard, not a
-/// budget: the world-wide budget is rtsim's NPC ceiling (NH-171), and no
-/// single settlement is planned above a few hundred.
+/// budget: the world-wide budget is rtsim's NPC ceiling (a separate NPC
+/// population budget), and no single settlement is planned above a few hundred.
 const MAX_SETTLEMENT_NPC_COUNT: u32 = 5_000;
 
 /// Authored settlement data for Cromatolis. The source-of-truth asset is
@@ -1031,7 +1031,7 @@ enum AuthoredSettlementCategory {
     City,
     Town,
     Village,
-    /// Indigenous-style village (NH-167 T41): generated exactly like a
+    /// Indigenous-style village: generated exactly like a
     /// `Village` today, with its own contract families, building targets
     /// and (placeholder) architectural direction.
     Aldea,
@@ -1155,7 +1155,7 @@ fn resolve_settlement_layouts(
                 "authored Cromatolis settlement layouts [{specifier}]: {id} has a layout but \
                  generates as {kind:?}, not as a city"
             ));
-            panic!("{err}");
+            fatal_authored::<()>(err);
         }
     }
     let landmark_exclusions: Vec<_> = landmark_exclusions
@@ -1344,11 +1344,11 @@ struct AuthoredSettlementPopulation {
     peoples: Vec<AuthoredSettlementPeople>,
     #[serde(default)]
     future_peoples: Vec<String>,
-    /// The rtsim NPC population this settlement aims for (NH-171 / NH-166
-    /// T36): the total over every town role (guards, adventurers, merchants
-    /// and the other professions). It is a target, not a hard cap: it sets
-    /// how many town NPCs the world wants, and respawns are steered toward
-    /// settlements below their number, but when none of those can take one
+    /// The rtsim NPC population this settlement aims for: the total over every
+    /// town role (guards, adventurers, merchants and the other
+    /// professions). It is a target, not a hard cap: it sets how many town
+    /// NPCs the world wants, and respawns are steered toward settlements
+    /// below their number, but when none of those can take one
     /// (e.g. all loaded) an NPC may still go to a settlement at its number.
     /// `None` keeps the upstream rule, which sizes the population by the
     /// settlement's plot count, so a settlement changes only when this is
@@ -1590,9 +1590,9 @@ struct AuthoredSettlementMeta {
     category: AuthoredSettlementCategory,
     size: AuthoredSettlementSize,
     /// This settlement's own building-count target, read from the site (never
-    /// re-derived from the family). Not consumed by generation yet: the
-    /// density work that targets it is NH-166 T36.
-    #[expect(dead_code)]
+    /// re-derived from the family). Caps the layout floor
+    /// (`seeds::CivSeedPolicy::layout_band`); the density work that sizes a
+    /// settlement by it is separate.
     target_buildings: usize,
     /// The architectural direction of the resolving template family, if it
     /// names one. Placeholder: no house-style variants exist yet, so every
@@ -1648,7 +1648,7 @@ struct SettlementTemplateFamily {
     /// (`"camp"`, `"refactor_city"`, or `"refactor_city_with_castle"`). See
     /// `site_kind_for_fallback_name`.
     xindeler_old_fallback: String,
-    /// The family's default building-count target (NH-167). A settlement's
+    /// The family's default building-count target. A settlement's
     /// own `target_buildings` (which may be an authored override) is what
     /// generation reads; this is only validated and kept for tooling.
     #[serde(default, deserialize_with = "present_value")]
@@ -2127,7 +2127,7 @@ fn authored_layer_load_failure(
         Some(std::io::ErrorKind::NotFound) => {
             format!(
                 "authored Cromatolis {layer} [{specifier}]: {file} is missing, but this world is \
-                 the              authored Cromatolis map and requires it"
+                 the authored Cromatolis map and requires it"
             )
         },
         Some(kind) => {
@@ -2139,11 +2139,18 @@ fn authored_layer_load_failure(
         None => {
             format!(
                 "authored Cromatolis {layer} [{specifier}]: {file} does not parse (unknown \
-                 fields,              unknown enum values such as an unknown category, and wrong \
-                 types are errors):              {reason}"
+                 fields, unknown enum values such as an unknown category, and wrong types are \
+                 errors): {reason}"
             )
         },
     })
+}
+
+/// Logs `err` before stopping world generation with it: a startup failure
+/// reaches the server log as an error event, not only as a panic message.
+fn fatal_authored<T>(err: impl fmt::Display) -> T {
+    tracing::error!("{err}");
+    panic!("{err}")
 }
 
 /// Loads and validates one authored Cromatolis layer; see the comment above
@@ -2215,7 +2222,7 @@ impl Civs {
                     "world.map.cromatolis_v0_sites",
                     |settlements: &AuthoredCromatolisSettlements| settlements.validate(map_size_lg),
                 )
-                .unwrap_or_else(|err| panic!("{err}")),
+                .unwrap_or_else(fatal_authored),
             )
         } else {
             None
@@ -2227,7 +2234,7 @@ impl Civs {
                     "world.map.cromatolis_v0_landmarks",
                     |landmarks: &AuthoredCromatolisLandmarks| landmarks.validate(map_size_lg),
                 )
-                .unwrap_or_else(|err| panic!("{err}")),
+                .unwrap_or_else(fatal_authored),
             )
         } else {
             None
@@ -2238,7 +2245,7 @@ impl Civs {
                 "world.map.cromatolis_v0_landmark_profiles",
                 |profiles: &AuthoredCromatolisLandmarkProfiles| profiles.validate(landmarks),
             )
-            .unwrap_or_else(|err| panic!("{err}"))
+            .unwrap_or_else(fatal_authored)
         });
         // Footprint, main-plaza anchor and building quotas of the authored
         // settlements that have one; resolved against the settlement and
@@ -2256,7 +2263,7 @@ impl Civs {
                         layouts.validate(&pins)
                     },
                 )
-                .unwrap_or_else(|err| panic!("{err}"));
+                .unwrap_or_else(fatal_authored);
                 (layouts, pins)
             });
         let authored_settlement_template_contract = if authored_settlements.is_some() {
@@ -2266,7 +2273,7 @@ impl Civs {
                     "world.map.cromatolis_v0_settlement_template_contract",
                     |contract: &SettlementTemplateContract| contract.validate(),
                 )
-                .unwrap_or_else(|err| panic!("{err}")),
+                .unwrap_or_else(fatal_authored),
             )
         } else {
             None
@@ -2281,7 +2288,7 @@ impl Civs {
                     "world.map.cromatolis_v0_routes",
                     |routes: &AuthoredCromatolisRouteGraph| routes.validate(map_size_lg),
                 )
-                .unwrap_or_else(|err| panic!("{err}")),
+                .unwrap_or_else(fatal_authored),
             )
         } else {
             None
@@ -2296,7 +2303,7 @@ impl Civs {
                     "world.map.cromatolis_v0_maritime_routes",
                     |routes: &AuthoredCromatolisMaritimeRoutes| routes.validate(map_size_lg),
                 )
-                .unwrap_or_else(|err| panic!("{err}")),
+                .unwrap_or_else(fatal_authored),
             )
         } else {
             None
@@ -2316,7 +2323,7 @@ impl Civs {
                     "world.map.cromatolis_v0_bridges",
                     |bridges: &AuthoredCromatolisBridges| bridges.validate(map_size_lg),
                 )
-                .unwrap_or_else(|err| panic!("{err}")),
+                .unwrap_or_else(fatal_authored),
             )
         } else {
             None
@@ -2334,7 +2341,7 @@ impl Civs {
                         fortifications.validate(map_size_lg)
                     },
                 )
-                .unwrap_or_else(|err| panic!("{err}")),
+                .unwrap_or_else(fatal_authored),
             )
         } else {
             None
@@ -6844,7 +6851,7 @@ mod tests {
         }
     }
 
-    // ---- Aldea (NH-167 T41) ----
+    // ---- Aldea ----
 
     /// One settlement record, as the open-world export writes it.
     fn settlement_ron(category: &str, size: &str, target: Option<&str>) -> String {
@@ -6932,7 +6939,7 @@ mod tests {
         assert!(err.contains("site.test_settlement"), "{err}");
     }
 
-    // ---- Per-settlement NPC count (NH-166 T36 / NH-171) ----
+    // ---- Per-settlement NPC count ----
 
     #[test]
     fn npc_count_is_optional_and_bounded() {
@@ -6999,7 +7006,7 @@ mod tests {
             assert_eq!(site.size, size, "{id}");
             assert_eq!(site.target_buildings, target, "{id}");
         }
-        // The other NH-167 T40 corrections, by their decided
+        // The other settlement-size corrections, by their decided
         // (category, size, target).
         use AuthoredSettlementCategory::{City, Town, Village};
         for (id, category, size, target) in [
@@ -7024,7 +7031,7 @@ mod tests {
     fn every_real_settlement_target_is_its_family_default_or_a_decided_override() {
         let settlements = real_settlements();
         let contract = real_settlement_template_contract();
-        // Per-settlement overrides (NH-167 section 9.5; source of truth:
+        // Per-settlement overrides (source of truth:
         // `target_buildings` in xindeler-open-world's
         // `authored_settlement_profiles.ron`); everything else must equal the
         // type x size matrix default of the resolving family.

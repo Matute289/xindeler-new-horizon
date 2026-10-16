@@ -272,10 +272,14 @@ impl CivSeedPolicy {
             return None;
         }
         let settlement = site.authored.as_ref()?;
-        min_buildings_for(
+        let band = min_buildings_for(
             settlement.category.contract_key(),
             settlement.size.contract_key(),
-        )
+        )?;
+        // The settlement's own (data) target caps the floor, so a settlement
+        // authored smaller than its category's band is never asked for more
+        // buildings than it is meant to have.
+        Some(band.min(settlement.target_buildings))
     }
 
     /// The seed of retry `attempt` (1-based) of a site whose first layout
@@ -326,6 +330,11 @@ impl<R: Rng> GenCtx<'_, R> {
 /// large 40, medium 23, small 7), so only a clearly starved roll trips it.
 /// A stop-gap floor, not a size model: settlements of one category should
 /// eventually be *sized* by their authored footprint, not re-drawn.
+///
+/// A settlement's own `target_buildings` caps its floor (`layout_band`),
+/// and an authored layout whose settlement target is below its band is
+/// refused at load (`settlement_layouts`), so the band can never be
+/// unreachable.
 ///
 /// TODO: these are balance numbers and belong in data, next to the sizes
 /// they describe -- the authored settlement template contract RON, keyed by
