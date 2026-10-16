@@ -18,6 +18,7 @@ struct Fake {
     now: Cell<f64>,
     pos: Cell<Option<Vec3<f32>>>,
     dead: Cell<bool>,
+    in_liquid: Cell<bool>,
     tod: Cell<Option<f64>>,
     view_distance: Cell<Option<u32>>,
     terrain: Cell<TerrainStatus>,
@@ -34,6 +35,7 @@ impl Fake {
             now: Cell::new(0.0),
             pos: Cell::new(Some(Vec3::new(0.0, 0.0, 100.0))),
             dead: Cell::new(false),
+            in_liquid: Cell::new(false),
             tod: Cell::new(None),
             view_distance: Cell::new(Some(12)),
             terrain: Cell::new(NOT_READY),
@@ -56,6 +58,8 @@ impl RunnerContext for Fake {
     fn player_pos(&self) -> Option<Vec3<f32>> { self.pos.get() }
 
     fn player_dead(&self) -> bool { self.dead.get() }
+
+    fn player_in_liquid(&self) -> bool { self.in_liquid.get() }
 
     fn time_of_day(&self) -> Option<f64> { self.tod.get() }
 
@@ -473,6 +477,73 @@ fn vertical_drift_counts_after_rest() {
         line(r.tick(&ctx)).as_deref(),
         Some("/goto 100.00 100.00 60.00")
     );
+}
+
+/// A swimmer rises or sinks without ever resting: that is not drift, and
+/// must not trigger a re-teleport or fail the wait.
+#[test]
+fn swimming_player_is_not_drift() {
+    let ctx = Fake::new();
+    ctx.in_liquid.set(true);
+    let mut r = StepRunner::new(&script(
+        "Teleport(wpos: (100.0, 100.0, -60.0)), WaitSeconds(3.0)",
+        0,
+    ));
+    r.tick(&ctx);
+    ctx.at(100.0, 100.0, -60.0);
+    r.tick(&ctx);
+    for i in 1..=(REST_FRAMES + 20) {
+        ctx.at(100.0, 100.0, -60.0 + 0.2 * i as f32);
+        assert!(
+            line(r.tick(&ctx)).is_none(),
+            "no re-teleport while swimming"
+        );
+    }
+    ctx.advance(4.0);
+    r.tick(&ctx);
+    assert!(r.is_finished());
+    assert!(matches!(outcomes(&r)[1], StepOutcome::Done));
+}
+
+/// Swimming only excuses vertical motion: a real horizontal displacement is
+/// still reported (re-teleported once), while pure bobbing never is.
+#[test]
+fn swimming_horizontal_drift_is_reported() {
+    let ctx = Fake::new();
+    ctx.in_liquid.set(true);
+    let mut r = StepRunner::new(&script(
+        "Teleport(wpos: (100.0, 100.0, -60.0)), WaitSeconds(100.0)",
+        0,
+    ));
+    r.tick(&ctx);
+    ctx.at(100.0, 100.0, -60.0);
+    r.tick(&ctx);
+    // Bobbing up and down far beyond the tolerance: fine.
+    ctx.at(100.0, 100.0, -60.0 + DRIFT_BLOCKS * 3.0);
+    assert!(line(r.tick(&ctx)).is_none());
+    // Pushed sideways while swimming: re-teleported.
+    ctx.at(100.0 + DRIFT_BLOCKS + 1.0, 100.0, -60.0);
+    assert_eq!(
+        line(r.tick(&ctx)).as_deref(),
+        Some("/goto 100.00 100.00 -60.00")
+    );
+}
+
+/// A viewpoint far from the player can never have its terrain loaded: say so
+/// at once instead of waiting out the terrain timeout.
+#[test]
+fn viewpoint_beyond_the_view_distance_fails_fast() {
+    let ctx = Fake::new();
+    ctx.at(0.0, 0.0, 100.0);
+    let mut r = StepRunner::new(&script(
+        "Viewpoint(cam: (0.0, 600.0, 120.0), look_at: (0.0, 0.0, 100.0))",
+        0,
+    ));
+    for _ in 0..6 {
+        r.tick(&ctx);
+    }
+    assert!(failed_with(&outcomes(&r)[0], "chunks from the player"));
+    assert!(ctx.now.get() < 1.0, "no timeout was waited out");
 }
 
 #[test]
@@ -945,6 +1016,9 @@ fn screenshot_that_never_arrives_times_out_with_exit_3() {
 #[test]
 fn screenshot_after_viewpoint_checks_terrain_around_the_camera() {
     let ctx = Fake::new();
+    // The abstract world here puts the lens far from the player; the
+    // far-lens guard is covered by its own test.
+    ctx.view_distance.set(None);
     ctx.terrain.set(READY);
     let mut r = StepRunner::new(&script(
         r#"Viewpoint(cam: (500.0, 600.0, 90.0), look_at: (500.0, 700.0, 80.0)),
@@ -976,6 +1050,9 @@ fn ordinals_sort_past_ninety_nine() {
 #[test]
 fn teleport_after_viewpoint_keeps_watching_the_camera() {
     let ctx = Fake::new();
+    // The abstract world here puts the lens far from the player; the
+    // far-lens guard is covered by its own test.
+    ctx.view_distance.set(None);
     ctx.terrain.set(READY);
     ctx.at(10.0, 10.0, 100.0);
     let mut r = StepRunner::new(&script(

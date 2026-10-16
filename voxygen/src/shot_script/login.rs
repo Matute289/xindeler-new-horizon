@@ -547,10 +547,15 @@ impl CharSelectDriver {
 
     /// Run one step against the client. No-op when no shot script is active.
     /// Returns `true` when the run must shut down.
-    pub fn tick(&mut self, client: &mut Client, view_distances: common::ViewDistances) -> bool {
-        if active().is_none() || !client.registered() {
+    pub fn tick(&mut self, client: &mut Client, settings_distances: common::ViewDistances) -> bool {
+        let Some(setup) = active() else {
+            return false;
+        };
+        if !client.registered() {
             return false;
         }
+        let view_distances =
+            script_view_distances(setup.script.defaults.view_distance, settings_distances);
         let list = client.character_list();
         let action = self.decide(
             list.loading,
@@ -590,6 +595,21 @@ impl CharSelectDriver {
             },
         }
         false
+    }
+}
+
+/// The view distances a script run enters the world with: the script's
+/// `defaults.view_distance` for terrain, instead of whatever the (possibly
+/// auto-detected, low-preset) graphics settings of the machine say. The entity
+/// distance is capped by the settings value so a script never raises entity
+/// streaming cost. The server and the client still clamp to their own maximum.
+pub(crate) fn script_view_distances(
+    script_view_distance: u32,
+    settings: common::ViewDistances,
+) -> common::ViewDistances {
+    common::ViewDistances {
+        terrain: script_view_distance,
+        entity: script_view_distance.min(settings.entity),
     }
 }
 

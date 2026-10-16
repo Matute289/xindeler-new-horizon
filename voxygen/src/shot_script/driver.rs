@@ -266,6 +266,9 @@ pub trait RunnerContext {
     fn player_pos(&self) -> Option<Vec3<f32>>;
     /// The player is dead (waiting to respawn).
     fn player_dead(&self) -> bool;
+    /// The player is in liquid. A swimmer never comes to rest (buoyancy and
+    /// sinking move them every frame), so the drift watch does not apply.
+    fn player_in_liquid(&self) -> bool { false }
     /// The client's time of day in game seconds, `None` if unknown.
     fn time_of_day(&self) -> Option<f64>;
     /// The client's terrain view distance in chunks, `None` if unknown.
@@ -1052,6 +1055,29 @@ impl StepRunner {
                         None,
                     );
                 }
+                // The server only sends chunks within the view distance of
+                // the player, so a lens farther away than that can never see
+                // its whole disc loaded (typically a `Viewpoint` followed by
+                // a teleport without a `Camera` step): fail at once instead
+                // of waiting out the timeout.
+                if let (Some(vd), Some(c), Some(p)) =
+                    (ctx.view_distance(), center, ctx.player_pos())
+                {
+                    use common::vol::RectVolSize;
+                    let chunk = common::terrain::TerrainChunkSize::RECT_SIZE.x as f32;
+                    let lens_chunks = Vec2::<f32>::from(p).distance(c) / chunk;
+                    if lens_chunks + radius as f32 > vd as f32 + 1.0 {
+                        return (
+                            StepOutcome::Failed(format!(
+                                "the camera is {lens_chunks:.1} chunks from the player, so a \
+                                 radius of {radius} chunks can never be loaded within the view \
+                                 distance of {vd} chunks: move the player near the lens, or put a \
+                                 Camera step after the teleport to bring the camera back"
+                            )),
+                            None,
+                        );
+                    }
+                }
                 (now, radius, None, false, 0)
             },
         };
@@ -1152,11 +1178,20 @@ impl StepRunner {
             }
         }
 
-        anchor.rest.update(pos);
-        if anchor.rest_z.is_none() && anchor.rest.settled() {
-            anchor.rest_z = Some(pos.z);
-        }
-        let vertical = anchor.rest_z.map_or(0.0, |z| (pos.z - z).abs());
+        let vertical = if ctx.player_in_liquid() {
+            // Swimming: the player floats up or sinks slowly and never
+            // rests, so vertical motion is not a drift from the target. A
+            // horizontal displacement still is.
+            anchor.rest = Rest::default();
+            anchor.rest_z = None;
+            0.0
+        } else {
+            anchor.rest.update(pos);
+            if anchor.rest_z.is_none() && anchor.rest.settled() {
+                anchor.rest_z = Some(pos.z);
+            }
+            anchor.rest_z.map_or(0.0, |z| (pos.z - z).abs())
+        };
         if horizontal <= DRIFT_BLOCKS && vertical <= DRIFT_BLOCKS {
             return Drift::Ok;
         }
@@ -1535,6 +1570,12 @@ impl RunnerContext for LiveContext<'_> {
     fn player_pos(&self) -> Option<Vec3<f32>> { self.client.position() }
 
     fn player_dead(&self) -> bool { self.client.is_dead() }
+
+    fn player_in_liquid(&self) -> bool {
+        self.client
+            .current::<common::comp::PhysicsState>()
+            .is_some_and(|p| p.in_liquid().is_some())
+    }
 
     fn time_of_day(&self) -> Option<f64> { Some(self.client.state().get_time_of_day()) }
 
