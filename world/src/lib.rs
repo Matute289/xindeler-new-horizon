@@ -712,10 +712,16 @@ impl World {
 
                 // The deep stone fill; the exposed wall of an authored dry
                 // pit is the column's own strata (`BlockGen`).
-                let wall_from = z_cache
-                    .sample
-                    .exposed_wall_floor
-                    .map(|f| f.floor() as i32 + 1);
+                // Authored ground lowered below the sim's basement is strata
+                // all the way down, flagged or not.
+                let wall_from = if z_cache.sample.lowered_below_basement() {
+                    Some(base_z)
+                } else {
+                    z_cache
+                        .sample
+                        .exposed_wall_floor
+                        .map(|f| f.floor() as i32 + 1)
+                };
                 let strata = wall_from.map(|_| z_cache.sample.wall_strata());
                 (base_z..min_z as i32).for_each(|z| {
                     let block = match (wall_from, &strata) {

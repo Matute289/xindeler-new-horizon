@@ -111,27 +111,32 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
                     // or not), may carry the engine's blue deep-rock colour.
                     if in_region(wpos) && !wet_here {
                         let mut beside = false;
+                        let mut near = false;
                         let mut lo = i32::MAX;
-                        for d in [
-                            Vec2::new(1, 0),
-                            Vec2::new(-1, 0),
-                            Vec2::new(0, 1),
-                            Vec2::new(0, -1),
-                        ] {
-                            let n = wpos + d;
-                            if in_region(n) && pits.iter().any(|r| inside(*r, n)) {
+                        for r in pits {
+                            // The nearest ground cell of the pit box.
+                            let n =
+                                Vec2::new(wpos.x.clamp(r.0, r.2 - 1), wpos.y.clamp(r.1, r.3 - 1));
+                            let d = (wpos - n).map(|e| e.abs()).reduce_max();
+                            if (wpos - n).map(|e| e.abs()).sum() == 1 && in_region(n) {
+                                // Beside the pit's ground (flagged or not): the
+                                // wall band from its top up to the surface.
                                 let top = world.sim().ground_alt_at(n).unwrap();
                                 lo = lo.min(top.floor() as i32 + 1);
                                 beside = true;
                             }
+                            near |= d <= 16;
                         }
-                        if beside {
+                        // Within 16 blocks of a pit, a column whose authored
+                        // ground sits below the sim's basement (the ring and
+                        // feather around the pit): 40 blocks from the surface.
+                        let below = near && col.alt < col.basement;
+                        if beside || below {
                             w.scanned_columns += 1;
-                            // Columns whose basement sits above the surface (negative
-                            // grass depth) have no sub-surface layer to scan.
-                            let grass =
-                                (1.5 + 2.0 * col.chaos).min(col.alt - col.basement).max(0.0);
-                            let hi = (col.alt - grass - 1.0).floor() as i32;
+                            // Under the surface layer (grass/earth in the
+                            // biome's own colours, which can be teal).
+                            let hi = (col.alt - (1.5 + 2.0 * col.chaos)).ceil() as i32 - 1;
+                            let lo = if beside { lo } else { hi - 40 };
                             for z in lo.max(z0)..=hi.min(z1 - 1) {
                                 let b = block(z);
                                 if matches!(b.kind(), BlockKind::Rock | BlockKind::Earth)
@@ -139,6 +144,17 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
                                         .is_some_and(|c| is_blue(c) && !is_ore_colour(c))
                                 {
                                     w.blue_blocks += 1;
+                                    {
+                                        eprintln!(
+                                            "BLUE beside={beside} below={below} z={z} alt={} \
+                                             base={} flagged={} auth={:?} col={:?}",
+                                            col.alt,
+                                            col.basement,
+                                            col.exposed_wall_floor.is_some(),
+                                            col.authored.map(|a| (a.settings.sea_fill, a.cell)),
+                                            b.get_color()
+                                        );
+                                    }
                                 }
                             }
                         }

@@ -1815,8 +1815,22 @@ impl ColumnSample<'_> {
         self.wall_strata().block(wpos)
     }
 
+    /// Whether this column belongs to a `sea_fill: AuthoredOnly` authored
+    /// region.
+    pub fn is_authored_only(&self) -> bool {
+        self.authored
+            .is_some_and(|a| a.settings.sea_fill == authored_raster::SeaFill::AuthoredOnly)
+    }
+
     /// The per-column invariants of [`Self::dry_wall_block`], to be built once
     /// per column and reused for every wall block of it.
+    /// Authored ground of a `sea_fill: AuthoredOnly` region that the raster
+    /// lowered below the sim's basement (`alt < basement`). Never true for
+    /// sim, no-manifest or `Auto`-region columns (`alt >= basement` there).
+    pub fn lowered_below_basement(&self) -> bool {
+        lowered_below_basement(self.is_authored_only(), self.alt, self.basement)
+    }
+
     pub fn wall_strata(&self) -> WallStrata {
         WallStrata::new(
             self.alt,
@@ -2080,6 +2094,10 @@ pub(crate) enum WallLayer {
     Ore(Rgb<u8>),
 }
 
+fn lowered_below_basement(authored_only: bool, alt: f32, basement: f32) -> bool {
+    authored_only && alt < basement
+}
+
 /// The layer of an exposed pit wall `depth` blocks under its surface layer for
 /// a column with `soil` blocks of earth. `mix` is a position hash in `[0, 1)`:
 /// the earth/stone blend is probabilistic over a band of [`WALL_BLEND_BAND`]
@@ -2322,6 +2340,53 @@ mod wall_layer_tests {
             }
         }
         assert!(n > 4000, "{n}");
+    }
+
+    /// Authored ground lowered below the sim's basement (`alt < basement`):
+    /// every block under the surface layer is earth-then-stone, never the
+    /// engine's blue (`stone_col`), at any depth.
+    #[test]
+    fn columns_below_their_basement_have_no_blue_strata() {
+        let blue_minus_red = |c: Rgb<u8>| c.b as i32 - c.r as i32;
+        for sub in [
+            Rgb::new(0.35, 0.28, 0.2),
+            Rgb::new(0.6, 0.55, 0.5),
+            Rgb::new(0.2, 0.25, 0.4),
+        ] {
+            for (alt, basement) in [(131.4, 140.0), (120.0, 120.5), (95.0, 160.0)] {
+                for chaos in [0.0, 0.3, 1.0] {
+                    let strata = WallStrata::new(alt, basement, chaos, false, sub);
+                    for depth in 0..40 {
+                        for k in 0..30 {
+                            let z = alt as i32 - depth;
+                            let b = strata.block(Vec3::new(k * 7, k * 3, z));
+                            let c = b.get_color().unwrap();
+                            assert!(matches!(b.kind(), BlockKind::Earth | BlockKind::Rock));
+                            if !WALL_ORES.iter().any(|o| Rgb::from(*o) == c) {
+                                assert!(blue_minus_red(c) <= 30, "{c:?} {sub:?}");
+                                assert_ne!((c.r, c.g, c.b), (90, 110, 150));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Only authored-only columns below their basement take the lowered
+    /// path: sim, no-manifest and `Auto` columns (`alt >= basement`) never
+    /// do, so their output is the generic path's, byte for byte.
+    #[test]
+    fn only_authored_only_columns_below_their_basement_are_lowered() {
+        for alt in [90.0f32, 123.4, 200.0] {
+            for d in [-5.0f32, -0.01, 0.0, 0.5, 40.0] {
+                let basement = alt - d.abs();
+                assert!(!lowered_below_basement(true, alt, basement));
+                assert!(!lowered_below_basement(false, alt, basement));
+            }
+            assert!(lowered_below_basement(true, alt, alt + 0.01));
+            assert!(!lowered_below_basement(false, alt, alt + 0.01));
+        }
     }
 
     #[test]

@@ -67,14 +67,11 @@ impl<'a> BlockGen<'a> {
             basement,
             chaos,
             water_level,
-            surface_color,
             sub_surface_color,
             stone_col,
-            snow_cover,
             cliff_offset,
             cliff_height,
             ice_depth,
-            surface_block_override,
             flood_block,
             exposed_wall_floor,
             ..
@@ -94,6 +91,24 @@ impl<'a> BlockGen<'a> {
             _ => Rgb::zero(),
         });
         let grass_depth = (1.5 + 2.0 * chaos).min(alt - basement);
+        // Authored ground lowered below the sim's basement (`alt < basement`,
+        // so `grass_depth` is negative and the column is filled up to the
+        // basement): the filled blocks are unchanged, but they are coloured
+        // from the real surface -- a grass/earth surface layer under
+        // `alt`, then the natural earth-and-stone strata -- instead of the
+        // engine's blue deep-rock ramp, which a negative depth reaches
+        // already next to the surface.
+        let below_basement = sample.lowered_below_basement();
+        let layer = 1.5 + 2.0 * chaos;
+        if below_basement && (wposf.z as f32) >= alt - layer && (wposf.z as f32) < basement {
+            return Some(surface_block(
+                sample,
+                (wposf.z as f32 - (alt - layer))
+                    .div(layer)
+                    .clamp(0.0, 1.0)
+                    .sqrt(),
+            ));
+        }
         if (wposf.z as f32) < alt - grass_depth {
             let stone_factor = (alt - grass_depth - wposf.z as f32) * 0.15;
             let col = Lerp::lerp(
@@ -108,7 +123,7 @@ impl<'a> BlockGen<'a> {
             // strata (earth, then natural stone with rare ore flecks) instead
             // of the engine's blue underground rock colour.
             let wall = exposed_wall_floor.is_some_and(|f| wposf.z as f32 > f);
-            let strata = wall.then(|| sample.wall_strata());
+            let strata = (wall || below_basement).then(|| sample.wall_strata());
             let solid =
                 |kind: BlockKind, col: Rgb<u8>| solid_block(strata.as_ref(), wpos, kind, col);
 
@@ -143,29 +158,7 @@ impl<'a> BlockGen<'a> {
                 .div(grass_depth)
                 .sqrt();
             // Surface
-            Some(if let Some(forced) = surface_block_override {
-                // A governing `BiomeProfile` override forces a specific
-                // surface block kind (e.g. bare `Rock` on a volcano's
-                // slopes) -- this takes full priority over the
-                // Sand/Earth/Snow/Grass decision below entirely.
-                let col = Lerp::lerp(sub_surface_color, surface_color, grass_factor);
-                Block::new(forced, col.map(|e| (e * 255.0) as u8))
-            } else if water_level > alt.ceil() {
-                Block::new(
-                    BlockKind::Sand,
-                    sub_surface_color.map(|e| (e * 255.0) as u8),
-                )
-            } else {
-                let col = Lerp::lerp(sub_surface_color, surface_color, grass_factor);
-                if grass_factor < 0.7 {
-                    Block::new(BlockKind::Earth, col.map(|e| (e * 255.0) as u8))
-                } else if snow_cover {
-                    //if temp < CONFIG.snow_temp + 0.031 {
-                    Block::new(BlockKind::Snow, col.map(|e| (e * 255.0) as u8))
-                } else {
-                    Block::new(BlockKind::Grass, col.map(|e| (e * 255.0) as u8))
-                }
-            })
+            Some(surface_block(sample, grass_factor))
         } else {
             None
         }
@@ -207,6 +200,42 @@ impl ZCache<'_> {
         let max = ground_max.max(self.sample.water_level + 2.0 + self.sample.ice_depth);
 
         (min, max)
+    }
+}
+
+/// The surface block of a column at `grass_factor` (0 at the bottom of the
+/// surface layer to 1 at its top).
+fn surface_block(sample: &ColumnSample, grass_factor: f32) -> Block {
+    let &ColumnSample {
+        alt,
+        water_level,
+        surface_color,
+        sub_surface_color,
+        snow_cover,
+        surface_block_override,
+        ..
+    } = sample;
+    if let Some(forced) = surface_block_override {
+        // A governing `BiomeProfile` override forces a specific
+        // surface block kind (e.g. bare `Rock` on a volcano's
+        // slopes) -- this takes full priority over the
+        // Sand/Earth/Snow/Grass decision below entirely.
+        let col = Lerp::lerp(sub_surface_color, surface_color, grass_factor);
+        Block::new(forced, col.map(|e| (e * 255.0) as u8))
+    } else if water_level > alt.ceil() {
+        Block::new(
+            BlockKind::Sand,
+            sub_surface_color.map(|e| (e * 255.0) as u8),
+        )
+    } else {
+        let col = Lerp::lerp(sub_surface_color, surface_color, grass_factor);
+        if grass_factor < 0.7 {
+            Block::new(BlockKind::Earth, col.map(|e| (e * 255.0) as u8))
+        } else if snow_cover {
+            Block::new(BlockKind::Snow, col.map(|e| (e * 255.0) as u8))
+        } else {
+            Block::new(BlockKind::Grass, col.map(|e| (e * 255.0) as u8))
+        }
     }
 }
 
