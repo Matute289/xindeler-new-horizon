@@ -11,6 +11,7 @@
 
 mod all;
 pub mod authored_raster;
+#[cfg(test)] mod base_golden_tests;
 mod biome_profile;
 mod block;
 pub mod canvas;
@@ -107,10 +108,14 @@ thread_local! {
 /// cave decorations that draw from it) seeded with `seed` on this thread.
 #[cfg(test)]
 pub(crate) fn with_deterministic_dynamic_rng<R>(seed: [u8; 32], f: impl FnOnce() -> R) -> R {
-    TEST_DYNAMIC_RNG_SEED.with(|s| s.set(Some(seed)));
-    let r = f();
-    TEST_DYNAMIC_RNG_SEED.with(|s| s.set(None));
-    r
+    // Restores the previous seed even if `f` panics, so a failed test does
+    // not leave a seed behind on a reused test thread.
+    struct Restore(Option<[u8; 32]>);
+    impl Drop for Restore {
+        fn drop(&mut self) { TEST_DYNAMIC_RNG_SEED.with(|s| s.set(self.0)); }
+    }
+    let _restore = Restore(TEST_DYNAMIC_RNG_SEED.with(|s| s.replace(Some(seed))));
+    f()
 }
 
 /// The RNG of a structure's weighted block choice (`StructureBlock::Choice`
@@ -211,6 +216,7 @@ impl World {
             // XINDELER: an authored settlement on authored water is a data
             // error (see `authored_raster::queries`).
             if let Err(err) = authored_raster::queries::check_authored_sites(&sim, &civs) {
+                tracing::error!("{err}");
                 panic!("{err}");
             }
 
@@ -234,6 +240,7 @@ impl World {
                 index.as_index_ref(),
                 calendar.as_ref(),
             ) {
+                tracing::error!("{err}");
                 panic!("{err}");
             }
             // XINDELER: sites, authored voids and roads on authored ground
@@ -245,7 +252,10 @@ impl World {
                 layer::authored_regions::authored_voids(&index, &world.sim),
             ) {
                 Ok(report) => world.sim.set_site_levelling(report.sites.levelled_columns),
-                Err(err) => panic!("{err}"),
+                Err(err) => {
+                    tracing::error!("{err}");
+                    panic!("{err}")
+                },
             }
             (world, index)
         })
@@ -299,6 +309,19 @@ impl World {
                         self.sim().map_size_lg(),
                         0.0..=self.sim().max_height,
                     );
+                    let biome_pois: Vec<_> = self
+                        .civs()
+                        .pois
+                        .iter()
+                        .filter(|(_, poi)| matches!(poi.kind, civ::PoiKind::Biome(_)))
+                        .map(|(id, poi)| (id, poi.loc))
+                        .collect();
+                    let label_chunks = self.sim().biome_label_chunks(&label_config, &biome_pois);
+                    let mut label_chunks = biome_pois
+                        .iter()
+                        .map(|&(id, _)| id)
+                        .zip(label_chunks)
+                        .collect::<std::collections::HashMap<_, _>>();
                     self.civs()
                         .pois
                         .iter()
@@ -307,10 +330,9 @@ impl World {
                                 civ::PoiKind::Peak(alt) => {
                                     (world_msg::PoiKind::Peak(*alt), poi.loc)
                                 },
-                                civ::PoiKind::Biome(size) => (
-                                    world_msg::PoiKind::Lake(*size),
-                                    self.sim().biome_label_chunk(&label_config, id, poi.loc)?,
-                                ),
+                                civ::PoiKind::Biome(size) => {
+                                    (world_msg::PoiKind::Lake(*size), label_chunks.remove(&id)??)
+                                },
                             };
                             Some(world_msg::PoiInfo {
                                 name: poi.name.clone(),

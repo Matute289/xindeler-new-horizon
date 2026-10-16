@@ -25,4 +25,24 @@ time cargo clippy -p \
 
 # Ensure that test-server compiles.
 time cargo clippy --locked --bin xindeler-server-cli --no-default-features -F simd  -- -D warnings &&
+# Ensure the opt-in airship route map renderer (`airship_maps`, off in every
+# other set above) still compiles and is clippy-clean, including its tests.
+time cargo clippy -p xindeler-world --locked \
+    --all-targets \
+    --features="airship_maps" \
+    -- -D warnings &&
+
+# Run the world and terrain-probe unit tests. This checkout has no LFS, so the
+# asset-loader canary file is a pointer that would abort start-up: satisfy it
+# first, but only when it really is a pointer (a local run with LFS must not
+# have its canary rewritten). The tests that need the `.vox` binaries are
+# `#[ignore]`d with that reason, and the chunk-generation golden test skips
+# itself without them.
+if head -c 7 assets/common/canary.canary | grep -q '^version'; then
+    printf 'VELOREN_CANARY_MAGIC\n' > assets/common/canary.canary
+fi &&
+time cargo test --locked -p xindeler-world --lib &&
+# terrain-probe is a binary crate: its tests are the bin's.
+time cargo test --locked -p xindeler-terrain-probe --bins &&
+
 time cargo fmt --all -- --check;

@@ -642,6 +642,7 @@ pub fn is_valid(condition: &SpotCondition, g: f32, c: &SimChunk) -> bool {
 }
 
 #[test]
+#[ignore = "needs LFS .vox assets"]
 fn test_spot_configs() {
     let all_spots = [
         Spot::DwarvenGrave,
