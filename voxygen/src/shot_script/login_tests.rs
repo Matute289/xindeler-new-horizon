@@ -461,7 +461,13 @@ fn minimap_setting_is_restored_after_the_script_changed_it() {
 }
 
 #[test]
-fn script_view_distance_overrides_the_graphics_settings() {
-    let vd = script_view_distances(12);
-    assert_eq!((vd.terrain, vd.entity), (12, 12));
+fn script_view_distance_overrides_terrain_and_caps_entities() {
+    let settings = common::ViewDistances {
+        terrain: 4,
+        entity: 6,
+    };
+    let vd = script_view_distances(12, settings);
+    assert_eq!((vd.terrain, vd.entity), (12, 6));
+    let vd = script_view_distances(3, settings);
+    assert_eq!((vd.terrain, vd.entity), (3, 3));
 }

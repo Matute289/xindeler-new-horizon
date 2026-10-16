@@ -505,6 +505,30 @@ fn swimming_player_is_not_drift() {
     assert!(matches!(outcomes(&r)[1], StepOutcome::Done));
 }
 
+/// Swimming only excuses vertical motion: a real horizontal displacement is
+/// still reported (re-teleported once), while pure bobbing never is.
+#[test]
+fn swimming_horizontal_drift_is_reported() {
+    let ctx = Fake::new();
+    ctx.in_liquid.set(true);
+    let mut r = StepRunner::new(&script(
+        "Teleport(wpos: (100.0, 100.0, -60.0)), WaitSeconds(100.0)",
+        0,
+    ));
+    r.tick(&ctx);
+    ctx.at(100.0, 100.0, -60.0);
+    r.tick(&ctx);
+    // Bobbing up and down far beyond the tolerance: fine.
+    ctx.at(100.0, 100.0, -60.0 + DRIFT_BLOCKS * 3.0);
+    assert!(line(r.tick(&ctx)).is_none());
+    // Pushed sideways while swimming: re-teleported.
+    ctx.at(100.0 + DRIFT_BLOCKS + 1.0, 100.0, -60.0);
+    assert_eq!(
+        line(r.tick(&ctx)).as_deref(),
+        Some("/goto 100.00 100.00 -60.00")
+    );
+}
+
 /// A viewpoint far from the player can never have its terrain loaded: say so
 /// at once instead of waiting out the terrain timeout.
 #[test]

@@ -1178,18 +1178,20 @@ impl StepRunner {
             }
         }
 
-        if ctx.player_in_liquid() {
+        let vertical = if ctx.player_in_liquid() {
             // Swimming: the player floats up or sinks slowly and never
-            // rests, which is not a drift from the target.
+            // rests, so vertical motion is not a drift from the target. A
+            // horizontal displacement still is.
             anchor.rest = Rest::default();
             anchor.rest_z = None;
-            return Drift::Ok;
-        }
-        anchor.rest.update(pos);
-        if anchor.rest_z.is_none() && anchor.rest.settled() {
-            anchor.rest_z = Some(pos.z);
-        }
-        let vertical = anchor.rest_z.map_or(0.0, |z| (pos.z - z).abs());
+            0.0
+        } else {
+            anchor.rest.update(pos);
+            if anchor.rest_z.is_none() && anchor.rest.settled() {
+                anchor.rest_z = Some(pos.z);
+            }
+            anchor.rest_z.map_or(0.0, |z| (pos.z - z).abs())
+        };
         if horizontal <= DRIFT_BLOCKS && vertical <= DRIFT_BLOCKS {
             return Drift::Ok;
         }
