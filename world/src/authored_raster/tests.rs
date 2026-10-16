@@ -1207,6 +1207,19 @@ fn authored_only_wet_and_bank_cells_have_no_sea_fill() {
     assert_eq!(auto.water_level, 139.01);
 }
 
+/// Both buried-ground paths (the exact column and the ring cell) use the
+/// sampler's column top, `alt as i32`, which truncates toward zero: an
+/// altitude in (-1, 0) has block 0 as its top, not -1.
+#[test]
+fn the_top_block_of_an_altitude_truncates_toward_zero() {
+    use super::queries::top_block_of_levelled_alt as top;
+    assert_eq!(top(-0.5), 0);
+    assert_eq!(top(-1.5), -1);
+    assert_eq!(top(-0.0), 0);
+    assert_eq!(top(0.9), 0);
+    assert_eq!(top(139.01), 139);
+}
+
 #[test]
 fn top_block_alt_has_the_block_as_its_top_below_zero_too() {
     for block in [-1860, -5, -1, 0, 1, 139, 5140] {

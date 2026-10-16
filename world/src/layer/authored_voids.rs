@@ -1540,8 +1540,8 @@ fn wpos_to_cpos(wpos: Vec2<i32>) -> Vec2<i32> {
 // same reason that one does: the rectangle side of the question has to agree
 // with the carve exactly, and the two carve modules getting their own copies
 // of the `+ 0.5` column convention is precisely the drift that produced the
-// defect these replace (COW-23 §7.1 -- a corner-only test is blind to a shape
-// that lies entirely *inside* a chunk, touching no corner at all).
+// defect these replace (the cave-and-void work -- a corner-only test is blind
+// to a shape that lies entirely *inside* a chunk, touching no corner at all).
 //
 // Why the corner form was safe where it came from, and stopped being safe
 // here: `cave.rs::apply_caves_to` also tests the four corners, but it pads its

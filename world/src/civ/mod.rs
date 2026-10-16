@@ -429,7 +429,7 @@ struct AuthoredCromatolisRoute {
     points: Vec<AuthoredMapPoint>,
 }
 
-/// Authored Cromatolis maritime trade routes (COW-24). Unlike
+/// Authored Cromatolis maritime trade routes. Unlike
 /// `AuthoredCromatolisRouteGraph`'s overland routes, a maritime route must
 /// never be carved into the terrain as a walkable road: ships don't need a
 /// paved seabed, and the real gap between the mainland and Rios Port's
@@ -2029,7 +2029,7 @@ const CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS: &[&str] = &[
 /// call to `establish_procedural_cromatolis_route_connectors` right after
 /// the mainland pass) rather than their own maritime stop.
 ///
-/// `site.rios_port` itself is therefore **empty** now (COW-24): it used to
+/// `site.rios_port` itself is therefore **empty** now: it used to
 /// list all three, back when the maritime-route system referenced below was
 /// "not-yet-built" -- `establish_authored_cromatolis_maritime_routes` now
 /// gives Rios Port a real `Track` to the mainland (it has authored maritime
@@ -2056,7 +2056,8 @@ const CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS: &[&str] = &[
 /// maritime pass above runs first and already gave it a `Track`. This list
 /// stays in place (currently empty) so the real-data reachability regression
 /// can pin any *future* gap explicitly instead of either failing outright or
-/// silently passing over it, exactly as it did for this one before COW-24.
+/// silently passing over it, exactly as it did for this one before the
+/// maritime-route work.
 const CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED: &[&str] = &[];
 
 /// Cromatolis's isolated northwest island group's own settlements that
@@ -2082,7 +2083,7 @@ const CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS: &[&str] =
 
 /// Seeds `site.rios_port` into
 /// `establish_procedural_cromatolis_route_connectors`'s "already reachable"
-/// set for the island-scoped call. Since COW-24,
+/// set for the island-scoped call. Since the maritime-route work,
 /// `establish_authored_cromatolis_maritime_routes` normally already gives
 /// Rios Port a real `Track` of its own by the time this runs (making this
 /// seed redundant in the common case), but the explicit seed stays as a
@@ -3800,7 +3801,7 @@ impl Civs {
     }
 
     /// Establishes logical travel edges for Cromatolis's authored maritime
-    /// trade routes (COW-24) as real `Track`s in
+    /// trade routes as real `Track`s in
     /// `self.tracks`/`self.track_map` -- exactly the same RTSim travel-edge
     /// mechanism `establish_authored_cromatolis_routes` above already uses
     /// for overland routes, deliberately not a parallel structure, and
@@ -4079,10 +4080,10 @@ impl Civs {
                     // authored chunks is the early return at the top of this
                     // function (`authored_cromatolis_v0`), which is therefore
                     // load-bearing: do not move or weaken it without guarding
-                    // here instead. See `COW-15`/`COW-2` -- that early return
-                    // also only holds while authored regions are map-global,
-                    // since it tests the *site's* chunk rather than each chunk
-                    // the path writes through.
+                    // here instead. See the authored-void and region-scoping work -- that early
+                    // return also only holds while authored regions are
+                    // map-global, since it tests the *site's* chunk rather than
+                    // each chunk the path writes through.
                     self.carve_track_into_terrain(ctx, &path);
 
                     // Take note of the track
@@ -5382,8 +5383,9 @@ mod tests {
 
     fn synthetic_map_size() -> MapSizeLg { MapSizeLg::new(Vec2::new(10, 10)).unwrap() }
 
-    /// COW-19, measured against the installed `cromatolis_v0_routes.ron`: 49
-    /// tracks, under 20 distinct `route_path.*` names.
+    /// Road-network work, measured against the installed
+    /// `cromatolis_v0_routes.ron`: 49 tracks, under 20 distinct
+    /// `route_path.*` names.
     ///
     /// Upstream `xindeler-open-world` authors 21 route paths, not 20. The
     /// twenty-first, `route_path.leafhat_pathway`, exports no track of its own
@@ -5404,20 +5406,22 @@ mod tests {
     /// though the row total would stay plausible.
     const AUTHORED_CROMATOLIS_ROUTE_PATH_NAMES: usize = 20;
 
-    /// COW-24, measured against the installed
+    /// Maritime-route work, measured against the installed
     /// `cromatolis_v0_maritime_routes.ron`: 36 authored maritime routes
     /// total (rows in the RON, mirroring `AUTHORED_CROMATOLIS_ROUTES`'s
     /// naming).
     const AUTHORED_CROMATOLIS_MARITIME_ROUTES: usize = 36;
 
-    /// COW-24, measured: of the 36 authored maritime routes, 15 connect two
-    /// real settlements (`Site` to `Site`) and therefore register a real
-    /// `Track` via `establish_authored_cromatolis_maritime_routes`. The
-    /// remaining 21 have an `External` or `Waypoint` stop and are parsed and
+    /// Maritime-route work, measured: of the 36 authored maritime routes, 15
+    /// connect two real settlements (`Site` to `Site`) and therefore
+    /// register a real `Track` via
+    /// `establish_authored_cromatolis_maritime_routes`. The remaining 21
+    /// have an `External` or `Waypoint` stop and are parsed and
     /// retained but never become a `Track` edge.
     const AUTHORED_CROMATOLIS_MARITIME_SITE_TO_SITE_ROUTES: usize = 15;
 
-    /// COW-19, measured: the settlements **no** authored track reaches.
+    /// Road-network work, measured: the settlements **no** authored track
+    /// reaches.
     ///
     /// This is the list, not a count, on purpose. A rewire that connects one
     /// settlement and strands another keeps any count identical and passes
@@ -5470,8 +5474,8 @@ mod tests {
         "site.under_the_river",
     ];
 
-    /// COW-19: what the *installed* `cromatolis_v0_sites.ron` is attested to
-    /// contain, per class.
+    /// Road-network work: what the *installed* `cromatolis_v0_sites.ron` is
+    /// attested to contain, per class.
     ///
     /// `xindeler-open-world` authors 65 settlements and this repository now
     /// installs all 65: the settlement set is fully reconciled, so a count
@@ -5811,8 +5815,8 @@ mod tests {
         site_id: String,
     }
 
-    /// COW-19: every `settlement_template_contract.ron` site override must name
-    /// a settlement this repository actually installs.
+    /// Road-network work: every `settlement_template_contract.ron` site
+    /// override must name a settlement this repository actually installs.
     ///
     /// An override pointing at an uninstalled settlement is dead configuration.
     /// It is inert today only because the loader above drops the field; the
@@ -5977,7 +5981,8 @@ mod tests {
         }
     }
 
-    /// COW-19: at most one authored route per *unordered pair* of settlements.
+    /// Road-network work: at most one authored route per *unordered pair* of
+    /// settlements.
     ///
     /// `establish_authored_cromatolis_routes` keeps its own `connected_pairs`
     /// set and `continue`s past a repeat with only a `debug!` line -- so a
@@ -6012,7 +6017,7 @@ mod tests {
         }
     }
 
-    // ---- Authored Cromatolis maritime routes (COW-24): loaders ----
+    // ---- Authored Cromatolis maritime routes: loaders ----
 
     #[test]
     fn cromatolis_authored_maritime_routes_parse_and_validate_real_export_without_panicking() {
@@ -6052,10 +6057,11 @@ mod tests {
         );
     }
 
-    /// COW-24: every maritime route's `Site(id)` stop currently resolves
-    /// against a real installed settlement. Unlike the land route graph's
-    /// equivalent test, `establish_authored_cromatolis_maritime_routes`
-    /// itself must NOT hard-fail if this ever stops being true (the maritime
+    /// Maritime-route work: every maritime route's `Site(id)` stop currently
+    /// resolves against a real installed settlement. Unlike the land route
+    /// graph's equivalent test,
+    /// `establish_authored_cromatolis_maritime_routes` itself must NOT
+    /// hard-fail if this ever stops being true (the maritime
     /// export is built independently upstream and can reference an id this
     /// engine's settlement set doesn't have yet -- it degrades to a `warn!`
     /// and skips just that route). This test still pins the current,
@@ -6086,7 +6092,7 @@ mod tests {
         }
     }
 
-    /// COW-24: at most one maritime route per *unordered pair* of
+    /// Maritime-route work: at most one maritime route per *unordered pair* of
     /// settlements, mirroring
     /// `cromatolis_authored_route_graph_has_no_duplicated_endpoint_pair`'s
     /// land-route coverage. `establish_authored_cromatolis_maritime_routes`
@@ -6119,11 +6125,11 @@ mod tests {
         }
     }
 
-    /// COW-24's real objective, pinned at the data level: `site.rios_port`
-    /// has an authored maritime stop to at least one mainland settlement
-    /// that already has its own authored land route (i.e. is not itself on
-    /// `CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD`). This is what
-    /// `establish_authored_cromatolis_maritime_routes` +
+    /// Maritime-route work real objective, pinned at the data level:
+    /// `site.rios_port` has an authored maritime stop to at least one
+    /// mainland settlement that already has its own authored land route
+    /// (i.e. is not itself on `CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD`).
+    /// This is what `establish_authored_cromatolis_maritime_routes` +
     /// `establish_procedural_cromatolis_route_connectors`'s mainland
     /// reachability test above rely on: a maritime `Track` alone is only
     /// useful if it lands on a settlement the mainland road network already
@@ -6285,7 +6291,7 @@ mod tests {
     /// be both a target (gets its own connector carved) and a seed anchor
     /// (is the thing other targets connect to) in the same pass.
     ///
-    /// Before COW-24 this checked membership against
+    /// Before the maritime-route work this checked membership against
     /// `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED` instead,
     /// since every island-pass member was, at the time, a mainland-pass
     /// failure by construction. That is no longer true for
@@ -6299,7 +6305,7 @@ mod tests {
     /// anchor. `site.itos_village`/`site.nugget_field_mines` are
     /// unaffected: no maritime stop reaches either of them, so the mainland
     /// pass still genuinely attempts and fails a direct `find_path` for
-    /// both, unchanged from before COW-24.
+    /// both, unchanged from before the maritime-route work.
     #[test]
     fn cromatolis_island_route_connector_lists_are_consistent_with_the_reviewed_connector_targets()
     {
@@ -6390,8 +6396,8 @@ mod tests {
             .find(|bridge| bridge.id == "bridge.kalthis_duren")
             .expect("the named Kalthis-Duren crossing must be present in the real export");
 
-        // Trust the RON over any prior markdown draft (see this row's spec
-        // §3): the real export uses 17m width / 12m clearance.
+        // Trust the RON over any prior markdown draft: the real export uses 17m width /
+        // 12m clearance.
         assert_eq!(kalthis_duren.deck_width_m, 17.0);
         assert_eq!(kalthis_duren.deck_clearance_m, 12.0);
         assert!(matches!(
@@ -6516,7 +6522,7 @@ mod tests {
         assert_eq!(normalized.y, 1.0);
     }
 
-    // ---- `/cromatolis_goto` pixel-to-world conversion (COW-9) ----
+    // ---- `/cromatolis_goto` pixel-to-world conversion ----
 
     #[test]
     fn cromatolis_source_pixels_reads_real_fortifications_source_map() {
@@ -7276,7 +7282,7 @@ mod tests {
             .sites()
             .filter(|site| site.authored_landmark.is_some())
             .count();
-        // COW-19 B3: pin the export against the reviewed attestation *first*,
+        // Attestation: pin the export against the reviewed attestation *first*,
         // then compare generation against the export. Comparing generation
         // straight to `real_settlements().len()` would pass trivially against a
         // truncated export -- generation places N, the file says N.
@@ -7406,7 +7412,7 @@ mod tests {
             .collect::<std::collections::HashMap<_, _>>();
 
         let routes = real_routes();
-        // COW-19 B4: pin the export before iterating it -- an export silently
+        // Attestation: pin the export before iterating it -- an export silently
         // truncated to a handful of routes would otherwise pass this loop
         // trivially.
         assert_eq!(routes.routes.len(), AUTHORED_CROMATOLIS_ROUTES);
@@ -7449,7 +7455,7 @@ mod tests {
 
     /// Real-data regression for the procedural Cromatolis route-connector
     /// pass (`Civs::establish_procedural_cromatolis_route_connectors`) and,
-    /// since COW-24, the authored maritime route pass
+    /// since the maritime-route work, the authored maritime route pass
     /// (`Civs::establish_authored_cromatolis_maritime_routes`): every
     /// installed settlement is reachable from the capital in the generated
     /// world -- an authored land route, a procedural connector, or an
@@ -7467,8 +7473,9 @@ mod tests {
     /// proves end-to-end reachability of the combined graph, not just that
     /// each mechanism ran. `site.rios_port` (and, transitively through the
     /// island connector pass, `site.itos_village`/`site.nugget_field_mines`)
-    /// is exactly the case COW-24 closes: it now resolves through this same
-    /// assertion instead of needing a dedicated carve-out.
+    /// is exactly the case the maritime-route work closes: it now resolves
+    /// through this same assertion instead of needing a dedicated
+    /// carve-out.
     #[test]
     #[ignore]
     fn civs_generate_makes_every_non_deliberately_roadless_settlement_reachable_from_the_capital() {
@@ -7582,11 +7589,11 @@ mod tests {
     /// `Civs::establish_procedural_cromatolis_route_connectors`
     /// (`CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS` /
     /// `CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS`) combined with
-    /// COW-24's authored maritime route pass
+    /// Maritime-route work authored maritime route pass
     /// (`Civs::establish_authored_cromatolis_maritime_routes`): proves the
     /// full chain now holds end to end.
     ///
-    /// Before COW-24 this test (then named
+    /// Before the maritime-route work this test (then named
     /// `..._connects_the_rios_port_island_group_to_itself_but_not_the_mainland`)
     /// asserted the island group was internally connected but *not*
     /// reachable from the capital -- that half of the story is now false by
@@ -8071,12 +8078,13 @@ mod tests {
         assert_fraction_in("Gnarling", gnarling, 0.05..0.15);
         assert_fraction_in("ChapelSite", chapel_site, 0.00005..0.0006);
         assert_fraction_in("Adlet", adlet, 0.08..0.20);
-        // Re-baselined by COW-22 `C22-1c`. `Sahagin` is `BiomeKind::Ocean` at
-        // 40-45 m below sea level, and until that row every inland water body
-        // whose authored bed is painted below sea level reported `Ocean` --
-        // which is exactly where a 40-45 m depth band lives. 550 suitable
-        // chunks before, 285 after: the 265 that dropped out were the deep
-        // middles of lakes, not sea, and a sahuagin lair belongs in the latter.
+        // Re-baselined by the water-classification work. `Sahagin` is
+        // `BiomeKind::Ocean` at 40-45 m below sea level, and until that row
+        // every inland water body whose authored bed is painted below sea level
+        // reported `Ocean` -- which is exactly where a 40-45 m depth band
+        // lives. 550 suitable chunks before, 285 after: the 265 that dropped
+        // out were the deep middles of lakes, not sea, and a sahuagin lair
+        // belongs in the latter.
         assert_fraction_in("Sahagin", sahagin, 0.0002..0.003);
         assert_fraction_in("VampireCastle", vampire_castle, 0.00005..0.0005);
         assert_fraction_in("Cultist", cultist, 0.12..0.28);

@@ -248,7 +248,9 @@ impl WorldSim {
                 block,
                 weight: GROUND_EXACT,
             } => self.exact_ground_top(feet.xy(), block),
-            AuthoredCell::Ground { .. } => self.ground_alt_at(feet.xy())?.floor() as i32 + 1,
+            AuthoredCell::Ground { .. } => {
+                top_block_of_levelled_alt(self.ground_alt_at(feet.xy())?) + 1
+            },
             AuthoredCell::Wet { .. } | AuthoredCell::Bank { .. } | AuthoredCell::None => {
                 return None;
             },

@@ -1052,10 +1052,10 @@ const ELEVATED_RIVER_WIDTH_M: f32 = 8.0;
 /// V1 has exactly one populated region (Cromatolis, see
 /// [`AUTHORED_REGIONS`]); this is the minimal abstraction needed so that
 /// opening a second region later is "add a registry entry," not "add
-/// another hardcoded branch" (per COW-2's region-within-one-world
-/// architecture). This does *not* yet support multiple regions being loaded
-/// simultaneously -- `WorldSim` still loads one `FileOpts` per server
-/// instance.
+/// another hardcoded branch" (per the region-scoping work's
+/// region-within-one-world architecture). This does *not* yet support multiple
+/// regions being loaded simultaneously -- `WorldSim` still loads one `FileOpts`
+/// per server instance.
 struct AuthoredRegion {
     /// The `FileOpts::LoadAsset` specifier that activates this region.
     map_asset: &'static str,
@@ -1102,11 +1102,11 @@ const AUTHORED_WATER_THRESHOLD: f32 = 0.5;
 /// can't silently desync the registry entry from its consumers.
 ///
 /// `pub(crate)` (rather than private to this module) so that `world/src/civ`
-/// can gate its own region-scoped loaders (settlements/landmarks, see COW-6)
-/// on `SimChunk::authored_region_id` the same way this module's own
-/// Snowland/Swamp checks do, instead of re-deriving a region check from the
-/// generic `authored_cromatolis_v0` flag (the COW-2 debt this repo is trying
-/// not to grow).
+/// can gate its own region-scoped loaders (settlements/landmarks, see the
+/// settlement-loader work) on `SimChunk::authored_region_id` the same way this
+/// module's own Snowland/Swamp checks do, instead of re-deriving a region check
+/// from the generic `authored_cromatolis_v0` flag (the region-scoping work debt
+/// this repo is trying not to grow).
 pub(crate) const CROMATOLIS_V0_REGION_ID: &str = "cromatolis_v0";
 
 /// The region registry. Add an entry here to make a new hand-authored map
@@ -2110,7 +2110,7 @@ impl ResolvedGroundSubstrateZones {
 ///
 /// IMPORTANT: resolved **map-globally**, matching the fact that
 /// `authored_region_id` is itself map-global today (see `GenCdf`). The day
-/// authored regions cover only part of a map (the `COW-2` debt), these
+/// authored regions cover only part of a map (the region-scoping debt), these
 /// need to be resolved per source feature — a spot structure spans a 3x3
 /// chunk neighbourhood and a tunnel spans many, so a per-rendered-chunk
 /// answer would slice geometry in half exactly on the region border.
@@ -3506,18 +3506,19 @@ impl WorldSim {
         if authored_cromatolis_v0 {
             // Blend the authored water / elevated-lake / river-channel masks into real
             // hydrology, instead of the altitude-only heuristic this block used before
-            // COW-3. Each mask keeps its own semantics rather than being collapsed into
-            // one generic "is wet" check: `elevated_lakes` marks standing water above
-            // sea level, `water` marks the broader surface-water footprint (sea/ocean/
-            // at-or-below-sea-level bodies), and `river_channels` marks flowing
-            // corridors. Priority follows specificity: an elevated lake wins over the
-            // broader water mask, which wins over a river channel, which wins over
-            // nothing.
-            // COW-22 `C22-1b`: the width of the channel each corridor chunk sits in,
-            // precomputed once for the whole map rather than searched per chunk
-            // (which would be O(n^2)). Feeds both the "can this be carved as a real
-            // river at all" test and the river's cross-section, which used to be a
-            // flat 3.2 m x 0.25 m ditch for every river on the map.
+            // Authored-mask work. Each mask keeps its own semantics rather than being
+            // collapsed into one generic "is wet" check: `elevated_lakes` marks
+            // standing water above sea level, `water` marks the broader
+            // surface-water footprint (sea/ocean/ at-or-below-sea-level
+            // bodies), and `river_channels` marks flowing corridors. Priority
+            // follows specificity: an elevated lake wins over the broader water
+            // mask, which wins over a river channel, which wins over nothing.
+            // Water-classification work: the width of the channel each corridor chunk sits
+            // in, precomputed once for the whole map rather than searched per
+            // chunk (which would be O(n^2)). Feeds both the "can this be carved
+            // as a real river at all" test and the river's cross-section, which
+            // used to be a flat 3.2 m x 0.25 m ditch for every river on the
+            // map.
             //
             // `local_channel_radius_chunks`, not a bare distance transform: a chunk's
             // own distance to the bank is small on *both* banks of a wide body, so
@@ -3540,8 +3541,8 @@ impl WorldSim {
                     .map(|values| authored_layer_value_for_cromatolis_v0(map_size_lg, idx, values))
             };
             // If every mask failed to load (e.g. degraded/missing assets), fall back to
-            // the pre-COW-3 altitude-only heuristic so oceans/lakes still form instead
-            // of vanishing outright.
+            // the pre-authored-mask work altitude-only heuristic so oceans/lakes still form
+            // instead of vanishing outright.
             let masks_loaded = authored_water_layer.is_some()
                 || authored_elevated_lakes_layer.is_some()
                 || authored_river_channels_layer.is_some()
@@ -3581,7 +3582,7 @@ impl WorldSim {
 
                 let neighbor_pass_pos = uniform_idx_as_vec2(map_size_lg, idx);
                 river.river_kind = if !masks_loaded && alt[idx] < 0.0 {
-                    // Every mask failed to load; fall back to the pre-COW-3
+                    // Every mask failed to load; fall back to the pre-authored-mask work
                     // altitude-only heuristic so oceans/lakes still form.
                     if is_ocean[idx] {
                         Some(RiverKind::Ocean)
@@ -3626,7 +3627,7 @@ impl WorldSim {
         // Per-chunk "is this land tile adjacent to authored standing/flowing
         // water" signal, built from the same masks the block above already
         // loaded -- consumed by `SimChunk::get_biome`'s `Swamp` branch
-        // (COW-4). A chunk that *is* water itself gets classified
+        // A chunk that *is* water itself gets classified
         // Ocean/Lake by an earlier `get_biome` branch before `Swamp` is ever
         // considered, so this only needs to answer "is a neighbor water" for
         // chunks that are themselves dry land. The masks are strictly binary
@@ -3635,7 +3636,7 @@ impl WorldSim {
         // to come from a neighbor check instead, same 3x3-neighborhood
         // pattern `pure_water` below uses.
         //
-        // The same sweep also derives `authored_water_body` (COW-22 `C22-1b`):
+        // The same sweep also derives `authored_water_body`:
         // the ecological classification of the chunks that *are* water. It
         // needs a 3x3 neighborhood too -- what separates a lagoon from a
         // landlocked lake is whether it touches marine water -- so both come
@@ -3645,8 +3646,8 @@ impl WorldSim {
                 |layer: &Option<Box<[f32]>>, idx: usize| authored_mask_hit(map_size_lg, layer, idx);
             // Marine water: inside the authored `water` mask *and* reached by
             // the `get_oceans` border flood fill. Deliberately not "alt below
-            // sea level" -- see `authored_river_kind_override` (COW-22
-            // `C22-1c`).
+            // sea level" -- see `authored_river_kind_override` (the water-classification
+            // work).
             let is_marine = |idx: usize| mask_hit(&authored_water_layer, idx) && is_ocean[idx];
             let (near_water, water_body): (Vec<bool>, Vec<Option<WaterBodyKind>>) = (0
                 ..map_size_lg.chunks_len())
@@ -3688,7 +3689,7 @@ impl WorldSim {
                         is_adjacent_to_marine: adjacent_to_marine,
                         // Nothing computes the offshore band that splits
                         // `Sea` from `Ocean` yet, so every marine chunk is open
-                        // ocean. COW-22 `C22-3` reshaped the seabed either side
+                        // ocean. The water-classification work reshaped the seabed either side
                         // of the waterline but derived no engine-side shelf
                         // classification from it.
                         is_shelf_sea: false,
@@ -3710,10 +3711,10 @@ impl WorldSim {
 
         // Salinity is the second, independent classification axis: a body can
         // be a river *and* salt. It is derived from the topology of the bodies
-        // classified above and never authored as its own raster (COW-22
-        // `C22-4`), so it needs nothing the block above did not already
-        // produce -- only the `elevated_lakes` decree, which it treats exactly
-        // as `promote_lagoon_basins` does.
+        // classified above and never authored as its own raster (the
+        // water-classification work that step), so it needs nothing the block
+        // above did not already produce -- only the `elevated_lakes` decree,
+        // which it treats exactly as `promote_lagoon_basins` does.
         let authored_salinity = if authored_cromatolis_v0 {
             derive_salinity(map_size_lg, &authored_water_body, &alt, |idx| {
                 authored_mask_hit(map_size_lg, &authored_elevated_lakes_layer, idx)
@@ -4951,11 +4952,12 @@ pub struct SimChunk {
     pub(crate) authored_region_id: Option<&'static str>,
     /// Whether this chunk is land adjacent to authored standing/flowing
     /// water (real Cromatolis water/elevated-lakes/river-channels masks from
-    /// COW-3, not humidity/altitude heuristics). Always `false` outside an
-    /// authored region. Consumed by `get_biome`'s `Swamp` branch.
+    /// Authored-mask work, not humidity/altitude heuristics). Always `false`
+    /// outside an authored region. Consumed by `get_biome`'s `Swamp`
+    /// branch.
     pub(crate) authored_near_water: bool,
     /// What kind of water body this chunk ecologically *is*, if it is water at
-    /// all (COW-22 `C22-1b`). `None` for dry land and for every chunk outside
+    /// all. `None` for dry land and for every chunk outside
     /// an authored region.
     ///
     /// Deliberately separate from `river.river_kind`, which answers the
@@ -5133,7 +5135,7 @@ fn cromatolis_authored_tree_density(
 /// On an authored Cromatolis map, every basin still defaults to sea level
 /// (the hand-authored heightmap has many small unmarked dips that would
 /// otherwise all become spurious procedural lakes) - the one exception is a
-/// basin the `elevated_lakes` mask (COW-3) marks as an authored elevated
+/// basin the `elevated_lakes` mask marks as an authored elevated
 /// lake AND the erosion sim also found genuinely closed
 /// (`dh_lake_idx >= 0`); a marked-but-open-draining basin has no real
 /// elevated pass height to use either, so it still falls back to sea level.
@@ -5238,21 +5240,22 @@ fn authored_route_way(map_size_lg: MapSizeLg, posi: usize, routes: &[f32]) -> Op
 /// `max_width` handling) while still being `WaterBodyKind::River`
 /// ecologically.
 ///
-/// Scoped `pub(crate)` for now: every consumer this row and the rest of COW-22
-/// add lives inside `world` (`sim`, `layer`). Widen it the day something in
-/// `server`/`voxygen` needs it -- that is a one-line change, where narrowing it
-/// again would not be.
+/// Scoped `pub(crate)` for now: every consumer this row and the rest of the
+/// water-classification work add lives inside `world` (`sim`, `layer`). Widen
+/// it the day something in `server`/`voxygen` needs it -- that is a one-line
+/// change, where narrowing it again would not be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub(crate) enum WaterBodyKind {
     /// Open marine water.
     Ocean,
     /// Marine water over the near-shore shelf. Not produced yet: nothing
     /// computes the offshore-distance/bathymetry band that separates `Sea`
-    /// from `Ocean`. COW-22's `C22-3` reshaped the seabed either side of the
-    /// waterline -- a shelf now exists in the terrain -- but derived no
-    /// engine-side classification from it, so whoever does has only to compute
-    /// the band and flip `AuthoredWaterBodyInputs::is_shelf_sea`, not re-shape
-    /// everything that reads this enum.
+    /// from `Ocean`. The water-classification work reshaped the seabed either
+    /// side of the waterline -- a shelf now exists in the terrain -- but
+    /// derived no engine-side classification from it, so whoever does has
+    /// only to compute the band and flip
+    /// `AuthoredWaterBodyInputs::is_shelf_sea`, not re-shape everything
+    /// that reads this enum.
     ///
     /// If the shelf classification is ever descoped, this variant and
     /// `AuthoredWaterBodyInputs::is_shelf_sea` come out with it -- they exist
@@ -5267,7 +5270,7 @@ pub(crate) enum WaterBodyKind {
     Lake,
     /// Inland standing water adjacent to marine water.
     Lagoon,
-    // NOTE: COW-22's taxonomy also names a `Swamp` case -- standing water
+    // NOTE: the water-classification work's taxonomy also names a `Swamp` case -- standing water
     // inside a swamp -- which this enum deliberately does *not* carry yet,
     // because nothing can produce it. The rule it specifies is "standing water
     // whose `get_biome` resolves to `BiomeKind::Swamp`", and `get_biome`
@@ -5277,7 +5280,7 @@ pub(crate) enum WaterBodyKind {
     // Deriving it instead from the inputs that branch uses
     // (`authored_near_water` and `SWAMP_HUMIDITY_THRESHOLD`) *would* fire, but
     // it would reclassify real lakes and break the exporter reconciliation
-    // `C22-1b` is measured against -- so it belongs to a row that can
+    // That step is measured against -- so it belongs to a row that can
     // re-measure the histogram, which is also the row that should add the
     // variant.
 }
@@ -5314,9 +5317,9 @@ struct AuthoredWaterBodyInputs {
 /// 4. remaining standing water -- `Lagoon` when it touches marine water, `Lake`
 ///    otherwise.
 ///
-/// COW-22's taxonomy also names a `Swamp` case, which this does not produce --
-/// see the note at the end of [`WaterBodyKind`] for why, and for what a later
-/// row would have to do to change that.
+/// Water-classification work taxonomy also names a `Swamp` case, which this
+/// does not produce -- see the note at the end of [`WaterBodyKind`] for why,
+/// and for what a later row would have to do to change that.
 fn authored_water_body_kind(inputs: AuthoredWaterBodyInputs) -> Option<WaterBodyKind> {
     let AuthoredWaterBodyInputs {
         is_elevated_lake,
@@ -5466,7 +5469,7 @@ pub(crate) enum Salinity {
 /// is Cromatolis's rivers being wide and their deltas meeting the sea along a
 /// long waterline, so the mouth seeds are many rather than deep. Worth
 /// revisiting with the aquatic-ecology profiles that will select on the result
-/// (COW-22 `C22-5`), and `cromatolis_salinity_histogram_regression_against_
+///, and `cromatolis_salinity_histogram_regression_against_
 /// real_lfs_assets` is the test to re-measure when either constant moves.
 ///
 /// Authored tuning for a region belongs in that region's RON, the way
@@ -5476,7 +5479,7 @@ pub(crate) enum Salinity {
 /// here only because there is no hydrology asset to put them in yet and
 /// inventing one for two integers -- with its own loader, schema and
 /// whole-asset failure mode -- costs more than it buys. The aquatic-ecology
-/// asset (COW-22 `C22-5`) is the right home: express them there in *metres*
+/// asset is the right home: express them there in *metres*
 /// (96 m and 256 m) and divide by `TerrainChunkSize::RECT_SIZE` here, so the
 /// authored number survives a chunk-size change, and have `derive_salinity`
 /// take them as parameters.
@@ -6394,7 +6397,7 @@ fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<River
             Some(RiverKind::Lake { neighbor_pass_pos })
         }
     } else if is_river_channel {
-        // COW-22 `C22-1b`: checked *before* the water mask (it used to be
+        // Water-classification work: checked *before* the water mask (it used to be
         // checked after). Every authored corridor cell also sits inside the
         // broader `water` mask, so while the water arm ran first no chunk on
         // the map could ever resolve to `RiverKind::River` -- the authored
@@ -6422,12 +6425,12 @@ fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<River
         // level -- 14,665 chunks across 327 bodies as the exporter measured the
         // v21 master, including the deep middle of Sapphire Loch (bed at
         // -139.7 m) whose shallow rim stayed `Lake`, i.e. one lake split into
-        // two `RiverKind`s along the sea-level contour (COW-22 `C22-1c`).
+        // two `RiverKind`s along the sea-level contour.
         // Scoped off for Cromatolis specifically rather than for every
-        // authored region, following the same precedent (and the same COW-2
-        // debt note) as `SimChunk::get_biome`'s `Snowland`/`Desert` checks: a
-        // future authored region shouldn't silently inherit a Cromatolis
-        // decision it was never measured against.
+        // authored region, following the same precedent (and the same region-scoping
+        // work debt note) as `SimChunk::get_biome`'s `Snowland`/`Desert`
+        // checks: a future authored region shouldn't silently inherit a
+        // Cromatolis decision it was never measured against.
         let below_sea_level_counts_as_ocean =
             region_id != Some(CROMATOLIS_V0_REGION_ID) && alt_below_sea_level;
         if is_ocean || below_sea_level_counts_as_ocean {
@@ -6890,7 +6893,7 @@ impl SimChunk {
             BiomeKind::Lake
         } else if self.authored_region_id == Some(CROMATOLIS_V0_REGION_ID) && self.river.is_river()
         {
-            // COW-22 `C22-1b`: `RiverKind::River` only became reachable at all
+            // Water-classification work: `RiverKind::River` only became reachable at all
             // with that row, and there is no `BiomeKind::River` -- without
             // this branch a river chunk would fall through the whole chain
             // below and report Jungle/Savannah/Forest/Grassland, i.e. a river
@@ -6921,7 +6924,7 @@ impl SimChunk {
             // Same rationale and scoping pattern as the `Snowland` check
             // above: Cromatolis is lore-authored as tropical/caribbean, not
             // arid, so this stays scoped to that specific region (not "any
-            // authored region is loaded" -- same COW-2 debt note).
+            // authored region is loaded" -- same region-scoping work debt note).
             //
             // What it protects against changed, but it is still load-bearing.
             // It used to be the whole coastline: one flat hot sea-level
@@ -6940,15 +6943,15 @@ impl SimChunk {
             // not just any humid open area (that's Jungle/Savannah/
             // Grassland's territory). Uses the authored water/elevated-lake/
             // river-channel masks directly (`authored_near_water`) rather
-            // than `RiverData::near_water`. The original COW-4 reason was
+            // than `RiverData::near_water`. The original reason was
             // that no chunk could resolve to `RiverKind::River` at all, so
-            // `near_water` never saw a land tile as "near" anything; COW-22
-            // `C22-1b` made rivers reachable, so that specific reason is
-            // gone. The choice stands on its own though: `near_water` is
-            // `is_river || !neighbor_rivers.is_empty() || is_lake ||
-            // is_ocean`, and `neighbor_rivers` comes from the erosion sim's
-            // river network, which the authored map never runs -- so it
-            // still would not see authored water next door.
+            // `near_water` never saw a land tile as "near" anything; the
+            // water-classification work That step made rivers reachable, so
+            // that specific reason is gone. The choice stands on its own
+            // though: `near_water` is `is_river || !neighbor_rivers.is_empty()
+            // || is_lake || is_ocean`, and `neighbor_rivers` comes from the
+            // erosion sim's river network, which the authored map never runs --
+            // so it still would not see authored water next door.
             // `authored_near_water` reads the masks themselves. Checked
             // *before* Jungle/Forest
             // rather than after (unlike the original pre-disable ordering):
@@ -8071,10 +8074,10 @@ mod tests {
         assert_eq!(ocean_connected, Some(RiverKind::Ocean));
     }
 
-    /// COW-22 `C22-1c`: an inland body whose authored bed is painted below sea
-    /// level but which the `get_oceans` flood fill never reaches is a lake,
-    /// not ocean. Before this fix the deep middle of such a body came back
-    /// `Ocean` while its shallower rim came back `Lake`.
+    /// Water-classification work: an inland body whose authored bed is painted
+    /// below sea level but which the `get_oceans` flood fill never reaches
+    /// is a lake, not ocean. Before this fix the deep middle of such a body
+    /// came back `Ocean` while its shallower rim came back `Lake`.
     #[test]
     fn inland_water_below_sea_level_is_a_lake_not_ocean_in_cromatolis() {
         let kind = authored_river_kind_override(AuthoredRiverKindInputs {
@@ -8093,8 +8096,8 @@ mod tests {
 
     /// ...but the fix is scoped to Cromatolis, so any other authored region
     /// keeps the previous altitude-based behaviour until it is measured on its
-    /// own data (same COW-2 debt scoping as `get_biome`'s `Snowland`/`Desert`
-    /// checks).
+    /// own data (same region-scoping work debt scoping as `get_biome`'s
+    /// `Snowland`/`Desert` checks).
     #[test]
     fn inland_water_below_sea_level_still_becomes_ocean_for_other_regions() {
         let kind = authored_river_kind_override(AuthoredRiverKindInputs {
@@ -8123,9 +8126,10 @@ mod tests {
         );
     }
 
-    /// COW-22 `C22-1b`: the corridor mask is checked before the broader `water`
-    /// mask it is a subset of. While the order was the other way round, no
-    /// chunk on an authored map could resolve to `RiverKind::River` at all.
+    /// Water-classification work: the corridor mask is checked before the
+    /// broader `water` mask it is a subset of. While the order was the
+    /// other way round, no chunk on an authored map could resolve to
+    /// `RiverKind::River` at all.
     #[test]
     fn a_narrow_river_channel_outranks_the_water_mask_it_sits_inside() {
         let kind = authored_river_kind_override(AuthoredRiverKindInputs {
@@ -8219,10 +8223,10 @@ mod tests {
         )
     }
 
-    /// COW-18.3 phase A discovery probe. It deliberately records generated
-    /// facts and the exact server RGBA, rather than interpreting a TIFF or a
-    /// client screenshot. Once these canonical positions are reviewed, this
-    /// becomes the fixed eight-zone regression table.
+    /// Terrain-discovery work phase A discovery probe. It deliberately records
+    /// generated facts and the exact server RGBA, rather than interpreting
+    /// a TIFF or a client screenshot. Once these canonical positions are
+    /// reviewed, this becomes the fixed eight-zone regression table.
     #[test]
     #[ignore]
     fn cromatolis_cartographic_baseline_discovery_against_real_lfs_assets() {
@@ -8346,7 +8350,7 @@ mod tests {
 
     /// Guards the authored map-only layer against an LFS pointer, a bad
     /// exporter interpolation, or an accidental second Y flip. These points
-    /// are the COW-18.4 review anchors for the named organic envelopes; tree
+    /// are the review anchors for the named organic envelopes; tree
     /// density and physical biome deliberately remain outside this map-only
     /// contract.
     #[test]
@@ -8889,14 +8893,14 @@ mod tests {
         );
     }
 
-    /// COW-17 binds the terrain `.bin` and river-channel raster into one
-    /// reviewed package. Belletoile is a dry authored lowland: the v22
-    /// terrain master samples it at about 92.94 m above the external sea
-    /// level. The real WorldSim interpolation yields about 96.82 m at the
-    /// matching chunk, while the paired river raster retains all 31,842
+    /// River-channel work binds the terrain `.bin` and river-channel raster
+    /// into one reviewed package. Belletoile is a dry authored lowland: the
+    /// v22 terrain master samples it at about 92.94 m above the external
+    /// sea level. The real WorldSim interpolation yields about 96.82 m at
+    /// the matching chunk, while the paired river raster retains all 31,842
     /// binary corridor cells.
     ///
-    /// ⚠️ The cell count was **28,200** until COW-22 `[OQ3]`
+    /// ⚠️ The cell count was **28,200** until the water-classification work
     /// (`xindeler-open-world#30`) rebuilt the classification. The old raster
     /// was "painted water above sea level that is not a closed, non-boundary-
     /// touching basin", which could never type an outflowing lake as a lake
@@ -8906,12 +8910,14 @@ mod tests {
     /// "channel" rim. The layer is now a shape-derived corridor mask:
     /// 4,563 shipped cells moved out to standing water and 9,490 below-sea-
     /// level corridor cells moved in. `28_200` must never come back — it is
-    /// the pre-COW-22 raster, exactly as `1_876` was the pre-COW-17 one.
+    /// the pre-water-classification work raster, exactly as `1_876` was the
+    /// pre-river-channel work one.
     ///
-    /// ⚠️ The count moved again, 33,127 → 33,566 (net +439), with COW-22
-    /// `[C22-3]` (`xindeler-open-world#31`), and this is expected rather than
+    /// ⚠️ The count moved again, 33,127 → 33,566 (net +439), with the
+    /// water-classification work's seabed reshaping
+    /// (`xindeler-open-world#31`), and this is expected rather than
     /// a drift: `classify_authored_water()` reads *elevation*, so reshaping
-    /// the seabed necessarily re-votes cells near the coast. `C22-3` raised
+    /// the seabed necessarily re-votes cells near the coast. That step raised
     /// the marine shelf, which moves some shallow river-mouth water across
     /// the ocean/inland boundary the classifier draws at `alt <= 0` (note:
     /// the exporter's boundary is `<=`, unlike the in-engine
@@ -9008,9 +9014,9 @@ mod tests {
 
         // The containment `authored_river_kind_override`'s and
         // `authored_water_body_kind`'s priority chains both depend on: every
-        // corridor cell is also a water-mask cell. That is why COW-22 `C22-1b`
-        // had to check the corridor mask *before* the water mask -- while the
-        // water arm ran first it swallowed every corridor cell and the
+        // corridor cell is also a water-mask cell. That is why the water-classification
+        // work had to check the corridor mask *before* the water mask -- while
+        // the water arm ran first it swallowed every corridor cell and the
         // `is_river_channel` arm was unreachable. If a future raster ever
         // paints a corridor outside the water mask, both chains need
         // re-checking rather than silently taking the corridor branch.
@@ -9350,12 +9356,12 @@ mod tests {
 
     /// Requires the real Cromatolis LFS assets, same precedent as
     /// `cromatolis_world_orientation_regression_against_real_lfs_assets`
-    /// above. Sanity-bounds `Swamp` coverage (re-enabled by this row, COW-4)
-    /// against the real hydrology/vegetation data `SWAMP_HUMIDITY_THRESHOLD`
-    /// was tuned against, so a future change to that threshold or to the
-    /// humidity formula that silently makes `Swamp` swallow the map (or
-    /// vanish again) gets caught here instead of only by eyeballing a
-    /// generated world.
+    /// above. Sanity-bounds `Swamp` coverage (re-enabled by this row, the swamp
+    /// work) against the real hydrology/vegetation data
+    /// `SWAMP_HUMIDITY_THRESHOLD` was tuned against, so a future change to
+    /// that threshold or to the humidity formula that silently makes
+    /// `Swamp` swallow the map (or vanish again) gets caught here instead
+    /// of only by eyeballing a generated world.
     #[test]
     #[ignore]
     fn cromatolis_swamp_coverage_regression_against_real_lfs_assets() {
@@ -9373,7 +9379,7 @@ mod tests {
         );
     }
 
-    // ---- COW-22 `C22-1b`: authored water-body classification ----
+    // ---- Water-classification work: authored water-body classification ----
 
     fn water_body_inputs() -> AuthoredWaterBodyInputs {
         AuthoredWaterBodyInputs {
@@ -9647,12 +9653,12 @@ mod tests {
         assert_eq!(velocity.y, 0.0);
     }
 
-    // ---- Real-LFS-asset regressions for COW-22 `C22-1b` / `C22-1c` ----
+    // ---- Real-LFS-asset regressions for the water-classification work ----
     //
-    // The baseline the open-world exporter measured independently for COW-22
-    // `[OQ3]`, stated once so the tests below derive from it instead of
-    // restating it. A raster change means re-measuring *these*, not chasing
-    // the same number through four assertions.
+    // The baseline the open-world exporter measured independently for the
+    // water-classification work `[OQ3]`, stated once so the tests below derive
+    // from it instead of restating it. A raster change means re-measuring
+    // *these*, not chasing the same number through four assertions.
     //
     // Re-measured against the marine-shelf-and-beach terrain package: these are
     // the exporter's own `classify_authored_water` re-run over the current
@@ -9784,10 +9790,10 @@ mod tests {
 
     /// Counts every `WaterBodyKind` across the real Cromatolis map and
     /// reconciles it against the numbers the open-world exporter measured
-    /// independently for COW-22 `[OQ3]`. A disagreement here means the engine
-    /// and the exporter have drifted on what "ocean" (or "river", or
-    /// "standing water") means, which is exactly the kind of drift that
-    /// silently mis-paints a whole coastline.
+    /// independently for the water-classification work. A disagreement here
+    /// means the engine and the exporter have drifted on what "ocean" (or
+    /// "river", or "standing water") means, which is exactly the kind of
+    /// drift that silently mis-paints a whole coastline.
     #[test]
     #[ignore]
     fn cromatolis_water_body_histogram_regression_against_real_lfs_assets() {
@@ -9817,8 +9823,8 @@ mod tests {
         );
         // Exporter: 316,682 marine cells.
         assert_eq!(count(WaterBodyKind::Ocean), EXPORTED_MARINE_CELLS);
-        // `Sea` needs an offshore band nothing computes yet -- COW-22
-        // `C22-3` shipped the bathymetry but no classification from it.
+        // `Sea` needs an offshore band nothing computes yet -- the water-classification
+        // work That step shipped the bathymetry but no classification from it.
         assert_eq!(count(WaterBodyKind::Sea), 0);
 
         // And the partition is exactly the authored water footprint: the
@@ -9849,10 +9855,11 @@ mod tests {
         );
     }
 
-    /// The sharpest single assertion in COW-22 `C22-1b`: before it, *no* chunk
-    /// on the Cromatolis map was `RiverKind::River` -- every authored corridor
-    /// cell lost to the broader `water` mask it sits inside, so the authored
-    /// river network existed in the data and nowhere in the simulation.
+    /// The sharpest single assertion in the water-classification work: before
+    /// it, *no* chunk on the Cromatolis map was `RiverKind::River` -- every
+    /// authored corridor cell lost to the broader `water` mask it sits
+    /// inside, so the authored river network existed in the data and
+    /// nowhere in the simulation.
     #[test]
     #[ignore]
     fn cromatolis_rivers_are_carveable_against_real_lfs_assets() {
@@ -9993,10 +10000,10 @@ mod tests {
         );
     }
 
-    /// COW-22 `C22-1c`, measured end to end: what the biome histogram looks
-    /// like once `is_ocean` alone decides what the sea is, rather than the old
-    /// `alt < 0` disjunct that also swallowed every inland body with a bed
-    /// painted below sea level.
+    /// Water-classification work, measured end to end: what the biome histogram
+    /// looks like once `is_ocean` alone decides what the sea is, rather
+    /// than the old `alt < 0` disjunct that also swallowed every inland
+    /// body with a bed painted below sea level.
     ///
     /// The before/after pair this row was originally written against
     /// (`Ocean` 331,778 -> 317,160) was measured on the raster that preceded
@@ -10006,7 +10013,7 @@ mod tests {
     /// exactly the exporter's marine cells, and `Lake` is exactly every other
     /// classified water chunk.
     ///
-    /// Also pins the `get_biome` consequence of `C22-1b`: with
+    /// Also pins the `get_biome` consequence of that step: with
     /// `RiverKind::River` finally reachable and no `BiomeKind::River` to
     /// answer with, a river chunk must still report `Lake` rather than falling
     /// through to a land biome.
@@ -10094,12 +10101,13 @@ mod tests {
         // high ground right at the pocket's old corners. `Mountain` and
         // `Snowland` do not move.
         //
-        // ⚠️ Re-baselined again 2026-09-26 for COW-18.5's `heightmap_manual_v23`,
-        // which authored the four Malicious Haven volcanic cones (they had no relief
-        // at all before: 93.14 / 260.07 / 93.14 / 245.03 m of bare island ground)
-        // plus the relocated Cobalt Depths submarine cone. Both terms the comment
-        // above separates are visible, and the small one is the reason THIS test
-        // moved at all, because the edit itself is nowhere near the Savannah pocket:
+        // ⚠️ Re-baselined again 2026-09-26 for the heightmap work's
+        // `heightmap_manual_v23`, which authored the four Malicious Haven
+        // volcanic cones (they had no relief at all before: 93.14 / 260.07 /
+        // 93.14 / 245.03 m of bare island ground) plus the relocated Cobalt
+        // Depths submarine cone. Both terms the comment above separates are
+        // visible, and the small one is the reason THIS test moved at all,
+        // because the edit itself is nowhere near the Savannah pocket:
         //
         //   Mountain  27,879 -> 27,995  (+116)   <- the relief itself: the new cones
         //   Savannah   2,288 ->  2,225  ( -63)   <- CDF knock-on
@@ -10381,7 +10389,7 @@ mod tests {
         );
     }
 
-    // ---- Salinity (COW-22 `C22-4`) ----
+    // ---- Salinity ----
 
     /// A hand-drawn 8x8 water map for the salinity rules.
     struct SalinityFixture {
@@ -10775,14 +10783,14 @@ mod tests {
         }
     }
 
-    // ---- Real-LFS-asset regressions for COW-22 `C22-4` ----
+    // ---- Real-LFS-asset regressions for the water-classification work ----
     //
     // These numbers and the exporter constants above this block
     // (`EXPORTED_RIVER_CELLS` and friends) describe the same rasters and move
     // together: both are counts over `cromatolis_v0.bin` and
     // `cromatolis_v0_river_channels.f32le`. A prior revision of this comment
     // noted they were out of sync (measured against different revisions of
-    // those two files after `C22-3` regenerated them) -- reconciled in a
+    // those two files after that step regenerated them) -- reconciled in a
     // follow-up (corridor 33,566, marine 316,682, lagoon 2,815, lake
     // unchanged at 13,872, all re-confirmed against the `xindeler-open-world`
     // exporter's own independent measurement, not just this engine's; the
@@ -10902,7 +10910,7 @@ mod tests {
     /// figures exactly and is not expected to: it labels components on the
     /// chunk grid after erosion has reshaped `alt`, and its "the sea" is the
     /// `get_oceans` border flood fill rather than "painted below sea level"
-    /// (COW-22 `C22-1c`), so a corridor that ends in an inland basin the
+    ///, so a corridor that ends in an inland basin the
     /// raster painted below sea level counts as landlocked here and as
     /// sea-reaching there. What carries over is the *claim*: a river that is
     /// salt from its own source is a rare exception, not the common case. That

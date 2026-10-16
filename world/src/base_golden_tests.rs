@@ -1,30 +1,51 @@
-//! Golden digests of the procedural world, recorded at the engine commit
-//! `65deeb2a20` (before the authored water and ground layers, the stable
-//! per-site seeds and the land red clamp), against the same world generated
-//! by the current code.
+//! Guards that the procedural world is unchanged by the authored water and
+//! ground layers, the stable per-site seeds and the land red clamp, on a
+//! generated 2^7 x 2^7 procedural world (seed 0) that needs no authored
+//! assets.
 //!
 //! The older "byte-identical" guards (`authored_raster::
 //! presentation_real_world_tests`) compare `get_map_with(.., true)` with
 //! `(.., false)` through the *same* new code, which tests a switch rather
-//! than equality with the code before. These tests compare against digests
-//! recorded from that earlier code, on a generated 2^7 x 2^7 procedural
-//! world (seed 0) that needs no authored assets, so they run in the normal
-//! test pass:
+//! than equality with the code before. Two kinds of test live here.
 //!
-//! * the map with the land red clamp off is exactly the base map (colour and
-//!   altitude planes);
-//! * the map with the clamp on differs from it only by land pixels whose red
-//!   channel went from 0 to 1;
-//! * generated chunks (terrain, water, ground and where every structure or
-//!   sprite stands) are exactly the base chunks. Chunk generation loads the
-//!   `.vox` structures, which live in LFS; without them (the CI checkout) the
-//!   chunk test says so and skips, so it only guards where the assets exist.
+//! **Structural tests (run everywhere, including CI on Linux).** They compare
+//! the new code with itself and never hash absolute values, because the noise
+//! and erosion use f32 `powf`/`exp`/`sin` whose last bits differ between
+//! platform maths libraries (Apple libm vs glibc): the same code makes a
+//! different map on macOS and on Linux.
+//!
+//! * the map with the land red clamp on equals the map with it off except for
+//!   land pixels whose red channel went from 0 to 1 (same green, blue and
+//!   alpha; no water pixel changes; altitude untouched);
+//! * `authored_ground` true and false give identical maps when no authored
+//!   layer exists;
+//! * generating the world twice in one process gives a bit-identical map.
+//!
+//! **Local-only digests (`#[ignore]`).** Digests recorded at the engine commit
+//! `65deeb2a20` (before those changes) on **macOS arm64** pin the new code to
+//! the old output byte for byte. They cannot hold on another platform, so they
+//! are ignored by default. Run them on a Mac with the `.vox` assets (LFS):
+//!
+//! ```text
+//! VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-world --lib \
+//!     base_golden_tests -- --ignored
+//! ```
+//!
+//! To re-bless after an intended change to procedural generation, run on the
+//! same platform:
+//!
+//! ```text
+//! VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-world --lib \
+//!     base_golden_tests::print_current_digests -- --ignored --nocapture
+//! ```
+//!
+//! paste the printed constants below and say so in the commit. The chunk
+//! digests need the real `.vox` structures (LFS); without them that test says
+//! so and skips.
 //!
 //! The base was built with the same test-only seeding of the dynamic and
 //! structure-choice RNGs that this crate has (`with_deterministic_dynamic_rng`)
-//! ported onto it; the recorder is the `shared` block below run on the base.
-//! If an intended change to procedural generation lands, re-record by running
-//! the helpers below on the new code and say so in the commit.
+//! ported onto it.
 
 use crate::{
     World,
@@ -128,7 +149,7 @@ fn chunk_bytes(world: &World, index: crate::IndexRef, cpos: Vec2<i32>) -> Vec<u8
     out
 }
 
-// ---- the goldens, recorded at 65deeb2a20 ----
+// ---- the local-only goldens, recorded at 65deeb2a20 on macOS arm64 ----
 
 const BASE_MAP_RGBA_SHA256: &str =
     "43ae18d2b3a3f63fbc86779a54c9c4ff148e9fa59f5a49670e5e7257a49fdf9c";
@@ -166,6 +187,7 @@ const CLAMPED_MAP_RGBA_SHA256: &str =
     "de4fc5bfa75996e4f367f46d694d694aa7acf2a40d7351f8c33185e714d4b51e";
 
 #[test]
+#[ignore = "digest recorded on macOS arm64; run locally with --ignored"]
 fn the_procedural_map_without_the_red_clamp_is_the_base_map() {
     let (world, index) = procedural_world();
     assert!(world.sim().authored_rasters.is_none());
@@ -187,6 +209,7 @@ fn the_procedural_map_without_the_red_clamp_is_the_base_map() {
 }
 
 #[test]
+#[ignore = "digest recorded on macOS arm64; run locally with --ignored"]
 fn the_red_clamp_only_raises_land_red_from_zero_to_one() {
     let (world, index) = procedural_world();
     let old = world
@@ -212,6 +235,7 @@ fn the_red_clamp_only_raises_land_red_from_zero_to_one() {
 }
 
 #[test]
+#[ignore = "digest recorded on macOS arm64; run locally with --ignored"]
 fn procedural_chunks_match_the_base() {
     let vox = common::assets::ASSETS_PATH.join("world/structure/natural/ribcage-small.vox");
     if !std::fs::read(&vox).is_ok_and(|bytes| bytes.starts_with(b"VOX ")) {
@@ -227,4 +251,85 @@ fn procedural_chunks_match_the_base() {
         let got = sha256(&chunk_bytes(&world, index.as_index_ref(), Vec2::new(x, y)));
         assert_eq!(got, want, "chunk ({x}, {y}) differs from the base chunk");
     }
+}
+
+/// Prints the current digests in the shape of the constants above, for
+/// re-blessing (see the file header). Local only.
+#[test]
+#[ignore = "re-bless helper; run locally with --ignored --nocapture"]
+fn print_current_digests() {
+    let (world, index) = procedural_world();
+    let old = world
+        .sim()
+        .get_map_opts(index.as_index_ref(), None, true, false);
+    let new = world.sim().get_map(index.as_index_ref(), None);
+    println!("BASE_MAP_RGBA_SHA256 = {}", sha256(&rgba_bytes(&old)));
+    println!("BASE_MAP_ALT_SHA256 = {}", sha256(&alt_bytes(&old)));
+    println!("CLAMPED_MAP_RGBA_SHA256 = {}", sha256(&rgba_bytes(&new)));
+    for (x, y) in BASE_CHUNK_SHA256.map(|(c, _)| c) {
+        println!(
+            "chunk ({x}, {y}) = {}",
+            sha256(&chunk_bytes(&world, index.as_index_ref(), Vec2::new(x, y)))
+        );
+    }
+}
+
+// ---- platform-independent structural tests (run in CI) ----
+
+#[test]
+fn the_red_clamp_changes_only_land_red_from_zero_to_one() {
+    let (world, index) = procedural_world();
+    assert!(world.sim().authored_rasters.is_none());
+    let off = world
+        .sim()
+        .get_map_opts(index.as_index_ref(), None, true, false);
+    let on = world.sim().get_map(index.as_index_ref(), None);
+    assert_eq!(off.rgba.size(), on.rgba.size());
+    assert_eq!(alt_bytes(&on), alt_bytes(&off), "the clamp moved altitude");
+    let mut changed = 0usize;
+    for ((pos, &n), &o) in on.rgba.iter().zip(off.rgba.raw()) {
+        if n != o {
+            changed += 1;
+            let ([nr, ng, nb, na], [or, og, ob, oa]) = (n.to_le_bytes(), o.to_le_bytes());
+            assert!(
+                or == 0 && nr == 1 && (ng, nb, na) == (og, ob, oa),
+                "a pixel changed beyond red 0 -> 1: {o:#010x} -> {n:#010x}"
+            );
+            assert!(
+                world.sim().get(pos).is_some_and(|c| !c.is_underwater()),
+                "a water pixel changed at {pos}"
+            );
+        }
+    }
+    println!("{changed} pixels raised red 0 -> 1");
+}
+
+#[test]
+fn authored_ground_on_or_off_gives_the_same_map_without_authored_layers() {
+    let (world, index) = procedural_world();
+    assert!(world.sim().authored_rasters.is_none());
+    let with = world
+        .sim()
+        .get_map_opts(index.as_index_ref(), None, true, false);
+    let without = world
+        .sim()
+        .get_map_opts(index.as_index_ref(), None, false, false);
+    assert!(
+        rgba_bytes(&with) == rgba_bytes(&without),
+        "colour plane differs"
+    );
+    assert!(
+        alt_bytes(&with) == alt_bytes(&without),
+        "altitude plane differs"
+    );
+}
+
+#[test]
+fn the_map_is_bit_identical_when_generated_twice_in_one_process() {
+    let (world_a, index_a) = procedural_world();
+    let (world_b, index_b) = procedural_world();
+    let a = world_a.sim().get_map(index_a.as_index_ref(), None);
+    let b = world_b.sim().get_map(index_b.as_index_ref(), None);
+    assert!(rgba_bytes(&a) == rgba_bytes(&b), "colour plane differs");
+    assert!(alt_bytes(&a) == alt_bytes(&b), "altitude plane differs");
 }

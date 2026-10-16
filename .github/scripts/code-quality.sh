@@ -40,12 +40,18 @@ time cargo clippy -p xindeler-world --locked \
 # itself without them. `economy::context::tests::test_economy_moderate_standalone`
 # is an upstream simulation that took ~4 minutes alone without the LFS assets
 # (it guards the economy, not this code) and is skipped here.
-if head -c 7 assets/common/canary.canary | grep -q '^version'; then
-    printf 'VELOREN_CANARY_MAGIC\n' > assets/common/canary.canary
+# XINDELER_SKIP_CI_TESTS=1 skips this test step (clippy and fmt still run);
+# unset, the tests run.
+if [ "${XINDELER_SKIP_CI_TESTS:-0}" = "1" ]; then
+    echo "XINDELER_SKIP_CI_TESTS=1: skipping the world and terrain-probe unit tests"
+else
+    if head -c 7 assets/common/canary.canary | grep -q '^version'; then
+        printf 'VELOREN_CANARY_MAGIC\n' > assets/common/canary.canary
+    fi &&
+    time cargo test --locked -p xindeler-world --lib \
+        -- --skip test_economy_moderate_standalone &&
+    # terrain-probe is a binary crate: its tests are the bin's.
+    time cargo test --locked -p xindeler-terrain-probe --bins
 fi &&
-time cargo test --locked -p xindeler-world --lib \
-    -- --skip test_economy_moderate_standalone &&
-# terrain-probe is a binary crate: its tests are the bin's.
-time cargo test --locked -p xindeler-terrain-probe --bins &&
 
 time cargo fmt --all -- --check;
