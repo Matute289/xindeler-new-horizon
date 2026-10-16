@@ -53,6 +53,17 @@ impl TelemetryFlushHandle {
     }
 }
 
+impl TelemetryFlushHandle {
+    /// Like [`flush`](Self::flush) but safe for a panic hook: never blocks on
+    /// a full queue (`try_send`) and waits at most 1s for the drain thread.
+    pub fn flush_bounded(&self) {
+        let (ack_tx, ack_rx) = bounded(1);
+        if self.tx.try_send(Msg::Flush(ack_tx)).is_ok() {
+            let _ = ack_rx.recv_timeout(Duration::from_secs(1));
+        }
+    }
+}
+
 impl TelemetryLayer {
     /// Returns `None` if the file cannot be created (logs a warning, doesn't
     /// panic).

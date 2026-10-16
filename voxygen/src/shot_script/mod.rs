@@ -45,7 +45,9 @@ pub fn on_panic(reason: &str) {
     // Never leave the hook unattended-hostile: report what is known, then go.
     // The `error!` line above goes through a non-blocking writer that `exit`
     // would not flush, so the reason and a backtrace also go to stderr, and
-    // the log writers are flushed before exiting.
+    // `flush_logs` drains the stdout writer and flushes the log files and
+    // telemetry (best effort: a file writer whose lock the panicking thread
+    // holds is skipped rather than deadlocking the hook).
     eprintln!(
         "error: shot script run panicked: {reason}\n{}",
         std::backtrace::Backtrace::force_capture()
