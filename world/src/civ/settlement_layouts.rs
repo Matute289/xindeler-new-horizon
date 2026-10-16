@@ -153,6 +153,10 @@ struct AuthoredExclusion {
 pub(super) struct AuthoredPins {
     /// Settlement id -> (pin in world blocks, target buildings).
     settlements: HashMap<String, (Vec2<i32>, usize)>,
+    /// Settlement id -> the minimum building count its category and size are
+    /// held to ([`super::seeds::min_buildings_for`]); absent for categories
+    /// that are not banded.
+    bands: HashMap<String, usize>,
     /// Landmark id -> pin in world blocks.
     landmarks: HashMap<String, Vec2<i32>>,
 }
@@ -173,6 +177,17 @@ impl AuthoredPins {
                         s.id.clone(),
                         (pin(s.center.to_chunk_pos(map_size)), s.target_buildings),
                     )
+                })
+                .collect(),
+            bands: settlements
+                .settlements
+                .iter()
+                .filter_map(|s| {
+                    super::seeds::min_buildings_for(
+                        s.category.contract_key(),
+                        s.size.contract_key(),
+                    )
+                    .map(|band| (s.id.clone(), band))
                 })
                 .collect(),
             landmarks: landmarks
@@ -235,6 +250,17 @@ impl AuthoredSettlementLayouts {
         let Some(&(pin, target)) = pins.settlements.get(&layout.site_id) else {
             return Err("no authored settlement has this id".to_string());
         };
+        if let Some(&band) = pins.bands.get(&layout.site_id)
+            && target < band
+        {
+            return Err(format!(
+                "settlement {} has a target_buildings of {target}, below the {band} buildings its \
+                 category and size are held to; every generated layout would be re-drawn {} times \
+                 at each world start. Raise the target or change the settlement's size",
+                layout.site_id,
+                super::seeds::MAX_LAYOUT_RETRIES
+            ));
+        }
         if !layout.frame.along_deg.is_finite() {
             return Err("frame along_deg is not a finite number".to_string());
         }
@@ -505,6 +531,7 @@ mod tests {
             ]
             .into_iter()
             .collect(),
+            bands: HashMap::new(),
             landmarks: [("site.tower".to_string(), Vec2::new(1200, 1000))]
                 .into_iter()
                 .collect(),
@@ -587,6 +614,23 @@ mod tests {
         assert_eq!(c.target_buildings(), 12);
         assert_eq!(c.wards[0].a, (-100.0, 50.0));
         assert_eq!(c.wards[0].b, (0.0, 200.0));
+    }
+
+    #[test]
+    fn a_target_below_the_settlements_band_is_refused_naming_the_settlement() {
+        let mut pins = pins();
+        // `site.a` has a target of 30; hold it to a band of 31.
+        pins.bands.insert("site.a".to_string(), 31);
+        let err = parse(VALID)
+            .validate(&pins)
+            .expect_err("a target below the band must not load");
+        assert!(
+            err.contains("site.a") && err.contains("target_buildings of 30"),
+            "{err}"
+        );
+        // At the band exactly it loads.
+        pins.bands.insert("site.a".to_string(), 30);
+        parse(VALID).validate(&pins).unwrap();
     }
 
     #[test]

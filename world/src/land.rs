@@ -22,8 +22,10 @@ use vek::*;
 /// the table. Site and plot generation (`world/src/site/`) reads the
 /// authored-aware ones, so plots stand on the authored ground; spatially
 /// extended features (`world/src/layer/`: the cave graph, caverns, authored
-/// voids) and civ placement (`world/src/civ/`, `world/src/sim/`) read the
-/// table. The test
+/// voids) read the table. Civ placement (`world/src/civ/`) reads the table
+/// for altitude but the authored-aware water facts (`WorldSim::chunk_water`
+/// and its siblings) for water, so a settlement is never placed on authored
+/// water. The test
 /// `authored_raster::tests::ground_reads_follow_the_layering_rule`
 /// enforces this split per directory: re-run it after every upstream merge, and
 /// give each new call it reports the accessor its directory needs (or an

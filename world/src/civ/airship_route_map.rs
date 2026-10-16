@@ -722,11 +722,10 @@ fn draw_airship_routes(
             |c: char| format!("{}_{}", route_color_ids[i % route_color_ids.len()], c);
 
         if route.legs.len() > 1 {
-            let mut leg_line_number = 1;
             let mut prev_leg = &route.legs[route.legs.len() - 1];
 
             // The leg line numbers are drawn at the destination end of the line.
-            for route_leg in route.legs.iter() {
+            for (leg_line_number, route_leg) in (1..).zip(route.legs.iter()) {
                 // for j in 0..segment.len() - 1 {
                 let from_loc = loc_fn(&points[prev_leg.dest_index], &prev_leg.platform);
                 let to_loc = loc_fn(&points[route_leg.dest_index], &route_leg.platform);
@@ -757,7 +756,6 @@ fn draw_airship_routes(
                     id_formatter,
                 )?;
 
-                leg_line_number += 1;
                 prev_leg = route_leg;
             }
         }

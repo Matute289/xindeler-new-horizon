@@ -248,7 +248,9 @@ impl WorldSim {
                 block,
                 weight: GROUND_EXACT,
             } => self.exact_ground_top(feet.xy(), block),
-            AuthoredCell::Ground { .. } => self.ground_alt_at(feet.xy())?.floor() as i32 + 1,
+            AuthoredCell::Ground { .. } => {
+                top_block_of_levelled_alt(self.ground_alt_at(feet.xy())?) + 1
+            },
             AuthoredCell::Wet { .. } | AuthoredCell::Bank { .. } | AuthoredCell::None => {
                 return None;
             },
@@ -263,7 +265,7 @@ impl WorldSim {
         self.authored_rasters
             .as_ref()
             .and_then(|r| r.site_levelled_alt(wpos))
-            .map_or(block, |alt| alt.floor() as i32)
+            .map_or(block, top_block_of_levelled_alt)
             + 1
     }
 
@@ -549,6 +551,10 @@ pub fn column_is_ocean(col: &crate::ColumnSample) -> bool {
         None => col.chunk.river.is_ocean(),
     }
 }
+
+/// The top block of a levelled altitude: truncation, like the sampler's
+/// column top (`alt as i32`), not `floor`, which is one block lower below 0.
+pub(super) fn top_block_of_levelled_alt(alt: f32) -> i32 { alt as i32 }
 
 impl World {
     /// Water at a column, authored-aware ([`WorldSim::water_at`]).

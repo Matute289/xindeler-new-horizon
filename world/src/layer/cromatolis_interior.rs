@@ -2818,7 +2818,7 @@ mod tests {
         assert!(geometry.plug_aabb.min.z <= floor_z && ceiling_z <= geometry.plug_aabb.max.z);
     }
 
-    /// **T19 of the COW-23 task board, interior half.** Nothing in either
+    /// **Interior half of the post-flip cave measurement.** Nothing in either
     /// authored interior may be pruned out of a chunk it carves.
     ///
     /// "Lost" here is per *shape, per chunk*: a chunk where the carve would

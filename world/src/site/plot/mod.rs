@@ -329,7 +329,7 @@ pub struct AirshipDockInfo<'plot> {
 }
 
 /// Which hull size a [`Berth`] or [`Anchorage`] is built for (spec §4.3's two
-/// berth classes, derived from the two merchant hulls COW-24 `[Q4]` confirmed
+/// berth classes, derived from the two merchant hulls confirmed
 /// -- `SailBoat` 12×32×6, `Galleon` 14×48×10, `common/src/comp/body/ship.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BerthClass {

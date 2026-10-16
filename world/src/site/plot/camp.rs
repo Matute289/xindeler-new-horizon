@@ -193,6 +193,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs LFS .vox assets"]
     fn authored_settlement_never_spawns_hostile_npcs_even_in_a_tropical_chunk() {
         let entities = render_camp(true, true);
         assert!(
@@ -209,6 +210,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs LFS .vox assets"]
     fn genuine_wild_camp_still_spawns_hostile_pirates_in_a_tropical_chunk() {
         let entities = render_camp(false, true);
         assert!(

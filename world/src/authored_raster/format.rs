@@ -137,7 +137,9 @@ impl WaterTile {
     pub fn idx(i: i32, j: i32) -> usize { cell_index(i, j) }
 
     #[inline(always)]
-    fn value(&self, v: u16) -> Option<i32> { (v != NONE).then(|| self.base_cm + v as i32) }
+    fn value(&self, v: u16) -> Option<i32> {
+        (v != NONE).then(|| self.base_cm.saturating_add(v as i32))
+    }
 
     /// Authored surface (cm) at stored index `k`.
     #[inline(always)]

@@ -613,12 +613,12 @@ mod tests {
         assert_eq!(resolved.len(), routes.routes.len());
     }
 
-    /// COW-24, measured: of the 15 authored maritime routes connecting two
-    /// real settlements, the `length_m >= 8_000.0` heuristic yields 4
-    /// `LongHaul` and 11 `Coastal` -- the island crossings plus the one
-    /// long mainland run. Across all 36 authored routes (including the 21
-    /// `External`/`Waypoint`-ending ones the heuristic also applies to
-    /// uniformly), the split is 8 `LongHaul` and 28 `Coastal`. This test
+    /// Maritime-route work, measured: of the 15 authored maritime routes
+    /// connecting two real settlements, the `length_m >= 8_000.0` heuristic
+    /// yields 4 `LongHaul` and 11 `Coastal` -- the island crossings plus
+    /// the one long mainland run. Across all 36 authored routes (including
+    /// the 21 `External`/`Waypoint`-ending ones the heuristic also applies
+    /// to uniformly), the split is 8 `LongHaul` and 28 `Coastal`. This test
     /// pins those numbers so a future change to the heuristic or the
     /// export is a deliberate, visible decision rather than a silent
     /// drift.

@@ -1,5 +1,4 @@
-//! Edge-case battery for the engine side of the probe. Ids `EC-*` refer to the
-//! precision-tooling corner-case catalogue.
+//! Edge-case battery for the engine side of the probe.
 //!
 //! * Pure tests (classification, box parsing, authored-point extraction from
 //!   the committed RON text files) run in the normal `cargo test`.
@@ -9,9 +8,9 @@
 //!   s of world generation per test). They only read synthetic/empty areas: the
 //!   research arena around (23264, 25312), map corners, and a wilderness box
 //!   that the test itself proves empty of sites and authored points.
-//! * A test that exposes a bug carries its catalogue id (`BUG-P*`) in its doc
-//!   comment; all of them pass since the fixes (a still-open bug would be
-//!   `#[ignore = "BUG-.."]`).
+//! * A test that exposes a fixed bug says "Regression (fixed)" in its doc
+//!   comment; all of them pass (a still-open bug would be an `#[ignore]`d test
+//!   naming it).
 
 use std::{path::PathBuf, sync::OnceLock};
 
@@ -28,7 +27,7 @@ fn repo_assets() -> PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..
 
 // ------------------------------------------------------------- pure
 
-/// EC-D30 (BUG-P9, fixed): lava is recorded as liquid (README: "2 liquid
+/// Regression (fixed): lava is recorded as liquid (README: "2 liquid
 /// (water and lava)"). `BlockKind::Lava` is neither fluid nor solid in the
 /// engine, so `classify` matches it explicitly; without that, lava channels
 /// and lakes would read as holes.
@@ -41,7 +40,7 @@ fn ec_d30_lava_is_liquid() {
     assert!(!is_lava(&Block::water(SpriteKind::Empty)));
 }
 
-/// EC-D30b: a column holding lava carries `flag::LAVA` (and `flag::LIQUID`),
+/// A column holding lava carries `flag::LAVA` (and `flag::LIQUID`),
 /// a water column carries only `LIQUID`, so verifiers can tell them apart
 /// without a layout change; a NaN-altitude column carries `RIM_NO_SAMPLE`.
 #[test]
@@ -74,7 +73,7 @@ fn ec_d30b_lava_and_rim_flags() {
     assert_ne!(flags_at(3, None) & flag::RIM_NO_SAMPLE, 0);
 }
 
-/// EC-D31 (BUG-P10, fixed): every natural rock/soil kind is GROUND, including
+/// Regression (fixed): every natural rock/soil kind is GROUND, including
 /// `GlowingWeakRock` (cave rock), which used to become STRUCTURE. With a
 /// surface cap the same natural-vs-structure rule applies: above the cap it
 /// is STRUCTURE like any other natural kind.
@@ -86,7 +85,7 @@ fn ec_d31_all_natural_rock_is_ground() {
     assert_eq!(classify_at(&b, 11, Some(10), false), class::STRUCTURE);
 }
 
-/// EC-D32: classification table for the cases the verifiers depend on.
+/// Classification table for the cases the verifiers depend on.
 #[test]
 fn ec_d32_classification_table() {
     let c = Rgb::new(1, 2, 3);
@@ -129,7 +128,7 @@ fn ec_d32_classification_table() {
     assert_eq!(classify(&tuft, true), class::SPRITE);
 }
 
-/// EC-A10: box parsing edge cases.
+/// Box parsing edge cases.
 #[test]
 fn ec_a10_box_parse_edges() {
     assert!(Box2::parse("0,0,1,1").is_ok(), "1x1 box");
@@ -160,7 +159,7 @@ fn ec_a10_box_parse_edges() {
     );
 }
 
-/// EC-A11 (BUG-P6, fixed): `near_box` uses i64, so boxes and margins near the
+/// Regression (fixed): `near_box` uses i64, so boxes and margins near the
 /// i32 limits neither panic (debug) nor wrap and mis-filter (release).
 #[test]
 fn ec_a11_near_box_extreme_inputs() {
@@ -182,7 +181,7 @@ fn ec_a11_near_box_extreme_inputs() {
     assert!(!near_box(0, 0, top, 600));
 }
 
-/// EC-D33 (BUG-P7, fixed): the committed fortifications file (walls and gates
+/// Regression (fixed): the committed fortifications file (walls and gates
 /// in 2048x1536 source pixels) reaches the emptiness guard, converted through
 /// its own `source_map` like the engine does, so a box crossed by an authored
 /// wall is no longer called empty.
@@ -216,7 +215,7 @@ fn ec_d33_fortifications_are_seen_by_the_emptiness_guard() {
     );
 }
 
-/// EC-D34 (BUG-P7, fixed): a linear authored feature (route/wall/bridge) whose
+/// Regression (fixed): a linear authored feature (route/wall/bridge) whose
 /// vertices are far from the box but whose segment crosses it is reported.
 #[test]
 fn ec_d34_segment_crossing_the_box_is_reported() {
@@ -277,7 +276,7 @@ fn authored_raster_regions_are_seen_by_the_emptiness_guard() {
     assert!(far.is_empty(), "{far:?}");
 }
 
-/// EC-D34b (BUG-P7, the measured case): wilderness chunk (653, 998) is NOT
+/// Measured case: wilderness chunk (653, 998) is NOT
 /// empty at a 600 m margin, because a committed route polyline passes about
 /// 312 m from it although its vertices are kilometres away. The committed RON
 /// files are read directly (no world generation).
@@ -304,7 +303,7 @@ fn ec_d34b_measured_chunk_is_not_empty() {
     );
 }
 
-/// EC-D34c: exact segment-vs-grown-box geometry (Liang-Barsky), including
+/// Exact segment-vs-grown-box geometry (Liang-Barsky), including
 /// segments that only graze the margin, degenerate segments and axis-aligned
 /// ones.
 #[test]
@@ -338,7 +337,7 @@ fn ec_d34c_segment_near_box_geometry() {
     );
 }
 
-/// EC-D34d: a RON file declaring a coordinate space the probe cannot convert
+/// A RON file declaring a coordinate space the probe cannot convert
 /// is an error for the strict guard (and a stderr warning for the lenient
 /// dump), never a silent skip.
 #[test]
@@ -363,7 +362,7 @@ fn ec_d34d_unknown_coordinate_space_is_refused() {
     assert!(err.contains("brand_new_space"), "{err}");
 }
 
-/// EC-F01: the probe's pixel/normalised -> world mapping against the engine's
+/// The probe's pixel/normalised -> world mapping against the engine's
 /// own (`world::civ::cromatolis_source_pixel_to_wpos`, the same
 /// normalise-then-`to_chunk_pos` path every authored loader uses). The engine
 /// snaps to chunk centres on a `(chunks - 1)` grid, the probe maps linearly:
@@ -440,7 +439,7 @@ fn ec_f01_pixel_mapping_matches_the_engine_within_the_snap_slack() {
     eprintln!("{checked} points, worst probe-vs-engine difference {worst:.1} m");
 }
 
-/// EC-F02: every `BlockKind` is classified on purpose. The expectation is an
+/// Every `BlockKind` is classified on purpose. The expectation is an
 /// exhaustive `match`, so a new engine variant does not compile until it is
 /// decided here, and `classify` / `is_natural_kind` must agree with it.
 #[test]
@@ -481,7 +480,7 @@ fn ec_f02_every_block_kind_is_classified() {
     assert!(n >= 17, "iterated only {n} kinds");
 }
 
-/// EC-F03: every committed `cromatolis_v0_*.ron` is either parsed by
+/// Every committed `cromatolis_v0_*.ron` is either parsed by
 /// `authored_features` or named in `NO_POSITION_FILES`, never silently
 /// skipped: the real directory loads, an unlisted file without a coordinate
 /// space is an error, and the allowlist has no stale names.
@@ -511,7 +510,7 @@ fn ec_f03_every_ron_file_is_parsed_or_allowlisted() {
     assert!(r.unwrap_err().contains("NO_POSITION_FILES"));
 }
 
-/// EC-D35: normalised points on the map border map to the world border and
+/// Normalised points on the map border map to the world border and
 /// rounding is half away from zero (documented here so the Python side
 /// matches).
 #[test]
@@ -550,7 +549,7 @@ fn ec_d35_normalised_point_mapping_at_the_border() {
 
 /// Every consecutive vertex pair of the `points: [...]` polylines in the
 /// normalised authored RON files, in world metres (test helper: a segment-aware
-/// emptiness check, see BUG-P7).
+/// emptiness check, see the fortifications guard).
 fn authored_segments(root: &Path, size: Vec2<i32>) -> Vec<((f64, f64), (f64, f64))> {
     fn walk(v: &ron::Value, size: Vec2<i32>, out: &mut Vec<((f64, f64), (f64, f64))>) {
         match v {
@@ -643,7 +642,7 @@ fn bx(x0: i32, y0: i32, x1: i32, y1: i32) -> Box2 { Box2 { x0, y0, x1, y1 } }
 /// The research arena (spec section 4.1: >= 2.15 km from any authored point).
 const ARENA: (i32, i32) = (23264, 25312);
 
-/// EC-D40: the research arena is empty (sites and authored points within
+/// The research arena is empty (sites and authored points within
 /// 600 m), so the heavy tests below may use it.
 #[test]
 #[ignore = "heavy: generates the real world"]
@@ -669,7 +668,7 @@ fn ec_d40b_whole_world_box_is_refused_before_sampling() {
     assert!(t.elapsed().as_secs() < 5, "refusal took {:?}", t.elapsed());
 }
 
-/// EC-D41: boxes leaving the world or straddling its edge are refused; boxes
+/// Boxes leaving the world or straddling its edge are refused; boxes
 /// touching the edge from inside dump fine, but the column sampler returns
 /// nothing (NaN floats) in a band along the world border: verifiers must
 /// treat NaN `alt`/`water_level` as "no data", not as a value.
@@ -735,7 +734,7 @@ fn ec_d41_world_edge_boxes() {
     }
 }
 
-/// EC-D42: the open ocean at the map corners sits at sea level: every
+/// The open ocean at the map corners sits at sea level: every
 /// liquid column's surface (`water_top + 1`) is 140 m.
 #[test]
 #[ignore = "heavy: generates the real world"]
@@ -757,7 +756,7 @@ fn ec_d42_ocean_surface_is_sea_level() {
     );
 }
 
-/// EC-D43: a sub-box with odd, non-chunk-aligned edges reads exactly the same
+/// A sub-box with odd, non-chunk-aligned edges reads exactly the same
 /// columns as a larger box (chunk/tile boundary independence).
 #[test]
 #[ignore = "heavy: generates the real world"]
@@ -790,7 +789,7 @@ fn ec_d43_sub_box_equals_slice_of_large_box() {
     }
 }
 
-/// EC-D44: dumps are identical for different worker-thread counts (the world
+/// Dumps are identical for different worker-thread counts (the world
 /// is loaded from a file; no thread-order dependence may leak in).
 #[test]
 #[ignore = "heavy: generates the real world twice"]
@@ -804,9 +803,9 @@ fn ec_d44_thread_count_independence() {
     assert!(crate::format::edge_tests::bytes(&a) == crate::format::edge_tests::bytes(&m));
 }
 
-/// EC-D45: `--zmax` below the ground clips every column (flag set, ground at
+/// `--zmax` below the ground clips every column (flag set, ground at
 /// zmax-1); `--zmin` above the ground leaves no ground and NO flag (the
-/// clipped-bottom gap of EC-D27, on real data).
+/// clipped-bottom gap of the `--zmin` summary test, on real data).
 #[test]
 #[ignore = "heavy: generates the real world"]
 fn ec_d45_z_range_cuts() {
@@ -821,8 +820,8 @@ fn ec_d45_z_range_cuts() {
     assert!(high.flags.iter().all(|&f| f == 0));
 }
 
-/// EC-D46: z ranges outside the i16 span are accepted by `dump` and then
-/// wrap in the i16 summary fields (see EC-D25).
+/// Z ranges outside the i16 span are accepted by `dump` and then
+/// wrap in the i16 summary fields (see the i16 wrap test).
 #[test]
 #[ignore = "heavy: generates the real world"]
 fn ec_d46_z_range_outside_i16_is_refused() {
@@ -831,7 +830,7 @@ fn ec_d46_z_range_outside_i16_is_refused() {
     assert!(dump(p, &opts(b, Some(-40_000), Some(-39_990)), &|_, _| {}).is_err());
 }
 
-/// EC-D47: `--keep-sprites` only turns AIR blocks into SPRITE; terrain,
+/// `--keep-sprites` only turns AIR blocks into SPRITE; terrain,
 /// water and structure blocks are unchanged.
 #[test]
 #[ignore = "heavy: generates the real world"]
@@ -859,7 +858,7 @@ fn ec_d47_keep_sprites_only_changes_air() {
     eprintln!("sprite cells in the arena box: {sprites}");
 }
 
-/// EC-D48: the automatic z range is computed from the chunks the box touches
+/// The automatic z range is computed from the chunks the box touches
 /// only, but a column's altitude interpolates towards its east/north
 /// neighbour chunk. Next to a steep neighbour the default range clips the
 /// surface (the README promises "highest alt/water + 96" covers it).
@@ -891,7 +890,8 @@ fn ec_d48_auto_z_range_covers_the_surface() {
     for (step, c) in cand.into_iter().take(400) {
         let b = bx(c.x * 32, c.y * 32, c.x * 32 + 32, c.y * 32 + 32);
         // Only wilderness: nothing authored or generated within 600 m, and no
-        // authored polyline segment either (the vertex-only guard is BUG-P7).
+        // authored polyline segment either (the vertex-only guard is the fortifications
+        // guard).
         if !world_sites(&ir, b, 600).is_empty()
             || !authored_points(&p.assets_root, world_size(sim), b, 600).is_empty()
             || segments

@@ -311,7 +311,7 @@ pub struct Site {
     /// kind" -- see `rtsim::data::Site::generate`'s `good_or_evil`
     /// classifier for the motivating case.
     pub is_authored_settlement: bool,
-    /// The settlement's authored rtsim NPC count (NH-171), when its data
+    /// The settlement's authored rtsim NPC count, when its data
     /// sets one. `None` keeps rtsim's plot-count rule. Read by
     /// `rtsim::generate::settlement_population`; generation never reads it.
     pub npc_count: Option<u32>,
@@ -1689,7 +1689,7 @@ impl Site {
         // ordinary lottery, continued.
         const QUOTA_STALL_DRAWS: usize = 256;
         const QUOTA_DRAWS_PER_BUILDING: usize = 4;
-        let base_draws = (size * 200.0) as i32 as usize;
+        let base_draws = (size * 200.0).max(0.0) as i32 as usize;
         let max_draws = site.footprint.as_deref().map_or(base_draws, |footprint| {
             base_draws.max(footprint.target_buildings() * QUOTA_DRAWS_PER_BUILDING)
         });

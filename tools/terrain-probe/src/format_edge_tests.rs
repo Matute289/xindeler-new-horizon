@@ -1,8 +1,7 @@
 //! Edge-case battery for the `tprobe v1` format (reader/writer and
-//! `summarize`). Pure: no engine, no assets. Ids `EC-D*` refer to the
-//! precision-tooling corner-case catalogue. A test that exposes a bug carries
-//! the catalogue's `BUG-P*` id in its doc comment; all of them pass since
-//! the fixes landed (a still-open bug would be `#[ignore = "BUG-.."]`).
+//! `summarize`). Pure: no engine, no assets. A test that exposes a
+//! fixed bug says so in its doc comment ("Regression (fixed)"); a still-open
+//! bug would be an `#[ignore]`d test naming it.
 
 use std::{
     collections::BTreeMap,
@@ -162,7 +161,7 @@ pub(crate) fn read_outcome(b: &[u8]) -> Result<bool, String> {
 
 // ------------------------------------------------------------- determinism
 
-/// EC-D20: same dump -> same bytes, for many random dumps; read->write is a
+/// Same dump -> same bytes, for many random dumps; read->write is a
 /// fixed point; `class_at` agrees with the runs at every z incl. both ends.
 #[test]
 fn ec_d20_random_dumps_round_trip_and_are_byte_stable() {
@@ -191,7 +190,7 @@ fn ec_d20_random_dumps_round_trip_and_are_byte_stable() {
     }
 }
 
-/// EC-D21: the 1x1 box and a 1-block z range are valid dumps.
+/// The 1x1 box and a 1-block z range are valid dumps.
 #[test]
 fn ec_d21_one_column_one_block() {
     for c in [class::AIR, class::GROUND, class::LIQUID, class::STRUCTURE] {
@@ -208,7 +207,7 @@ fn ec_d21_one_column_one_block() {
     }
 }
 
-/// EC-D22: an empty box (0 columns) is rejected by the writer with an `Err`
+/// An empty box (0 columns) is rejected by the writer with an `Err`
 /// (the review round made `check_dims` require a non-empty box), never a panic.
 #[test]
 fn ec_d22_empty_box_is_rejected() {
@@ -216,7 +215,7 @@ fn ec_d22_empty_box_is_rejected() {
     assert!(d.write_to(Vec::new()).is_err());
 }
 
-/// EC-D23: a column taller than u16::MAX blocks splits into several runs of
+/// A column taller than u16::MAX blocks splits into several runs of
 /// the same class and is still summarised correctly.
 #[test]
 fn ec_d23_runs_longer_than_u16_split() {
@@ -230,7 +229,7 @@ fn ec_d23_runs_longer_than_u16_split() {
     assert_eq!(i32::from(s.ground_top), -40_000 + h as i32 - 2);
 }
 
-/// EC-D24 (BUG-P3, fixed): the `NO_Z` sentinel (-32768) cannot be a real z:
+/// Regression (fixed): the `NO_Z` sentinel (-32768) cannot be a real z:
 /// a z range reaching it is refused up front (the reader and the writer both
 /// call `check_z_range`), and `summarize` itself reports such a block as
 /// "none" instead of a colliding value.
@@ -249,7 +248,7 @@ fn ec_d24_sentinel_collision_at_i16_min() {
     assert_eq!(read_outcome(&c), Ok(false));
 }
 
-/// EC-D25 (BUG-P3, fixed): z outside the i16 range never wraps: `summarize`
+/// Regression (fixed): z outside the i16 range never wraps: `summarize`
 /// reports "none", and every dump entry point refuses such a range.
 #[test]
 fn ec_d25_z_outside_i16_wraps() {
@@ -263,7 +262,7 @@ fn ec_d25_z_outside_i16_wraps() {
     assert!(check_z_range(1, 32_768).is_ok());
 }
 
-/// EC-D26: semantic cases of `summarize` that verifiers rely on.
+/// Semantic cases of `summarize` that verifiers rely on.
 #[test]
 fn ec_d26_summary_semantics() {
     use class::*;
@@ -305,7 +304,7 @@ fn ec_d26_summary_semantics() {
     assert_eq!((s.ground_top, s.water_top, s.flags), (NO_Z, NO_Z, 0));
 }
 
-/// EC-D27: a column cut from below by `--zmin` (all air because the terrain
+/// A column cut from below by `--zmin` (all air because the terrain
 /// is lower than zmin) carries no flag: the format cannot tell it from a
 /// shaft that continues below zmin. Characterisation test of the gap.
 #[test]
@@ -317,7 +316,7 @@ fn ec_d27_no_clipped_bottom_flag_exists() {
 
 // ------------------------------------------------------------- corruption
 
-/// EC-D01: every truncation of a valid file is a clean error, never a panic.
+/// Every truncation of a valid file is a clean error, never a panic.
 #[test]
 fn ec_d01_every_truncation_is_a_clean_error() {
     let d = random_dump(&mut Rng::new(1), 3, 2, 12);
@@ -332,7 +331,7 @@ fn ec_d01_every_truncation_is_a_clean_error() {
     }
 }
 
-/// EC-D02 (BUG-P4, fixed): trailing bytes after the last section are an
+/// Regression (fixed): trailing bytes after the last section are an
 /// error (a concatenated or partially overwritten file must not read as
 /// valid).
 #[test]
@@ -342,7 +341,7 @@ fn ec_d02_trailing_garbage_is_rejected() {
     assert_eq!(read_outcome(&b), Ok(false));
 }
 
-/// EC-D03: single-bit flips anywhere in the file never panic (they may parse
+/// Single-bit flips anywhere in the file never panic (they may parse
 /// when they hit an f32 payload, that is fine).
 #[test]
 fn ec_d03_bit_flips_never_panic() {
@@ -365,7 +364,7 @@ fn ec_d03_bit_flips_never_panic() {
     );
 }
 
-/// EC-D04 (BUG-P1, fixed): a huge `comp_len`/`raw_len` in the section table
+/// Regression (fixed): a huge `comp_len`/`raw_len` in the section table
 /// is an error, not an allocation panic/abort.
 #[test]
 fn ec_d04_huge_section_lengths_are_errors() {
@@ -378,7 +377,7 @@ fn ec_d04_huge_section_lengths_are_errors() {
     }
 }
 
-/// EC-D05 (BUG-P2, fixed): a header whose nx/ny disagree with box_xy (same
+/// Regression (fixed): a header whose nx/ny disagree with box_xy (same
 /// column count) is rejected, so `col_index` can never misaddress a column.
 #[test]
 fn ec_d05_nx_ny_must_match_the_box() {
@@ -392,7 +391,7 @@ fn ec_d05_nx_ny_must_match_the_box() {
     assert_eq!(read_outcome(&c), Ok(false));
 }
 
-/// EC-D06 (BUG-P4, fixed): an inverted z range (zmax < zmin) is rejected.
+/// Regression (fixed): an inverted z range (zmax < zmin) is rejected.
 #[test]
 fn ec_d06_inverted_z_range_is_rejected() {
     let b = bytes(&random_dump(&mut Rng::new(6), 2, 1, 4));
@@ -405,7 +404,7 @@ fn ec_d06_inverted_z_range_is_rejected() {
     assert!(check_z_range(10, 10).is_err());
 }
 
-/// EC-D07 (BUG-P4, fixed): unknown class codes inside run_class are rejected.
+/// Regression (fixed): unknown class codes inside run_class are rejected.
 #[test]
 fn ec_d07_unknown_class_codes_are_rejected() {
     let mut d = random_dump(&mut Rng::new(7), 2, 1, 4);
@@ -413,7 +412,7 @@ fn ec_d07_unknown_class_codes_are_rejected() {
     assert!(d.validate().is_err());
 }
 
-/// EC-D08: a different format name / magic is refused (version mismatch);
+/// A different format name / magic is refused (version mismatch);
 /// unknown extra header keys are tolerated (forward compatibility).
 #[test]
 fn ec_d08_version_mismatch_is_refused() {
@@ -427,7 +426,7 @@ fn ec_d08_version_mismatch_is_refused() {
     assert_eq!(read_outcome(&c), Ok(true));
 }
 
-/// EC-D09: a zstd section corrupted in the middle never panics.
+/// A zstd section corrupted in the middle never panics.
 #[test]
 fn ec_d09_zstd_payload_corruption_never_panics() {
     let d = random_dump(&mut Rng::new(9), 6, 6, 40);
@@ -443,7 +442,7 @@ fn ec_d09_zstd_payload_corruption_never_panics() {
     }
 }
 
-/// EC-D10 (BUG-P4, fixed): a non-finite site radius cannot round-trip
+/// Regression (fixed): a non-finite site radius cannot round-trip
 /// (serde_json writes NaN/inf as null), so the writer refuses it instead of
 /// silently turning it into "unknown".
 #[test]
@@ -475,7 +474,7 @@ fn ec_d10_site_radius_non_finite_is_refused() {
     assert_eq!(r.sites[0].radius, Some(12.5));
 }
 
-/// EC-D11: f32 bit patterns (NaN payloads, -0.0, subnormals, inf) survive the
+/// F32 bit patterns (NaN payloads, -0.0, subnormals, inf) survive the
 /// byte shuffle exactly.
 #[test]
 fn ec_d11_float_bit_patterns_survive() {
@@ -494,7 +493,7 @@ fn ec_d11_float_bit_patterns_survive() {
     assert_eq!(bits(&r.alt), bits(&pats));
 }
 
-/// EC-D12: endianness is explicit: multi-byte values are little-endian on disk
+/// Endianness is explicit: multi-byte values are little-endian on disk
 /// regardless of the host (the shuffle puts all low bytes first).
 #[test]
 fn ec_d12_little_endian_on_disk() {

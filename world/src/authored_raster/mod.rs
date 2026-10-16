@@ -24,8 +24,10 @@
 //! ([`queries::check_ground_seams`], after civ generation). Water below 0 m
 //! is a per-region parameter ([`SeaFill`]). The sim chunk table stays the
 //! natural map (the exporter builds it from the master as it was before the
-//! patch); the authored-aware ground queries for sites and rtsim are not
-//! routed to the ground layer yet (they read the table, as before).
+//! patch). Site and plot generation read the authored-aware ground queries
+//! (`Land::ground_alt_at` and its siblings, see [`queries`]); spatially
+//! extended layers and civ placement keep reading the table (civ reads the
+//! authored-aware `chunk_water*` water facts).
 //!
 //! # What it does
 //!
@@ -1093,6 +1095,18 @@ impl Region {
     }
 }
 
+/// The tile grid covering the box `min..max`, with checked arithmetic so a
+/// garbage manifest fails with an error instead of overflowing.
+fn grid_of_box(min: Vec2<i32>, max: Vec2<i32>) -> Result<Vec2<i32>, String> {
+    let axis = |lo: i32, hi: i32| -> Result<i32, String> {
+        hi.checked_sub(lo)
+            .and_then(|extent| extent.checked_add(TILE_SIZE - 1))
+            .map(|e| e / TILE_SIZE)
+            .ok_or_else(|| format!("the box {min:?}..{max:?} is too large to be a region"))
+    };
+    Ok(Vec2::new(axis(min.x, max.x)?, axis(min.y, max.y)?))
+}
+
 /// The one place the layers' precedence is decided: a water cell (wet or
 /// bank) wins; a ground cell under it is checked at load to agree with it.
 #[inline(always)]
@@ -1427,15 +1441,21 @@ impl AuthoredRasters {
         // declare water.
         let mut resident = 0usize;
         for rm in &manifest.regions {
-            let size = Vec2::<i32>::from(rm.max) - Vec2::<i32>::from(rm.min);
-            let grid = size.map(|e| (e.max(0) + TILE_SIZE - 1) / TILE_SIZE);
+            let (rmin, rmax) = (Vec2::<i32>::from(rm.min), Vec2::<i32>::from(rm.max));
+            let grid = grid_of_box(rmin, rmax)
+                .map_err(|why| err(format!("region '{}': {why}", rm.id)))?
+                .map(|e| e.max(0));
             resident += rm
                 .tiles
                 .iter()
                 .map(|t| format::resident_tile_bytes(t.layer))
                 .sum::<usize>();
             if rm.layers.contains(&LayerKind::Water) {
-                resident += (grid.x.max(0) * grid.y.max(0)) as usize * BYTES_PER_DIST_TILE;
+                resident = resident.saturating_add(
+                    (grid.x as usize)
+                        .saturating_mul(grid.y as usize)
+                        .saturating_mul(BYTES_PER_DIST_TILE),
+                );
             }
         }
         if resident > RESIDENT_BUDGET_BYTES {
@@ -1555,8 +1575,8 @@ impl AuthoredRasters {
             {
                 return Err(rerr(format!("overlaps region '{}'", other.id)));
             }
-            let tiles = (max - min).map(|e| (e + TILE_SIZE - 1) / TILE_SIZE);
-            let n_tiles = (tiles.x * tiles.y) as usize;
+            let tiles = grid_of_box(min, max).map_err(rerr)?;
+            let n_tiles = (tiles.x as usize).saturating_mul(tiles.y as usize);
             // The listing first (cheap, ordered errors), then every tile
             // fetched, checked and decoded in parallel on the current pool.
             let mut seen = hashbrown::HashSet::new();
@@ -2332,6 +2352,15 @@ fn validate_region(
                             entry.min_surface_block = entry.min_surface_block.min(surface_block);
                             entry.max_surface_block = entry.max_surface_block.max(surface_block);
                             entry.min_bed_block = entry.min_bed_block.min(bed_block);
+                            for (what, block) in [("surface", surface_block), ("bed", bed_block)] {
+                                if !format::GROUND_BLOCK_RANGE.contains(&block) {
+                                    r.problems.report(format!(
+                                        "{wpos:?}: water {what} block {block} is outside the \
+                                         blocks {:?} the engine can hold",
+                                        format::GROUND_BLOCK_RANGE
+                                    ));
+                                }
+                            }
                             if bed_block >= surface_block {
                                 r.problems.report(format!(
                                     "{wpos:?}: bed block {bed_block} is not below surface block \
@@ -2404,6 +2433,13 @@ fn validate_region(
                         },
                         AuthoredCell::Bank { bed_block } => {
                             entry.min_bed_block = entry.min_bed_block.min(bed_block);
+                            if !format::GROUND_BLOCK_RANGE.contains(&bed_block) {
+                                r.problems.report(format!(
+                                    "{wpos:?}: bank ground block {bed_block} is outside the \
+                                     blocks {:?} the engine can hold",
+                                    format::GROUND_BLOCK_RANGE
+                                ));
+                            }
                             if bed_block < SEA_TOP_BLOCK && !authored_only {
                                 r.problems.report(format!(
                                     "{wpos:?}: bank ground block {bed_block} is below the ocean's \

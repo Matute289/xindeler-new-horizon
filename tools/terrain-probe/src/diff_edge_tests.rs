@@ -1,6 +1,5 @@
 //! Edge cases of `terrain-probe diff` (the comparison that the discrepancy
-//! test and the determinism checks rely on). Ids refer to the
-//! precision-tooling corner-case catalogue.
+//! test and the determinism checks rely on).
 
 use super::*;
 use crate::format::{
@@ -17,7 +16,7 @@ fn compare(a: &Dump, b: &Dump, show: usize) -> Res<bool> {
     Ok(compare_with(a, b, &o)?.ok(&o))
 }
 
-/// EC-D50: identical dumps compare equal; a single changed block is found.
+/// Identical dumps compare equal; a single changed block is found.
 #[test]
 fn ec_d50_single_block_difference_is_found() {
     let a = random_dump(&mut Rng::new(50), 5, 4, 30);
@@ -30,7 +29,7 @@ fn ec_d50_single_block_difference_is_found() {
     assert!(!compare(&a, &b, 5).unwrap());
 }
 
-/// EC-D51: the comparison is independent of how runs are split (a column
+/// The comparison is independent of how runs are split (a column
 /// stored as one 70000-block run or as 65535 + 4465 is the same column).
 #[test]
 fn ec_d51_run_split_independence() {
@@ -42,7 +41,7 @@ fn ec_d51_run_split_independence() {
     assert!(compare(&a, &b, 0).unwrap());
 }
 
-/// EC-D52: dumps of different boxes or z ranges are refused, not compared.
+/// Dumps of different boxes or z ranges are refused, not compared.
 #[test]
 fn ec_d52_different_boxes_are_refused() {
     let a = random_dump(&mut Rng::new(52), 3, 3, 10);
@@ -55,7 +54,7 @@ fn ec_d52_different_boxes_are_refused() {
     assert!(compare(&a, &c, 0).is_err());
 }
 
-/// EC-D53 (BUG-P5, fixed): a difference only in the top block kind (Grass vs
+/// Regression (fixed): a difference only in the top block kind (Grass vs
 /// Sand at the same z, both class GROUND) fails the strict comparison, so
 /// `diff` exits 1 on any difference as the README promises.
 #[test]
@@ -66,7 +65,7 @@ fn ec_d53_top_kind_difference_fails_the_diff() {
     assert!(!compare(&a, &b, 0).unwrap());
 }
 
-/// EC-D54: NaN floats compare by bit pattern: the same NaN is equal, a
+/// NaN floats compare by bit pattern: the same NaN is equal, a
 /// different NaN payload is a difference (documents the rule).
 #[test]
 fn ec_d54_nan_floats_compare_by_bits() {

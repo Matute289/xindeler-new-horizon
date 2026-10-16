@@ -642,6 +642,7 @@ pub fn is_valid(condition: &SpotCondition, g: f32, c: &SimChunk) -> bool {
 }
 
 #[test]
+#[ignore = "needs LFS .vox assets"]
 fn test_spot_configs() {
     let all_spots = [
         Spot::DwarvenGrave,
@@ -681,16 +682,16 @@ fn test_spot_configs() {
     }
 }
 
-/// Full-world smoke test for COW-16 (the "no monsters outside settlements"
-/// bug report): confirms that enabling `spots: true` for Cromatolis in
-/// `assets/world/map/cromatolis_v0_procedural_layers.ron` actually places
-/// spot markers on the real generated map, that none of them land on a
-/// chunk claimed by a registered `Site` (settlements, landmarks, bridges and
-/// fortifications are all registered as `Site`s with a real footprint
-/// radius -- see `civ::Civs::establish_site`'s "Place sites in world" pass --
-/// so `is_valid`'s `c.sites.is_empty()` check is real collision protection,
-/// not just a procedural-world nicety), and that a healthy share of the
-/// placed spots are creature-cluster variants (a non-empty `entities` list
+/// Full-world smoke test for the spawn work (the "no monsters outside
+/// settlements" bug report): confirms that enabling `spots: true` for
+/// Cromatolis in `assets/world/map/cromatolis_v0_procedural_layers.ron`
+/// actually places spot markers on the real generated map, that none of them
+/// land on a chunk claimed by a registered `Site` (settlements, landmarks,
+/// bridges and fortifications are all registered as `Site`s with a real
+/// footprint radius -- see `civ::Civs::establish_site`'s "Place sites in world"
+/// pass -- so `is_valid`'s `c.sites.is_empty()` check is real collision
+/// protection, not just a procedural-world nicety), and that a healthy share of
+/// the placed spots are creature-cluster variants (a non-empty `entities` list
 /// in `spot_config`), not just structure-only decoration.
 ///
 /// Requires the real Cromatolis LFS assets pulled locally, same precedent as
@@ -763,7 +764,7 @@ mod cromatolis_real_world {
              `c.sites.is_empty()` guard in `is_valid` should make this structurally impossible"
         );
 
-        // Measured on the real map (COW-16): land=681560, spot=7630 (~1.12% of
+        // Measured on the real map: land=681560, spot=7630 (~1.12% of
         // land), creature_cluster=7075 (~92.7% of spots). Generous ranges
         // around the measured baseline: tight enough to catch a regression
         // back to `spots: false` (which would zero both), loose enough to

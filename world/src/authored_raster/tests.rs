@@ -840,6 +840,50 @@ fn the_memory_budget_is_checked_before_any_tile_is_read() {
 }
 
 #[test]
+fn water_layer_blocks_outside_the_engine_range_are_refused() {
+    // A lake 2e9 cm up (20 million blocks): far outside the blocks the
+    // engine can hold, whatever the sea rule says.
+    let lake = |surface_cm, bed_cm| {
+        let mut s = region("lake", (1024, 1024), (1536, 1216), 32, vec![
+            PaintOp::Water {
+                shape: Shape::Rect {
+                    x0: 1100.0,
+                    y0: 1100.0,
+                    x1: 1200.0,
+                    y1: 1120.0,
+                },
+                surface_cm,
+                bed_cm,
+            },
+            PaintOp::BankRing {
+                width_m: 2,
+                bed_cm: Some(surface_cm + 50),
+            },
+        ]);
+        s.sea_fill = SeaFill::AuthoredOnly;
+        s
+    };
+    expect_error(
+        vec![build_region(&lake(2_000_000_000, 1_999_999_400)).unwrap()],
+        "outside the blocks",
+    );
+    // The same lake inside the range loads.
+    assert!(load(&[build_region(&lake(23_868, 23_268)).unwrap()]).is_ok());
+}
+
+#[test]
+fn a_garbage_region_box_fails_cleanly_instead_of_overflowing() {
+    let mut built = build_region(&river_spec()).unwrap();
+    built.manifest.min = (i32::MIN, i32::MIN);
+    built.manifest.max = (i32::MAX, i32::MAX);
+    let fetch = |_: &str, _: LayerKind, _: i32, _: i32| -> Result<Vec<u8>, String> {
+        Err("no tiles".to_string())
+    };
+    let e = AuthoredRasters::from_manifest(manifest(&[built]), MAP, "test", &fetch).unwrap_err();
+    assert!(e.0.contains("too large to be a region"), "{}", e.0);
+}
+
+#[test]
 fn unknown_aquatic_profiles_and_bad_margins_are_refused() {
     let mut spec = river_spec();
     spec.aquatic_ecology_profile = Some("no_such_profile".into());
@@ -1161,6 +1205,19 @@ fn authored_only_wet_and_bank_cells_have_no_sea_fill() {
     assert_eq!(own.water_level, own.alt);
     let auto = ground_col(bank, SeaFill::Auto).resolve(engine(), dry());
     assert_eq!(auto.water_level, 139.01);
+}
+
+/// Both buried-ground paths (the exact column and the ring cell) use the
+/// sampler's column top, `alt as i32`, which truncates toward zero: an
+/// altitude in (-1, 0) has block 0 as its top, not -1.
+#[test]
+fn the_top_block_of_an_altitude_truncates_toward_zero() {
+    use super::queries::top_block_of_levelled_alt as top;
+    assert_eq!(top(-0.5), 0);
+    assert_eq!(top(-1.5), -1);
+    assert_eq!(top(-0.0), 0);
+    assert_eq!(top(0.9), 0);
+    assert_eq!(top(139.01), 139);
 }
 
 #[test]
@@ -3092,6 +3149,64 @@ fn chunk_presentation_on_a_synthetic_raster() {
     assert_eq!(fully_dry.table_alt(5.0, 9.0), 5.0);
     assert_eq!(table.table_alt(5.0, 9.0), 9.0);
     assert_eq!(table.table_alt(12.0, 9.0), 12.0);
+}
+
+/// A chunk whose 1024 columns are all authored but 504 of which are water is
+/// mostly dry, yet not "fully dry": it keeps the table's river link. (The
+/// authored-column count alone, which includes the wet columns, would call it
+/// fully dry.)
+#[test]
+fn a_fully_authored_chunk_with_wet_columns_is_not_fully_dry() {
+    use crate::sim::WorldSim;
+    use common::terrain::{MapSizeLg, map::MapConfig};
+
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    // The chunk is x 2080..2112, y 1056..1088; the lake takes 28 x 18 of it.
+    let mut own = region("mostly_dry", (2048, 1024), (2304, 1280), 0, vec![
+        PaintOp::Ground {
+            shape: rect(2080.0, 1056.0, 2272.0, 1248.0),
+            ground_cm: 25_050,
+            weight: GROUND_EXACT,
+        },
+        PaintOp::ClearGround {
+            shape: rect(2082.0, 1058.0, 2110.0, 1076.0),
+        },
+        PaintOp::Water {
+            shape: rect(2082.0, 1058.0, 2110.0, 1076.0),
+            surface_cm: 24_068,
+            bed_cm: 23_468,
+        },
+    ]);
+    own.sea_fill = SeaFill::AuthoredOnly;
+    let mut sim = WorldSim::empty_with_size_for_test(MapSizeLg::new(Vec2::new(7, 7)).unwrap());
+    sim.set_authored_rasters_for_test(Some(load(&[build_region(&own).unwrap()]).unwrap()));
+    let config = MapConfig::orthographic(sim.map_size_lg(), 0.0..=1000.0);
+    let chunk = Vec2::new(2080, 1056) / CHUNK;
+    let summary = sim
+        .authored_rasters
+        .as_ref()
+        .and_then(|r| r.chunk_summary(chunk))
+        .expect("the chunk is authored");
+    assert_eq!(summary.authored_columns, 1024);
+    assert_eq!(summary.wet_columns, 504);
+    let presentation = sim.chunk_presentation(&config, chunk);
+    assert!(
+        presentation.authored_dry,
+        "504 of 1024 columns wet is mostly dry"
+    );
+    assert!(
+        !presentation.authored_fully_dry,
+        "a chunk with wet columns keeps its river link"
+    );
+}
+
+#[test]
+fn a_levelled_altitude_below_zero_truncates_like_the_sampler() {
+    // The sampler's column top is `alt as i32` (towards zero), so the exact
+    // ground top for -3.5 is block -3, not -4.
+    assert_eq!(super::queries::top_block_of_levelled_alt(-3.5), -3);
+    assert_eq!(super::queries::top_block_of_levelled_alt(3.5), 3);
+    assert_eq!(super::queries::top_block_of_levelled_alt(-0.2), 0);
 }
 
 #[test]
