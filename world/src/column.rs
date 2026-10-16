@@ -1790,25 +1790,56 @@ pub struct ColumnSample<'a> {
     /// that this column stands more than a block above, in a
     /// `sea_fill: AuthoredOnly` region (the wall of an authored dry pit);
     /// `None` everywhere else. Blocks of the column above it are the wall's
-    /// exposed face and take the ground's material
-    /// (`world/src/block.rs`, `WorldSim::dry_wall_floor_at`).
+    /// exposed face and show the column's own strata
+    /// (`ColumnSample::dry_wall_block`, `world/src/block.rs`,
+    /// `WorldSim::dry_wall_floor_at`).
     pub exposed_wall_floor: Option<f32>,
 
     pub chunk: &'a SimChunk,
 }
 
 impl ColumnSample<'_> {
-    /// The block of an authored dry pit's exposed wall
-    /// ([`Self::exposed_wall_floor`]): the ground's own surface block of this
-    /// column (its kind and colour), so the wall reads as the same material
-    /// as the ground and not as the engine's deep stone.
-    pub fn dry_wall_block(&self) -> common::terrain::Block {
-        let kind = self.surface_block_override.unwrap_or(if self.snow_cover {
-            BlockKind::Snow
+    /// The block of an authored dry pit's exposed wall at `wpos`
+    /// ([`Self::exposed_wall_floor`]): the column's own strata as they would
+    /// run with depth, not the engine's single deep-stone ramp. Under the
+    /// surface layer the wall is `Earth` (the column's sub-surface colour) down
+    /// to the column's own soil depth (`alt - basement`; none where the surface
+    /// is forced to bare rock), blended into `Rock` over a short band by a
+    /// position hash, then `Rock` in the natural stone colour of exposed
+    /// cliffs (a warm grey tinted by the column, banded like the engine's
+    /// cliff faces) -- never the engine's underground blue (`stone_col`). A
+    /// very sparse speckle of the rock is tinted as ore.
+    pub fn dry_wall_block(&self, wpos: Vec3<i32>) -> common::terrain::Block {
+        let grass_depth = (1.5 + 2.0 * self.chaos).min(self.alt - self.basement);
+        let depth = self.alt - grass_depth - wpos.z as f32;
+        let soil = if self.surface_block_override == Some(BlockKind::Rock) {
+            0.0
         } else {
-            BlockKind::Grass
-        });
-        common::terrain::Block::new(kind, self.surface_color.map(|e| (e * 255.0) as u8))
+            (self.alt - self.basement).clamp(0.0, WALL_MAX_SOIL)
+        };
+        let mix = RandomField::new(WALL_MIX_SEED).get_f32(wpos);
+        let jitter = RandomField::new(WALL_JITTER_SEED).get_f32(wpos);
+        let layer = wall_layer(
+            depth,
+            soil,
+            mix,
+            RandomField::new(WALL_ORE_SEED).get_f32(wpos),
+            RandomField::new(WALL_ORE_KIND_SEED).get_f32(wpos),
+        );
+        // Engine-style horizontal banding of an exposed face.
+        let band = (wpos.z as f32 - self.basement * 0.3).div(2.0).sin() * 0.5 + 0.5;
+        let shade = Lerp::lerp(1.0, 0.7, band) * (0.94 + 0.12 * jitter);
+        let to_u8 = |c: Rgb<f32>| c.map(|e| (e * 255.0).clamp(0.0, 255.0) as u8);
+        match layer {
+            WallLayer::Earth => {
+                common::terrain::Block::new(BlockKind::Earth, to_u8(self.sub_surface_color * shade))
+            },
+            WallLayer::Rock => {
+                let stone = Rgb::lerp(WALL_STONE, self.sub_surface_color, WALL_STONE_TINT);
+                common::terrain::Block::new(BlockKind::Rock, to_u8(stone * shade))
+            },
+            WallLayer::Ore(col) => common::terrain::Block::new(BlockKind::Rock, col),
+        }
     }
 
     /// Whether procedural decorations (boulders, trees, scatter) must not be
@@ -2036,4 +2067,95 @@ pub struct ColInfo {
     pub basement: f32,
     pub cliff_offset: f32,
     pub cliff_height: f32,
+}
+
+/// Deepest soil a pit wall may show before it is stone, in blocks.
+const WALL_MAX_SOIL: f32 = 40.0;
+/// Width, in blocks, of the earth-to-stone blend band on a pit wall.
+const WALL_BLEND_BAND: f32 = 6.0;
+/// The natural stone of an exposed pit wall (a warm grey, linear 0..1).
+const WALL_STONE: Rgb<f32> = Rgb::new(0.47, 0.44, 0.41);
+/// How much of the column's sub-surface colour tints the wall stone.
+const WALL_STONE_TINT: f32 = 0.3;
+/// Chance that a rock block of a pit wall is an ore fleck.
+pub const WALL_ORE_CHANCE: f32 = 0.004;
+/// Position-hash seeds of the wall's earth/stone mix, colour jitter and ore.
+const WALL_MIX_SEED: u32 = 0x57a1_0001;
+const WALL_JITTER_SEED: u32 = 0x57a1_0002;
+const WALL_ORE_SEED: u32 = 0x57a1_0003;
+const WALL_ORE_KIND_SEED: u32 = 0x57a1_0004;
+/// Fleck colours: iron, copper, gold, coal.
+const WALL_ORES: [(u8, u8, u8); 4] = [(150, 92, 62), (92, 150, 100), (212, 178, 62), (38, 38, 44)];
+
+/// What a pit wall block is at a depth below the surface layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WallLayer {
+    Earth,
+    Rock,
+    Ore(Rgb<u8>),
+}
+
+/// The layer of an exposed pit wall `depth` blocks under its surface layer for
+/// a column with `soil` blocks of earth. `mix`, `ore` and `ore_kind` are
+/// position hashes in `[0, 1)`: the earth/stone blend is probabilistic over a
+/// band of [`WALL_BLEND_BAND`] blocks centred on the soil depth.
+pub fn wall_layer(depth: f32, soil: f32, mix: f32, ore: f32, ore_kind: f32) -> WallLayer {
+    let earth_p = ((soil - depth) / WALL_BLEND_BAND + 0.5).clamp(0.0, 1.0);
+    if mix < earth_p {
+        WallLayer::Earth
+    } else if ore < WALL_ORE_CHANCE {
+        let i = ((ore_kind * WALL_ORES.len() as f32) as usize).min(WALL_ORES.len() - 1);
+        WallLayer::Ore(WALL_ORES[i].into())
+    } else {
+        WallLayer::Rock
+    }
+}
+
+#[cfg(test)]
+mod wall_layer_tests {
+    use super::*;
+
+    #[test]
+    fn a_deep_soil_column_shows_earth_then_stone() {
+        let at = |depth, mix| wall_layer(depth, 12.0, mix, 0.9, 0.0);
+        assert_eq!(at(0.0, 0.5), WallLayer::Earth);
+        assert_eq!(at(8.0, 0.5), WallLayer::Earth);
+        assert_eq!(at(20.0, 0.5), WallLayer::Rock);
+        // Inside the band both occur, by the hash.
+        assert_eq!(at(12.0, 0.2), WallLayer::Earth);
+        assert_eq!(at(12.0, 0.8), WallLayer::Rock);
+    }
+
+    #[test]
+    fn a_stone_heavy_column_is_stone_from_the_start() {
+        for depth in [4.0, 10.0, 300.0] {
+            assert_eq!(wall_layer(depth, 0.0, 0.5, 0.9, 0.0), WallLayer::Rock);
+        }
+    }
+
+    #[test]
+    fn ore_is_sparse_deterministic_and_only_in_rock() {
+        let n = 200_000;
+        let mut ore = 0;
+        for i in 0..n {
+            let p = Vec3::new(i, i / 7, -i / 3);
+            let l = |p| {
+                wall_layer(
+                    50.0,
+                    0.0,
+                    RandomField::new(WALL_MIX_SEED).get_f32(p),
+                    RandomField::new(WALL_ORE_SEED).get_f32(p),
+                    RandomField::new(WALL_ORE_KIND_SEED).get_f32(p),
+                )
+            };
+            assert_eq!(l(p), l(p));
+            ore += matches!(l(p), WallLayer::Ore(_)) as u32;
+        }
+        let rate = ore as f32 / n as f32;
+        assert!(
+            (rate - WALL_ORE_CHANCE).abs() < WALL_ORE_CHANCE * 0.3,
+            "{rate}"
+        );
+        assert_eq!(wall_layer(0.0, 9.0, 0.1, 0.0, 0.0), WallLayer::Earth);
+    }
 }

@@ -104,12 +104,13 @@ impl<'a> BlockGen<'a> {
             .map(|e| (e * 255.0) as u8);
 
             // The exposed side of an authored dry pit's wall (the column
-            // stands above neighbouring authored dry ground): the ground's own
-            // material instead of the engine's deep stone and earth strata.
+            // stands above neighbouring authored dry ground): the column's own
+            // strata (earth, then natural stone with rare ore flecks) instead
+            // of the engine's blue underground rock colour.
             let wall = exposed_wall_floor.is_some_and(|f| wposf.z as f32 > f);
             let solid = |kind: BlockKind, col: Rgb<u8>| {
                 if wall {
-                    sample.dry_wall_block()
+                    sample.dry_wall_block(wpos)
                 } else {
                     Block::new(kind, col)
                 }

@@ -380,8 +380,9 @@ pub enum SeaFill {
     /// otherwise a dry strip meets a vertical water face at the region's
     /// edge. The exporter owes this for every `AuthoredOnly` region that
     /// borders the sea. Beside authored ground, a column standing more than a
-    /// block and a half above it is an exposed wall and takes the ground's
-    /// surface material (`WorldSim::dry_wall_floor_at`): the rule covers
+    /// block and a half above it is an exposed wall and shows the column's own
+    /// strata, earth then natural stone, not the engine's blue underground rock
+    /// (`WorldSim::dry_wall_floor_at`): the rule covers
     /// every authored-ground edge of the region, ordinary cliffs included.
     AuthoredOnly,
 }

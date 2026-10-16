@@ -1,6 +1,7 @@
 //! The wall of an authored dry pit on the Cromatolis calibration arena: no
-//! water on it and the ground's own material, never the engine's deep stone
-//! (blue) or a sea-filled sand slope.
+//! water on it, the column's own strata (earth, then natural stone, with rare
+//! ore flecks), never the engine's blue underground rock or a sea-filled sand
+//! slope.
 //!
 //! ```text
 //! VELOREN_ASSETS=$PWD/assets cargo test -p xindeler-world --release --features tools \
@@ -34,24 +35,36 @@ fn in_region(p: Vec2<i32>) -> bool {
     p.x >= REGION_MIN.0 && p.x < REGION_MAX.0 && p.y >= REGION_MIN.1 && p.y < REGION_MAX.1
 }
 
+/// Whether a colour is the engine's blue underground rock (`stone_col`
+/// 90,110,150 is 60 over red): a natural wall colour is never this blue.
+fn is_blue(c: Rgb<u8>) -> bool { c.b as i32 - c.r as i32 > 30 }
+
 #[derive(Default, Debug)]
 struct Wall {
     columns: u32,
     liquid_columns: u32,
     sea_sand_columns: u32,
-    /// Wall blocks (above the neighbouring ground, under the surface layer)
-    /// that are not the surface block kind.
-    foreign_blocks: u32,
+    /// Wall blocks (above the neighbouring ground, under the surface layer).
     wall_blocks: u32,
-    colour_mismatch: u32,
-    kinds: std::collections::BTreeMap<String, u32>,
     wall_columns: u32,
-    /// Columns of the region beside a pit's ground whose blocks above the
-    /// pit's top and under the surface layer hold any `Rock`/`Earth`: a wall
-    /// that was not given the ground's material, flagged or not.
-    unflagged_wall_blocks: u32,
+    /// Wall blocks by kind.
+    kinds: std::collections::BTreeMap<String, u32>,
+    /// `Rock`/`Earth` blocks of the wall band with the engine's blue colour,
+    /// in any column of the region beside a pit (flagged or not).
+    blue_blocks: u32,
+    /// Rock wall blocks that are ore flecks.
+    ore_blocks: u32,
+    /// Wall columns with earth above rock (a transition), only earth, only
+    /// rock.
+    transition_columns: u32,
+    earth_only_columns: u32,
+    rock_only_columns: u32,
+    /// Wall columns whose earth lies under rock (the wrong way round).
+    inverted_columns: u32,
     /// Columns of the region beside a pit's ground (the scan above covered).
     scanned_columns: u32,
+    /// Hash of every wall block, for the determinism check.
+    digest: u64,
 }
 
 /// Survey the chunks around the pits. `pits` are the ground boxes, `wet` the
@@ -92,10 +105,10 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
                     w.liquid_columns += (liquid && !wet_here) as u32;
                     w.sea_sand_columns +=
                         (liquid && !wet_here && top_kind == Some(BlockKind::Sand)) as u32;
-                    // The whole-box scan: a column of the region beside a
-                    // pit's ground must hold no stone or earth between that
-                    // ground's top and its own surface layer, whether the
-                    // wall rule flagged it or not.
+                    // The whole-box scan: no `Rock`/`Earth` block of the band
+                    // between a pit's ground top and the column's own surface
+                    // layer, in any column of the region beside a pit (flagged
+                    // or not), may carry the engine's blue deep-rock colour.
                     if in_region(wpos) && !wet_here {
                         let mut beside = false;
                         let mut lo = i32::MAX;
@@ -115,10 +128,15 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
                         if beside {
                             w.scanned_columns += 1;
                             let hi = col.alt as i32 - 6;
-                            let bad = (lo.max(z0)..=hi.min(z1 - 1)).any(|z| {
-                                matches!(block(z).kind(), BlockKind::Rock | BlockKind::Earth)
-                            });
-                            w.unflagged_wall_blocks += bad as u32;
+                            for z in lo.max(z0)..=hi.min(z1 - 1) {
+                                let b = block(z);
+                                if matches!(b.kind(), BlockKind::Rock | BlockKind::Earth)
+                                    && b.get_color()
+                                        .is_some_and(|c| is_blue(c) && !is_ore_colour(c))
+                                {
+                                    w.blue_blocks += 1;
+                                }
+                            }
                         }
                     }
                     let Some(floor) = col.exposed_wall_floor else {
@@ -128,26 +146,50 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
                     // Under the surface layer, above the neighbouring ground.
                     let lo = floor.floor() as i32 + 1;
                     let hi = col.alt as i32 - 6;
+                    let (mut top_earth, mut low_rock) = (None::<i32>, None::<i32>);
+                    let mut top_rock = None::<i32>;
                     for z in lo.max(z0)..=hi.min(z1 - 1) {
                         let b = block(z);
                         if !b.is_filled() || b.is_liquid() {
                             continue;
                         }
                         w.wall_blocks += 1;
-                        // The column's own surface block (an authored bank
-                        // may override the kind).
-                        let want_block = col.dry_wall_block();
-                        let want = want_block.get_color().unwrap();
-                        if b.kind() != want_block.kind() {
-                            // Other kinds are natural layers placed over the
-                            // wall afterwards (a cave's weak rock in a
-                            // cliff); the engine's strata are the defect.
-                            *w.kinds.entry(format!("{:?}", b.kind())).or_default() += 1;
-                            w.foreign_blocks +=
-                                matches!(b.kind(), BlockKind::Rock | BlockKind::Earth) as u32;
-                        } else if b.get_color() != Some(want) {
-                            w.colour_mismatch += 1;
+                        *w.kinds.entry(format!("{:?}", b.kind())).or_default() += 1;
+                        let c = b.get_color().unwrap_or_default();
+                        w.digest = w.digest.wrapping_mul(1_099_511_628_211).wrapping_add(
+                            (z as u64) << 32
+                                ^ (c.r as u64) << 16
+                                ^ (c.g as u64) << 8
+                                ^ c.b as u64
+                                ^ (b.kind() as u64) << 48,
+                        );
+                        match b.kind() {
+                            BlockKind::Earth => {
+                                top_earth = top_earth.max(Some(z));
+                            },
+                            BlockKind::Rock => {
+                                if is_ore_colour(c) {
+                                    w.ore_blocks += 1;
+                                } else {
+                                    low_rock = Some(low_rock.map_or(z, |e| e.min(z)));
+                                    top_rock = top_rock.max(Some(z));
+                                }
+                            },
+                            _ => {},
                         }
+                    }
+                    match (top_earth, top_rock) {
+                        (Some(_), Some(_)) => {
+                            w.transition_columns += 1;
+                            // Earth must start above where the rock does: the
+                            // topmost earth is above the lowest rock.
+                            if top_earth < low_rock {
+                                w.inverted_columns += 1;
+                            }
+                        },
+                        (Some(_), None) => w.earth_only_columns += 1,
+                        (None, Some(_)) => w.rock_only_columns += 1,
+                        _ => {},
                     }
                 }
             }
@@ -158,17 +200,26 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
         a.columns += r.columns;
         a.liquid_columns += r.liquid_columns;
         a.sea_sand_columns += r.sea_sand_columns;
-        a.foreign_blocks += r.foreign_blocks;
         a.wall_blocks += r.wall_blocks;
-        a.colour_mismatch += r.colour_mismatch;
         a.wall_columns += r.wall_columns;
-        a.unflagged_wall_blocks += r.unflagged_wall_blocks;
+        a.blue_blocks += r.blue_blocks;
+        a.ore_blocks += r.ore_blocks;
+        a.transition_columns += r.transition_columns;
+        a.earth_only_columns += r.earth_only_columns;
+        a.rock_only_columns += r.rock_only_columns;
+        a.inverted_columns += r.inverted_columns;
         a.scanned_columns += r.scanned_columns;
+        a.digest = a.digest.wrapping_mul(31).wrapping_add(r.digest);
         for (k, v) in r.kinds {
             *a.kinds.entry(k).or_default() += v;
         }
         a
     })
+}
+
+/// An ore fleck colour of the wall (`WALL_ORES`).
+fn is_ore_colour(c: Rgb<u8>) -> bool {
+    [(150, 92, 62), (92, 150, 100), (212, 178, 62), (38, 38, 44)].contains(&(c.r, c.g, c.b))
 }
 
 fn rect((x0, y0, x1, y1): Rect) -> Shape {
@@ -232,7 +283,7 @@ fn fake_deep_pit_table(world: &mut World) {
 /// stone; natural sea elsewhere in the same world keeps its water.
 #[test]
 #[ignore]
-fn pit_walls_are_dry_and_the_grounds_own_material() {
+fn pit_walls_are_dry_with_natural_strata_and_no_blue_rock() {
     let (mut world, index) = generate_world();
     let ir = index.as_index_ref();
     fake_deep_pit_table(&mut world);
@@ -245,10 +296,11 @@ fn pit_walls_are_dry_and_the_grounds_own_material() {
         assert!(w.wall_blocks > 10_000, "no wall surveyed: {w:?}");
         assert_eq!(w.liquid_columns, 0, "water around the pit: {w:?}");
         assert_eq!(w.sea_sand_columns, 0, "{w:?}");
-        assert_eq!(w.foreign_blocks, 0, "wall is not ground material: {w:?}");
-        assert_eq!(w.colour_mismatch, 0, "{w:?}");
+        assert_wall_strata("pit", &w);
         assert!(w.scanned_columns > 500, "{w:?}");
-        assert_eq!(w.unflagged_wall_blocks, 0, "unflagged stone wall: {w:?}");
+        // Same chunks twice: the same blocks (position-hash ore and mix).
+        let again = survey(&world, ir, &[EXACT], &[]);
+        assert_eq!(w.digest, again.digest, "wall blocks are not deterministic");
     }
     // Counter-test: natural sea in the same world still holds water.
     let sea = (40..980)
@@ -278,9 +330,31 @@ fn pit_walls_are_dry_and_the_grounds_own_material() {
     assert!(water > 1000);
 }
 
+/// The strata contract of a surveyed pit: earth near the top turning to stone
+/// below on columns with soil, stone straight away on stone-heavy ones, no
+/// blue rock anywhere beside the pit, and ore flecks sparse.
+fn assert_wall_strata(name: &str, w: &Wall) {
+    assert_eq!(w.blue_blocks, 0, "{name}: blue rock on a wall: {w:?}");
+    assert_eq!(w.inverted_columns, 0, "{name}: stone above earth: {w:?}");
+    assert!(
+        w.transition_columns > 0,
+        "{name}: no earth-to-stone wall: {w:?}"
+    );
+    assert!(
+        w.earth_only_columns + w.transition_columns + w.rock_only_columns > 0,
+        "{name}: {w:?}"
+    );
+    let rock = w.kinds.get("Rock").copied().unwrap_or(0);
+    assert!(rock > 0, "{name}: no stone at depth: {w:?}");
+    assert!(
+        (w.ore_blocks as f32) < rock as f32 * 0.01,
+        "{name}: ore is not sparse: {w:?}"
+    );
+}
+
 /// Run one layout through the survey and check the pit invariants: no water but
-/// the authored one, the ground's material on every flagged wall block, no
-/// stone or earth in any wall of the region (flagged or not).
+/// the authored one, no blue rock
+/// in any wall block of the region beside a pit (flagged or not).
 fn check_layout(name: &str, pits: &[(Rect, i32)], water: &[(Rect, i32, i32)]) {
     let (mut world, index) = generate_world();
     let ir = index.as_index_ref();
@@ -295,16 +369,15 @@ fn check_layout(name: &str, pits: &[(Rect, i32)], water: &[(Rect, i32, i32)]) {
     assert!(w.scanned_columns > 200, "{name}: nothing scanned: {w:?}");
     assert_eq!(w.liquid_columns, 0, "{name}: stray water: {w:?}");
     assert_eq!(w.sea_sand_columns, 0, "{name}: {w:?}");
-    assert_eq!(w.foreign_blocks, 0, "{name}: {w:?}");
-    assert_eq!(w.colour_mismatch, 0, "{name}: {w:?}");
-    assert_eq!(w.unflagged_wall_blocks, 0, "{name}: unflagged wall: {w:?}");
+    assert_eq!(w.blue_blocks, 0, "{name}: blue rock on a wall: {w:?}");
+    assert_eq!(w.inverted_columns, 0, "{name}: {w:?}");
 }
 
 /// Two pits sharing a wall: the shallower one's side facing the deeper one is
 /// a wall above the deeper pit's floor.
 #[test]
 #[ignore]
-fn two_adjacent_pits_have_ground_material_walls() {
+fn two_adjacent_pits_have_natural_strata_walls() {
     check_layout(
         "adjacent",
         &[
@@ -316,7 +389,7 @@ fn two_adjacent_pits_have_ground_material_walls() {
 }
 
 /// A pit with a river running along its east side: the river keeps its water,
-/// nothing else holds any, and the pit's other walls are ground material.
+/// nothing else holds any, and the pit's other walls show the natural strata.
 #[test]
 #[ignore]
 fn pit_beside_a_river_keeps_only_the_rivers_water() {
@@ -333,7 +406,7 @@ fn pit_beside_a_river_keeps_only_the_rivers_water() {
 /// obeys the same invariants.
 #[test]
 #[ignore]
-fn pit_at_the_region_border_has_ground_material_walls() {
+fn pit_at_the_region_border_has_natural_strata_walls() {
     check_layout(
         "border",
         &[(

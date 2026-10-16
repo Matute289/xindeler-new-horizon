@@ -63,7 +63,7 @@ const WALL_MIN_DROP: f32 = 1.5;
 /// top toward the solid ground of the neighbour. The value is an empirical
 /// bound measured on the calibration arena (no unflagged wall block in the
 /// whole-box scan of the pit-wall tests); too large a value only lowers the
-/// floor, so more of the wall takes the ground's material, never less.
+/// floor, so more of the wall gets the column's own strata, never less.
 const UNAUTHORED_RELIEF_MARGIN: f32 = 6.0;
 
 impl WorldSim {
@@ -148,19 +148,20 @@ impl WorldSim {
     /// dip beside a pit: its altitude is the table's, less a margin for the
     /// engine's relief, which only lowers the floor into the neighbour's solid
     /// ground). The blocks of the column above it are the exposed side of the
-    /// wall; world generation gives them the ground's material instead of the
-    /// engine's deep stone (`BlockGen::get_with_z_cache`).
+    /// wall; world generation gives them the column's own strata (earth, then
+    /// natural stone) instead of the engine's blue underground rock
+    /// (`BlockGen::get_with_z_cache`, `ColumnSample::dry_wall_block`).
     ///
     /// The rule is deliberately **not pit-specific**: any column of an
     /// `AuthoredOnly` region that stands more than `WALL_MIN_DROP` above an
-    /// authored ground or bank neighbour gets the surface material over the
+    /// authored ground or bank neighbour gets the column's own strata over the
     /// whole height from that neighbour's top, so an ordinary cliff steeper
     /// than about 56 degrees (or a terrace, or a shore bank beside unauthored
     /// relief) next to authored ground is covered too. The requirement is that
-    /// a pit wall be the ground's material; keeping the rule generic avoids a
-    /// second, pit-only classification of authored ground. The interior blocks
-    /// of a flagged column become surface blocks too (grass is found when
-    /// digging into such a wall).
+    /// a pit wall show earth and stone, not blue rock; keeping the rule generic
+    /// avoids a second, pit-only classification of authored ground. The
+    /// interior blocks of a flagged column follow the same strata, so
+    /// digging into a wall finds earth and stone as it would in the ground.
     pub fn dry_wall_floor_at(&self, wpos: Vec2<i32>, alt: f32, own_ground: bool) -> Option<f32> {
         let rasters = self.authored_rasters.as_ref()?;
         let mut floor: Option<f32> = None;
