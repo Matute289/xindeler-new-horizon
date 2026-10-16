@@ -459,3 +459,9 @@ fn minimap_setting_is_restored_after_the_script_changed_it() {
     restore_minimap(&mut shown);
     assert!(!shown);
 }
+
+#[test]
+fn script_view_distance_overrides_the_graphics_settings() {
+    let vd = script_view_distances(12);
+    assert_eq!((vd.terrain, vd.entity), (12, 12));
+}
