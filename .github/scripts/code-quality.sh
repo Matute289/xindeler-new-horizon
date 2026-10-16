@@ -39,7 +39,10 @@ time cargo clippy -p xindeler-world --locked \
 # `#[ignore]`d with that reason, and the chunk-generation golden test skips
 # itself without them. `economy::context::tests::test_economy_moderate_standalone`
 # is an upstream simulation that took ~4 minutes alone without the LFS assets
-# (it guards the economy, not this code) and is skipped here.
+# (it guards the economy, not this code) and is skipped here, as is
+# `sim::tests::cromatolis_world_generates_without_lfs_assets` (~5 minutes: it
+# generates the whole authored world; run it locally with
+# `cargo test -p xindeler-world --lib cromatolis_world_generates_without_lfs_assets`).
 # XINDELER_SKIP_CI_TESTS=1 skips this test step (clippy and fmt still run);
 # unset, the tests run.
 if [ "${XINDELER_SKIP_CI_TESTS:-0}" = "1" ]; then
@@ -49,7 +52,8 @@ else
         printf 'VELOREN_CANARY_MAGIC\n' > assets/common/canary.canary
     fi &&
     time cargo test --locked -p xindeler-world --lib \
-        -- --skip test_economy_moderate_standalone &&
+        -- --skip test_economy_moderate_standalone \
+        --skip cromatolis_world_generates_without_lfs_assets &&
     # terrain-probe is a binary crate: its tests are the bin's.
     time cargo test --locked -p xindeler-terrain-probe --bins
 fi &&
