@@ -86,9 +86,10 @@
 //!   authored surface block, at most [`ICE_MAX_BLOCKS`] thick, and never the
 //!   whole column (at least one liquid block stays under it). A cold lake looks
 //!   frozen but thinner, and the top of the column keeps the authored height.
-//!   Which columns freeze (the noise) is the engine's, unchanged; natural
-//!   water, authored banks and ground, and every column outside a region keep
-//!   the natural band.
+//!   Which columns freeze (the noise) is the engine's, unchanged. Only drawn
+//!   wet cells are clamped; the sea is not a drawn surface, so a sea-flooded
+//!   authored bank in a cold chunk keeps the natural ice, as do natural water,
+//!   authored ground and every column outside a region (intended).
 //! * **Decorations stay natural by default.** Procedural rocks, trees and
 //!   sprites beside and in authored water are the natural map's and are kept; a
 //!   region may opt out ([`RegionManifest::suppress_procedural_in_water`],
@@ -234,6 +235,9 @@ pub const RIM_MARGIN_M: i32 = 64;
 /// Largest feather the manifest may ask for.
 pub const MAX_FEATHER_M: i32 = 128;
 /// Most `Ice` blocks on an authored wet column ([`AuthoredColumn::ice_band`]).
+/// A visual thickness choice (a thin crust, not the engine's up-to-several
+/// blocks); the rule that at least one liquid block always stays under the ice
+/// is separate and an invariant, whatever this value is.
 pub const ICE_MAX_BLOCKS: i32 = 2;
 /// Top block of the engine's ocean: the column sampler fills `z <
 /// sea_level - 1 + 0.01`. Authored water and banks may not go below it.
@@ -862,6 +866,12 @@ impl AuthoredColumn {
     /// the authored surface), so the column never rises above the drawn
     /// height and at least one liquid block stays below the ice. `t = 0`
     /// gives half-depth 0, which is "no ice".
+    ///
+    /// Intended looks: when a regional flood has lifted `water_level` over the
+    /// drawn surface the ice stays in the drawn surface block and the flood
+    /// liquid lies above it; and `None` for banks, ground and empty cells, so a
+    /// sea-flooded bank in a cold chunk keeps the natural ice (only drawn wet
+    /// cells are clamped, the sea is not a drawn surface).
     #[inline]
     pub fn ice_band(&self, water_level: f32, natural_ice_depth: f32) -> Option<(f32, f32)> {
         let AuthoredCell::Wet {

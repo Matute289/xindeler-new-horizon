@@ -285,6 +285,86 @@ fn authored_ice_band_only_grows_downward_from_the_surface() {
 }
 
 #[test]
+fn one_block_authored_ice_counts_as_ice_for_wildlife() {
+    let col = AuthoredColumn {
+        settings: SETTINGS,
+        weight: 1.0,
+        cell: AuthoredCell::Wet {
+            surface_block: 238,
+            bed_block: 232,
+        },
+        water_dist: Some(0.0),
+        natural: false,
+    };
+    // Natural half-depth 1.0 -> one block of ice below the surface block.
+    let (centre, half) = col.ice_band(238.5, 1.0).unwrap();
+    assert_eq!(half, 0.5);
+    assert!(crate::layer::wildlife::is_ice_column(half, true));
+    assert!(!crate::layer::wildlife::is_ice_column(half, false));
+    assert!(!crate::layer::wildlife::is_ice_column(0.0, true));
+    // The Ice spawn height (`ice_centre + 1 + ice_depth`) is one block over
+    // the top of the band, i.e. over the drawn surface block.
+    assert_eq!(centre + 1.0 + half, 238.5 + 1.0);
+}
+
+#[test]
+fn flooded_authored_water_keeps_ice_in_the_drawn_surface_block() {
+    let col = AuthoredColumn {
+        settings: SETTINGS,
+        weight: 1.0,
+        cell: AuthoredCell::Wet {
+            surface_block: 238,
+            bed_block: 232,
+        },
+        water_dist: Some(0.0),
+        natural: false,
+    };
+    // A regional flood lifted the water level well above the drawn surface.
+    let wl = 238.5 + 6.0;
+    for d in [0.6_f32, 1.5, 2.5, 3.5] {
+        let (centre, half) = col.ice_band(wl, d).unwrap();
+        let ice = ice_blocks((centre, half), 232, 238 + 8);
+        assert!(!ice.is_empty() && ice.iter().all(|&z| z <= 238), "{ice:?}");
+        assert!(centre + half <= 238.5, "band top over the drawn surface");
+    }
+}
+
+#[test]
+fn z_limit_covers_every_flooded_authored_water_voxel() {
+    let col = AuthoredColumn {
+        settings: SETTINGS,
+        weight: 1.0,
+        cell: AuthoredCell::Wet {
+            surface_block: 238,
+            bed_block: 232,
+        },
+        water_dist: Some(0.0),
+        natural: false,
+    };
+    for rise in [0.0_f32, 2.0, 5.0, 6.5, 12.0, 40.0] {
+        let wl = 238.5 + rise;
+        for d in [0.0_f32, 0.6, 1.5, 3.5] {
+            let (centre, half) = col.ice_band(wl, d).unwrap();
+            // The caller fills `min_z..max_z as i32`; the ground bound is below
+            // the drawn surface here.
+            let max = crate::block::z_max(240.0, wl, half);
+            // The original form of the bound, unaffected by the ice band's centre.
+            assert_eq!(max, (wl + 2.0 + half).max(240.0));
+            assert!(max >= wl + 2.0, "bound below the water column: {max}");
+            let max_z = max as i32;
+            for z in 232..=wl as i32 + 3 {
+                let wet = (z as f32) < wl;
+                let ice = (z as f32 - centre).abs() < half;
+                assert!(
+                    !(wet || ice) || z < max_z,
+                    "voxel {z} (wl {wl}, d {d}) is skipped by max_z {max_z}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn ice_band_is_authored_wet_only() {
     let col = |cell| AuthoredColumn {
         settings: SETTINGS,
