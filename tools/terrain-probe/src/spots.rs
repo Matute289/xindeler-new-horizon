@@ -132,7 +132,8 @@ pub fn build_doc(arena: &str, source: &str, placements: &[Placement]) -> Built {
             .collect();
         if !over.is_empty() {
             warnings.push(format!(
-                "rejected {} columns of {}: dent up to {} blocks is over the format limit {MAX_DIG_BLOCKS} (left un-exempt)",
+                "rejected {} columns of {}: dent up to {} blocks is over the format limit \
+                 {MAX_DIG_BLOCKS} (left un-exempt)",
                 over.len(),
                 p.name,
                 over.iter().map(|c| c.1).max().unwrap_or(0)
@@ -362,7 +363,8 @@ impl Run {
 pub fn run(p: &Probe, bx: Box2, arena: &str) -> Res<Run> {
     let collected = collect(p, bx)?;
     let source = format!(
-        "terrain-probe spots, engine {}, seed {}, window {},{},{},{} (cleared columns of the placed prefabs)",
+        "terrain-probe spots, engine {}, seed {}, window {},{},{},{} (cleared columns of the \
+         placed prefabs)",
         env!("TPROBE_ENGINE_COMMIT"),
         p.seed,
         bx.x0,
