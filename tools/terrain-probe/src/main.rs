@@ -129,10 +129,12 @@ enum Cmd {
     },
     /// Print the `spots/v1` JSON of the procedural spot structures
     /// (graves, stumps, ...) that touch a window: footprint boxes from the
-    /// HOLLOW columns of each placed prefab and the deepest dent they can
-    /// make, for the verifier's spot exemption. Generates the world live
-    /// (about 3 s, no chunk generation). Placements that would break the
-    /// format's caps are left out and reported on stderr.
+    /// columns each placed prefab can clear and the deepest dent they can
+    /// make, for the external spots/v1 consumer. Generates the world live
+    /// (about 3 s, no chunk generation). Columns that would break the
+    /// format's caps (a dent deeper than 8 blocks) are left out and reported
+    /// on stderr; a terrain sample that fails is reported too. `--strict`
+    /// turns either into exit 1 with no output.
     Spots {
         /// `x0,y0,x1,y1` in world metres, half-open.
         #[arg(long = "box")]
@@ -143,6 +145,10 @@ enum Cmd {
         /// Write the JSON here instead of stdout.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Exit 1 (and write nothing) if any column was left out for being
+        /// deeper than the cap or any terrain sample failed.
+        #[arg(long)]
+        strict: bool,
     },
     /// Print a dump's header and column statistics.
     Info {
@@ -693,11 +699,24 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 ExitCode::SUCCESS
             })
         },
-        Cmd::Spots { bx, arena, out } => {
+        Cmd::Spots {
+            bx,
+            arena,
+            out,
+            strict,
+        } => {
             let bx = Box2::parse(bx)?;
             let p = load_probe(cli)?;
-            let doc = spots::run(&p, bx, arena)?;
-            let mut text = serde_json::to_string_pretty(&doc)?;
+            let run = spots::run(&p, bx, arena)?;
+            if *strict && run.is_incomplete() {
+                eprintln!(
+                    "error: --strict: {} column(s) left out for being deeper than the cap, {} \
+                     terrain sample(s) failed; nothing written",
+                    run.dropped_columns, run.sample_failures
+                );
+                return Ok(ExitCode::from(1));
+            }
+            let mut text = serde_json::to_string_pretty(&run.doc)?;
             text.push('\n');
             match out {
                 Some(path) => std::fs::write(path, text)?,
