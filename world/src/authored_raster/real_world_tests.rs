@@ -151,6 +151,7 @@ pub(super) fn column_bits(
         c.cliff_offset.to_bits(),
         c.cliff_height.to_bits(),
         c.ice_depth.to_bits(),
+        c.ice_centre.to_bits(),
         c.snow_cover as u32,
         c.surface_is_physical as u32,
         c.forest_kind as u32,

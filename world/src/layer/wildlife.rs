@@ -777,6 +777,20 @@ impl CromatolisWildlifeDensityBoost {
     }
 }
 
+// XINDELER: a natural column counts as ice only past the base half-depth of
+// 0.5 (the noise gives many smaller values on shallow cold shores, which must
+// not change the natural spawns); on authored water the one-block band
+// (half-depth exactly 0.5) counts too, as it does in the map colouring.
+#[inline]
+pub(crate) fn is_ice_column(
+    ice_depth: f32,
+    authored: Option<&crate::authored_raster::AuthoredColumn>,
+    is_underwater: bool,
+) -> bool {
+    let authored_wet = authored.is_some_and(|a| a.cell.is_wet());
+    (ice_depth > 0.5 || (ice_depth > 0.0 && authored_wet)) && is_underwater
+}
+
 pub fn apply_wildlife_supplement<'a, R: Rng>(
     // NOTE: Used only for dynamic elements like chests and entities!
     dynamic_rng: &mut R,
@@ -815,7 +829,11 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
             };
 
             let is_underwater = col_sample.water_level > col_sample.alt;
-            let is_ice = col_sample.ice_depth > 0.5 && is_underwater;
+            let is_ice = is_ice_column(
+                col_sample.ice_depth,
+                col_sample.authored.as_ref(),
+                is_underwater,
+            );
             let (current_day_period, calendar) = if let Some((time, calendar)) = time {
                 (DayPeriod::from(time.0), Some(calendar))
             } else {
@@ -859,7 +877,11 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
             if let Some(pack) = entity_group {
                 let desired_alt = match pack.spawn_mode {
                     SpawnMode::Land | SpawnMode::Underwater => col_sample.alt,
-                    SpawnMode::Ice => col_sample.water_level + 1.0 + col_sample.ice_depth,
+                    // XINDELER: one block over the top of the ice band
+                    // (`ice_centre + ice_depth`): the water level plus the
+                    // half-depth for natural water, the drawn surface for a
+                    // downward-only band on authored water.
+                    SpawnMode::Ice => col_sample.ice_centre + 1.0 + col_sample.ice_depth,
                     SpawnMode::Water => dynamic_rng.random_range(
                         col_sample.alt..col_sample.water_level.max(col_sample.alt + 0.1),
                     ),

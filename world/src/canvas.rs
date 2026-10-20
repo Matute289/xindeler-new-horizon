@@ -92,13 +92,8 @@ impl<'a> CanvasInfo<'a> {
             .filter_map(move |pos| {
                 let pos = self.chunk_pos + pos;
                 self.chunks.get(pos).and_then(|c| c.spot).map(|spot| {
-                    let wpos = pos.map2(TerrainChunkSize::RECT_SIZE, |e, sz| {
-                        e * sz as i32 + sz as i32 / 2
-                    });
-                    // TODO: Very dumb, not this.
-                    let seed = pos.x as u32 | (pos.y as u32).wrapping_shl(16);
-
-                    (wpos, spot, seed ^ 0xA801D82E)
+                    let (wpos, seed) = crate::layer::spot::chunk_spot_placement(pos);
+                    (wpos, spot, seed)
                 })
             })
     }

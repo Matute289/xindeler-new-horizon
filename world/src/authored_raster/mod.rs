@@ -29,6 +29,14 @@
 //! extended layers and civ placement keep reading the table (civ reads the
 //! authored-aware `chunk_water*` water facts).
 //!
+//! Procedural caves may run *under* an exact cell (exact ground, wet bed or
+//! bank) but never break its surface: the tunnel range stops
+//! `authored_voids::SURFACE_MARGIN` blocks below the cell's
+//! top block (`tunnel_bounds_at_col_guarded_by`, the one function the carve,
+//! the vegetation suppression and the traversal repair read), so a cave mouth
+//! that would open inside an exact patch is sealed rock. Blend and
+//! unauthored cells keep the procedural tunnels.
+//!
 //! # What it does
 //!
 //! Inside a declared, chunk-aligned *authored region*, the column sampler
@@ -79,6 +87,17 @@
 //!   change blocks a few metres outside its box (<= 10 m measured), so every
 //!   authored cell must lie at least [`REGION_MARGIN_M`] inside the box; a
 //!   closer one is a load error that names the box to use instead.
+//! * **Ice on authored water.** The natural engine freezes still water in a
+//!   cold chunk with a band of `Ice` centred on the water level, so up to a few
+//!   blocks of ice stand *above* the surface. On an authored wet column the
+//!   band is clamped ([`AuthoredColumn::ice_band`]): ice only at or below the
+//!   authored surface block, at most [`ICE_MAX_BLOCKS`] thick, and never the
+//!   whole column (at least one liquid block stays under it). A cold lake looks
+//!   frozen but thinner, and the top of the column keeps the authored height.
+//!   Which columns freeze (the noise) is the engine's, unchanged. Only drawn
+//!   wet cells are clamped; the sea is not a drawn surface, so a sea-flooded
+//!   authored bank in a cold chunk keeps the natural ice, as do natural water,
+//!   authored ground and every column outside a region (intended).
 //! * **Decorations stay natural by default.** Procedural rocks, trees and
 //!   sprites beside and in authored water are the natural map's and are kept; a
 //!   region may opt out ([`RegionManifest::suppress_procedural_in_water`],
@@ -223,6 +242,11 @@ pub fn global_resident_bytes() -> usize {
 pub const RIM_MARGIN_M: i32 = 64;
 /// Largest feather the manifest may ask for.
 pub const MAX_FEATHER_M: i32 = 128;
+/// Most `Ice` blocks on an authored wet column ([`AuthoredColumn::ice_band`]).
+/// A visual thickness choice (a thin crust, not the engine's up-to-several
+/// blocks); the rule that at least one liquid block always stays under the ice
+/// is separate and an invariant, whatever this value is.
+pub const ICE_MAX_BLOCKS: i32 = 2;
 /// Top block of the engine's ocean: the column sampler fills `z <
 /// sea_level - 1 + 0.01`. Authored water and banks may not go below it.
 pub const SEA_TOP_BLOCK: i32 = (CONFIG.sea_level - 1.0 + 0.01) as i32;
@@ -835,6 +859,46 @@ impl AuthoredColumn {
                 snow_height
             },
         }
+    }
+
+    /// The ice band of this column in a cold chunk, as `(centre, half_depth)`:
+    /// the block `z` is `Ice` where `|z - centre| < half_depth`. Authored wet
+    /// columns only (`None` for every other column, which keeps the natural
+    /// band centred on its water level).
+    ///
+    /// `natural_ice_depth` is the engine's own half-depth for the column (its
+    /// noise decides which columns freeze and how deep). Its part at or below
+    /// the authored surface block becomes `t` whole blocks of ice, `t <=`
+    /// [`ICE_MAX_BLOCKS`] and `t <` the water depth, stacked directly under the
+    /// surface: the band tops out at the surface (`water_level` capped at
+    /// the authored surface), so the column never rises above the drawn
+    /// height and at least one liquid block stays below the ice. `t = 0`
+    /// gives half-depth 0, which is "no ice".
+    ///
+    /// Intended looks: when a regional flood has lifted `water_level` over the
+    /// drawn surface the ice stays in the drawn surface block and the flood
+    /// liquid lies above it; and `None` for banks, ground and empty cells, so a
+    /// sea-flooded bank in a cold chunk keeps the natural ice (only drawn wet
+    /// cells are clamped, the sea is not a drawn surface).
+    #[inline]
+    pub fn ice_band(&self, water_level: f32, natural_ice_depth: f32) -> Option<(f32, f32)> {
+        let AuthoredCell::Wet {
+            surface_block,
+            bed_block,
+        } = self.cell
+        else {
+            return None;
+        };
+        // Natural ice covers `|z - water_level| < d`; the part below the
+        // surface block (centre `surface_block + 0.5`) is `ceil(d - 0.5)`
+        // blocks.
+        let below = (natural_ice_depth - 0.5).max(0.0).ceil() as i32;
+        let t = below
+            .min(ICE_MAX_BLOCKS)
+            .min(surface_block - bed_block - 1)
+            .max(0) as f32;
+        let top = water_level.min(surface_block as f32 + 0.5);
+        Some((top - t * 0.5, t * 0.5))
     }
 
     /// Whether procedural boulders, trees and sprites must not be rooted in
@@ -2518,6 +2582,7 @@ fn validate_region(
 #[cfg(test)] mod ground_consumer_real_world_tests;
 #[cfg(test)] mod ground_real_world_tests;
 #[cfg(test)] mod ground_seam_real_world_tests;
+#[cfg(test)] mod ice_real_world_tests;
 #[cfg(test)] mod pit_wall_real_world_tests;
 #[cfg(test)] mod presentation_real_world_tests;
 #[cfg(test)] mod real_world_tests;

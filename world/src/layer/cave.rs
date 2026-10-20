@@ -2,7 +2,7 @@ use crate::{
     Canvas, CanvasInfo, ColumnSample, IndexRef, Land,
     layer::{
         authored_regions::authored_voids_for as authored_voids,
-        authored_voids::{ChunkVoids, ProceduralContact, chunk_voids_at},
+        authored_voids::{ChunkVoids, ProceduralContact, SURFACE_MARGIN, chunk_voids_at},
         traversal::{AccommodationTier, PassageColumn, PassageQuery},
     },
     site::SiteKind,
@@ -100,10 +100,14 @@ pub(crate) fn surface_descents<'a>(
         .filter_map(move |cell| {
             let tunnel = tunnel_below_from_cell(cell, 0, land)?;
             // If there is water here there most likely isn't an accessible entrance.
-            if land
-                .column_sample(tunnel.a.wpos, index)
-                .is_some_and(|c| c.water_dist.is_none_or(|d| d > 5.0))
-            {
+            //
+            // XINDELER: nor is there one under exact authored ground: the
+            // guard in `tunnel_bounds_at_col_guarded_by` keeps a tunnel from
+            // breaking that surface, so the mouth is sealed rock and a marker
+            // there would advertise a cave that cannot be entered.
+            if land.column_sample(tunnel.a.wpos, index).is_some_and(|c| {
+                c.water_dist.is_none_or(|d| d > 5.0) && exact_top_block(&c).is_none()
+            }) {
                 Some((tunnel.a.wpos, tunnel))
             } else {
                 None
@@ -426,6 +430,33 @@ fn all_tunnels_at<'a>(
     })
 }
 
+/// XINDELER: the top block the authored raster fixes exactly for this column
+/// (exact ground, wet bed or bank), `None` for a blend cell, an unauthored
+/// column and everything outside an authored region.
+fn exact_top_block(col: &ColumnSample) -> Option<i32> {
+    col.authored
+        .as_ref()
+        .and_then(|authored| authored.cell.exact_ground_block())
+}
+
+/// XINDELER: stop a tunnel's z-range under a column whose top block is fixed
+/// exactly (`exact_top`, see [`exact_top_block`]); a no-op for `None`.
+///
+/// `Range::end` is exclusive, so `end = top - SURFACE_MARGIN` leaves
+/// `SURFACE_MARGIN + 1` blocks of rock above the highest carved block
+/// (`top - SURFACE_MARGIN - 1`), where an authored void's inclusive
+/// `col_alt - SURFACE_MARGIN` ceiling leaves `SURFACE_MARGIN`. The one extra
+/// block is intentional: the procedural tunnel also dresses its roof (cover,
+/// stalactites) below `end`, so the margin is kept a little generous rather
+/// than re-tuned to the authored-void number. A range this empties
+/// (`end <= start`) is dropped by the caller.
+fn clamp_under_exact_top(mut z_range: Range<i32>, exact_top: Option<i32>) -> Range<i32> {
+    if let Some(top) = exact_top {
+        z_range.end = z_range.end.min(top - SURFACE_MARGIN as i32);
+    }
+    z_range
+}
+
 /// The single function every consumer reads a tunnel's per-column z-range
 /// through: `apply_caves_to` carves from it, and `tree.rs`/`shrub.rs` suppress
 /// planting from it (via [`tunnel_bounds_at`]).
@@ -455,6 +486,7 @@ fn tunnel_bounds_at_chunk<'a>(
                 land,
                 col.alt,
                 col.water_dist,
+                exact_top_block(&col),
                 tunnels,
                 voids,
             )
@@ -474,12 +506,22 @@ fn tunnel_bounds_at_chunk<'a>(
 /// `voids` is this **chunk's** bucket, resolved by the caller (see
 /// [`chunk_voids_at`]), so the guard costs nothing per column beyond the
 /// geometry it actually has to test.
+///
+/// XINDELER: `exact_top` is the top block the authored raster fixes exactly
+/// for this column (see [`exact_top_block`]), `None` anywhere else. A
+/// tunnel may run *under* such a column but never break its surface: the
+/// range stops at least `SURFACE_MARGIN` blocks of rock below that top (see
+/// [`clamp_under_exact_top`]), as an authored void does, and a mouth that
+/// would open there is sealed rock. This is a clamp on top of the
+/// water-distance narrowing, never a widening, and it is inert wherever
+/// `exact_top` is `None`.
 fn tunnel_bounds_at_col_guarded_by<'a>(
     wpos2d: Vec2<i32>,
     info: &'a CanvasInfo,
     _land: &'a Land,
     col_alt: f32,
     col_water_dist: Option<f32>,
+    exact_top: Option<i32>,
     tunnels: impl Iterator<Item = (u32, Tunnel)> + 'a,
     voids: Option<ChunkVoids<'a>>,
 ) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
@@ -494,6 +536,7 @@ fn tunnel_bounds_at_col_guarded_by<'a>(
                 - ((col_water_dist.unwrap_or(1000.0) - 4.0).max(0.0) / 32.0).clamped(0.0, 1.0))
                 * (1.0 - ((col_alt - z_range.end as f32 - 4.0) / 8.0).clamped(0.0, 1.0)),
         )..z_range.end;
+        let z_range = clamp_under_exact_top(z_range, exact_top);
         // An authored void claiming this column decides whether this tunnel
         // exists here at all.
         //
@@ -573,7 +616,7 @@ pub(crate) fn tunnel_bounds_at_col_both<'a>(
     impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a,
     impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a,
 ) {
-    let (alt, water_dist) = (col.alt, col.water_dist);
+    let (alt, water_dist, exact_top) = (col.alt, col.water_dist, exact_top_block(col));
     let make = move |voids| {
         tunnel_bounds_at_col_guarded_by(
             wpos2d,
@@ -581,6 +624,7 @@ pub(crate) fn tunnel_bounds_at_col_both<'a>(
             land,
             alt,
             water_dist,
+            exact_top,
             all_tunnels_at(wpos2d, info, land),
             voids,
         )
@@ -644,6 +688,11 @@ impl TunnelPassage<'_> {
     /// worth analysing at all. Unlike [`PassageQuery::column`] it samples no
     /// column, so it costs a handful of noise lookups rather than a full
     /// column generation.
+    ///
+    /// Intentionally conservative: it is the raw band, before the water
+    /// narrowing, the exact-ground clamp and the authored-void guard, so it is
+    /// a superset of what [`PassageQuery::column`] later keeps. It may send an
+    /// intruder to the full analysis for nothing, never skip one that matters.
     pub(crate) fn coarse_bands(&self, wpos2d: Vec2<i32>, out: &mut Vec<(i32, i32)>) {
         let wposf = wpos2d.map(|e| e as f64 + 0.5);
         for (_, tunnel) in &self.tunnels {
@@ -682,6 +731,7 @@ impl PassageQuery for TunnelPassage<'_> {
             &land,
             col_alt,
             col.water_dist,
+            exact_top_block(&col),
             self.tunnels.iter().copied(),
             chunk_voids_at(authored_voids(&info), wpos2d),
         )
@@ -2318,7 +2368,15 @@ pub(crate) mod measure {
         /// plug straight across the corridor, because the clip's unit is a
         /// whole `(column, tunnel)` entry. **This is the number V13 is
         /// about, and its target is zero.**
+        ///
+        /// Includes [`Self::exact_sealed_columns`]: a column the exact-ground
+        /// clamp empties is a plug across the corridor all the same.
         pub(crate) sealed_columns: u32,
+        /// ...of the sealed columns, how many are plugged not by an authored
+        /// void but by the exact-ground clamp (the tunnel would run here, but
+        /// would break the surface of drawn ground). A mouth marked under a
+        /// drawn patch shows up here rather than being skipped.
+        pub(crate) exact_sealed_columns: u32,
         /// ...and how many an authored void claims with
         /// [`ProceduralContact::Connect`]: the tunnel runs into an authored cave
         /// and is deliberately left to open into it.
@@ -2373,6 +2431,7 @@ pub(crate) mod measure {
             open_columns: 0,
             sealed_columns: 0,
             connect_columns: 0,
+            exact_sealed_columns: 0,
             near_authored_columns: 0,
             first_seal_at: None,
         };
@@ -2399,19 +2458,35 @@ pub(crate) mod measure {
             // The chunk bucket, resolved here because the walk moves between
             // chunks column by column and so cannot hoist it any further.
             let chunk_voids = chunk_voids_at(voids, wpos2d);
-            let bounds = |voids| {
+            let exact_top = exact_top_block(&col);
+            let bounds_with = |exact_top, voids| {
                 tunnel_bounds_at_col_guarded_by(
                     wpos2d,
                     info,
                     land,
                     col.alt,
                     col.water_dist,
+                    exact_top,
                     std::iter::once((level, *tunnel)),
                     voids,
                 )
                 .next()
             };
+            let bounds = |voids| bounds_with(exact_top, voids);
             let Some((_, z_range, ..)) = bounds(None) else {
+                // The tunnel is absent here either because it never reached
+                // this column, or because the exact-ground clamp emptied its
+                // range. The second is a deliberate plug across the corridor,
+                // so it is counted -- not skipped, which would blind every
+                // mouth check to a mouth under a drawn patch.
+                if exact_top.is_some() && bounds_with(None, None).is_some() {
+                    verdict.open_columns += 1;
+                    verdict.sealed_columns += 1;
+                    verdict.exact_sealed_columns += 1;
+                    verdict
+                        .first_seal_at
+                        .get_or_insert_with(|| travelled.round() as i32);
+                }
                 continue;
             };
             verdict.open_columns += 1;
@@ -2692,5 +2767,83 @@ pub(crate) mod measure {
         let open = walk_tunnel(edge, level, info, land, voids).is_open();
         cache.insert(key, open);
         open
+    }
+}
+
+/// The exact-ground clamp, asserted directly rather than through a world, so
+/// a wet bed or a bank is covered without the water narrowing (which acts
+/// within 36 m of water and can hide the clamp) standing in for it.
+#[cfg(test)]
+mod exact_clamp_tests {
+    use super::*;
+    use crate::authored_raster::AuthoredCell;
+
+    const MARGIN: i32 = SURFACE_MARGIN as i32;
+
+    #[test]
+    fn no_exact_top_leaves_the_range_alone() {
+        assert_eq!(clamp_under_exact_top(10..120, None), 10..120);
+    }
+
+    #[test]
+    fn a_range_above_the_ceiling_is_cut_down_to_it() {
+        assert_eq!(clamp_under_exact_top(10..120, Some(100)), 10..100 - MARGIN);
+    }
+
+    #[test]
+    fn a_range_already_deep_enough_is_untouched() {
+        assert_eq!(clamp_under_exact_top(10..50, Some(100)), 10..50);
+    }
+
+    #[test]
+    fn a_near_surface_range_is_emptied_and_so_dropped() {
+        let clamped = clamp_under_exact_top(97..102, Some(100));
+        assert!(clamped.end - clamped.start <= 0, "{clamped:?}");
+    }
+
+    #[test]
+    fn the_clamp_keeps_one_block_more_cover_than_an_authored_void() {
+        // Inclusive authored ceiling: `col_alt - SURFACE_MARGIN` -> cover of
+        // SURFACE_MARGIN blocks. Exclusive end here -> one more.
+        let top = 100;
+        let last_carved = clamp_under_exact_top(0..500, Some(top)).end - 1;
+        assert_eq!(top - last_carved, MARGIN + 1);
+    }
+
+    #[test]
+    fn wet_beds_banks_and_exact_ground_all_clamp_and_blend_cells_do_not() {
+        let cells = [
+            (
+                AuthoredCell::Wet {
+                    surface_block: 120,
+                    bed_block: 100,
+                },
+                true,
+            ),
+            (AuthoredCell::Bank { bed_block: 100 }, true),
+            (
+                AuthoredCell::Ground {
+                    block: 100,
+                    weight: crate::authored_raster::format::GROUND_EXACT,
+                },
+                true,
+            ),
+            (
+                AuthoredCell::Ground {
+                    block: 100,
+                    weight: 1,
+                },
+                false,
+            ),
+            (AuthoredCell::None, false),
+        ];
+        for (cell, clamps) in cells {
+            let range = clamp_under_exact_top(10..120, cell.exact_ground_block());
+            assert_eq!(range.end < 120, clamps, "{cell:?} -> {range:?}");
+            if clamps {
+                // A wet cell is clamped under its *bed*, not its water surface.
+                assert_eq!(range.end, 100 - MARGIN, "{cell:?}");
+            }
+        }
     }
 }
