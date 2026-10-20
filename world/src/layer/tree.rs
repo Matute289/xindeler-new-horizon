@@ -289,22 +289,19 @@ pub fn apply_trees_to(
         // Record which blocks of this column are natural terrain *before any
         // tree touches it*, so that whether a voxel is buried does not depend
         // on the order of the trees or on what an earlier tree wrote.
-        let mut z_range: Option<(i32, i32)> = None;
-        for tree in trees.iter() {
-            let bounds = tree_bounds(tree);
-            if column_in_tree(tree, bounds) {
-                let (lo, hi) = (tree.pos.z + bounds.min.z, tree.pos.z + bounds.max.z);
-                z_range = Some(z_range.map_or((lo, hi), |(l, h)| (l.min(lo), h.max(hi))));
-            }
-        }
-        if let Some((lo, hi)) = z_range {
-            column_terrain.fill(lo, hi, |z| {
+        column_terrain.fill_union(
+            trees.iter().filter_map(|tree| {
+                let bounds = tree_bounds(tree);
+                column_in_tree(tree, bounds)
+                    .then(|| (tree.pos.z + bounds.min.z, tree.pos.z + bounds.max.z))
+            }),
+            |z| {
                 canvas
                     .get(Vec3::new(wpos2d.x, wpos2d.y, z))
                     .kind()
                     .is_terrain()
-            });
-        }
+            },
+        );
 
         for tree in trees {
             let bounds = tree_bounds(tree);
@@ -465,6 +462,18 @@ impl ColumnTerrain {
         }
     }
 
+    /// Records the terrain over the union of the trees' write spans
+    /// ([`union_range`]); does nothing when no tree reaches the column.
+    fn fill_union(
+        &mut self,
+        spans: impl IntoIterator<Item = (i32, i32)>,
+        is_terrain: impl FnMut(i32) -> bool,
+    ) {
+        if let Some((bottom, top)) = union_range(spans) {
+            self.fill(bottom, top, is_terrain);
+        }
+    }
+
     fn is_terrain(&self, z: i32) -> bool {
         let i = z.wrapping_sub(self.bottom);
         i >= 0
@@ -478,6 +487,17 @@ impl ColumnTerrain {
     /// directly above it: it has no open face upward. See
     /// [`tree_voxel_is_buried`].
     fn is_closed(&self, z: i32) -> bool { self.is_terrain(z) && self.is_terrain(z + 1) }
+}
+
+/// The smallest `(bottom, top)` containing every `(lo, hi)` span, where a tree
+/// writes `lo..hi` (exclusive) top-down. `top` is the span's own exclusive
+/// end, deliberately kept as an inclusive bound of the result: the topmost
+/// voxel written at `hi - 1` asks whether the block at `hi` above it was
+/// terrain, so that block has to be in the snapshot too.
+fn union_range(spans: impl IntoIterator<Item = (i32, i32)>) -> Option<(i32, i32)> {
+    spans.into_iter().fold(None, |acc, (lo, hi)| {
+        Some(acc.map_or((lo, hi), |(l, h)| (l.min(lo), h.max(hi))))
+    })
 }
 
 /// The per-column state of one tree's top-down write, and the one place that
@@ -1444,6 +1464,8 @@ mod buried_voxel_tests {
         voxels: Vec<Option<Block>>,
         lights: bool,
         hanging: &'static [(f32, SpriteKind)],
+        /// The voxel index (into `voxels`) at which the model ends the column.
+        end_at: Option<usize>,
     }
 
     impl TreeSpec {
@@ -1453,24 +1475,38 @@ mod buried_voxel_tests {
                 voxels,
                 lights: false,
                 hanging: &[],
+                end_at: None,
             }
         }
     }
 
-    /// Runs the layer's per-column logic (a snapshot, then every tree in
-    /// order through `write_tree_column`) on a plain column.
+    /// Runs the layer's per-column logic (a snapshot over the union of the
+    /// trees' spans, then every tree in order through `write_tree_column`) on
+    /// a plain column.
     fn run(before: &[Block], trees: &[TreeSpec], rng: &mut StdRng) -> Vec<Block> {
+        run_with_snow(before, trees, rng, false)
+    }
+
+    fn span(column: &Column, tree: &TreeSpec) -> (i32, i32) {
+        let hi = column.z(tree.first) + 1;
+        (hi - tree.voxels.len() as i32, hi)
+    }
+
+    fn run_with_snow(
+        before: &[Block],
+        trees: &[TreeSpec],
+        rng: &mut StdRng,
+        snow_cover: bool,
+    ) -> Vec<Block> {
         let mut column = Column(before.to_vec());
-        let top = column.z(0);
         let mut terrain = ColumnTerrain::default();
-        terrain.fill(0, top, |z| {
+        terrain.fill_union(trees.iter().map(|tree| span(&column, tree)), |z| {
             column
                 .index(Vec3::new(0, 0, z))
                 .is_some_and(|i| before[i].kind().is_terrain())
         });
         for tree in trees {
-            let hi = column.z(tree.first) + 1;
-            let lo = hi - tree.voxels.len() as i32;
+            let (lo, hi) = span(&column, tree);
             write_tree_column(
                 &mut column,
                 rng,
@@ -1478,11 +1514,17 @@ mod buried_voxel_tests {
                 Vec2::zero(),
                 lo..hi,
                 tree.lights,
-                false,
+                snow_cover,
                 tree.hanging,
-                |wpos| match tree.voxels[(hi - 1 - wpos.z) as usize] {
-                    Some(block) => TreeVoxel::Fill(block, None),
-                    None => TreeVoxel::Empty,
+                |wpos| {
+                    let k = (hi - 1 - wpos.z) as usize;
+                    if tree.end_at == Some(k) {
+                        return TreeVoxel::End;
+                    }
+                    match tree.voxels[k] {
+                        Some(block) => TreeVoxel::Fill(block, None),
+                        None => TreeVoxel::Empty,
+                    }
                 },
             );
         }
@@ -1590,10 +1632,17 @@ mod buried_voxel_tests {
 
     /// The write loop as it was before the buried rule: a literal copy of the
     /// state machine, used as a reference for the random draws.
-    fn base_reference(before: &[Block], tree: &TreeSpec, rng: &mut StdRng) -> Vec<Block> {
+    fn base_reference(
+        before: &[Block],
+        tree: &TreeSpec,
+        rng: &mut StdRng,
+        snow_cover: bool,
+    ) -> Vec<Block> {
         let mut column = Column(before.to_vec());
         let hi = column.z(tree.first) + 1;
         let mut last_block = Block::empty();
+        let mut is_top = true;
+        let mut is_leaf_top = true;
         for (k, voxel) in tree.voxels.iter().enumerate() {
             let wpos = Vec3::new(0, 0, hi - 1 - k as i32);
             match voxel {
@@ -1604,8 +1653,18 @@ mod buried_voxel_tests {
                         && rng.random_range(0..256) == 0
                     {
                         column.set(wpos + Vec3::unit_z(), Block::air(SpriteKind::Lantern));
+                    } else if snow_cover
+                        && ((block.kind() == BlockKind::Leaves && is_leaf_top)
+                            || (is_top && block.is_filled()))
+                    {
+                        column.set(
+                            wpos + Vec3::unit_z(),
+                            Block::new(BlockKind::Snow, Rgb::new(210, 210, 255)),
+                        );
                     }
                     column.set(wpos, *block);
+                    is_leaf_top = false;
+                    is_top = false;
                     last_block = *block;
                 },
                 None => {
@@ -1616,6 +1675,7 @@ mod buried_voxel_tests {
                             }
                         }
                     }
+                    is_leaf_top = true;
                     last_block = Block::empty();
                 },
             }
@@ -1637,6 +1697,7 @@ mod buried_voxel_tests {
             voxels,
             lights: true,
             hanging: &[(0.5, SpriteKind::Beehive), (0.3, SpriteKind::Apple)],
+            end_at: None,
         }
     }
 
@@ -1647,7 +1708,7 @@ mod buried_voxel_tests {
             let mut a = StdRng::seed_from_u64(seed);
             let mut b = StdRng::seed_from_u64(seed);
             let new = run(&before, &[lit_tree()], &mut a);
-            let old = base_reference(&before, &lit_tree(), &mut b);
+            let old = base_reference(&before, &lit_tree(), &mut b, false);
             assert_eq!(new, old, "seed {seed}");
             assert_eq!(a.random::<u64>(), b.random::<u64>(), "seed {seed}");
         }
@@ -1671,5 +1732,116 @@ mod buried_voxel_tests {
         }
         // The draws were really exercised on the written side.
         assert!(lanterns_in_air > 0);
+    }
+
+    #[test]
+    fn the_union_range_spans_every_tree_and_keeps_the_top_inclusive() {
+        assert_eq!(union_range([]), None);
+        assert_eq!(union_range([(5, 8)]), Some((5, 8)));
+        // Non-adjacent spans: the gap between them is inside the range.
+        assert_eq!(union_range([(0, 2), (5, 8), (3, 4)]), Some((0, 8)));
+        let mut t = ColumnTerrain::default();
+        t.fill_union([(5, 8), (0, 2)], |_| true);
+        assert!((0..=8).all(|z| t.is_terrain(z)));
+        assert!(!t.is_terrain(-1) && !t.is_terrain(9));
+        // No tree reaches the column: nothing is recorded.
+        let mut empty = ColumnTerrain::default();
+        empty.fill_union([], |_| true);
+        assert!(!empty.is_terrain(0));
+    }
+
+    #[test]
+    fn the_snapshot_reaches_the_block_above_the_tallest_trees_top_voxel() {
+        // z 9..=0, top-down. A tall tree writes z 7..=5 and a short,
+        // non-adjacent one z 1..=0; rock fills z 8 down to 0, so every voxel
+        // of both is closed and nothing may be written. The topmost voxel
+        // (z 7) is only closed if the rock at z 8, exactly the union's `hi`,
+        // is in the snapshot.
+        let mut before = vec![rock(); 10];
+        before[0] = air();
+        let tall = TreeSpec::new(2, vec![Some(wood()); 3]);
+        let short = TreeSpec::new(8, vec![Some(leaves()); 2]);
+        let after = run_plain(&before, &[tall, short]);
+        assert_eq!(after, before);
+
+        // With air at z 8 the top voxel is the open surface: it is written,
+        // and the voxels under it are still closed.
+        before[1] = air();
+        let tall = TreeSpec::new(2, vec![Some(wood()); 3]);
+        let short = TreeSpec::new(8, vec![Some(leaves()); 2]);
+        let after = run_plain(&before, &[tall, short]);
+        let mut expected = before.clone();
+        expected[2] = wood();
+        assert_eq!(after, expected);
+    }
+
+    #[test]
+    fn a_model_ending_on_its_first_voxel_writes_and_draws_nothing() {
+        let before = [air(), air(), air(), rock(), rock(), rock()];
+        let ends_first = || TreeSpec {
+            end_at: Some(0),
+            ..lit_tree()
+        };
+        let short = || TreeSpec::new(4, vec![Some(leaves()); 2]);
+        let mut a = StdRng::seed_from_u64(7);
+        let mut b = StdRng::seed_from_u64(7);
+        let with = run(&before, &[ends_first(), short()], &mut a);
+        let without = run(&before, &[short()], &mut b);
+        // The ended tree is still part of the snapshot's span, but writes
+        // nothing and draws nothing; the other tree is buried as usual.
+        assert_eq!(with, without);
+        assert_eq!(with, before);
+        assert_eq!(a.random::<u64>(), b.random::<u64>());
+    }
+
+    #[test]
+    fn snow_matches_the_base_on_unburied_parts_and_never_follows_a_dropped_voxel() {
+        // A leaf crown over a rock surface with a buried voxel under it.
+        // z 6..=0 top-down: air x3, rock surface at z 3, rock at z 2, an air
+        // pocket at z 1, rock at z 0.
+        let before = [air(), air(), air(), rock(), rock(), air(), rock()];
+        let crown = || TreeSpec {
+            first: 1,
+            voxels: vec![
+                Some(leaves()),
+                Some(leaves()),
+                Some(leaves()),
+                Some(leaves()),
+                Some(wood()),
+            ],
+            lights: true,
+            hanging: &[(0.5, SpriteKind::Beehive)],
+            end_at: None,
+        };
+        for seed in 0..64 {
+            let mut a = StdRng::seed_from_u64(seed);
+            let mut b = StdRng::seed_from_u64(seed);
+            let new = run_with_snow(&before, &[crown()], &mut a, true);
+            let old = base_reference(&before, &crown(), &mut b, true);
+            // Everything down to and including the open rock surface (z 3) is
+            // as in the base, including the snow cap over the crown top.
+            assert_eq!(new[..4], old[..4], "seed {seed}");
+            assert_eq!(new[0].kind(), BlockKind::Snow, "seed {seed}");
+            // The leaf at z 2 is buried and stays rock; the wood in the pocket
+            // is open and is written, as in the base.
+            assert_eq!(new[4], rock(), "seed {seed}");
+            assert_eq!(new[5], old[5], "seed {seed}");
+            assert_eq!(a.random::<u64>(), b.random::<u64>(), "seed {seed}");
+        }
+
+        // A crown whose first voxels are buried: the first written voxel is
+        // not the top of the tree, so it gets no snow cap, and the dropped
+        // voxels place none.
+        let before = [rock(), rock(), rock(), air(), air(), rock()];
+        let buried_top = || TreeSpec::new(1, vec![Some(leaves()); 4]);
+        let new = run_with_snow(
+            &before,
+            &[buried_top()],
+            &mut StdRng::seed_from_u64(3),
+            true,
+        );
+        let old = base_reference(&before, &buried_top(), &mut StdRng::seed_from_u64(3), true);
+        assert!(old.iter().any(|b| b.kind() == BlockKind::Snow));
+        assert_eq!(new, [rock(), rock(), rock(), leaves(), leaves(), rock()]);
     }
 }
