@@ -570,15 +570,18 @@ pub fn apply_spots_to(canvas: &mut Canvas, _dynamic_rng: &mut impl Rng) {
     let nearby_spots = canvas.nearby_spots().collect::<Vec<_>>();
 
     for (spot_wpos2d, spot, seed) in nearby_spots.iter().copied() {
-        let mut rng = ChaChaRng::from_seed(seed_expan::rng_state(seed));
-
-        let units = UnitChooser::new(seed).get(seed).into();
-
         let spot_config = spot_config(&spot);
+        let group = spot_config.base_structures.map(Structure::load_group);
+        let group = group.as_ref().map(|group| group.read());
+        let SpotDraw {
+            mut rng,
+            units,
+            structure,
+        } = spot_draw(seed, group.as_ref().map(|group| -> &[Structure] { group }));
+
         // Blit base structure
-        if let Some(base_structures) = spot_config.base_structures {
-            let structures = Structure::load_group(base_structures).read();
-            let structure = structures.choose(&mut rng).unwrap();
+        if group.is_some() {
+            let structure = structure.expect("a spot's structure group is never empty");
             let origin = spot_wpos2d.with_z(
                 canvas
                     .col_or_gen(spot_wpos2d)
@@ -619,6 +622,47 @@ pub fn apply_spots_to(canvas: &mut Canvas, _dynamic_rng: &mut impl Rng) {
         }
     }
 }
+
+/// World position (the centre of the chunk) and placement seed of the spot
+/// that chunk `pos` may hold. This is the single definition used by
+/// `Canvas::nearby_spots` and by the footprint tooling, so both always agree.
+pub fn chunk_spot_placement(pos: Vec2<i32>) -> (Vec2<i32>, u32) {
+    let wpos = pos.map2(TerrainChunkSize::RECT_SIZE, |e, sz| {
+        e * sz as i32 + sz as i32 / 2
+    });
+    // TODO: Very dumb, not this.
+    let seed = pos.x as u32 | (pos.y as u32).wrapping_shl(16);
+    (wpos, seed ^ 0xA801D82E)
+}
+
+/// The random draws that decide how a spot is blitted. `apply_spots_to` and the
+/// footprint tooling both take them from here, so the draw order (rng seeding,
+/// rotation, then one structure choice) is defined exactly once.
+struct SpotDraw<'a> {
+    /// The spot's rng, positioned right after the structure choice (the entity
+    /// placement keeps drawing from it).
+    rng: ChaChaRng,
+    /// Rotation/mirroring of the blit.
+    units: Vec2<Vec2<i32>>,
+    /// The structure chosen from the spot's group, if it has one.
+    structure: Option<&'a Structure>,
+}
+
+fn spot_draw(seed: u32, group: Option<&[Structure]>) -> SpotDraw<'_> {
+    let mut rng = ChaChaRng::from_seed(seed_expan::rng_state(seed));
+    let units = UnitChooser::new(seed).get(seed).into();
+    let structure = group.and_then(|structures| structures.choose(&mut rng));
+    SpotDraw {
+        rng,
+        units,
+        structure,
+    }
+}
+
+#[cfg(any(test, feature = "tools"))]
+mod footprint;
+#[cfg(any(test, feature = "tools"))]
+pub use footprint::{HollowColumn, SpotFootprint, spot_footprint};
 
 pub fn is_valid(condition: &SpotCondition, g: f32, c: &SimChunk) -> bool {
     c.sites.is_empty()

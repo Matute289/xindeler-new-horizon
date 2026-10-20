@@ -10,6 +10,7 @@ mod legacy;
 mod login_check;
 mod probe;
 mod scratch_server;
+mod spots;
 #[cfg(test)] mod test_alloc;
 mod tiles;
 
@@ -125,6 +126,29 @@ enum Cmd {
         require_empty: bool,
         #[arg(long)]
         json: bool,
+    },
+    /// Print the `spots/v1` JSON of the procedural spot structures
+    /// (graves, stumps, ...) that touch a window: footprint boxes from the
+    /// columns each placed prefab can clear and the deepest dent they can
+    /// make, for the external spots/v1 consumer. Generates the world live
+    /// (about 3 s, no chunk generation). Columns that would break the
+    /// format's caps (a dent deeper than 8 blocks) are left out and reported
+    /// on stderr; a terrain sample that fails is reported too. `--strict`
+    /// turns either into exit 1 with no output.
+    Spots {
+        /// `x0,y0,x1,y1` in world metres, half-open.
+        #[arg(long = "box")]
+        bx: String,
+        /// Arena name written into the document.
+        #[arg(long)]
+        arena: String,
+        /// Write the JSON here instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Exit 1 (and write nothing) if any column was left out for being
+        /// deeper than the cap or any terrain sample failed.
+        #[arg(long)]
+        strict: bool,
     },
     /// Print a dump's header and column statistics.
     Info {
@@ -674,6 +698,31 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             } else {
                 ExitCode::SUCCESS
             })
+        },
+        Cmd::Spots {
+            bx,
+            arena,
+            out,
+            strict,
+        } => {
+            let bx = Box2::parse(bx)?;
+            let p = load_probe(cli)?;
+            let run = spots::run(&p, bx, arena)?;
+            if *strict && run.is_incomplete() {
+                eprintln!(
+                    "error: --strict: {} column(s) left out for being deeper than the cap, {} \
+                     terrain sample(s) failed; nothing written",
+                    run.dropped_columns, run.sample_failures
+                );
+                return Ok(ExitCode::from(1));
+            }
+            let mut text = serde_json::to_string_pretty(&run.doc)?;
+            text.push('\n');
+            match out {
+                Some(path) => std::fs::write(path, text)?,
+                None => std::io::stdout().write_all(text.as_bytes())?,
+            }
+            Ok(ExitCode::SUCCESS)
         },
         Cmd::Info { input } => {
             let d = Dump::read_file(input)?;
