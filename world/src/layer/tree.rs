@@ -295,8 +295,23 @@ pub fn apply_trees_to(
             let mut is_top = true;
             let mut is_leaf_top = true;
             let mut last_block = Block::empty();
+            // Whether `last_block` was dropped as buried (see
+            // `tree_voxel_is_buried`) rather than written.
+            let mut last_dropped = false;
+            // Whether the block above the current one was natural terrain
+            // before this tree touched the column. The loop runs top-down, so
+            // this is the previous iteration's target block, read before its
+            // write; it starts from the block just above the tree's bounds.
+            let mut above_is_terrain = canvas
+                .get(Vec3::new(wpos2d.x, wpos2d.y, tree.pos.z + bounds.max.z))
+                .kind()
+                .is_terrain();
             for z in (bounds.min.z..bounds.max.z).rev() {
                 let wpos = Vec3::new(wpos2d.x, wpos2d.y, tree.pos.z + z);
+                let target_is_terrain = canvas.get(wpos).kind().is_terrain();
+                let buried_above_root =
+                    is_buried_above_root(z, target_is_terrain, above_is_terrain);
+                above_is_terrain = target_is_terrain;
                 let model_pos = Vec3::from(
                     (wpos - tree.pos)
                         .xy()
@@ -339,6 +354,21 @@ pub fn apply_trees_to(
                     &Vec2::new(tree.units.0, tree.units.1),
                 )
                 .map(|(block, sprite_cfg, _entity_path)| {
+                    if tree_voxel_is_buried(buried_above_root, block) {
+                        // Nothing is written: no block, no snow cap, and no
+                        // hanging sprite under it. The dynamic RNG is drawn
+                        // exactly as if it were written, so the rest of the
+                        // chunk (lanterns, hanging sprites, later layers)
+                        // stays where it was.
+                        if tree.lights && last_block.is_air() && block.kind() == BlockKind::Wood {
+                            let _ = dynamic_rng.random_range(0..256);
+                        }
+                        is_leaf_top = false;
+                        is_top = false;
+                        last_block = block;
+                        last_dropped = true;
+                        return;
+                    }
                     // Add lights to the tree
                     if tree.lights
                         && last_block.is_air()
@@ -364,12 +394,13 @@ pub fn apply_trees_to(
                     is_leaf_top = false;
                     is_top = false;
                     last_block = block;
+                    last_dropped = false;
                 })
                 .unwrap_or_else(|| {
                     // Hanging sprites
                     if last_block.is_filled() {
                         for (chance, sprite) in hanging_sprites {
-                            if dynamic_rng.random_bool(*chance as f64) {
+                            if dynamic_rng.random_bool(*chance as f64) && !last_dropped {
                                 canvas.map_resource(wpos, |block| block.with_sprite(*sprite));
                             }
                         }
@@ -377,10 +408,50 @@ pub fn apply_trees_to(
 
                     is_leaf_top = true;
                     last_block = Block::empty();
+                    last_dropped = false;
                 });
             }
         }
     });
+}
+
+/// Whether the voxel at `rel_z` (relative to the tree's root altitude) of a
+/// tree column lies in natural terrain that is closed above: at or above the
+/// root, target natural terrain, and natural terrain directly above it before
+/// the tree touched the column. See [`tree_voxel_is_buried`].
+#[inline]
+fn is_buried_above_root(rel_z: i32, target_is_terrain: bool, above_is_terrain: bool) -> bool {
+    rel_z >= 0 && target_is_terrain && above_is_terrain
+}
+
+/// Whether a tree voxel must be dropped because it would be buried in natural
+/// terrain.
+///
+/// `buried_above_root` is true when the voxel sits at or above the tree's own
+/// root altitude, the target block is natural terrain
+/// ([`BlockKind::is_terrain`]) and the block directly above it was natural
+/// terrain too before the tree touched the column. Such a voxel has no open
+/// face upward: it is a crown, branch or trunk part that reaches into a
+/// neighbouring hillside, cliff or pit wall, where it only costs memory and
+/// turns up as stray wood and leaves when a cave or a dig later opens the
+/// rock. The surface voxel of that terrain (open above) is still replaced, so
+/// a crown still rests on and pokes into the ground surface as before, and
+/// everything below the root altitude (roots, the buried trunk foot) is
+/// untouched.
+///
+/// A pure air output (a `Hollow` in a tree model) is never dropped, so any
+/// dig a tree model asks for stays exactly as it was. Everything else (wood,
+/// leaves, fruit or liana sprites, water) is dropped when buried.
+///
+/// The rule reads only the column being written and is the same for every
+/// world, authored or procedural.
+#[inline]
+fn tree_voxel_is_buried(buried_above_root: bool, block: Block) -> bool {
+    buried_above_root
+        && (block.kind() != BlockKind::Air
+            || block
+                .get_sprite()
+                .is_some_and(|sprite| sprite != SpriteKind::Empty))
 }
 
 /// A type that specifies the generation properties of a tree.
@@ -1176,4 +1247,108 @@ impl Branch {
 struct Root {
     line: LineSegment3<f32>,
     radius: f32,
+}
+
+#[cfg(test)]
+mod buried_voxel_tests {
+    use super::*;
+
+    fn rock() -> Block { Block::new(BlockKind::Rock, Rgb::new(100, 100, 100)) }
+    fn grass() -> Block { Block::new(BlockKind::Grass, Rgb::new(40, 160, 40)) }
+    fn leaves() -> Block { Block::new(BlockKind::Leaves, Rgb::new(30, 120, 30)) }
+    fn wood() -> Block { Block::new(BlockKind::Wood, Rgb::new(60, 30, 0)) }
+
+    /// Runs the layer's top-down decision over one column: `terrain[i]` is
+    /// the block at `rel_z = top - i` before the tree, `tree[i]` the tree's
+    /// output there (`None` = no voxel). Returns the column after the tree.
+    fn write_column(
+        top: i32,
+        above: Block,
+        terrain: &[Block],
+        tree: &[Option<Block>],
+    ) -> Vec<Block> {
+        let mut out = terrain.to_vec();
+        let mut above_is_terrain = above.kind().is_terrain();
+        for (i, (target, voxel)) in terrain.iter().zip(tree).enumerate() {
+            let rel_z = top - i as i32;
+            let target_is_terrain = target.kind().is_terrain();
+            let buried = is_buried_above_root(rel_z, target_is_terrain, above_is_terrain);
+            above_is_terrain = target_is_terrain;
+            if let Some(voxel) = voxel
+                && !tree_voxel_is_buried(buried, *voxel)
+            {
+                out[i] = *voxel;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_crown_voxel_buried_in_rock_is_not_written() {
+        // A pit wall column: solid rock from far above down past the crown.
+        let col = write_column(10, rock(), &[rock(); 4], &[Some(leaves()); 4]);
+        assert_eq!(col, vec![rock(); 4]);
+        assert!(tree_voxel_is_buried(true, leaves()));
+        assert!(tree_voxel_is_buried(true, wood()));
+        assert!(tree_voxel_is_buried(
+            true,
+            Block::air(SpriteKind::Empty).with_sprite(SpriteKind::Liana)
+        ));
+    }
+
+    #[test]
+    fn a_crown_voxel_in_air_or_water_is_still_written() {
+        let air = Block::air(SpriteKind::Empty);
+        let col = write_column(10, air, &[air; 3], &[Some(leaves()); 3]);
+        assert_eq!(col, vec![leaves(); 3]);
+        // Air under a rock overhang is open space: written.
+        let col = write_column(10, rock(), &[air, air], &[Some(leaves()); 2]);
+        assert_eq!(col, vec![leaves(); 2]);
+        let water = Block::water(SpriteKind::Empty);
+        assert!(!is_buried_above_root(5, water.kind().is_terrain(), true));
+    }
+
+    #[test]
+    fn the_open_ground_surface_is_replaced_but_not_the_rock_under_it() {
+        // A hillside column: air above, grass surface, rock below.
+        let air = Block::air(SpriteKind::Empty);
+        let col = write_column(
+            6,
+            air,
+            &[air, grass(), rock(), rock()],
+            &[Some(leaves()); 4],
+        );
+        assert_eq!(col, vec![leaves(), leaves(), rock(), rock()]);
+    }
+
+    #[test]
+    fn roots_below_the_root_altitude_are_unchanged() {
+        // The trunk foot at rel_z 0 (open above) and roots below it are
+        // written as before, even though they replace ground.
+        let air = Block::air(SpriteKind::Empty);
+        let col = write_column(0, air, &[grass(), rock(), rock()], &[
+            Some(wood()),
+            Some(wood()),
+            Some(wood()),
+        ]);
+        assert_eq!(col, vec![wood(), wood(), wood()]);
+        assert!(!is_buried_above_root(-1, true, true));
+    }
+
+    #[test]
+    fn a_hollow_in_a_tree_model_still_digs() {
+        // A pure air output is a dig and is never dropped, buried or not.
+        let air = Block::air(SpriteKind::Empty);
+        assert!(!tree_voxel_is_buried(true, air));
+        let col = write_column(10, rock(), &[rock()], &[Some(air)]);
+        assert_eq!(col, vec![air]);
+    }
+
+    #[test]
+    fn other_tree_blocks_above_do_not_count_as_terrain() {
+        // Leaves of an earlier tree above a surface voxel leave it open; the
+        // rule only looks at natural terrain.
+        assert!(!is_buried_above_root(3, true, leaves().kind().is_terrain()));
+        assert!(!is_buried_above_root(3, wood().kind().is_terrain(), true));
+    }
 }
