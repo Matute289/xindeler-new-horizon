@@ -605,3 +605,162 @@ fn exact_ground_is_not_carved_by_tunnels() {
     assert_eq!(all.raised, 0, "engine relief above exact ground");
     assert_eq!(all.top_exact, all.columns - all.decorated);
 }
+
+/// The same 128 x 96 m region as `exact_ground_is_not_carved_by_tunnels`,
+/// with the 30 x 30 m exact patch at `(23700..23730, 25500..25530)`.
+fn mouth_patch_spec(extra: Vec<PaintOp>) -> RegionSpec {
+    let mut ops = vec![PaintOp::Ground {
+        shape: rect(23700.0, 25500.0, 23730.0, 25530.0),
+        ground_cm: 23_950,
+        weight: GROUND_EXACT,
+    }];
+    ops.extend(extra);
+    ops.push(PaintOp::GroundRing {
+        width_m: 8,
+        ground_cm: None,
+    });
+    RegionSpec::new(
+        "exact_over_cave_mouth",
+        (23648, 25472),
+        (23776, 25568),
+        16,
+        ops,
+    )
+}
+
+/// Positive control for the mouth checks: a surface cave mouth under an exact
+/// patch is neither skipped nor left marked. The walk of its descent counts
+/// the columns the exact-ground clamp empties as sealed (by the clamp, not by
+/// an authored void), so `no_marked_surface_mouth_is_plugged_by_a_seal` can
+/// not go blind to it; and the map marker for that mouth is dropped, since it
+/// would advertise a sealed cave.
+#[test]
+#[ignore]
+fn a_mouth_under_an_exact_patch_is_sealed_by_the_guard_and_unmarked() {
+    use crate::{
+        Land,
+        canvas::CanvasInfo,
+        layer::cave::{measure::walk_tunnel, surface_descents},
+    };
+
+    let in_patch = |p: Vec2<i32>| (23700..23730).contains(&p.x) && (25500..25530).contains(&p.y);
+    let (mut world, index) = generate_world();
+    let index_ref = index.as_index_ref();
+
+    let before: Vec<_> = surface_descents(&Land::from_sim(world.sim()), index_ref).collect();
+    let under_patch: Vec<_> = before.iter().filter(|(m, _)| in_patch(*m)).collect();
+    assert!(
+        !under_patch.is_empty(),
+        "no marked mouth lies in the patch, the test proves nothing"
+    );
+
+    let rasters = load_specs(&[mouth_patch_spec(vec![])]).unwrap();
+    world.sim.set_authored_rasters_for_test(Some(rasters));
+
+    CanvasInfo::with_mock_canvas_info(index_ref, world.sim(), |info| {
+        let land = info.land();
+        for (mouth, tunnel) in &under_patch {
+            let walk = walk_tunnel(tunnel, 1, info, &land, None);
+            println!("mouth {mouth:?}: {walk:?}");
+            assert!(
+                walk.exact_sealed_columns > 0,
+                "mouth {mouth:?} under exact ground was skipped instead of counted: {walk:?}"
+            );
+            assert!(!walk.is_open(), "{walk:?}");
+            assert_eq!(walk.sealed_columns, walk.exact_sealed_columns, "{walk:?}");
+        }
+    });
+
+    let after: Vec<_> = surface_descents(&Land::from_sim(world.sim()), index_ref).collect();
+    assert!(
+        after.iter().all(|(m, _)| !in_patch(*m)),
+        "a marker survives on exact ground"
+    );
+    assert_eq!(
+        after.len(),
+        before.len() - under_patch.len(),
+        "only the mouths under the patch lose their marker"
+    );
+}
+
+/// Wet beds and banks are exact too. A lake and its bank ring inside the same
+/// patch: no tunnel breaks either surface.
+///
+/// Honest limit: authored water within 36 m already narrows tunnels (a range
+/// ending within 4 blocks of the surface collapses to nothing), and a wet
+/// column's altitude is its bed, so near a lake the narrowing and the guard
+/// largely overlap and this world test cannot say which one held. The clamp
+/// itself is asserted for wet and bank cells, with no narrowing in play, by
+/// `exact_clamp_tests` in `layer::cave`.
+#[test]
+#[ignore]
+fn exact_wet_bed_and_bank_are_not_carved_by_tunnels() {
+    let (mut world, index) = generate_world();
+    let index_ref = index.as_index_ref();
+    // The exact ground under the lake and its bank ring is cleared first
+    // (ground under water must equal the bed).
+    let spec = mouth_patch_spec(vec![
+        PaintOp::ClearGround {
+            shape: Shape::Ellipse {
+                cx: 23715.0,
+                cy: 25515.0,
+                rx: 13.0,
+                ry: 13.0,
+            },
+        },
+        PaintOp::Water {
+            shape: Shape::Ellipse {
+                cx: 23715.0,
+                cy: 25515.0,
+                rx: 8.0,
+                ry: 8.0,
+            },
+            surface_cm: 23_900,
+            bed_cm: 23_800,
+        },
+        PaintOp::BankRing {
+            width_m: 5,
+            bed_cm: None,
+        },
+    ]);
+    let chunks: Vec<Vec2<i32>> = (796..799)
+        .flat_map(|cy| (739..743).map(move |cx| Vec2::new(cx, cy)))
+        .collect();
+    let rasters = load_specs(&[spec]).unwrap();
+    rasters
+        .check_consistency_with_sim("test", &world.sim)
+        .expect("the patch passes the sim-table checks");
+    world.sim.set_authored_rasters_for_test(Some(rasters));
+
+    let (mut wet, mut bank) = (0u32, 0u32);
+    for y in 25500..25530 {
+        for x in 23700..23730 {
+            match world
+                .sim
+                .authored_rasters
+                .as_ref()
+                .unwrap()
+                .column(Vec2::new(x, y))
+                .map(|c| c.cell)
+            {
+                Some(AuthoredCell::Wet { .. }) => wet += 1,
+                Some(AuthoredCell::Bank { .. }) => bank += 1,
+                _ => {},
+            }
+        }
+    }
+    assert!(wet > 0 && bank > 0, "wet {wet}, bank {bank}");
+
+    let (table, examples, _) = judge(&world, index_ref, &chunks);
+    let mut all = Row::default();
+    for r in table.values() {
+        all.add(r);
+    }
+    println!("lake patch: wet {wet}, bank {bank}; {all:?}; {examples:#?}");
+    assert!(all.wet > 0, "no wet column judged");
+    assert_eq!(
+        all.carved, 0,
+        "tunnels broke an exact surface: {examples:#?}"
+    );
+    assert_eq!(all.raised, 0, "engine relief above exact ground");
+}

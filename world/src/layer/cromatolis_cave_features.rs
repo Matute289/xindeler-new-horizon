@@ -2667,9 +2667,11 @@ mod tests {
         );
     }
 
-    /// The guard cannot change which surface cave entrances exist, and this
-    /// pins that it did not: markers come from the node lattice
-    /// (`surface_entrances` never calls the tunnel query at all), so a change
+    /// The authored-void guard cannot change which surface cave entrances
+    /// exist, and this pins that it did not: markers come from the node
+    /// lattice (`surface_entrances` never calls the tunnel query at all; the
+    /// only authored input is the exact-ground filter, inert while the shipped
+    /// map draws no exact patch), so a change
     /// here means the lattice, the authored map or a nearby site's layout
     /// moved (a mouth is only marked where the column sample sees no water
     /// within 5 blocks, and a nearby site's spawn rules -- its radius and
