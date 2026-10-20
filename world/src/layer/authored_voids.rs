@@ -135,8 +135,10 @@ pub(crate) const AUTHORED_VOID_MARGIN: f32 = 16.0;
 /// folded into the `Seal` dilation -- see [`VoidShape::margin`].
 pub(crate) const EDGE_SOFTNESS: f32 = 3.0;
 
-/// How far below the terrain surface an authored ceiling is always capped, so a
-/// shallow authored void can never punch a hole to the sky.
+/// The minimum rock cover kept between a carve and a surface whose top is
+/// fixed: an authored ceiling is always capped this far below the terrain, so
+/// a shallow authored void can never punch a hole to the sky, and a
+/// procedural tunnel stops this far below exact authored ground.
 ///
 /// Defined here and read by the carve sites for the same reason as
 /// [`EDGE_SOFTNESS`]. It is load-bearing for the index: the protected band is
