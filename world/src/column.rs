@@ -1502,6 +1502,14 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             0.0
         };
 
+        // XINDELER: ice on authored water only forms downward from the drawn
+        // surface (`AuthoredColumn::ice_band`); `ice_centre` is the band's
+        // centre, the water level for every natural column, so `BlockGen`
+        // keeps one compare per voxel. See `crate::authored_raster`.
+        let (ice_centre, ice_depth) = authored
+            .and_then(|a| a.ice_band(water_level, ice_depth))
+            .unwrap_or((water_level, ice_depth));
+
         // A scorched/burnt look for a crater or debris field, blended in by
         // `damage.scorch` (already faded by radial blend strength and
         // healing progress -- see `DamageOverride::effects_at`) toward
@@ -1625,6 +1633,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             cliff_height,
             water_vel,
             ice_depth,
+            ice_centre,
             surface_block_override,
             flood_block,
             governing_biome_profile: biome_profile,
@@ -1769,7 +1778,13 @@ pub struct ColumnSample<'a> {
     pub cliff_offset: f32,
     pub cliff_height: f32,
     pub water_vel: Vec3<f32>,
+    /// Half-thickness of the `Ice` band over the water: ice where
+    /// `|z - ice_centre| < ice_depth`. `0` is no ice.
     pub ice_depth: f32,
+    /// Centre of the `Ice` band: the water level, except on an authored wet
+    /// column, whose band sits under the authored surface
+    /// (`authored_raster::AuthoredColumn::ice_band`).
+    pub ice_centre: f32,
     /// A governing `BiomeProfile` override's forced surface block kind (e.g.
     /// `Rock` for a volcano), if any -- see `world/src/block.rs`'s
     /// `BlockGen::get_with_z_cache`.

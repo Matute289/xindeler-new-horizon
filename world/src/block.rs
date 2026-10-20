@@ -74,6 +74,7 @@ impl<'a> BlockGen<'a> {
             cliff_offset,
             cliff_height,
             ice_depth,
+            ice_centre,
             surface_block_override,
             flood_block,
             exposed_wall_floor,
@@ -197,7 +198,7 @@ impl<'a> BlockGen<'a> {
             // freeze, so ice only ever forms over an actual `Water` flood).
             if over_water
                 && flood_block == BlockKind::Water
-                && (wposf.z as f32 - water_level).abs() < ice_depth
+                && (wposf.z as f32 - ice_centre).abs() < ice_depth
             {
                 Some(Block::new(BlockKind::Ice, CONFIG.ice_color))
             } else if (wposf.z as f32) < water_level {
@@ -226,10 +227,22 @@ impl ZCache<'_> {
 
         let ground_max = self.sample.alt + warp + 2.0;
 
-        let max = ground_max.max(self.sample.water_level + 2.0 + self.sample.ice_depth);
+        // XINDELER: the bound stays on `water_level`, not on the ice band's
+        // centre. Authored ice never rises above `water_level` (see
+        // `AuthoredColumn::ice_band`), but a regional flood can lift
+        // `water_level` well over the drawn surface, and the water column up to
+        // it must still be generated.
+        let max = z_max(ground_max, self.sample.water_level, self.sample.ice_depth);
 
         (min, max)
     }
+}
+
+/// Upper bound of the voxel loop for a column: the ground bound or the water
+/// level plus the ice band's half-depth, whichever is higher.
+#[inline]
+pub(crate) fn z_max(ground_max: f32, water_level: f32, ice_depth: f32) -> f32 {
+    ground_max.max(water_level + 2.0 + ice_depth)
 }
 
 /// The surface block of a lowered column (authored ground below the sim's
