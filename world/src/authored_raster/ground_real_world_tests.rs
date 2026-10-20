@@ -524,3 +524,84 @@ fn sea_floor_below_sea_level_in_ocean_chunks_and_refused_inland() {
     );
     assert!(e.0.contains("sea_fill: AuthoredOnly"), "{e}");
 }
+
+/// Procedural caves pass under exact ground but never break its surface: on
+/// a 30 x 30 m exact patch (block 239) over the spot where the unauthored
+/// world has a cave mouth, every exact column keeps its authored top block.
+/// The same chunks without the manifest still show the mouth, so this proves
+/// the guard and not a missing tunnel. (No water in the patch on purpose:
+/// authored water within 36 m already narrows tunnels and would hide the
+/// guard.)
+#[test]
+#[ignore]
+fn exact_ground_is_not_carved_by_tunnels() {
+    let (mut world, index) = generate_world();
+    let index_ref = index.as_index_ref();
+    let spec = RegionSpec::new(
+        "exact_over_cave_mouth",
+        (23648, 25472),
+        (23776, 25568),
+        16,
+        vec![
+            PaintOp::Ground {
+                shape: rect(23700.0, 25500.0, 23730.0, 25530.0),
+                ground_cm: 23_950,
+                weight: GROUND_EXACT,
+            },
+            PaintOp::GroundRing {
+                width_m: 8,
+                ground_cm: None,
+            },
+        ],
+    );
+    let chunks: Vec<Vec2<i32>> = (796..799)
+        .flat_map(|cy| (739..743).map(move |cx| Vec2::new(cx, cy)))
+        .collect();
+
+    // Without the manifest: the unauthored world has carved columns here
+    // (top block more than the surface margin under the sampler's altitude).
+    let carved_without = chunks
+        .par_iter()
+        .map(|c| {
+            let (chunk, _) = world
+                .generate_chunk(index_ref, *c, None, || false, None, None)
+                .unwrap();
+            let mut n = 0u32;
+            for y in 0..32 {
+                for x in 0..32 {
+                    let wpos = c * 32 + Vec2::new(x, y);
+                    if !(23700..23730).contains(&wpos.x) || !(25500..25530).contains(&wpos.y) {
+                        continue;
+                    }
+                    let col = world.sample_columns().get((wpos, index_ref, None)).unwrap();
+                    let top = (chunk.get_min_z()..chunk.get_max_z().min(col.alt as i32 + 1))
+                        .rev()
+                        .find(|z| chunk.get(Vec3::new(x, y, *z)).is_ok_and(is_natural_ground));
+                    n += top.is_none_or(|t| (t as f32) < col.alt - 4.0) as u32;
+                }
+            }
+            n
+        })
+        .sum::<u32>();
+    assert!(
+        carved_without > 0,
+        "the unauthored world has no cave mouth in the patch, the test proves nothing"
+    );
+
+    let rasters = load_specs(&[spec]).unwrap();
+    rasters
+        .check_consistency_with_sim("test", &world.sim)
+        .expect("the patch passes the sim-table checks");
+    world.sim.set_authored_rasters_for_test(Some(rasters));
+    let (table, examples, _) = judge(&world, index_ref, &chunks);
+    let mut all = Row::default();
+    for r in table.values() {
+        all.add(r);
+    }
+    println!("patch: {all:?}; carved without the manifest: {carved_without}; {examples:#?}");
+    assert!(all.columns >= 30 * 30, "{} exact columns", all.columns);
+    assert_eq!(all.sampler_exact, all.columns, "sampler not exact");
+    assert_eq!(all.carved, 0, "tunnels broke exact ground: {examples:#?}");
+    assert_eq!(all.raised, 0, "engine relief above exact ground");
+    assert_eq!(all.top_exact, all.columns - all.decorated);
+}

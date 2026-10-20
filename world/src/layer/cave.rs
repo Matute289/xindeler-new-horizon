@@ -2,7 +2,7 @@ use crate::{
     Canvas, CanvasInfo, ColumnSample, IndexRef, Land,
     layer::{
         authored_regions::authored_voids_for as authored_voids,
-        authored_voids::{ChunkVoids, ProceduralContact, chunk_voids_at},
+        authored_voids::{ChunkVoids, ProceduralContact, SURFACE_MARGIN, chunk_voids_at},
         traversal::{AccommodationTier, PassageColumn, PassageQuery},
     },
     site::SiteKind,
@@ -426,6 +426,15 @@ fn all_tunnels_at<'a>(
     })
 }
 
+/// XINDELER: the top block the authored raster fixes exactly for this column
+/// (exact ground, wet bed or bank), `None` for a blend cell, an unauthored
+/// column and everything outside an authored region.
+fn exact_top_block(col: &ColumnSample) -> Option<i32> {
+    col.authored
+        .as_ref()
+        .and_then(|authored| authored.cell.exact_ground_block())
+}
+
 /// The single function every consumer reads a tunnel's per-column z-range
 /// through: `apply_caves_to` carves from it, and `tree.rs`/`shrub.rs` suppress
 /// planting from it (via [`tunnel_bounds_at`]).
@@ -455,6 +464,7 @@ fn tunnel_bounds_at_chunk<'a>(
                 land,
                 col.alt,
                 col.water_dist,
+                exact_top_block(&col),
                 tunnels,
                 voids,
             )
@@ -474,26 +484,39 @@ fn tunnel_bounds_at_chunk<'a>(
 /// `voids` is this **chunk's** bucket, resolved by the caller (see
 /// [`chunk_voids_at`]), so the guard costs nothing per column beyond the
 /// geometry it actually has to test.
+///
+/// XINDELER: `exact_top` is the top block the authored raster fixes exactly
+/// for this column (see [`exact_top_block`]), `None` anywhere else. A
+/// tunnel may run *under* such a column but never break its surface: the
+/// range stops `SURFACE_MARGIN` blocks below that top, as an authored void
+/// does, and a mouth that would open there is sealed rock. This is a clamp
+/// on top of the water-distance narrowing above, never a widening, and it
+/// is inert wherever `exact_top` is `None`.
 fn tunnel_bounds_at_col_guarded_by<'a>(
     wpos2d: Vec2<i32>,
     info: &'a CanvasInfo,
     _land: &'a Land,
     col_alt: f32,
     col_water_dist: Option<f32>,
+    exact_top: Option<i32>,
     tunnels: impl Iterator<Item = (u32, Tunnel)> + 'a,
     voids: Option<ChunkVoids<'a>>,
 ) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
     let wposf = wpos2d.map(|e| e as f64 + 0.5);
+    let exact_ceiling = exact_top.map(|top| top - SURFACE_MARGIN as i32);
     tunnels.filter_map(move |(level, tunnel)| {
         let (z_range, horizontal, vertical, dist) = tunnel.z_range_at(wposf, *info)?;
         // Avoid cave entrances intersecting water
-        let z_range = Lerp::lerp_unclamped(
+        let mut z_range = Lerp::lerp_unclamped(
             z_range.end,
             z_range.start,
             1.0 - (1.0
                 - ((col_water_dist.unwrap_or(1000.0) - 4.0).max(0.0) / 32.0).clamped(0.0, 1.0))
                 * (1.0 - ((col_alt - z_range.end as f32 - 4.0) / 8.0).clamped(0.0, 1.0)),
         )..z_range.end;
+        if let Some(ceiling) = exact_ceiling {
+            z_range.end = z_range.end.min(ceiling);
+        }
         // An authored void claiming this column decides whether this tunnel
         // exists here at all.
         //
@@ -573,7 +596,7 @@ pub(crate) fn tunnel_bounds_at_col_both<'a>(
     impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a,
     impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a,
 ) {
-    let (alt, water_dist) = (col.alt, col.water_dist);
+    let (alt, water_dist, exact_top) = (col.alt, col.water_dist, exact_top_block(col));
     let make = move |voids| {
         tunnel_bounds_at_col_guarded_by(
             wpos2d,
@@ -581,6 +604,7 @@ pub(crate) fn tunnel_bounds_at_col_both<'a>(
             land,
             alt,
             water_dist,
+            exact_top,
             all_tunnels_at(wpos2d, info, land),
             voids,
         )
@@ -682,6 +706,7 @@ impl PassageQuery for TunnelPassage<'_> {
             &land,
             col_alt,
             col.water_dist,
+            exact_top_block(&col),
             self.tunnels.iter().copied(),
             chunk_voids_at(authored_voids(&info), wpos2d),
         )
@@ -2406,6 +2431,7 @@ pub(crate) mod measure {
                     land,
                     col.alt,
                     col.water_dist,
+                    exact_top_block(&col),
                     std::iter::once((level, *tunnel)),
                     voids,
                 )

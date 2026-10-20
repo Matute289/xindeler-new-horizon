@@ -29,6 +29,14 @@
 //! extended layers and civ placement keep reading the table (civ reads the
 //! authored-aware `chunk_water*` water facts).
 //!
+//! Procedural caves may run *under* an exact cell (exact ground, wet bed or
+//! bank) but never break its surface: the tunnel range stops
+//! `authored_voids::SURFACE_MARGIN` blocks below the cell's
+//! top block (`tunnel_bounds_at_col_guarded_by`, the one function the carve,
+//! the vegetation suppression and the traversal repair read), so a cave mouth
+//! that would open inside an exact patch is sealed rock. Blend and
+//! unauthored cells keep the procedural tunnels.
+//!
 //! # What it does
 //!
 //! Inside a declared, chunk-aligned *authored region*, the column sampler
