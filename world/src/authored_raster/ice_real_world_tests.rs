@@ -75,6 +75,21 @@ fn cold_authored_lake_freezes_downward_only() {
                     wet += 1;
                     let col = world.sample_columns().get((wpos, index_ref, None)).unwrap();
                     assert!(col.ice_centre + col.ice_depth <= col.water_level);
+                    // The voxel loop bound, through `get_z_limits` itself, is the
+                    // original one (ground bound or water level + 2 + half-depth),
+                    // also with a regional flood lifting the water level.
+                    for rise in [0.0_f32, 6.0, 40.0] {
+                        let mut sample = col.clone();
+                        sample.water_level += rise;
+                        let ground_max = sample.alt + sample.chaos * 32.0 + 2.0;
+                        let expected = ground_max.max(sample.water_level + 2.0 + sample.ice_depth);
+                        let (_, max) = crate::block::ZCache {
+                            sample,
+                            calendar: None,
+                        }
+                        .get_z_limits();
+                        assert_eq!(max.to_bits(), expected.to_bits(), "{wpos} rise {rise}");
+                    }
                     let mut top_fluid = None;
                     let mut ice = Vec::new();
                     for z in (chunk.get_min_z()..chunk.get_max_z()).rev() {

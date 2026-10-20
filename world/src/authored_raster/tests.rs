@@ -299,9 +299,23 @@ fn one_block_authored_ice_counts_as_ice_for_wildlife() {
     // Natural half-depth 1.0 -> one block of ice below the surface block.
     let (centre, half) = col.ice_band(238.5, 1.0).unwrap();
     assert_eq!(half, 0.5);
-    assert!(crate::layer::wildlife::is_ice_column(half, true));
-    assert!(!crate::layer::wildlife::is_ice_column(half, false));
-    assert!(!crate::layer::wildlife::is_ice_column(0.0, true));
+    let gate = crate::layer::wildlife::is_ice_column;
+    // The authored wet one-block band counts as ice (when under water).
+    assert!(gate(half, Some(&col), true));
+    assert!(!gate(half, Some(&col), false));
+    assert!(!gate(0.0, Some(&col), true));
+    // Natural columns keep the base threshold: 0.3 and 0.5 are not ice, 0.6 is.
+    assert!(!gate(0.3, None, true));
+    assert!(!gate(0.5, None, true));
+    assert!(gate(0.6, None, true));
+    // An authored dry cell is as natural as no authored column at all.
+    let dry = AuthoredColumn {
+        cell: AuthoredCell::None,
+        ..col
+    };
+    assert!(!gate(0.3, Some(&dry), true));
+    assert!(!gate(0.5, Some(&dry), true));
+    assert!(gate(0.6, Some(&dry), true));
     // The Ice spawn height (`ice_centre + 1 + ice_depth`) is one block over
     // the top of the band, i.e. over the drawn surface block.
     assert_eq!(centre + 1.0 + half, 238.5 + 1.0);
