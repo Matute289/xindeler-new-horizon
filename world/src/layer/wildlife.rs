@@ -859,7 +859,15 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
             if let Some(pack) = entity_group {
                 let desired_alt = match pack.spawn_mode {
                     SpawnMode::Land | SpawnMode::Underwater => col_sample.alt,
-                    SpawnMode::Ice => col_sample.water_level + 1.0 + col_sample.ice_depth,
+                    // One block over the top of the ice band (the water level plus
+                    // the band's half-depth for natural water; the authored
+                    // surface for a downward-only band).
+                    SpawnMode::Ice => {
+                        col_sample.water_level
+                            + 1.0
+                            + col_sample.ice_depth
+                            + (col_sample.ice_centre - col_sample.water_level)
+                    },
                     SpawnMode::Water => dynamic_rng.random_range(
                         col_sample.alt..col_sample.water_level.max(col_sample.alt + 0.1),
                     ),

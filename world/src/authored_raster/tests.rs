@@ -225,6 +225,89 @@ fn resolve_wet_and_bank_are_exact_at_any_weight() {
     }
 }
 
+/// The blocks `Ice` takes in a column for a band, the way `BlockGen` decides
+/// it: `|z - centre| < half_depth`, over the water blocks `bed + 1..=surface`.
+fn ice_blocks(band: (f32, f32), bed: i32, surface: i32) -> Vec<i32> {
+    (bed + 1..=surface + 3)
+        .filter(|&z| (z as f32 - band.0).abs() < band.1)
+        .collect()
+}
+
+#[test]
+fn authored_ice_band_only_grows_downward_from_the_surface() {
+    let wet = |surface_block, bed_block| AuthoredColumn {
+        settings: SETTINGS,
+        weight: 1.0,
+        cell: AuthoredCell::Wet {
+            surface_block,
+            bed_block,
+        },
+        water_dist: Some(0.0),
+        natural: false,
+    };
+    for (surface, bed) in [(238, 232), (238, 237), (238, 236), (4639, 4633), (12, 5)] {
+        let col = wet(surface, bed);
+        let wl = surface as f32 + 0.5;
+        // Every natural half-depth the engine can produce (up to ~3.5 + cliff).
+        for step in 0..=160 {
+            let d = step as f32 * 0.05;
+            let (centre, half) = col.ice_band(wl, d).unwrap();
+            let ice = ice_blocks((centre, half), bed, surface);
+            let t = ice.len() as i32;
+            assert!(
+                ice.iter().all(|&z| z <= surface),
+                "ice above the surface block {surface} at d={d}: {ice:?}"
+            );
+            assert!(t <= ICE_MAX_BLOCKS, "{t} ice blocks at d={d}");
+            // Contiguous from the surface block down, and a liquid block left.
+            assert!(ice.iter().rev().zip(0..).all(|(&z, k)| z == surface - k));
+            assert!(
+                surface - bed - t >= 1,
+                "no liquid left under the ice at d={d}"
+            );
+            // The natural band's part below the surface, truncated.
+            let natural_below = (bed + 1..=surface)
+                .filter(|&z| (z as f32 - wl).abs() < d)
+                .count() as i32;
+            assert_eq!(t, natural_below.min(ICE_MAX_BLOCKS).min(surface - bed - 1));
+            assert!(
+                half == 0.0 || centre + half <= wl,
+                "band top over the water"
+            );
+        }
+    }
+    // A column that does not freeze stays unfrozen.
+    let (c, h) = wet(238, 232).ice_band(238.5, 0.0).unwrap();
+    assert!(ice_blocks((c, h), 232, 238).is_empty());
+    // Warm natural half-depth values the noise gives (<= 0.5) never freeze.
+    let (c, h) = wet(238, 232).ice_band(238.5, 0.5).unwrap();
+    assert!(ice_blocks((c, h), 232, 238).is_empty());
+}
+
+#[test]
+fn ice_band_is_authored_wet_only() {
+    let col = |cell| AuthoredColumn {
+        settings: SETTINGS,
+        weight: 1.0,
+        cell,
+        water_dist: Some(1.0),
+        natural: false,
+    };
+    assert_eq!(
+        col(AuthoredCell::Bank { bed_block: 239 }).ice_band(139.01, 2.0),
+        None
+    );
+    assert_eq!(
+        col(AuthoredCell::Ground {
+            block: 239,
+            weight: GROUND_EXACT
+        })
+        .ice_band(139.01, 2.0),
+        None
+    );
+    assert_eq!(col(AuthoredCell::None).ice_band(139.01, 2.0), None);
+}
+
 #[test]
 fn resolve_none_blends_engine_into_dry_terrain() {
     let col = |weight, water_dist| AuthoredColumn {

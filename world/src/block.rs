@@ -74,6 +74,7 @@ impl<'a> BlockGen<'a> {
             cliff_offset,
             cliff_height,
             ice_depth,
+            ice_centre,
             surface_block_override,
             flood_block,
             exposed_wall_floor,
@@ -197,7 +198,7 @@ impl<'a> BlockGen<'a> {
             // freeze, so ice only ever forms over an actual `Water` flood).
             if over_water
                 && flood_block == BlockKind::Water
-                && (wposf.z as f32 - water_level).abs() < ice_depth
+                && (wposf.z as f32 - ice_centre).abs() < ice_depth
             {
                 Some(Block::new(BlockKind::Ice, CONFIG.ice_color))
             } else if (wposf.z as f32) < water_level {
@@ -226,7 +227,11 @@ impl ZCache<'_> {
 
         let ground_max = self.sample.alt + warp + 2.0;
 
-        let max = ground_max.max(self.sample.water_level + 2.0 + self.sample.ice_depth);
+        // The ice band's top is `ice_centre + ice_depth`; the offset is
+        // exactly 0 for natural water (centre = water level).
+        let ice_offset = self.sample.ice_centre - self.sample.water_level;
+        let max =
+            ground_max.max(self.sample.water_level + 2.0 + self.sample.ice_depth + ice_offset);
 
         (min, max)
     }
