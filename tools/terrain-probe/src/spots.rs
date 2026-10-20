@@ -132,7 +132,7 @@ pub fn build_doc(arena: &str, source: &str, placements: &[Placement]) -> Built {
             .collect();
         if !over.is_empty() {
             warnings.push(format!(
-                "rejected {} columns of {}: dent up to {} blocks is over the format limit                  {MAX_DIG_BLOCKS} (left un-exempt)",
+                "rejected {} columns of {}: dent up to {} blocks is over the format limit {MAX_DIG_BLOCKS} (left un-exempt)",
                 over.len(),
                 p.name,
                 over.iter().map(|c| c.1).max().unwrap_or(0)
@@ -142,6 +142,11 @@ pub fn build_doc(arena: &str, source: &str, placements: &[Placement]) -> Built {
     }
 
     // (y, x) -> (summed dig, owning placement index)
+    // Overlapping dents are summed per column. The sum is neither an upper nor
+    // a lower bound of the real dig: voxels already cleared by another spot
+    // are counted twice (overcount), and a cavity that lies below another
+    // spot's dent is missed (undercount). Both errors fail loudly (a false
+    // defect, or `--strict`) and never hide a defect.
     let mut owner: BTreeMap<(i32, i32), (i32, usize)> = BTreeMap::new();
     for (i, p) in ordered.iter().enumerate() {
         for &(c, dig) in &p.columns {
@@ -357,7 +362,7 @@ impl Run {
 pub fn run(p: &Probe, bx: Box2, arena: &str) -> Res<Run> {
     let collected = collect(p, bx)?;
     let source = format!(
-        "terrain-probe spots, engine {}, seed {}, window {},{},{},{} (cleared columns of the          placed prefabs)",
+        "terrain-probe spots, engine {}, seed {}, window {},{},{},{} (cleared columns of the placed prefabs)",
         env!("TPROBE_ENGINE_COMMIT"),
         p.seed,
         bx.x0,
