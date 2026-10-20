@@ -10,6 +10,7 @@ mod legacy;
 mod login_check;
 mod probe;
 mod scratch_server;
+mod spots;
 #[cfg(test)] mod test_alloc;
 mod tiles;
 
@@ -125,6 +126,23 @@ enum Cmd {
         require_empty: bool,
         #[arg(long)]
         json: bool,
+    },
+    /// Print the `spots/v1` JSON of the procedural spot structures
+    /// (graves, stumps, ...) that touch a window: footprint boxes from the
+    /// HOLLOW columns of each placed prefab and the deepest dent they can
+    /// make, for the verifier's spot exemption. Generates the world live
+    /// (about 3 s, no chunk generation). Placements that would break the
+    /// format's caps are left out and reported on stderr.
+    Spots {
+        /// `x0,y0,x1,y1` in world metres, half-open.
+        #[arg(long = "box")]
+        bx: String,
+        /// Arena name written into the document.
+        #[arg(long)]
+        arena: String,
+        /// Write the JSON here instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Print a dump's header and column statistics.
     Info {
@@ -674,6 +692,18 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             } else {
                 ExitCode::SUCCESS
             })
+        },
+        Cmd::Spots { bx, arena, out } => {
+            let bx = Box2::parse(bx)?;
+            let p = load_probe(cli)?;
+            let doc = spots::run(&p, bx, arena)?;
+            let mut text = serde_json::to_string_pretty(&doc)?;
+            text.push('\n');
+            match out {
+                Some(path) => std::fs::write(path, text)?,
+                None => std::io::stdout().write_all(text.as_bytes())?,
+            }
+            Ok(ExitCode::SUCCESS)
         },
         Cmd::Info { input } => {
             let d = Dump::read_file(input)?;
