@@ -23,7 +23,11 @@
 //!
 //! **Local-only digests (`#[ignore]`).** Digests recorded at the engine commit
 //! `65deeb2a20` (before those changes) on **macOS arm64** pin the new code to
-//! the old output byte for byte. They cannot hold on another platform, so they
+//! the old output byte for byte, with one deliberate exception: the digest of
+//! chunk (20, 20) was re-blessed on purpose, because the tree layer no longer
+//! writes tree voxels that would be buried in natural terrain (a chunk with
+//! trees against a cliff or hillside changes; the map digests and the other
+//! five chunks are untouched). They cannot hold on another platform, so they
 //! are ignored by default. Run them on a Mac with the `.vox` assets (LFS):
 //!
 //! ```text
@@ -158,7 +162,7 @@ const BASE_MAP_ALT_SHA256: &str =
 const BASE_CHUNK_SHA256: [((i32, i32), &str); 6] = [
     (
         (20, 20),
-        "8ee5af6b5392c3eea4e4a5b88570a944a9a9d1b010d6bb2808dfafd6af26aa2c",
+        "4389a7f63f446348474c9cdb1fe777e9cddfc429ed3e4f6b3a7dc77268194463",
     ),
     (
         (64, 64),
