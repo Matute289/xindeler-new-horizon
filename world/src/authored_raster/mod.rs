@@ -1240,10 +1240,10 @@ impl Region {
                     t,
                     |i| self.ground[i].is_some(),
                     |i, k, wpos| {
-                        self.contains(wpos)
+                        cell_of(self.water[i].as_ref(), self.ground[i].as_ref(), k)
+                            .is_exact_ground_layer_cell()
+                            && self.contains(wpos)
                             && !self.partial_at(wpos)
-                            && cell_of(self.water[i].as_ref(), self.ground[i].as_ref(), k)
-                                .is_exact_ground_layer_cell()
                     },
                 )
             })
