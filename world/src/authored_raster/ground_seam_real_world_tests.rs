@@ -186,6 +186,12 @@ struct RingRow {
     within_bound: usize,
     worst: Option<String>,
     exact_edge: usize,
+    /// The ring's outermost column has the altitude of the plateau-only
+    /// terrain (1e-3 m of f32 rounding): the ring ends where that terrain
+    /// begins, with no step.
+    outer_matches: usize,
+    /// Largest difference between those two altitudes over the transects.
+    max_outer_diff: f32,
 }
 
 /// B-T7, B-S1 and identity gate 3 for the ring: rings of 8, 16, 32 and 64 m
@@ -268,6 +274,10 @@ fn blend_ring_meets_the_engine_terrain_within_the_step_bound() {
         for (t, path) in measured.iter().zip(ts) {
             row.transects += 1;
             row.exact_edge += (t.blocks[0] == h) as usize;
+            let outer = *w as usize;
+            let outer_diff = (t.alts[outer] - t.engine[outer]).abs();
+            row.max_outer_diff = row.max_outer_diff.max(outer_diff);
+            row.outer_matches += (outer_diff <= 1e-3) as usize;
             row.monotone += t.blocks.windows(2).all(|p| p[1] <= p[0]) as usize;
             // In altitude: alt = lerp(engine, plateau, w) with w falling
             // outward, so it can only rise where the engine rises, and by no
@@ -379,6 +389,11 @@ fn blend_ring_meets_the_engine_terrain_within_the_step_bound() {
         assert_eq!(
             row.monotone_over_engine, row.transects,
             "ring {w}: the ring rises where the engine does not"
+        );
+        assert_eq!(
+            row.outer_matches, row.transects,
+            "ring {w}: the outer column differs from the terrain it meets by up to {} m",
+            row.max_outer_diff
         );
     }
     assert_eq!(

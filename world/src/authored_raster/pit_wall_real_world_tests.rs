@@ -489,21 +489,33 @@ fn check_layout(name: &str, pits: &[(Rect, i32)], water: &[(Rect, i32, i32)]) {
 /// blocks beside a pit's floor a column can show its stone just above its
 /// last earth, but never systematically.
 ///
-/// A wall that shows the whole band ([`WALL_BLEND_BAND`] blocks or more)
-/// has its earth above its stone (1 % of the wall columns at most). A
-/// shorter wall lies inside the band, where each block is earth or stone by
-/// its own hash: a few percent of those with both show the stone on top,
-/// and how many such walls a pit has depends on the terrain around it (a
-/// smooth rim puts most of its walls at the same few blocks above the floor,
-/// a rough one spreads them), so that share is bounded instead: at most one
-/// in ten.
+/// A wall that shows the whole band ([`WALL_BLEND_BAND`] blocks or more) and
+/// has both earth and stone has its earth above its stone, with no
+/// exception: none of those is inverted, and there must be some, or the
+/// check says nothing. A shorter wall lies inside the band, where each block
+/// is earth or stone by its own hash: about 4 % of those with both show the
+/// stone on top (pooled over the layouts, 47 of 1094 here and 14 of 399 on the
+/// terrain before the fade; per layout the worst measured is 4.9 %), and how
+/// many such walls a pit has depends on the terrain around it (a smooth rim
+/// puts most of its walls at the same few blocks above the floor, a rough one
+/// spreads them), so that share is bounded instead: at most one in fourteen
+/// (7 %). A reversed gradient or a flat probability would show 33 to 50 %.
 fn assert_earth_over_stone(name: &str, w: &Wall) {
-    assert!(
-        w.inverted_columns * 100 <= w.wall_columns,
-        "{name}: stone above earth: {w:?}"
+    let long_mixed = w.transition_columns - w.short_transition_columns;
+    println!(
+        "{name}: long mixed walls {long_mixed} (inverted {}), short mixed walls {} (inverted {})",
+        w.inverted_columns, w.short_transition_columns, w.short_inverted_columns
     );
     assert!(
-        w.short_inverted_columns * 10 <= w.short_transition_columns,
+        long_mixed > 0,
+        "{name}: no long wall with both earth and stone to check: {w:?}"
+    );
+    assert_eq!(
+        w.inverted_columns, 0,
+        "{name}: stone above earth on a long wall: {w:?}"
+    );
+    assert!(
+        w.short_inverted_columns * 14 <= w.short_transition_columns,
         "{name}: stone above earth on short walls: {w:?}"
     );
 }
