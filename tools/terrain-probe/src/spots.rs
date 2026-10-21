@@ -27,7 +27,7 @@ use crate::probe::{Box2, Probe, Res};
 /// Largest box side the format accepts (metres).
 pub const MAX_BOX_SIDE_M: i32 = 48;
 /// Largest `max_dig_blocks` the format accepts.
-pub const MAX_DIG_BLOCKS: i32 = 8;
+pub const MAX_DIG_BLOCKS: i32 = 10;
 /// A spot's blit reaches 48 m from its chunk centre, so its chunk centre can be
 /// up to 2 chunks outside the window.
 const CHUNK_PAD: i32 = 2;
@@ -112,7 +112,7 @@ fn column_boxes(cols: impl IntoIterator<Item = Vec2<i32>>, max_side: i32) -> Vec
 ///   out (for every spot) and reported: it stays un-exempt, so a real defect
 ///   cannot hide behind it.
 /// * A placement is split by dent depth: `<name>_d<N>` boxes hold the columns
-///   that can lose up to N blocks (N in 1..=8).
+///   that can lose up to N blocks (N in 1..=10).
 /// * Boxes are cut to at most `MAX_BOX_SIDE_M` per side; a placement that needs
 ///   several boxes gets `name_1`, `name_2`, ...
 /// * `max_exempt_columns` is the number of cleared columns listed.
@@ -468,7 +468,7 @@ mod tests {
     #[test]
     fn overlapping_dents_over_the_cap_are_left_out_and_reported() {
         let b = build_doc("A", "t", &[
-            place("a", &[(10, 10), (11, 10)], 5),
+            place("a", &[(10, 10), (11, 10)], 6),
             place("b", &[(11, 10)], 5),
         ]);
         check_v1(&b.doc).unwrap();
@@ -481,8 +481,8 @@ mod tests {
 
     #[test]
     fn a_column_over_the_cap_for_one_spot_is_left_out_for_all() {
-        let mut deep = place("deep", &[(0, 0)], 9);
-        deep.columns[0].1 = 9;
+        let mut deep = place("deep", &[(0, 0)], 11);
+        deep.columns[0].1 = 11;
         let b = build_doc("A", "t", &[deep, place("zz", &[(0, 0), (1, 0)], 2)]);
         check_v1(&b.doc).unwrap();
         assert_eq!(b.dropped_columns, 1);
@@ -493,9 +493,9 @@ mod tests {
     #[test]
     fn over_cap_and_harmless_placements_are_left_out_and_reported() {
         let b = build_doc("A", "t", &[
-            place("deep", &[(0, 0)], 9),
+            place("deep", &[(0, 0)], 11),
             place("flat", &[(5, 5)], 0),
-            place("ok", &[(9, 9)], 8),
+            place("ok", &[(9, 9)], 10),
         ]);
         check_v1(&b.doc).unwrap();
         assert_eq!(b.warnings.len(), 1);
@@ -508,12 +508,12 @@ mod tests {
     #[test]
     fn a_column_over_the_cap_is_left_out_but_the_rest_of_its_spot_stays() {
         let mut deep = place("pit", &[(0, 0), (1, 0), (2, 0)], 2);
-        deep.columns[1].1 = 9; // one column on a rise: too deep
+        deep.columns[1].1 = 11; // one column on a rise: too deep
         deep.columns[2].1 = 1; // one column on a dip: shallow
         let b = build_doc("A", "t", &[deep]);
         check_v1(&b.doc).unwrap();
         assert_eq!(b.warnings.len(), 1);
-        assert!(b.warnings[0].contains("pit") && b.warnings[0].contains("9"));
+        assert!(b.warnings[0].contains("pit") && b.warnings[0].contains("11"));
         assert_eq!(b.doc["max_exempt_columns"], 2);
         let digs: Vec<i64> = b.doc["spots"]
             .as_array()
@@ -534,7 +534,7 @@ mod tests {
 
     /// A `spots/v1` document as the external consumer
     /// (`tools/precision/spots.py` in the open-world repo) accepts it. The
-    /// caps asserted below (48 m box side, 1..=8 dig blocks, disjoint
+    /// caps asserted below (48 m box side, 1..=10 dig blocks, disjoint
     /// boxes, unique names, exactly the allowed keys) live in that consumer
     /// too; if they change there, change them here and in `MAX_BOX_SIDE_M`
     /// / `MAX_DIG_BLOCKS` together.
@@ -556,14 +556,17 @@ mod tests {
     fn golden_document_passes_the_validator_with_the_caps() {
         let doc: Value = serde_json::from_str(GOLDEN).unwrap();
         validate(&doc).unwrap();
-        assert_eq!((MAX_BOX_SIDE_M, MAX_DIG_BLOCKS), (48, 8));
+        assert_eq!((MAX_BOX_SIDE_M, MAX_DIG_BLOCKS), (48, 10));
         // The caps are tight: the first box side at the cap, the first dig at
         // the cap, and one step past either is refused.
         let mut wide = doc.clone();
         wide["spots"][2]["box"] = json!([100, 0, 149, 2]);
         assert!(validate(&wide).unwrap_err().contains("box side over 48"));
+        let mut at_cap = doc.clone();
+        at_cap["spots"][2]["max_dig_blocks"] = json!(10);
+        validate(&at_cap).unwrap();
         let mut deep = doc.clone();
-        deep["spots"][2]["max_dig_blocks"] = json!(9);
+        deep["spots"][2]["max_dig_blocks"] = json!(11);
         assert!(validate(&deep).unwrap_err().contains("max_dig_blocks"));
         let mut none = doc.clone();
         none["spots"][0]["max_dig_blocks"] = json!(0);
