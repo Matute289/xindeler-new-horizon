@@ -2091,7 +2091,7 @@ pub struct ColInfo {
 /// Deepest soil a pit wall may show before it is stone, in blocks.
 const WALL_MAX_SOIL: f32 = 40.0;
 /// Width, in blocks, of the earth-to-stone blend band on a pit wall.
-const WALL_BLEND_BAND: f32 = 6.0;
+pub(crate) const WALL_BLEND_BAND: f32 = 6.0;
 /// The natural stone of an exposed pit wall (a warm grey, linear 0..1).
 const WALL_STONE: Rgb<f32> = Rgb::new(0.47, 0.44, 0.41);
 /// How much of the column's sub-surface colour tints the wall stone.
