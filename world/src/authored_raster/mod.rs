@@ -606,7 +606,7 @@ pub struct AuthoredColumn {
     pub water_dist: Option<f32>,
     /// Distance from the column centre to the nearest exact ground cell
     /// centre, metres (chamfer 3-4), `None` beyond [`GROUND_WARP_FADE_M`].
-    /// Only computed for the columns whose dry relief it fades (blend and
+    /// Only computed for the columns whose dry warp it fades (blend and
     /// unauthored columns of owned chunks); `None` everywhere else, exact
     /// ground cells included. Exact ground in a partial chunk does not count
     /// as a source.

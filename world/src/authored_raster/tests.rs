@@ -3763,6 +3763,8 @@ fn dry_relief_fades_towards_exact_ground_and_nowhere_else() {
     }
     .resolve(engine(), dry());
     assert_eq!(both.warp_factor, 0.25);
+    // Delta halved by the water fade, warp quartered by both.
+    assert_eq!(both.alt, 245.0 + 1.5 + 0.375);
     // A partial chunk's natural column is never touched.
     let natural = AuthoredColumn {
         natural: true,
