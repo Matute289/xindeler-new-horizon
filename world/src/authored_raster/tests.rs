@@ -3730,25 +3730,26 @@ fn dry_relief_fades_towards_exact_ground_and_nowhere_else() {
     // ends.
     let edge = col(none, 1.0, Some(GROUND_WARP_FADE_M as f32)).resolve(engine(), dry());
     assert_eq!(edge, far);
-    // On an exact cell's edge: the spline altitude, no warp, no delta.
+    // On an exact cell's edge: the spline altitude and the delta, no warp
+    // (the delta does not scale with the plateau's slope, so it stays).
     let near = col(none, 1.0, Some(0.0)).resolve(engine(), dry());
-    assert_eq!(near.alt, 245.0);
+    assert_eq!(near.alt, 245.0 + 3.0);
     assert_eq!(near.warp_factor, 0.0);
-    // Half way: half the relief.
+    // Half way: half the warp.
     let mid = col(none, 1.0, Some(GROUND_WARP_FADE_M as f32 / 2.0)).resolve(engine(), dry());
-    assert_eq!(mid.alt, 245.0 + 1.5 + 0.75);
+    assert_eq!(mid.alt, 245.0 + 3.0 + 0.75);
     assert_eq!(mid.warp_factor, 0.5);
-    // A blend cell next to the patch keeps none of the dip.
+    // A blend cell next to the patch keeps none of the warp's dip.
     let ring = AuthoredCell::Ground {
         block: 250,
         weight: 128,
     };
     let w = 128.0 / GROUND_EXACT as f32;
     let r = col(ring, 1.0, Some(1.0)).resolve(engine(), dry());
-    let relief = 4.5 * ground_warp_weight(1.0);
+    let relief = 3.0 + 1.5 * ground_warp_weight(1.0);
     let expected = Lerp::lerp(245.0 + relief, top_block_alt(250), w);
     assert!((r.alt - expected).abs() < 1e-4, "{} vs {expected}", r.alt);
-    assert!((r.alt - Lerp::lerp(245.0, top_block_alt(250), w)).abs() < 0.01);
+    assert!((r.alt - Lerp::lerp(248.0, top_block_alt(250), w)).abs() < 0.01);
     // Water fade unchanged, and the two multiply.
     let wet_near = AuthoredColumn {
         water_dist: Some(32.0),
@@ -3813,8 +3814,9 @@ fn ring_relief_profile_is_dip_free_for_every_weight_and_distance() {
         .resolve(engine(), dry())
         .alt
     };
-    // The fixture's full relief: delta 3 plus warp 1.5 over the 245 m spline.
-    let (base, full) = (245.0, 245.0 + 4.5);
+    // The fixture's full relief: delta 3 plus warp 1.5 over the 245 m
+    // spline; only the warp fades, so the faded floor keeps the delta.
+    let (base, full) = (245.0 + 3.0, 245.0 + 4.5);
     assert!(ground > full);
     let mut prev_row: Option<Vec<f32>> = None;
     for d in 1..=8 {

@@ -19,8 +19,8 @@
 //! terrain the region would render without the ground layer toward its
 //! authored block by `weight / 255`: the exporter writes these as a ring
 //! around every exact patch, so patches meet the engine's terrain without a
-//! step. The dry terrain's procedural relief (warp and delta) on blend and
-//! unauthored columns of owned chunks fades out towards exact ground over
+//! step. The dry terrain's procedural warp on blend and unauthored columns
+//! of owned chunks fades out towards exact ground over
 //! [`GROUND_WARP_FADE_M`] ([`ground_warp_weight`]), as it fades towards
 //! authored water, so no ditch opens beside a drawn plateau. Ground cells in
 //! partial chunks meet natural columns directly; where natural water would
@@ -75,8 +75,8 @@
 //! * **Column sampler** ([`AuthoredColumn::resolve`]): wet and bank columns are
 //!   exact at any feather weight; unauthored columns blend from the engine's
 //!   terrain to the engine's *dry* terrain over the feather; no water above sea
-//!   level in a region except authored water. The dry terrain's procedural
-//!   relief also fades out towards exact ground over [`GROUND_WARP_FADE_M`]
+//!   level in a region except authored water. The dry terrain's procedural warp
+//!   also fades out towards exact ground over [`GROUND_WARP_FADE_M`]
 //!   ([`ground_warp_weight`]). Exact ground in a partial chunk, and ground in
 //!   an adjacent region (across the shared edge), do not fade the other side's
 //!   columns, and the feather still blends toward the engine's unfaded warp, so
@@ -158,17 +158,16 @@ pub const MANIFEST_SCHEMA: u32 = 1;
 /// saturates, so the two can never disagree.
 pub const DIST_CAP_M: i32 = crate::column::WATER_WARP_FADE_M as i32;
 /// Distance from the nearest exact authored ground cell at which the dry
-/// terrain's procedural relief (the warp and the delta it scales) is back to
-/// full strength; see [`ground_warp_weight`]. The relief scales with the
-/// slope of the sim chunk altitudes, which a drawn plateau steepens, so left
-/// unfaded it digs a ditch (or raises a lip) beside the drawn ground, inside
-/// the blend ring and past it. It equals [`DIST_CAP_M`], so the ground
-/// distance field shares the water field's apron and encoding, and a column
-/// this far or farther from every exact cell keeps the engine's relief
-/// exactly.
+/// terrain's procedural warp is back to full strength; see
+/// [`ground_warp_weight`]. The warp scales with the slope of the sim chunk
+/// altitudes, which a drawn plateau steepens, so left unfaded it digs a ditch
+/// (or raises a lip) beside the drawn ground, inside the blend ring and past
+/// it. It equals [`DIST_CAP_M`], so the ground distance field shares the water
+/// field's apron and encoding, and a column this far or farther from every
+/// exact cell keeps the engine's relief exactly.
 pub const GROUND_WARP_FADE_M: i32 = DIST_CAP_M;
 
-/// The weight of the dry terrain's procedural relief at `dist_m` metres from
+/// The weight of the dry terrain's procedural warp at `dist_m` metres from
 /// the nearest exact authored ground cell: 0 on the cell, 1 at and beyond
 /// [`GROUND_WARP_FADE_M`], a smoothstep in between (continuous, monotonic,
 /// flat at both ends, so neither the drawn edge nor the far end of the fade
@@ -838,8 +837,9 @@ impl AuthoredColumn {
     /// at all in a [`SeaFill::AuthoredOnly`] region);
     /// terrain blended by the feather weight from the engine's (with the sim
     /// water's carving) to the engine's *dry* terrain (same noise and warp,
-    /// faded by the distance to the authored water instead of the sim's, and
-    /// by the distance to exact authored ground, [`ground_warp_weight`]).
+    /// faded by the distance to the authored water instead of the sim's; the
+    /// warp alone also by the distance to exact authored ground,
+    /// [`ground_warp_weight`]).
     #[inline]
     fn unauthored(&self, engine: EngineColumn, dry: DryTerrain) -> EngineColumn {
         let w = self.weight;
@@ -847,14 +847,18 @@ impl AuthoredColumn {
             .water_dist
             .map_or(1.0, |d| (d / DIST_CAP_M as f32).clamped(0.0, 1.0))
             * dry.max_warp;
-        // Beyond the fade distance (and in every region without exact
-        // ground) the factor is left as it was, not multiplied by 1.
-        let dry_wf = self
+        // Only the warp fades towards exact ground: it scales with the chunk
+        // slope a drawn plateau steepens. The delta does not (the engine's
+        // terrain around the plateau carries it too), so fading it as well
+        // would sink the ring below its surroundings. Beyond the fade
+        // distance (and in every region without exact ground) the factor is
+        // left as it was, not multiplied by 1.
+        let warp_wf = self
             .ground_dist
             .map_or(dry_wf, |d| dry_wf * ground_warp_weight(d));
         let dry_alt = dry.riverless_alt.max(dry.base_sea_level + 0.5)
             + Lerp::lerp(0.0, dry.riverless_alt_delta, dry_wf)
-            + dry.warp * dry_wf;
+            + dry.warp * warp_wf;
         let water_dist = if w >= 1.0 {
             self.water_dist
         } else {
@@ -877,7 +881,7 @@ impl AuthoredColumn {
                 SeaFill::AuthoredOnly => dry.base_sea_level.min(alt),
             },
             water_dist,
-            warp_factor: Lerp::lerp(engine.warp_factor, dry_wf, w),
+            warp_factor: Lerp::lerp(engine.warp_factor, warp_wf, w),
             cliff_offset: engine.cliff_offset,
             riverless_alt: engine.riverless_alt,
         }
