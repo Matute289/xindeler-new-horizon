@@ -14,7 +14,7 @@ use super::{
     real_world_tests::{REGION_MAX, REGION_MIN, generate_world, load_specs},
     writer::{PaintOp, RegionSpec, Shape},
 };
-use crate::{World, util::Sampler};
+use crate::{World, column::WALL_BLEND_BAND, util::Sampler};
 use common::{
     terrain::{Block, BlockKind},
     vol::ReadVol,
@@ -59,8 +59,16 @@ struct Wall {
     transition_columns: u32,
     earth_only_columns: u32,
     rock_only_columns: u32,
-    /// Wall columns whose earth lies under rock (the wrong way round).
+    /// Wall columns whose earth lies under rock (the wrong way round), among
+    /// those whose wall shows at least [`WALL_BLEND_BAND`] blocks.
     inverted_columns: u32,
+    /// Wall columns showing fewer than [`WALL_BLEND_BAND`] blocks with both
+    /// earth and rock, and those among them with the earth under the rock.
+    /// Such a window lies inside the earth-to-stone blend band, where each
+    /// block is earth or stone by a per-block hash: stone over earth there is
+    /// the band's own mix, not an inversion.
+    short_transition_columns: u32,
+    short_inverted_columns: u32,
     /// Columns of the region whose authored ground sits below the sim's
     /// basement (any distance from a pit), those among them with earth above
     /// stone, and those with the earth under the stone.
@@ -196,12 +204,14 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
                     let hi = col.alt as i32 - 6;
                     let (mut top_earth, mut low_rock) = (None::<i32>, None::<i32>);
                     let mut top_rock = None::<i32>;
+                    let mut shown = 0u32;
                     for z in lo.max(z0)..=hi.min(z1 - 1) {
                         let b = block(z);
                         if !b.is_filled() || b.is_liquid() {
                             continue;
                         }
                         w.wall_blocks += 1;
+                        shown += 1;
                         *w.kinds.entry(format!("{:?}", b.kind())).or_default() += 1;
                         let c = b.get_color().unwrap_or_default();
                         w.digest = w.digest.wrapping_mul(1_099_511_628_211).wrapping_add(
@@ -231,8 +241,12 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
                             w.transition_columns += 1;
                             // Earth must start above where the rock does: the
                             // topmost earth is above the lowest rock.
-                            if top_earth < low_rock {
-                                w.inverted_columns += 1;
+                            let inverted = top_earth < low_rock;
+                            if (shown as f32) < WALL_BLEND_BAND {
+                                w.short_transition_columns += 1;
+                                w.short_inverted_columns += inverted as u32;
+                            } else {
+                                w.inverted_columns += inverted as u32;
                             }
                         },
                         (Some(_), None) => w.earth_only_columns += 1,
@@ -256,6 +270,8 @@ fn survey(world: &World, index: crate::IndexRef, pits: &[Rect], wet: &[Rect]) ->
         a.earth_only_columns += r.earth_only_columns;
         a.rock_only_columns += r.rock_only_columns;
         a.inverted_columns += r.inverted_columns;
+        a.short_transition_columns += r.short_transition_columns;
+        a.short_inverted_columns += r.short_inverted_columns;
         a.scanned_columns += r.scanned_columns;
         a.lowered_columns += r.lowered_columns;
         a.lowered_transition_columns += r.lowered_transition_columns;
@@ -423,10 +439,7 @@ fn pit_chunks_serialise_compactly() {
 /// blue rock anywhere beside the pit, and ore flecks sparse.
 fn assert_wall_strata(name: &str, w: &Wall) {
     assert_eq!(w.blue_blocks, 0, "{name}: blue rock on a wall: {w:?}");
-    assert!(
-        w.inverted_columns * 100 <= w.wall_columns,
-        "{name}: stone above earth: {w:?}"
-    );
+    assert_earth_over_stone(name, w);
     assert!(
         w.transition_columns > 0,
         "{name}: no earth-to-stone wall: {w:?}"
@@ -469,12 +482,41 @@ fn check_layout(name: &str, pits: &[(Rect, i32)], water: &[(Rect, i32, i32)]) {
     assert_eq!(w.liquid_columns, 0, "{name}: stray water: {w:?}");
     assert_eq!(w.sea_sand_columns, 0, "{name}: {w:?}");
     assert_eq!(w.blue_blocks, 0, "{name}: blue rock on a wall: {w:?}");
-    // The earth-to-stone blend band is probabilistic: in a window of a few
-    // blocks beside a pit's floor a column can show its stone just above its
-    // last earth, but never systematically.
+    assert_earth_over_stone(name, &w);
+}
+
+/// The earth-to-stone blend band is probabilistic: in a window of a few
+/// blocks beside a pit's floor a column can show its stone just above its
+/// last earth, but never systematically.
+///
+/// A wall that shows the whole band ([`WALL_BLEND_BAND`] blocks or more) and
+/// has both earth and stone has its earth above its stone, with no
+/// exception: none of those is inverted, and there must be some, or the
+/// check says nothing. A shorter wall lies inside the band, where each block
+/// is earth or stone by its own hash: about 4 % of those with both show the
+/// stone on top (pooled over the layouts, 47 of 1094 here and 14 of 399 on the
+/// terrain before the fade; per layout the worst measured is 4.9 %), and how
+/// many such walls a pit has depends on the terrain around it (a smooth rim
+/// puts most of its walls at the same few blocks above the floor, a rough one
+/// spreads them), so that share is bounded instead: at most one in fourteen
+/// (7 %). A reversed gradient or a flat probability would show 33 to 50 %.
+fn assert_earth_over_stone(name: &str, w: &Wall) {
+    let long_mixed = w.transition_columns - w.short_transition_columns;
+    println!(
+        "{name}: long mixed walls {long_mixed} (inverted {}), short mixed walls {} (inverted {})",
+        w.inverted_columns, w.short_transition_columns, w.short_inverted_columns
+    );
     assert!(
-        w.inverted_columns * 100 <= w.wall_columns,
-        "{name}: stone above earth: {w:?}"
+        long_mixed > 0,
+        "{name}: no long wall with both earth and stone to check: {w:?}"
+    );
+    assert_eq!(
+        w.inverted_columns, 0,
+        "{name}: stone above earth on a long wall: {w:?}"
+    );
+    assert!(
+        w.short_inverted_columns * 14 <= w.short_transition_columns,
+        "{name}: stone above earth on short walls: {w:?}"
     );
 }
 

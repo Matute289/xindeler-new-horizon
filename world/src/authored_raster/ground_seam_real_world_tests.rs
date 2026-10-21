@@ -57,27 +57,34 @@ const STEP_BLOCKS: i32 = 7;
 /// (the master continuing the plateau flat, as `make_exact` over a flat
 /// master gives), in a chunk-aligned box that keeps the 16 m margin.
 fn ring_spec(width: i32, x0: i32, ground_cm: i32) -> RegionSpec {
+    let mut s = plateau_spec(width, x0, ground_cm);
+    s.ops.push(PaintOp::GroundRing {
+        width_m: width,
+        ground_cm: None,
+    });
+    s
+}
+
+/// [`ring_spec`] without the ring: the same box and exact plateau, so every
+/// column around it is the unauthored terrain the ring blends into (the
+/// engine's dry terrain, its warp faded towards the plateau by the same
+/// distance field, [`super::ground_warp_weight`]).
+fn plateau_spec(width: i32, x0: i32, ground_cm: i32) -> RegionSpec {
     let pad = width + 16;
     RegionSpec::new(
         format!("bt7_ring_{width}"),
         (floor32(x0 - pad), floor32(PATCH_Y - pad)),
         (ceil32(x0 + PATCH + pad), ceil32(PATCH_Y + PATCH + pad)),
         32,
-        vec![
-            exact(
-                rect(
-                    x0 as f32,
-                    PATCH_Y as f32,
-                    (x0 + PATCH) as f32,
-                    (PATCH_Y + PATCH) as f32,
-                ),
-                ground_cm,
+        vec![exact(
+            rect(
+                x0 as f32,
+                PATCH_Y as f32,
+                (x0 + PATCH) as f32,
+                (PATCH_Y + PATCH) as f32,
             ),
-            PaintOp::GroundRing {
-                width_m: width,
-                ground_cm: None,
-            },
-        ],
+            ground_cm,
+        )],
     )
 }
 
@@ -167,9 +174,10 @@ struct RingRow {
     /// The top block never rises from the plateau edge to the engine
     /// terrain (the plateau stands above it).
     monotone: usize,
-    /// Its altitude never rises more than the engine's own terrain rises
-    /// between the same two columns: the ring adds no bump of its own (the
-    /// engine's relief shows through the outer, low-weight part of the ring).
+    /// Its altitude never rises more than the terrain it meets (the region
+    /// without the ring) rises between the same two columns: the ring adds no
+    /// bump of its own (that terrain's relief shows through the outer,
+    /// low-weight part of the ring).
     monotone_over_engine: usize,
     /// Largest step between adjacent columns, edge to engine.
     max_step: i32,
@@ -178,6 +186,12 @@ struct RingRow {
     within_bound: usize,
     worst: Option<String>,
     exact_edge: usize,
+    /// The ring's outermost column has the altitude of the plateau-only
+    /// terrain (1e-3 m of f32 rounding): the ring ends where that terrain
+    /// begins, with no step.
+    outer_matches: usize,
+    /// Largest difference between those two altitudes over the transects.
+    max_outer_diff: f32,
 }
 
 /// B-T7, B-S1 and identity gate 3 for the ring: rings of 8, 16, 32 and 64 m
@@ -199,6 +213,19 @@ fn blend_ring_meets_the_engine_terrain_within_the_step_bound() {
     let line = |(start, dir): (Vec2<i32>, Vec2<i32>), w: i32| -> Vec<Vec2<i32>> {
         (0..=w).map(|k| start + dir * k).collect()
     };
+    // The terrain the ring meets: the same plateaus without their rings. Not
+    // the world without a manifest: around exact ground the region's
+    // unauthored terrain keeps the engine's noise but fades its procedural
+    // warp out towards the plateau over 64 m (`ground_warp_weight`), so it is
+    // deliberately smoother than the engine's there, and the ring (a lerp
+    // from that terrain to the plateau) follows it, not the engine's.
+    let plateaus: Vec<RegionSpec> = RINGS
+        .iter()
+        .map(|&(w, x0)| plateau_spec(w, x0, h_cm))
+        .collect();
+    world.sim.set_authored_rasters_for_test(Some(
+        load_specs(&plateaus).expect("the B-T7 plateaus load without rings"),
+    ));
     let engine: HashMap<i32, Vec<Vec<f32>>> = paths
         .iter()
         .map(|(w, _, ts)| {
@@ -247,6 +274,10 @@ fn blend_ring_meets_the_engine_terrain_within_the_step_bound() {
         for (t, path) in measured.iter().zip(ts) {
             row.transects += 1;
             row.exact_edge += (t.blocks[0] == h) as usize;
+            let outer = *w as usize;
+            let outer_diff = (t.alts[outer] - t.engine[outer]).abs();
+            row.max_outer_diff = row.max_outer_diff.max(outer_diff);
+            row.outer_matches += (outer_diff <= 1e-3) as usize;
             row.monotone += t.blocks.windows(2).all(|p| p[1] <= p[0]) as usize;
             // In altitude: alt = lerp(engine, plateau, w) with w falling
             // outward, so it can only rise where the engine rises, and by no
@@ -358,6 +389,11 @@ fn blend_ring_meets_the_engine_terrain_within_the_step_bound() {
         assert_eq!(
             row.monotone_over_engine, row.transects,
             "ring {w}: the ring rises where the engine does not"
+        );
+        assert_eq!(
+            row.outer_matches, row.transects,
+            "ring {w}: the outer column differs from the terrain it meets by up to {} m",
+            row.max_outer_diff
         );
     }
     assert_eq!(
