@@ -75,8 +75,13 @@
 //! * **Column sampler** ([`AuthoredColumn::resolve`]): wet and bank columns are
 //!   exact at any feather weight; unauthored columns blend from the engine's
 //!   terrain to the engine's *dry* terrain over the feather; no water above sea
-//!   level in a region except authored water. Regional terrain overrides
-//!   (crater, flood) apply on top.
+//!   level in a region except authored water. The dry terrain's procedural
+//!   relief also fades out towards exact ground over [`GROUND_WARP_FADE_M`]
+//!   ([`ground_warp_weight`]). Exact ground in a partial chunk, and ground in
+//!   an adjacent region (across the shared edge), do not fade the other side's
+//!   columns, and the feather still blends toward the engine's unfaded warp, so
+//!   a residual ditch can remain where a plateau sits inside the feather band.
+//!   Regional terrain overrides (crater, flood) apply on top.
 //! * **Sim chunk table** (kinds, `water_alt`, downhill graph) is *not* mutated:
 //!   any change there would leak up to three chunks outside the region
 //!   (`local_cells` radius) and into civ generation. Consumers that must agree
@@ -602,8 +607,10 @@ pub struct AuthoredColumn {
     pub water_dist: Option<f32>,
     /// Distance from the column centre to the nearest exact ground cell
     /// centre, metres (chamfer 3-4), `None` beyond [`GROUND_WARP_FADE_M`].
-    /// Only computed for the columns whose dry relief it fades (ground and
-    /// unauthored columns of owned chunks); `None` everywhere else.
+    /// Only computed for the columns whose dry relief it fades (blend and
+    /// unauthored columns of owned chunks); `None` everywhere else, exact
+    /// ground cells included. Exact ground in a partial chunk does not count
+    /// as a source.
     pub ground_dist: Option<f32>,
     pub settings: RegionSettings,
     /// The column's chunk is partial
@@ -1215,6 +1222,15 @@ impl Region {
     /// Like [`Self::dist_field`], to the exact ground cells (a water cell
     /// over the ground wins, as everywhere; cells past the box edge are not
     /// rendered and do not count).
+    ///
+    /// Exact ground in a *partial* chunk is not a source. The partial
+    /// chunk's own unauthored columns are natural and never take the fade
+    /// ([`AuthoredRasters::column`]), so were its ground a source, an owned
+    /// unauthored column just across the chunk border, within the fade
+    /// distance of it, would lose its relief while its natural neighbour kept
+    /// all of it: a step of up to the warp amplitude along the border. Left
+    /// out, such ground meets the natural terrain directly, as it did before
+    /// the fade existed.
     fn ground_dist_field(&self, idx: usize) -> Option<&[u8]> {
         self.ground_dist[idx]
             .get_or_init(|| {
@@ -1225,6 +1241,7 @@ impl Region {
                     |i| self.ground[i].is_some(),
                     |i, k, wpos| {
                         self.contains(wpos)
+                            && !self.partial_at(wpos)
                             && cell_of(self.water[i].as_ref(), self.ground[i].as_ref(), k)
                                 .is_exact_ground_layer_cell()
                     },
@@ -2002,10 +2019,13 @@ impl AuthoredRasters {
             } else {
                 region.water_dist(wpos)
             },
+            // Blend and unauthored columns of owned chunks only: `resolve`
+            // ignores the distance on an exact cell, so it is not looked up.
             ground_dist: match cell {
-                AuthoredCell::Ground { .. } | AuthoredCell::None if !natural => {
+                AuthoredCell::Ground { weight, .. } if !natural && weight != GROUND_EXACT => {
                     region.ground_dist(wpos)
                 },
+                AuthoredCell::None if !natural => region.ground_dist(wpos),
                 _ => None,
             },
             settings: region.settings,

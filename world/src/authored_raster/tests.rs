@@ -3777,7 +3777,11 @@ fn ground_distance_is_to_the_nearest_exact_ground_cell() {
     // The plateau's west edge is x = 1100; 1099 is unauthored.
     assert_eq!(gd(1099, 1100), Some(1.0));
     assert_eq!(gd(1090, 1100), Some(10.0));
-    assert_eq!(gd(1100, 1100), Some(0.0));
+    // An exact cell skips the lookup (`resolve` ignores it there); the
+    // field itself holds 0 on it.
+    assert_eq!(gd(1100, 1100), None);
+    let region = ar.region_at(Vec2::new(1100, 1100)).unwrap();
+    assert_eq!(region.ground_dist(Vec2::new(1100, 1100)), Some(0.0));
     // North edge y = 1149: 1200 is 51 m away.
     assert_eq!(gd(1200, 1200), Some(51.0));
     // 1450 is 150 m east of the plateau: beyond the fade.
@@ -3788,4 +3792,279 @@ fn ground_distance_is_to_the_nearest_exact_ground_cell() {
     for (x, y) in [(1050, 1050), (1100, 1095), (1300, 1150), (1500, 1200)] {
         assert_eq!(river.column(Vec2::new(x, y)).unwrap().ground_dist, None);
     }
+}
+
+/// Every blend weight and every distance of the ring (1..=8 m from the
+/// patch): the relief never leaves the envelope between the fully faded and
+/// the unfaded blend, never dips as the weight or the distance grows, and
+/// moves less than a decimetre per metre.
+#[test]
+fn ring_relief_profile_is_dip_free_for_every_weight_and_distance() {
+    let ground = top_block_alt(250);
+    let alt = |weight: u8, d: f32| {
+        AuthoredColumn {
+            settings: SETTINGS,
+            weight: 1.0,
+            cell: AuthoredCell::Ground { block: 250, weight },
+            water_dist: None,
+            ground_dist: Some(d),
+            natural: false,
+        }
+        .resolve(engine(), dry())
+        .alt
+    };
+    // The fixture's full relief: delta 3 plus warp 1.5 over the 245 m spline.
+    let (base, full) = (245.0, 245.0 + 4.5);
+    assert!(ground > full);
+    let mut prev_row: Option<Vec<f32>> = None;
+    for d in 1..=8 {
+        let d = d as f32;
+        let relief = (full - base) * ground_warp_weight(d);
+        let mut prev = f32::MIN;
+        let mut row = Vec::new();
+        for weight in 1..GROUND_EXACT {
+            let w = weight as f32 / GROUND_EXACT as f32;
+            let a = alt(weight, d);
+            assert!((a - Lerp::lerp(base + relief, ground, w)).abs() < 1e-4);
+            let (lo, hi) = (Lerp::lerp(base, ground, w), Lerp::lerp(full, ground, w));
+            assert!(a >= lo - 1e-4 && a <= hi + 1e-4, "w {weight} d {d}: {a}");
+            assert!(a >= prev, "dip with the weight at w {weight} d {d}");
+            prev = a;
+            row.push(a);
+        }
+        if let Some(p) = &prev_row {
+            for (weight, (a, b)) in p.iter().zip(&row).enumerate() {
+                assert!(b >= a, "dip with the distance at w {} d {d}", weight + 1);
+                assert!(b - a < 0.1, "step of {} m at w {} d {d}", b - a, weight + 1);
+            }
+        }
+        prev_row = Some(row);
+    }
+}
+
+/// A ground box of 256 m tiles whose sources sit in another tile than the
+/// column: the distance crosses the tile border, straight and diagonally,
+/// also when the column's own tile lists no ground tile at all.
+#[test]
+fn ground_distance_crosses_tile_borders() {
+    let spec = region("borders", (1024, 1024), (1536, 1536), 32, vec![
+        PaintOp::Ground {
+            shape: Shape::Rect {
+                x0: 1300.0,
+                y0: 1300.0,
+                x1: 1340.0,
+                y1: 1340.0,
+            },
+            ground_cm: 25_137,
+            weight: GROUND_EXACT,
+        },
+    ]);
+    let built = build_region(&spec).unwrap();
+    // Only the tile (1, 1) holds ground; the 2 x 2 grid's other tiles are
+    // not listed.
+    assert_eq!(built.ground_tiles.len(), 1);
+    let ar = load(&[built]).unwrap();
+    let gd = |x, y| ar.column(Vec2::new(x, y)).unwrap().ground_dist;
+    // Tile borders at x = 1280 and y = 1280.
+    assert_eq!(gd(1279, 1320), Some(21.0));
+    assert_eq!(gd(1320, 1279), Some(21.0));
+    assert_eq!(gd(1280, 1320), Some(20.0));
+    // Diagonal over the corner of four tiles: 21 chamfer diagonals (4/3 m
+    // each).
+    assert_eq!(gd(1279, 1279), Some(28.0));
+    assert_eq!(gd(1270, 1270), Some(40.0));
+    // Far side of the border, same field.
+    assert_eq!(gd(1299, 1320), Some(1.0));
+    // Beyond the fade distance in the other tile: nothing.
+    assert_eq!(gd(1236, 1320), Some(64.0));
+    assert_eq!(gd(1235, 1320), None);
+}
+
+/// Water over ground is water: the ground cells under authored water are not
+/// sources of the ground distance.
+#[test]
+fn water_cells_over_ground_are_not_ground_sources() {
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let spec = region("wet_ground", (1024, 1024), (1536, 1216), 32, vec![
+        // Ground under the lake that agrees with its bed, then the lake.
+        PaintOp::Ground {
+            shape: rect(1100.0, 1100.0, 1200.0, 1110.0),
+            ground_cm: 23_268,
+            weight: GROUND_EXACT,
+        },
+        PaintOp::Water {
+            shape: rect(1100.0, 1100.0, 1200.0, 1110.0),
+            surface_cm: 23_868,
+            bed_cm: 23_268,
+        },
+        PaintOp::BankRing {
+            width_m: 1,
+            bed_cm: Some(23_918),
+        },
+        // A real patch of exact ground, 50 m east of the lake.
+        PaintOp::Ground {
+            shape: rect(1250.0, 1100.0, 1260.0, 1110.0),
+            ground_cm: 24_050,
+            weight: GROUND_EXACT,
+        },
+    ]);
+    let ar = load(&[build_region(&spec).unwrap()]).unwrap();
+    let region = ar.region_at(Vec2::new(1150, 1105)).unwrap();
+    // The lake's own cells hold ground in the ground layer ...
+    let g = region.ground[0]
+        .as_ref()
+        .and_then(|g| g.get(cell_index(1150 - 1024, 1105 - 1024)));
+    assert_eq!(g, Some((232, GROUND_EXACT)));
+    // ... but are water, and are not sources: the lake's east edge (x 1199)
+    // is 51 m from the patch, not 0, and the unauthored column beyond its
+    // bank is 49 m from the patch, not 2.
+    assert!(ar.cell_at(Vec2::new(1199, 1105)).unwrap().is_wet());
+    assert_eq!(region.ground_dist(Vec2::new(1199, 1105)), Some(51.0));
+    assert_eq!(region.ground_dist(Vec2::new(1150, 1105)), None);
+    assert_eq!(
+        ar.column(Vec2::new(1201, 1105)).unwrap().cell,
+        AuthoredCell::None
+    );
+    assert_eq!(
+        ar.column(Vec2::new(1201, 1105)).unwrap().ground_dist,
+        Some(49.0)
+    );
+}
+
+/// Exact ground in a partial chunk is not a source: next to the chunk
+/// border the owned unauthored column keeps the engine's full relief, like
+/// its natural neighbour, instead of a step the size of the relief.
+#[test]
+fn ground_in_a_partial_chunk_does_not_fade_the_owned_columns_beside_it() {
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let ground = |x0, x1| PaintOp::Ground {
+        shape: rect(x0, 1100.0, x1, 1110.0),
+        ground_cm: 25_137,
+        weight: GROUND_EXACT,
+    };
+    // Chunk (34, 34) is wpos 1088..1120: partial, holds a patch ending 9 m
+    // before its east border. A second patch in the owned chunk (36, 34)
+    // (wpos 1152..1184) keeps the fade.
+    let mut spec = region("partial", (1024, 1024), (1536, 1216), 32, vec![
+        ground(1100.0, 1111.0),
+        ground(1160.0, 1170.0),
+    ]);
+    spec.allow_partial_chunks = vec![(34, 34)];
+    let ar = load(&[build_region(&spec).unwrap()]).unwrap();
+    let col = |x| ar.column(Vec2::new(x, 1105)).unwrap();
+    // The border: x = 1119 is the partial chunk's natural column, x = 1120
+    // the first owned one. Both are unauthored and 9 / 10 m from the patch.
+    assert!(col(1119).natural && !col(1120).natural);
+    assert_eq!(col(1119).cell, AuthoredCell::None);
+    assert_eq!(col(1120).cell, AuthoredCell::None);
+    assert_eq!(col(1119).ground_dist, None);
+    assert_eq!(col(1120).ground_dist, Some(40.0));
+    let owned = col(1120).resolve(engine(), dry());
+    // (the nearest source for 1120 is the owned chunk's patch, 40 m away; the
+    // partial chunk's patch, 10 m away, is ignored)
+    assert!(owned.warp_factor > 0.5 && owned.warp_factor < 1.0);
+    // Without the owned chunk's patch nothing fades next to the border: the
+    // owned column is the engine's relief bit for bit, as without ground.
+    let mut spec = region("partial_only", (1024, 1024), (1536, 1216), 32, vec![
+        ground(1100.0, 1111.0),
+    ]);
+    spec.allow_partial_chunks = vec![(34, 34)];
+    let ar = load(&[build_region(&spec).unwrap()]).unwrap();
+    let col = |x| ar.column(Vec2::new(x, 1105)).unwrap();
+    assert_eq!(col(1120).ground_dist, None);
+    assert_eq!(col(1119).ground_dist, None);
+    let owned = col(1120).resolve(engine(), dry());
+    let far = AuthoredColumn {
+        settings: SETTINGS,
+        weight: 1.0,
+        cell: AuthoredCell::None,
+        water_dist: None,
+        ground_dist: None,
+        natural: false,
+    }
+    .resolve(engine(), dry());
+    assert_eq!(owned.alt, far.alt);
+    assert_eq!(owned.warp_factor, far.warp_factor);
+    // The patch itself is still exact in its partial chunk.
+    assert_eq!(col(1105).cell, AuthoredCell::Ground {
+        block: 251,
+        weight: GROUND_EXACT
+    });
+}
+
+/// A straightforward reference for the distance-to-water field: one
+/// chamfer 3-4 pass pair over the whole region, no tiles, no apron.
+fn reference_water_field(region: &Region) -> Vec<Option<f32>> {
+    let size = region.max - region.min;
+    let (w, h) = (size.x, size.y);
+    let at = |x: i32, y: i32| (y * w + x) as usize;
+    let mut d = vec![u16::MAX; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            if region.cell(region.min + Vec2::new(x, y)).is_wet() {
+                d[at(x, y)] = 0;
+            }
+        }
+    }
+    let relax = |d: &mut Vec<u16>, x: i32, y: i32, nx: i32, ny: i32, k: u16| {
+        if nx >= 0 && ny >= 0 && nx < w && ny < h {
+            let v = d[at(nx, ny)].saturating_add(k);
+            if v < d[at(x, y)] {
+                d[at(x, y)] = v;
+            }
+        }
+    };
+    for y in 0..h {
+        for x in 0..w {
+            relax(&mut d, x, y, x - 1, y, 3);
+            relax(&mut d, x, y, x, y - 1, 3);
+            relax(&mut d, x, y, x - 1, y - 1, 4);
+            relax(&mut d, x, y, x + 1, y - 1, 4);
+        }
+    }
+    for y in (0..h).rev() {
+        for x in (0..w).rev() {
+            relax(&mut d, x, y, x + 1, y, 3);
+            relax(&mut d, x, y, x, y + 1, 3);
+            relax(&mut d, x, y, x + 1, y + 1, 4);
+            relax(&mut d, x, y, x - 1, y + 1, 4);
+        }
+    }
+    d.iter()
+        .map(|&v| (v <= (DIST_CAP_M * 3) as u16).then(|| v as f32 / 3.0))
+        .collect()
+}
+
+/// The distance-to-water field, built through the generalised field builder,
+/// is the plain chamfer distance everywhere in the region, tile borders
+/// included (rivers and a pond that straddle them, ground tiles present).
+#[test]
+fn water_distance_field_is_the_plain_chamfer_distance() {
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Shape::Rect { x0, y0, x1, y1 };
+    let mut spec = river_spec();
+    spec.ops.insert(0, PaintOp::Water {
+        shape: rect(1270.0, 1150.0, 1292.0, 1170.0),
+        surface_cm: 23_868,
+        bed_cm: 23_268,
+    });
+    // Ground in the same region must not leak into the water field.
+    spec.ops.push(PaintOp::Ground {
+        shape: rect(1400.0, 1150.0, 1450.0, 1180.0),
+        ground_cm: 25_137,
+        weight: GROUND_EXACT,
+    });
+    let ar = load(&[build_region(&spec).unwrap()]).unwrap();
+    let region = ar.region_at(Vec2::new(1100, 1100)).unwrap();
+    let reference = reference_water_field(region);
+    let size = region.max - region.min;
+    let mut some = 0;
+    for y in 0..size.y {
+        for x in 0..size.x {
+            let wpos = region.min + Vec2::new(x, y);
+            let got = region.water_dist(wpos);
+            assert_eq!(got, reference[(y * size.x + x) as usize], "{wpos:?}");
+            some += got.is_some() as usize;
+        }
+    }
+    assert!(some > 10_000);
 }
