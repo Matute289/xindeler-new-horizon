@@ -19,8 +19,12 @@
 //! terrain the region would render without the ground layer toward its
 //! authored block by `weight / 255`: the exporter writes these as a ring
 //! around every exact patch, so patches meet the engine's terrain without a
-//! step. Ground cells in partial chunks meet natural columns directly; where
-//! natural water would stand as a wall beside one, world generation stops
+//! step. The dry terrain's procedural relief (warp and delta) on blend and
+//! unauthored columns of owned chunks fades out towards exact ground over
+//! [`GROUND_WARP_FADE_M`] ([`ground_warp_weight`]), as it fades towards
+//! authored water, so no ditch opens beside a drawn plateau. Ground cells in
+//! partial chunks meet natural columns directly; where natural water would
+//! stand as a wall beside one, world generation stops
 //! ([`queries::check_ground_seams`], after civ generation). Water below 0 m
 //! is a per-region parameter ([`SeaFill`]). The sim chunk table stays the
 //! natural map (the exporter builds it from the master as it was before the
@@ -148,6 +152,27 @@ pub const MANIFEST_SCHEMA: u32 = 1;
 /// distance at which the column sampler's warp fade (`water_dist / 64`)
 /// saturates, so the two can never disagree.
 pub const DIST_CAP_M: i32 = crate::column::WATER_WARP_FADE_M as i32;
+/// Distance from the nearest exact authored ground cell at which the dry
+/// terrain's procedural relief (the warp and the delta it scales) is back to
+/// full strength; see [`ground_warp_weight`]. The relief scales with the
+/// slope of the sim chunk altitudes, which a drawn plateau steepens, so left
+/// unfaded it digs a ditch (or raises a lip) beside the drawn ground, inside
+/// the blend ring and past it. It equals [`DIST_CAP_M`], so the ground
+/// distance field shares the water field's apron and encoding, and a column
+/// this far or farther from every exact cell keeps the engine's relief
+/// exactly.
+pub const GROUND_WARP_FADE_M: i32 = DIST_CAP_M;
+
+/// The weight of the dry terrain's procedural relief at `dist_m` metres from
+/// the nearest exact authored ground cell: 0 on the cell, 1 at and beyond
+/// [`GROUND_WARP_FADE_M`], a smoothstep in between (continuous, monotonic,
+/// flat at both ends, so neither the drawn edge nor the far end of the fade
+/// shows a crease).
+#[inline]
+pub fn ground_warp_weight(dist_m: f32) -> f32 {
+    let t = (dist_m / GROUND_WARP_FADE_M as f32).clamped(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
 /// Engine limit on the decoded tiles plus distance fields of a whole
 /// manifest. Over it, loading fails: split or shrink regions, or list fewer
 /// tiles (a tile without authored cells need not be listed).
@@ -575,6 +600,11 @@ pub struct AuthoredColumn {
     /// centre, metres (chamfer 3-4), `None` beyond [`DIST_CAP_M`]. Not
     /// computed (`Some(0.0)`) for wet columns.
     pub water_dist: Option<f32>,
+    /// Distance from the column centre to the nearest exact ground cell
+    /// centre, metres (chamfer 3-4), `None` beyond [`GROUND_WARP_FADE_M`].
+    /// Only computed for the columns whose dry relief it fades (ground and
+    /// unauthored columns of owned chunks); `None` everywhere else.
+    pub ground_dist: Option<f32>,
     pub settings: RegionSettings,
     /// The column's chunk is partial
     /// ([`RegionManifest::allow_partial_chunks`]): an unauthored column there
@@ -801,7 +831,8 @@ impl AuthoredColumn {
     /// at all in a [`SeaFill::AuthoredOnly`] region);
     /// terrain blended by the feather weight from the engine's (with the sim
     /// water's carving) to the engine's *dry* terrain (same noise and warp,
-    /// faded by the distance to the authored water instead of the sim's).
+    /// faded by the distance to the authored water instead of the sim's, and
+    /// by the distance to exact authored ground, [`ground_warp_weight`]).
     #[inline]
     fn unauthored(&self, engine: EngineColumn, dry: DryTerrain) -> EngineColumn {
         let w = self.weight;
@@ -809,6 +840,11 @@ impl AuthoredColumn {
             .water_dist
             .map_or(1.0, |d| (d / DIST_CAP_M as f32).clamped(0.0, 1.0))
             * dry.max_warp;
+        // Beyond the fade distance (and in every region without exact
+        // ground) the factor is left as it was, not multiplied by 1.
+        let dry_wf = self
+            .ground_dist
+            .map_or(dry_wf, |d| dry_wf * ground_warp_weight(d));
         let dry_alt = dry.riverless_alt.max(dry.base_sea_level + 0.5)
             + Lerp::lerp(0.0, dry.riverless_alt_delta, dry_wf)
             + dry.warp * dry_wf;
@@ -1047,6 +1083,8 @@ struct Region {
     ground: Vec<Option<GroundTile>>,
     /// Distance-to-water fields, one per tile of the grid.
     dist: Vec<OnceLock<Option<Box<[u8]>>>>,
+    /// Distance-to-exact-ground fields, one per tile of the grid.
+    ground_dist: Vec<OnceLock<Option<Box<[u8]>>>>,
 }
 
 impl Region {
@@ -1164,15 +1202,54 @@ impl Region {
         self.dist[idx]
             .get_or_init(|| {
                 let t = Vec2::new(idx as i32 % self.tiles.x, idx as i32 / self.tiles.x);
-                build_dist_field(self, t)
+                build_dist_field(
+                    self,
+                    t,
+                    |i| self.water[i].is_some(),
+                    |i, k, _| self.raw(i).is_some_and(|raw| raw.is_wet(k)),
+                )
+            })
+            .as_deref()
+    }
+
+    /// Like [`Self::dist_field`], to the exact ground cells (a water cell
+    /// over the ground wins, as everywhere; cells past the box edge are not
+    /// rendered and do not count).
+    fn ground_dist_field(&self, idx: usize) -> Option<&[u8]> {
+        self.ground_dist[idx]
+            .get_or_init(|| {
+                let t = Vec2::new(idx as i32 % self.tiles.x, idx as i32 / self.tiles.x);
+                build_dist_field(
+                    self,
+                    t,
+                    |i| self.ground[i].is_some(),
+                    |i, k, wpos| {
+                        self.contains(wpos)
+                            && cell_of(self.water[i].as_ref(), self.ground[i].as_ref(), k)
+                                .is_exact_ground_layer_cell()
+                    },
+                )
             })
             .as_deref()
     }
 
     fn water_dist(&self, wpos: Vec2<i32>) -> Option<f32> {
+        self.field_dist(wpos, |idx| self.dist_field(idx))
+    }
+
+    fn ground_dist(&self, wpos: Vec2<i32>) -> Option<f32> {
+        self.field_dist(wpos, |idx| self.ground_dist_field(idx))
+    }
+
+    #[inline(always)]
+    fn field_dist<'a>(
+        &'a self,
+        wpos: Vec2<i32>,
+        field: impl FnOnce(usize) -> Option<&'a [u8]>,
+    ) -> Option<f32> {
         let local = wpos - self.min;
         let t = local.map(|e| e.div_euclid(TILE_SIZE));
-        let field = self.dist_field(self.tile_index(t)?)?;
+        let field = field(self.tile_index(t)?)?;
         let c = local - t * TILE_SIZE;
         let d = field[cell_index(c.x, c.y)];
         (d != NO_DIST).then(|| d as f32 / 3.0)
@@ -1218,17 +1295,24 @@ fn cell_of(water: Option<&WaterTile>, ground: Option<&GroundTile>, k: usize) -> 
     }
 }
 
-/// Chamfer (3-4) distance from every cell of tile `t` to the nearest wet
-/// cell, looking up to [`DIST_CAP_M`] into the eight neighbouring tiles.
+/// Chamfer (3-4) distance from every cell of tile `t` to the nearest source
+/// cell (`is_source(tile index, cell index, wpos)`, asked only of tiles
+/// where `listed(tile index)`), looking up to [`DIST_CAP_M`] into the eight
+/// neighbouring tiles; `None` when none of the nine tiles is listed.
 /// Integer arithmetic only, so the field is the same on every platform.
-fn build_dist_field(region: &Region, t: Vec2<i32>) -> Option<Box<[u8]>> {
+fn build_dist_field(
+    region: &Region,
+    t: Vec2<i32>,
+    listed: impl Fn(usize) -> bool,
+    is_source: impl Fn(usize, usize, Vec2<i32>) -> bool,
+) -> Option<Box<[u8]>> {
     let apron = DIST_CAP_M;
     let n = TILE_SIZE + 2 * apron;
     let any_listed = (-1..=1).any(|dy| {
         (-1..=1).any(|dx| {
             region
                 .tile_index(t + Vec2::new(dx, dy))
-                .is_some_and(|i| region.water[i].is_some())
+                .is_some_and(&listed)
         })
     });
     if !any_listed {
@@ -1240,7 +1324,7 @@ fn build_dist_field(region: &Region, t: Vec2<i32>) -> Option<Box<[u8]>> {
     for dy in -1..=1 {
         for dx in -1..=1 {
             let nt = t + Vec2::new(dx, dy);
-            let Some(raw) = region.tile_index(nt).and_then(|i| region.raw(i)) else {
+            let Some(ti) = region.tile_index(nt).filter(|&ti| listed(ti)) else {
                 continue;
             };
             let o = region.origin(nt);
@@ -1251,7 +1335,8 @@ fn build_dist_field(region: &Region, t: Vec2<i32>) -> Option<Box<[u8]>> {
                 }
                 for i in 0..TILE_SIZE {
                     let wx = o.x + i - origin.x;
-                    if (0..n).contains(&wx) && raw.is_wet(cell_index(i, j)) {
+                    if (0..n).contains(&wx) && is_source(ti, cell_index(i, j), o + Vec2::new(i, j))
+                    {
                         d[(wy * n + wx) as usize] = 0;
                     }
                 }
@@ -1521,8 +1606,9 @@ impl AuthoredRasters {
         // The memory budget comes from the manifest's counts alone, before a
         // single tile is read.
         // Per layer: a water tile is 256 KiB, a ground tile 192 KiB; the
-        // distance fields (64 KiB per grid tile) exist only for regions that
-        // declare water.
+        // distance-to-water fields (64 KiB per grid tile) exist only for
+        // regions that declare water, the distance-to-exact-ground fields
+        // only on the grid tiles next to (or holding) a listed ground tile.
         let mut resident = 0usize;
         for rm in &manifest.regions {
             let (rmin, rmax) = (Vec2::<i32>::from(rm.min), Vec2::<i32>::from(rm.max));
@@ -1540,6 +1626,17 @@ impl AuthoredRasters {
                         .saturating_mul(grid.y as usize)
                         .saturating_mul(BYTES_PER_DIST_TILE),
                 );
+            }
+            let ground_tiles = rm
+                .tiles
+                .iter()
+                .filter(|t| t.layer == LayerKind::Ground)
+                .count();
+            if ground_tiles > 0 {
+                let fields = ground_tiles
+                    .saturating_mul(9)
+                    .min((grid.x as usize).saturating_mul(grid.y as usize));
+                resident = resident.saturating_add(fields.saturating_mul(BYTES_PER_DIST_TILE));
             }
         }
         if resident > RESIDENT_BUDGET_BYTES {
@@ -1843,6 +1940,7 @@ impl AuthoredRasters {
                 water,
                 ground,
                 dist: (0..n_tiles).map(|_| OnceLock::new()).collect(),
+                ground_dist: (0..n_tiles).map(|_| OnceLock::new()).collect(),
             });
         }
         let bounds = regions
@@ -1893,6 +1991,7 @@ impl AuthoredRasters {
     pub fn column(&self, wpos: Vec2<i32>) -> Option<AuthoredColumn> {
         let region = self.region_at(wpos)?;
         let cell = region.cell(wpos);
+        let natural = region.partial_at(wpos);
         Some(AuthoredColumn {
             weight: region.weight(wpos),
             cell,
@@ -1903,8 +2002,14 @@ impl AuthoredRasters {
             } else {
                 region.water_dist(wpos)
             },
+            ground_dist: match cell {
+                AuthoredCell::Ground { .. } | AuthoredCell::None if !natural => {
+                    region.ground_dist(wpos)
+                },
+                _ => None,
+            },
             settings: region.settings,
-            natural: region.partial_at(wpos),
+            natural,
         })
     }
 

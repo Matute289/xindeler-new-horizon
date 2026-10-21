@@ -199,6 +199,7 @@ fn resolve_wet_and_bank_are_exact_at_any_weight() {
                 bed_block: 232,
             },
             water_dist: Some(0.0),
+            ground_dist: None,
             natural: false,
         }
         .resolve(engine(), dry());
@@ -216,6 +217,7 @@ fn resolve_wet_and_bank_are_exact_at_any_weight() {
             weight,
             cell: AuthoredCell::Bank { bed_block: 239 },
             water_dist: Some(1.0),
+            ground_dist: None,
             natural: false,
         }
         .resolve(engine(), dry());
@@ -243,6 +245,7 @@ fn authored_ice_band_only_grows_downward_from_the_surface() {
             bed_block,
         },
         water_dist: Some(0.0),
+        ground_dist: None,
         natural: false,
     };
     for (surface, bed) in [(238, 232), (238, 237), (238, 236), (4639, 4633), (12, 5)] {
@@ -294,6 +297,7 @@ fn one_block_authored_ice_counts_as_ice_for_wildlife() {
             bed_block: 232,
         },
         water_dist: Some(0.0),
+        ground_dist: None,
         natural: false,
     };
     // Natural half-depth 1.0 -> one block of ice below the surface block.
@@ -331,6 +335,7 @@ fn flooded_authored_water_keeps_ice_in_the_drawn_surface_block() {
             bed_block: 232,
         },
         water_dist: Some(0.0),
+        ground_dist: None,
         natural: false,
     };
     // A regional flood lifted the water level well above the drawn surface.
@@ -353,6 +358,7 @@ fn z_limit_covers_every_flooded_authored_water_voxel() {
             bed_block: 232,
         },
         water_dist: Some(0.0),
+        ground_dist: None,
         natural: false,
     };
     for rise in [0.0_f32, 2.0, 5.0, 6.5, 12.0, 40.0] {
@@ -385,6 +391,7 @@ fn ice_band_is_authored_wet_only() {
         weight: 1.0,
         cell,
         water_dist: Some(1.0),
+        ground_dist: None,
         natural: false,
     };
     assert_eq!(
@@ -409,6 +416,7 @@ fn resolve_none_blends_engine_into_dry_terrain() {
         weight,
         cell: AuthoredCell::None,
         water_dist,
+        ground_dist: None,
         natural: false,
     };
     // Weight 0 is the engine's terrain, never its water.
@@ -836,6 +844,8 @@ fn constants_agree_with_the_engine() {
     assert!((SEA_TOP_BLOCK as f32) < crate::CONFIG.sea_level - 1.0 + 0.01);
     assert!(((SEA_TOP_BLOCK + 1) as f32) >= crate::CONFIG.sea_level - 1.0 + 0.01);
     assert_eq!(DIST_CAP_M as f32, crate::column::WATER_WARP_FADE_M);
+    // The ground field reuses the water field's apron and u8 encoding.
+    assert!(GROUND_WARP_FADE_M <= DIST_CAP_M && DIST_CAP_M * 3 < NO_DIST as i32);
 }
 
 #[test]
@@ -848,6 +858,7 @@ fn apply_reapplies_the_flood_on_top_of_authored_water_only() {
             bed_block: 232,
         },
         water_dist: Some(0.0),
+        ground_dist: None,
         natural: false,
     };
     let flood = |l: f32| l.max(240.0);
@@ -872,6 +883,7 @@ fn procedural_suppression_follows_the_region_settings() {
         weight: 1.0,
         cell,
         water_dist: d,
+        ground_dist: None,
         natural: false,
     };
     let wet = AuthoredCell::Wet {
@@ -1230,6 +1242,7 @@ fn ground_col(cell: AuthoredCell, sea_fill: SeaFill) -> AuthoredColumn {
         weight: 0.3,
         cell,
         water_dist: Some(12.0),
+        ground_dist: None,
         natural: false,
     }
 }
@@ -1609,9 +1622,10 @@ fn layers_and_tile_listing_are_checked_per_layer() {
 #[test]
 fn ground_memory_is_charged_per_layer() {
     let ground_only = load(&[build_region(&plateau_spec()).unwrap()]).unwrap();
-    // 2 x 1 grid; ground tiles only, no distance fields.
+    // 2 x 1 grid; ground tiles, and the distance-to-exact-ground fields of
+    // the grid tiles next to them (both, here), no distance-to-water fields.
     let n = build_region(&plateau_spec()).unwrap().ground_tiles.len();
-    assert_eq!(ground_only.resident_bytes, n * (192 << 10));
+    assert_eq!(ground_only.resident_bytes, n * (192 << 10) + 2 * (64 << 10));
     let water = load(&[build_region(&river_spec()).unwrap()]).unwrap();
     let w = build_region(&river_spec()).unwrap().tiles.len();
     assert_eq!(water.resident_bytes, w * (256 << 10) + 2 * (64 << 10));
@@ -3672,4 +3686,106 @@ fn unauthored_columns_below_sea_level_stay_dry_in_authored_only_regions() {
     let mut natural = ground_col(AuthoredCell::None, SeaFill::AuthoredOnly);
     natural.natural = true;
     assert_eq!(natural.resolve(low, low_dry), low);
+}
+
+#[test]
+fn ground_warp_weight_fades_smoothly_from_exact_ground() {
+    let fade = GROUND_WARP_FADE_M as f32;
+    assert_eq!(ground_warp_weight(0.0), 0.0);
+    // Next to an exact cell the relief is all but gone.
+    assert!(ground_warp_weight(1.0) < 0.002);
+    assert_eq!(ground_warp_weight(fade / 2.0), 0.5);
+    assert_eq!(ground_warp_weight(fade), 1.0);
+    assert_eq!(ground_warp_weight(fade + 0.5), 1.0);
+    assert_eq!(ground_warp_weight(10_000.0), 1.0);
+    // Monotonic and continuous over the whole fade, in chamfer thirds (the
+    // distance field's resolution) and finer.
+    let mut prev = ground_warp_weight(0.0);
+    for i in 1..=(GROUND_WARP_FADE_M * 30 + 30) {
+        let w = ground_warp_weight(i as f32 / 30.0);
+        assert!((0.0..=1.0).contains(&w));
+        assert!(w >= prev, "not monotonic at {}", i as f32 / 30.0);
+        // Smoothstep's steepest slope is 1.5 / fade per metre.
+        assert!(w - prev <= 1.5 / fade / 30.0 + 1e-6, "jump at {i}");
+        prev = w;
+    }
+}
+
+#[test]
+fn dry_relief_fades_towards_exact_ground_and_nowhere_else() {
+    let col = |cell, weight, ground_dist| AuthoredColumn {
+        settings: SETTINGS,
+        weight,
+        cell,
+        water_dist: None,
+        ground_dist,
+        natural: false,
+    };
+    let none = AuthoredCell::None;
+    // No exact ground in reach: the relief is the engine's, bit for bit.
+    let far = col(none, 1.0, None).resolve(engine(), dry());
+    assert_eq!(far.alt, 245.0 + 3.0 + 1.5);
+    assert_eq!(far.warp_factor, 1.0);
+    // At the fade distance the weight is exactly 1: no seam where the field
+    // ends.
+    let edge = col(none, 1.0, Some(GROUND_WARP_FADE_M as f32)).resolve(engine(), dry());
+    assert_eq!(edge, far);
+    // On an exact cell's edge: the spline altitude, no warp, no delta.
+    let near = col(none, 1.0, Some(0.0)).resolve(engine(), dry());
+    assert_eq!(near.alt, 245.0);
+    assert_eq!(near.warp_factor, 0.0);
+    // Half way: half the relief.
+    let mid = col(none, 1.0, Some(GROUND_WARP_FADE_M as f32 / 2.0)).resolve(engine(), dry());
+    assert_eq!(mid.alt, 245.0 + 1.5 + 0.75);
+    assert_eq!(mid.warp_factor, 0.5);
+    // A blend cell next to the patch keeps none of the dip.
+    let ring = AuthoredCell::Ground {
+        block: 250,
+        weight: 128,
+    };
+    let w = 128.0 / GROUND_EXACT as f32;
+    let r = col(ring, 1.0, Some(1.0)).resolve(engine(), dry());
+    let relief = 4.5 * ground_warp_weight(1.0);
+    let expected = Lerp::lerp(245.0 + relief, top_block_alt(250), w);
+    assert!((r.alt - expected).abs() < 1e-4, "{} vs {expected}", r.alt);
+    assert!((r.alt - Lerp::lerp(245.0, top_block_alt(250), w)).abs() < 0.01);
+    // Water fade unchanged, and the two multiply.
+    let wet_near = AuthoredColumn {
+        water_dist: Some(32.0),
+        ..col(none, 1.0, None)
+    }
+    .resolve(engine(), dry());
+    assert_eq!(wet_near.alt, 245.0 + 1.5 + 0.75);
+    let both = AuthoredColumn {
+        water_dist: Some(32.0),
+        ..col(none, 1.0, Some(GROUND_WARP_FADE_M as f32 / 2.0))
+    }
+    .resolve(engine(), dry());
+    assert_eq!(both.warp_factor, 0.25);
+    // A partial chunk's natural column is never touched.
+    let natural = AuthoredColumn {
+        natural: true,
+        ..col(none, 1.0, Some(0.0))
+    };
+    assert_eq!(apply(Some(natural), engine(), dry(), |l| l), engine());
+}
+
+#[test]
+fn ground_distance_is_to_the_nearest_exact_ground_cell() {
+    let ar = load(&[build_region(&plateau_spec()).unwrap()]).unwrap();
+    let gd = |x, y| ar.column(Vec2::new(x, y)).unwrap().ground_dist;
+    // The plateau's west edge is x = 1100; 1099 is unauthored.
+    assert_eq!(gd(1099, 1100), Some(1.0));
+    assert_eq!(gd(1090, 1100), Some(10.0));
+    assert_eq!(gd(1100, 1100), Some(0.0));
+    // North edge y = 1149: 1200 is 51 m away.
+    assert_eq!(gd(1200, 1200), Some(51.0));
+    // 1450 is 150 m east of the plateau: beyond the fade.
+    assert_eq!(gd(1450, 1100), None);
+    // A region without a ground layer has no ground distance anywhere, so
+    // its terrain is exactly what it was.
+    let river = load(&[build_region(&river_spec()).unwrap()]).unwrap();
+    for (x, y) in [(1050, 1050), (1100, 1095), (1300, 1150), (1500, 1200)] {
+        assert_eq!(river.column(Vec2::new(x, y)).unwrap().ground_dist, None);
+    }
 }
