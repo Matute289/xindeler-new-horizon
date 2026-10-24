@@ -34,6 +34,10 @@ pub struct ColumnGen<'a> {
     /// `World::generate_chunk` path (via `World::sample_blocks_with_overrides`)
     /// ever passes `Some`.
     overrides: Option<&'a TerrainOverrides>,
+    /// Samples blend (ring) cells of an authored ground layer as unauthored
+    /// columns of their region, so the post-civ site check can measure what
+    /// the ring adds. Only [`Self::without_ring`] sets it.
+    without_ring: bool,
 }
 
 #[derive(Deserialize)]
@@ -130,6 +134,17 @@ impl<'a> ColumnGen<'a> {
         Self {
             sim,
             overrides: None,
+            without_ring: false,
+        }
+    }
+
+    /// Same as [`Self::new`], but a blend (ring) cell of an authored ground
+    /// layer samples as an unauthored column of its region: the terrain the
+    /// ring is blended away from.
+    pub fn without_ring(sim: &'a WorldSim) -> Self {
+        Self {
+            without_ring: true,
+            ..Self::new(sim)
         }
     }
 
@@ -151,6 +166,7 @@ impl<'a> ColumnGen<'a> {
         Self {
             sim,
             overrides: Some(overrides),
+            without_ring: false,
         }
     }
 }
@@ -170,7 +186,14 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let authored = sim
             .authored_rasters
             .as_ref()
-            .and_then(|rasters| rasters.column(wpos));
+            .and_then(|rasters| rasters.column(wpos))
+            .map(|a| {
+                if self.without_ring {
+                    a.without_ring()
+                } else {
+                    a
+                }
+            });
 
         // let turb = Vec2::new(
         //     sim.gen_ctx.turb_x_nz.get((wposf.div(48.0)).into_array()) as f32,

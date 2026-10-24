@@ -45,7 +45,10 @@ use super::{
     AuthoredCell, LoadError, ROAD_CLIMB_LIMIT_BLOCKS, RegionEntry, SITE_PATCH_MARGIN_M,
     VOID_EXPOSURE_TOLERANCE_BLOCKS, format::GROUND_EXACT, top_block_alt,
 };
-use crate::{IndexRef, Land, World, layer::authored_voids::AuthoredVoids, site::SpawnRules};
+use crate::{
+    IndexRef, Land, World, column::ColumnGen, layer::authored_voids::AuthoredVoids,
+    site::SpawnRules, util::Sampler,
+};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use tracing::{info, warn};
@@ -76,8 +79,12 @@ pub struct SiteOnPatch {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RingChange {
     pub limit_blocks: u32,
-    /// The largest change among the counted cells, rounded up.
-    pub largest_blocks: u32,
+    /// The largest measured change among the counted cells, rounded up;
+    /// `None` when none of them could be measured.
+    pub largest_blocks: Option<u32>,
+    /// Counted cells whose change could not be measured (they count as over
+    /// the limit).
+    pub unmeasurable: usize,
 }
 
 /// What [`site_patch_report`] found.
@@ -97,9 +104,9 @@ pub struct SitePatchReport {
     /// Listed sites whose plot levelling moves exact ground columns
     /// (reported).
     pub levelled_exact: Vec<SiteOnPatch>,
-    /// Every exact ground column the listed sites' levelling moves, with the
-    /// levelled altitude the column sampler renders there, by site then
-    /// `(y, x)`.
+    /// Every exact ground column the listed sites' levelling moves, and every
+    /// ring cell a region allows under a listed site, with the altitude the
+    /// column sampler renders there, by site then `(y, x)`.
     pub levelled_columns: Vec<(Vec2<i32>, f32)>,
     /// `(region, key)` listings that name no site near the region (stale
     /// pins): reported.
@@ -127,14 +134,27 @@ fn columns(a: Aabr<i32>, b: Aabr<i32>) -> Vec<Vec2<i32>> {
         .collect()
 }
 
+/// A blend (ring) cell under a site, as the cell scan measured it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RingCell {
+    pub pos: Vec2<i32>,
+    /// How far the ring moves the rendered ground at this cell, in blocks:
+    /// the column sampler's altitude with the ring against the same column
+    /// with the ring turned into an unauthored cell of its region, so
+    /// relief, warp, sea clamp, plot levelling (the ring cell is levelled a
+    /// second time) and partial-chunk carving are all in it. Infinite (not
+    /// measured) when the region allows no ring cells under sites, and when
+    /// a column cannot be sampled.
+    pub change: f32,
+    /// The altitude the sampler renders at this cell (NaN when not measured).
+    pub alt: f32,
+}
+
 /// The ground cells under one site's footprint.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SiteGroundCells {
-    /// Blend (ring) cells, by `(y, x)`, with how far the ring moves the
-    /// ground there, in blocks ([`ring_change`]). Measured only when the
-    /// region allows ring cells under sites; otherwise infinite (every ring
-    /// cell counts, unmeasured).
-    pub ring: Vec<(Vec2<i32>, f32)>,
+    /// Blend (ring) cells, by `(y, x)`.
+    pub ring: Vec<RingCell>,
     /// Exact cells whose top block the sites' plot levelling moves (only
     /// when the region levels sites), with the levelled altitude, by `(y, x)`.
     pub levelled_exact: Vec<(Vec2<i32>, f32)>,
@@ -144,6 +164,8 @@ pub struct SiteGroundCells {
 /// ring cells, and the exact cells whose top block the plot levelling of the
 /// sites in their chunk moves -- the column sampler's own rule
 /// (`alt + (pref - alt) * factor`, `SpawnRules` of every site of the chunk).
+/// When the region allows ring cells under sites, each ring cell is measured
+/// by sampling its column twice (see [`RingCell::change`]).
 pub fn site_ground_cells(
     world: &World,
     index: IndexRef,
@@ -155,6 +177,8 @@ pub fn site_ground_cells(
     };
     let land = Land::from_sim(&world.sim);
     let measure_ring = r.ring_under_sites_max_change_blocks.is_some();
+    let with_ring = ColumnGen::new(&world.sim);
+    let without_ring = ColumnGen::without_ring(&world.sim);
     // The sites' preferred altitude and blend factor at a column.
     let plot_rule = |wpos: Vec2<i32>| -> Option<(f32, f32)> {
         let chunk = world.sim.get_wpos(wpos)?;
@@ -171,23 +195,19 @@ pub fn site_ground_cells(
                 return None;
             };
             if weight != GROUND_EXACT {
-                let change = if measure_ring {
-                    let plot = if r.site_levelling {
-                        plot_rule(wpos)
-                    } else {
-                        Some((0.0, 0.0))
-                    };
-                    match (plot, world.sim.get_alt_approx(wpos)) {
-                        (Some(plot), Some(table)) => {
-                            ring_change(table, top_block_alt(block), weight, plot)
-                        },
-                        // Outside the map: cannot be measured, so it counts.
-                        _ => f32::INFINITY,
+                let (change, alt) = if measure_ring {
+                    match (
+                        with_ring.get((wpos, index, None)),
+                        without_ring.get((wpos, index, None)),
+                    ) {
+                        (Some(a), Some(b)) => ((a.alt - b.alt).abs(), a.alt),
+                        // Cannot be measured, so it counts.
+                        _ => (f32::INFINITY, f32::NAN),
                     }
                 } else {
-                    f32::INFINITY
+                    (f32::INFINITY, f32::NAN)
                 };
-                return Some((wpos, Counted::Ring(change)));
+                return Some((wpos, Counted::Ring { change, alt }));
             }
             if !r.site_levelling {
                 return None;
@@ -200,10 +220,10 @@ pub fn site_ground_cells(
         })
         .collect();
     let mut cells = SiteGroundCells::default();
-    for (p, c) in counted {
+    for (pos, c) in counted {
         match c {
-            Counted::Ring(change) => cells.ring.push((p, change)),
-            Counted::Levelled(alt) => cells.levelled_exact.push((p, alt)),
+            Counted::Ring { change, alt } => cells.ring.push(RingCell { pos, change, alt }),
+            Counted::Levelled(alt) => cells.levelled_exact.push((pos, alt)),
         }
     }
     cells
@@ -211,31 +231,10 @@ pub fn site_ground_cells(
 
 /// A ground column under a site that the check counts.
 enum Counted {
-    /// A ring cell, with [`ring_change`] of it.
-    Ring(f32),
+    /// A ring cell ([`RingCell`]).
+    Ring { change: f32, alt: f32 },
     /// An exact cell the plot levelling moves, with the levelled altitude.
     Levelled(f32),
-}
-
-/// How far, in blocks, a ring cell of blend weight `weight` moves the
-/// rendered ground away from the natural site ground in its column.
-///
-/// `table` is the chunk table's altitude, `target` the authored block's
-/// altitude, `plot` the sites' `(preferred altitude, factor)` there. The
-/// column sampler levels the natural column (`natural`), blends it toward the
-/// target by the ring weight, and levels the ring cell once more, so
-/// `natural = L(table)` and `ring = L(natural + w * (target - natural))` with
-/// `L(x) = x + (pref - x) * factor`. Under a fully levelled plot (factor 1)
-/// both are the preferred altitude and the change is 0; a plot nowhere near
-/// levelled (factor 0) sees the ring's own `w * |target - natural|`; in
-/// between the change also holds the second levelling the ring cell gets
-/// (`factor * |pref - natural|`, even at weight 0), which is why the measure
-/// is the rendered change and not just the distance to the target.
-pub fn ring_change(table: f32, target: f32, weight: u8, (pref, factor): (f32, f32)) -> f32 {
-    let level = |a: f32| a + (pref - a) * factor.clamped(0.0, 1.0);
-    let natural = level(table);
-    let ring = level(natural + (target - natural) * (weight as f32 / GROUND_EXACT as f32));
-    (ring - natural).abs()
 }
 
 /// The site check (see the module doc). Ordered by site key, then region.
@@ -283,6 +282,42 @@ pub fn site_patch_report(world: &World, index: IndexRef) -> SitePatchReport {
     report
 }
 
+/// Ring cells of one site counted on one side of the allowance.
+#[derive(Default)]
+struct RingTally {
+    count: usize,
+    first: Option<Vec2<i32>>,
+    /// The largest measured change.
+    largest: f32,
+    unmeasurable: usize,
+}
+
+impl RingTally {
+    fn add(&mut self, c: &RingCell) {
+        self.count += 1;
+        self.first.get_or_insert(c.pos);
+        if c.change.is_finite() {
+            self.largest = self.largest.max(c.change);
+        } else {
+            self.unmeasurable += 1;
+        }
+    }
+
+    fn site(&self, near: &SiteOnPatch, limit: Option<u32>) -> SiteOnPatch {
+        SiteOnPatch {
+            cells: self.count,
+            example: self.first,
+            ring_change: limit.map(|limit_blocks| RingChange {
+                limit_blocks,
+                largest_blocks: (self.count > self.unmeasurable)
+                    .then(|| self.largest.ceil() as u32),
+                unmeasurable: self.unmeasurable,
+            }),
+            ..near.clone()
+        }
+    }
+}
+
 /// Files one site that is near region `r` in `report`. `cells` gives the
 /// ground cells under the site; it is not called for an unlisted site.
 fn report_site(
@@ -310,25 +345,27 @@ fn report_site(
         example: hits.first().copied(),
         ..near.clone()
     };
+    // One pass over the ring cells: those within the allowance (their
+    // rendered altitude is kept for the ground queries) and the others.
     let limit = r.ring_under_sites_max_change_blocks;
-    let ring_tally = |hits: &[(Vec2<i32>, f32)]| SiteOnPatch {
-        ring_change: limit.map(|limit_blocks| RingChange {
-            limit_blocks,
-            largest_blocks: hits.iter().map(|h| h.1).fold(0.0, f32::max).ceil() as u32,
-        }),
-        ..tally(&hits.iter().map(|h| h.0).collect::<Vec<_>>())
-    };
-    // A cell is allowed only when its change is known and within the limit.
-    let (allowed, refused): (Vec<_>, Vec<_>) = cells
-        .ring
-        .iter()
-        .copied()
-        .partition(|c| limit.is_some_and(|l| c.1 <= l as f32));
-    if !refused.is_empty() {
-        report.ring_under_site.push(ring_tally(&refused));
+    let (mut allowed, mut refused) = (RingTally::default(), RingTally::default());
+    let mut allowed_alts = Vec::new();
+    for c in &cells.ring {
+        if limit.is_some_and(|l| c.change <= l as f32) {
+            allowed.add(c);
+            allowed_alts.push((c.pos, c.alt));
+        } else {
+            refused.add(c);
+        }
     }
-    if !allowed.is_empty() {
-        report.ring_allowed_under_site.push(ring_tally(&allowed));
+    if refused.count > 0 {
+        report.ring_under_site.push(refused.site(&near, limit));
+    }
+    if allowed.count > 0 {
+        report
+            .ring_allowed_under_site
+            .push(allowed.site(&near, limit));
+        report.levelled_columns.extend(allowed_alts);
     }
     if !cells.levelled_exact.is_empty() {
         let moved: Vec<Vec2<i32>> = cells.levelled_exact.iter().map(|c| c.0).collect();
@@ -521,10 +558,26 @@ fn site_names(v: &[SiteOnPatch], with_cells: bool) -> String {
         .take(10)
         .map(|s| {
             if let Some(c) = s.ring_change.filter(|_| with_cells) {
+                let what = match c.largest_blocks {
+                    Some(largest) => format!(
+                        "{} cell(s) move the ground by more than the {} block(s) the region \
+                         allows, by up to {largest} block(s){}",
+                        s.cells,
+                        c.limit_blocks,
+                        if c.unmeasurable > 0 {
+                            format!(", {} of them unmeasurable", c.unmeasurable)
+                        } else {
+                            String::new()
+                        }
+                    ),
+                    None => format!(
+                        "{} cell(s) are unmeasurable against the {} block(s) the region allows",
+                        s.cells, c.limit_blocks
+                    ),
+                };
                 format!(
-                    "{} (region '{}', {} cell(s) move the ground by more than the {} block(s) the \
-                     region allows, by up to {} block(s), e.g. {:?})",
-                    s.site, s.region, s.cells, c.limit_blocks, c.largest_blocks, s.example
+                    "{} (region '{}', {what}, e.g. {:?})",
+                    s.site, s.region, s.example
                 )
             } else if with_cells {
                 format!(
@@ -675,8 +728,11 @@ pub(crate) fn check_ground_consumers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authored_raster::{
+        AuthoredColumn, DryTerrain, EngineColumn, RegionSettings, SeaFill,
+    };
 
-    const KEY: &str = "settlement:kalthis";
+    const KEY: &str = "procedural:town:10,20";
     const BOUNDS: Aabr<i32> = Aabr {
         min: Vec2::new(100, 100),
         max: Vec2::new(900, 900),
@@ -698,12 +754,17 @@ mod tests {
         }
     }
 
-    /// The report of one site standing on ring cells with the given changes.
+    /// The report of one site standing on ring cells with the given changes
+    /// (rendered altitude `100 + index`).
     fn file(r: &RegionEntry, key: &str, changes: &[f32]) -> SitePatchReport {
         let ring = changes
             .iter()
             .enumerate()
-            .map(|(i, c)| (Vec2::new(200 + i as i32, 300), *c))
+            .map(|(i, &change)| RingCell {
+                pos: Vec2::new(200 + i as i32, 300),
+                change,
+                alt: 100.0 + i as f32,
+            })
             .collect();
         let mut report = SitePatchReport::default();
         report_site(&mut report, r, key, BOUNDS, || SiteGroundCells {
@@ -721,13 +782,14 @@ mod tests {
         let report = file(&r, KEY, &[f32::INFINITY, f32::INFINITY]);
         assert_eq!(report.ring_under_site.len(), 1);
         assert!(report.ring_allowed_under_site.is_empty());
+        assert!(report.levelled_columns.is_empty());
         let errors = site_errors(&report);
         assert_eq!(errors.len(), 1);
         assert_eq!(
             errors[0],
             "1 listed site(s) stand on blend (ring) cells, where the ground query only \
-             approximates the rendered terrain: settlement:kalthis (region 'pit', 2 cell(s), e.g. \
-             Some(Vec2 { x: 200, y: 300 })). Grow the exact footprint over the site"
+             approximates the rendered terrain: procedural:town:10,20 (region 'pit', 2 cell(s), \
+             e.g. Some(Vec2 { x: 200, y: 300 })). Grow the exact footprint over the site"
         );
         // A measured change does not matter while the allowance is off.
         let report = file(&r, KEY, &[0.0, 0.5]);
@@ -736,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn ring_cells_within_the_allowance_are_accepted() {
+    fn ring_cells_within_the_allowance_are_accepted_and_handed_to_the_ground_queries() {
         let listed = vec![KEY.to_string()];
         let r = region(&listed, Some(3));
         let report = file(&r, KEY, &[0.0, 2.5, 3.0]);
@@ -750,9 +812,16 @@ mod tests {
             allowed.ring_change,
             Some(RingChange {
                 limit_blocks: 3,
-                largest_blocks: 3,
+                largest_blocks: Some(3),
+                unmeasurable: 0,
             })
         );
+        // The rendered altitudes of the allowed cells.
+        assert_eq!(report.levelled_columns, vec![
+            (Vec2::new(200, 300), 100.0),
+            (Vec2::new(201, 300), 101.0),
+            (Vec2::new(202, 300), 102.0),
+        ]);
     }
 
     #[test]
@@ -775,16 +844,36 @@ mod tests {
             "{}",
             errors[0]
         );
-        // A cell that cannot be measured counts as over the limit.
+    }
+
+    #[test]
+    fn a_cell_that_cannot_be_measured_is_refused_and_says_so() {
+        let listed = vec![KEY.to_string()];
+        let r = region(&listed, Some(3));
         for bad in [f32::INFINITY, f32::NAN] {
             let report = file(&r, KEY, &[0.0, bad]);
             assert_eq!(report.ring_under_site[0].cells, 1);
+            let msg = site_errors(&report).remove(0);
+            assert!(
+                msg.contains("1 cell(s) are unmeasurable against the 3 block(s)"),
+                "{msg}"
+            );
+            assert!(!msg.contains(&u32::MAX.to_string()), "{msg}");
         }
+        let report = file(&r, KEY, &[5.0, f32::INFINITY]);
+        let msg = site_errors(&report).remove(0);
+        assert!(
+            msg.contains(
+                "2 cell(s) move the ground by more than the 3 block(s) the region allows, by up \
+                 to 5 block(s), 1 of them unmeasurable"
+            ),
+            "{msg}"
+        );
     }
 
     #[test]
     fn an_unlisted_site_stays_strict_whatever_the_allowance() {
-        let listed = vec!["settlement:other".to_string()];
+        let listed = vec!["procedural:town:1,2".to_string()];
         let r = region(&listed, Some(1000));
         let mut report = SitePatchReport::default();
         report_site(&mut report, &r, KEY, BOUNDS, || {
@@ -798,31 +887,90 @@ mod tests {
         assert!(errors[0].contains(KEY), "{}", errors[0]);
     }
 
-    #[test]
-    fn ring_change_follows_the_levelling_rule() {
-        // No levelling: the ring's own blend toward the target.
-        let got = ring_change(100.0, 110.0, 128, (0.0, 0.0));
-        assert!((got - 10.0 * (128.0 / 255.0)).abs() < 1e-4, "{got}");
-        assert_eq!(ring_change(100.0, 90.0, 0, (0.0, 0.0)), 0.0);
-        // A fully levelled plot ignores the ring.
-        assert_eq!(ring_change(100.0, 130.0, 200, (101.0, 1.0)), 0.0);
-        // Half levelled: the natural ground is already half way to the plot
-        // altitude, and the ring cell is levelled once more.
-        let natural: f32 = 100.0 + (110.0 - 100.0) * 0.5;
-        let ring = natural + (130.0 - natural) * (200.0 / 255.0);
-        let ring = ring + (110.0 - ring) * 0.5;
-        let got = ring_change(100.0, 130.0, 200, (110.0, 0.5));
-        assert!((got - (ring - natural).abs()).abs() < 1e-4, "{got}");
+    fn settings() -> RegionSettings {
+        RegionSettings {
+            suppress_procedural_in_water: false,
+            exclude_procedural_margin_m: 0.0,
+            aquatic_profile: None,
+            sea_fill: SeaFill::Auto,
+            site_levelling: true,
+        }
+    }
+
+    /// The change `AuthoredColumn::resolve` makes at a ring cell of weight
+    /// `weight` and target block `block`, against the same column without
+    /// the ring, on a noise-free column of table altitude `table` under a
+    /// plot `(pref, factor)`; and the closed form it should follow.
+    fn resolved_change(table: f32, block: i32, weight: u8, plot: (f32, f32)) -> (f32, f32) {
+        let level = |a: f32| a + (plot.0 - a) * plot.1;
+        let natural = level(table);
+        let column = AuthoredColumn {
+            weight: 1.0,
+            cell: AuthoredCell::Ground { block, weight },
+            water_dist: None,
+            ground_dist: None,
+            settings: settings(),
+            natural: false,
+        };
+        let engine = EngineColumn {
+            alt: natural,
+            water_level: 0.0,
+            water_dist: None,
+            warp_factor: 0.0,
+            cliff_offset: 0.0,
+            riverless_alt: natural,
+        };
+        let dry = DryTerrain {
+            riverless_alt: natural,
+            riverless_alt_delta: 0.0,
+            warp: 0.0,
+            max_warp: 0.0,
+            base_sea_level: 0.0,
+            site_prefer_alt: plot,
+        };
+        let ring = column.resolve(engine, dry).alt;
+        let base = column.without_ring().resolve(engine, dry).alt;
+        assert_eq!(
+            base, natural,
+            "a column without its ring is the natural one"
+        );
+        let target = top_block_alt(block);
+        let w = weight as f32 / GROUND_EXACT as f32;
+        let closed = plot.1 * (plot.0 - natural) + (1.0 - plot.1) * w * (target - natural);
+        ((ring - base).abs(), closed.abs())
     }
 
     #[test]
-    fn ring_change_counts_the_second_levelling_of_a_ring_cell() {
-        // Even a ring cell of weight 0 is levelled again on top of the
-        // natural column's levelling: half way to the plot altitude (50)
-        // from the natural 75 is 12.5 blocks, whatever the target.
-        let got = ring_change(100.0, 70.0, 0, (50.0, 0.5));
-        assert!((got - 12.5).abs() < 1e-4, "{got}");
-        let got = ring_change(100.0, 999.0, 0, (50.0, 0.5));
-        assert!((got - 12.5).abs() < 1e-4, "{got}");
+    fn the_rendered_ring_change_follows_the_levelling_rule_including_the_second_levelling() {
+        for factor in [0.0, 0.25, 0.5, 1.0] {
+            for weight in [0u8, 1, 100, 254] {
+                let (resolved, closed) = resolved_change(100.0, 130, weight, (50.0, factor));
+                assert!(
+                    (resolved - closed).abs() < 1e-3,
+                    "factor {factor} weight {weight}: resolve {resolved}, closed form {closed}"
+                );
+            }
+        }
+        // Weight 0, half levelled: the second levelling alone, whatever the
+        // target (natural 75, plot 50).
+        let (resolved, _) = resolved_change(100.0, 70, 0, (50.0, 0.5));
+        assert!((resolved - 12.5).abs() < 1e-3, "{resolved}");
+        // A fully levelled plot ignores the ring.
+        let (resolved, _) = resolved_change(100.0, 130, 200, (50.0, 1.0));
+        assert!(resolved.abs() < 1e-3, "{resolved}");
+    }
+
+    #[test]
+    fn without_ring_only_turns_blend_cells_into_unauthored_ones() {
+        let column = |weight| AuthoredColumn {
+            weight: 1.0,
+            cell: AuthoredCell::Ground { block: 10, weight },
+            water_dist: None,
+            ground_dist: None,
+            settings: settings(),
+            natural: false,
+        };
+        assert_eq!(column(128).without_ring().cell, AuthoredCell::None);
+        assert_eq!(column(GROUND_EXACT).without_ring(), column(GROUND_EXACT));
     }
 }

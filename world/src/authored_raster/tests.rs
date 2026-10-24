@@ -2172,6 +2172,33 @@ fn site_levelling_applies_on_ground_cells_only_when_the_region_levels() {
 }
 
 #[test]
+fn the_ring_allowance_needs_a_ground_layer() {
+    // A water-only region cannot set it; the refusal names only this field.
+    let mut water_only = river_spec();
+    water_only.ring_under_sites_max_change_blocks = Some(1);
+    let e = load(&[build_region(&water_only).unwrap()]).unwrap_err();
+    assert!(
+        e.0.contains(
+            "ring_under_sites_max_change_blocks configures the ground layer, and the region does \
+             not declare Ground"
+        ),
+        "{e}"
+    );
+    assert!(!e.0.contains("sites_on_patch"), "{e}");
+    // The older fields keep their refusal text.
+    let mut listed = river_spec();
+    listed.sites_on_patch = vec!["procedural:town:1,2".into()];
+    let e = load(&[build_region(&listed).unwrap()]).unwrap_err();
+    assert!(
+        e.0.contains(
+            "sites_on_patch, site_levelling and max_exposed_void_columns configure the ground \
+             layer, and the region does not declare Ground"
+        ),
+        "{e}"
+    );
+}
+
+#[test]
 fn region_digests_follow_each_region_and_the_new_fields_are_digest_stable() {
     let spec = |id: &str, x: i32, cm: i32| {
         region(id, (x, 1024), (x + 256, 1280), 32, vec![PaintOp::Ground {

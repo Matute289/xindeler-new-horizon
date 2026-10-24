@@ -408,25 +408,27 @@ pub struct RegionManifest {
     /// whatever this says.
     ///
     /// The change measured at a ring cell is how far the ring moves the
-    /// rendered ground from what the same column renders without the ring,
-    /// the natural site ground: with `L(x) = x + (pref - x) * factor` (the
-    /// sites' plot levelling, which the column sampler applies to the natural
-    /// column and then once more to a ring cell; with
-    /// [`Self::site_levelling`] off, `L` is the identity), `natural =
-    /// L(table altitude)`, `ring = L(natural + w * (target - natural))` with
-    /// `w` the cell's blend weight (below 1), and the change is `|ring -
-    /// natural|`. Under a fully levelled plot (`factor` 1) it is 0; where the
-    /// plot is only partly levelled it also holds the second levelling the
-    /// ring cell gets (`factor * |pref - natural|`, even at weight 0). Every
-    /// ring cell under a listed site must stay within the limit, so the ring
-    /// never leaves a step or a seam larger than the limit against the
-    /// levelled site ground around it.
-    /// The engine's relief noise is not part of the measure (the table
-    /// altitude stands for the natural column, as in the site layout's own
-    /// ground query). One cell over the limit stops world generation,
-    /// naming the site and the count of such cells. The exact cells under a
-    /// site are not covered by this limit (they are reported, as before).
-    /// Needs a Ground layer, like the other site settings.
+    /// rendered ground there: the column sampler's altitude at the cell, minus
+    /// the altitude of the same column with the ring turned into an
+    /// unauthored cell of the region. It is measured once at start-up, after
+    /// the sites are placed, so the engine's relief, warp, sea clamp, the
+    /// sites' plot levelling (a ring cell is levelled once more on top of the
+    /// natural column's levelling, so even a ring cell of weight 0 moves
+    /// under a partly levelled plot) and partial-chunk carving are all in
+    /// it. Under a fully levelled plot the change is 0. One cell over the
+    /// limit stops world generation, naming the site, the count of such cells
+    /// and the largest change; a cell that cannot be measured counts as over.
+    ///
+    /// What the limit bounds, and what it does not: each ring cell under a
+    /// listed site differs from the region's own unauthored ground there by
+    /// at most the limit. Two neighbouring ring cells can therefore differ
+    /// from each other by up to twice the limit plus the unauthored ground's
+    /// own step, and the step between a ring cell and an exact cell next to
+    /// it, or a column outside the region, is not bounded by it. The exact
+    /// cells under a site are not covered (they are reported, as before).
+    /// The ground queries answer the rendered altitude on the allowed ring
+    /// cells under a listed site, as they do on exact cells that levelling
+    /// moves. Needs a Ground layer, like the other site settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ring_under_sites_max_change_blocks: Option<u32>,
 }
@@ -718,6 +720,18 @@ impl AuthoredColumn {
                 self.settings.sea_fill == SeaFill::Auto && b < SEA_TOP_BLOCK
             },
             AuthoredCell::None => false,
+        }
+    }
+
+    /// This column with a blend (ring) cell turned into an unauthored cell:
+    /// what the region renders there without the ring.
+    pub fn without_ring(self) -> Self {
+        match self.cell {
+            AuthoredCell::Ground { weight, .. } if weight != GROUND_EXACT => Self {
+                cell: AuthoredCell::None,
+                ..self
+            },
+            _ => self,
         }
     }
 
@@ -1740,18 +1754,24 @@ impl AuthoredRasters {
                     rm.layers
                 )));
             }
-            if !rm.layers.contains(&LayerKind::Ground)
-                && (!rm.sites_on_patch.is_empty()
+            if !rm.layers.contains(&LayerKind::Ground) {
+                if !rm.sites_on_patch.is_empty()
                     || !rm.site_levelling
                     || rm.max_exposed_void_columns > 0
-                    || rm.ring_under_sites_max_change_blocks.is_some())
-            {
-                return Err(rerr(
-                    "sites_on_patch, site_levelling, max_exposed_void_columns and \
-                     ring_under_sites_max_change_blocks configure the ground layer, and the \
-                     region does not declare Ground"
-                        .into(),
-                ));
+                {
+                    return Err(rerr(
+                        "sites_on_patch, site_levelling and max_exposed_void_columns configure \
+                         the ground layer, and the region does not declare Ground"
+                            .into(),
+                    ));
+                }
+                if rm.ring_under_sites_max_change_blocks.is_some() {
+                    return Err(rerr(
+                        "ring_under_sites_max_change_blocks configures the ground layer, and the \
+                         region does not declare Ground"
+                            .into(),
+                    ));
+                }
             }
             if let Some((i, key)) = rm
                 .sites_on_patch
@@ -2130,8 +2150,9 @@ impl AuthoredRasters {
     }
 
     /// Record the exact ground columns that listed sites' plot levelling
-    /// moves (`post_civ::SitePatchReport::levelled_columns`), so the ground
-    /// queries answer the levelled height the column renders there.
+    /// moves, and the ring cells a region allows under them
+    /// (`post_civ::SitePatchReport::levelled_columns`), so the ground
+    /// queries answer the height the column renders there.
     pub(crate) fn set_site_levelling(
         &mut self,
         columns: impl IntoIterator<Item = (Vec2<i32>, f32)>,

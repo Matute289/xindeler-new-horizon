@@ -660,6 +660,59 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
         err.contains(&key) && err.contains("blend (ring)"),
     );
     assert!(err.contains(&key) && err.contains("blend (ring)"));
+    // The same short patch where the region allows ring cells under its
+    // listed sites: accepted at the largest measured change, refused one
+    // block below it, and the ground queries answer the rendered altitude on
+    // the allowed cells.
+    let allow = |limit: u32| {
+        let mut s = spec(&near, short);
+        s.ring_under_sites_max_change_blocks = Some(limit);
+        load_specs(&[s]).unwrap()
+    };
+    world.sim.set_authored_rasters_for_test(Some(allow(1000)));
+    let report = check_ground_consumers(&world, index_ref, None).unwrap();
+    assert!(report.sites.ring_under_site.is_empty());
+    let allowed = report
+        .sites
+        .ring_allowed_under_site
+        .iter()
+        .find(|s| s.site == key)
+        .expect("the ring runs under the chosen site");
+    let largest = allowed.ring_change.unwrap().largest_blocks.unwrap();
+    println!(
+        "ring allowed under {key}: {} cell(s), largest change {largest} block(s)",
+        allowed.cells
+    );
+    let example = allowed.example.unwrap();
+    world
+        .sim
+        .set_site_levelling(report.sites.levelled_columns.iter().copied());
+    assert_eq!(
+        world.sim.ground_alt_at(example),
+        Some(sampled_alt(&world, index_ref, example)),
+        "the ground query answers the rendered altitude on an allowed ring cell"
+    );
+    world
+        .sim
+        .set_authored_rasters_for_test(Some(allow(largest)));
+    check_ground_consumers(&world, index_ref, None).unwrap();
+    if largest > 0 {
+        world
+            .sim
+            .set_authored_rasters_for_test(Some(allow(largest - 1)));
+        let err = check_ground_consumers(&world, index_ref, None)
+            .unwrap_err()
+            .0;
+        println!("ring over the allowance: {err}");
+        assert!(
+            err.contains(&key)
+                && err.contains(&format!(
+                    "move the ground by more than the {} block(s)",
+                    largest - 1
+                )),
+            "{err}"
+        );
+    }
 }
 
 /// Positions buried by +10 m and +90 m patches are lifted

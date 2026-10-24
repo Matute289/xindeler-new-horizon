@@ -203,8 +203,10 @@ impl WorldSim {
     /// * blend (ring) ground of weight `w`: `lerp(table, block, w / 255)`. The
     ///   rendered ring lerps toward the engine column *with* its noise instead,
     ///   so on ring cells this differs from the blocks by up to the engine's
-    ///   relief times `1 - w` (rings belong outside sites; the post-civ site
-    ///   check refuses one under a listed site);
+    ///   relief times `1 - w`. Under a listed site the post-civ site check
+    ///   refuses a ring cell unless its region allows it
+    ///   (`ring_under_sites_max_change_blocks`); an allowed cell answers the
+    ///   altitude the column renders (`AuthoredRasters::site_levelled_alt`);
     /// * everything else, and every column outside every region: the chunk
     ///   table ([`Self::get_alt_approx`]), bit for bit.
     ///
@@ -223,11 +225,16 @@ impl WorldSim {
                     .and_then(|r| r.site_levelled_alt(wpos))
                     .unwrap_or_else(|| top_block_alt(block)),
             ),
-            Some(AuthoredCell::Ground { block, weight }) => Some(Lerp::lerp(
-                self.get_alt_approx(wpos)?,
-                top_block_alt(block),
-                weight as f32 / GROUND_EXACT as f32,
-            )),
+            Some(AuthoredCell::Ground { block, weight }) => {
+                match rasters.and_then(|r| r.site_levelled_alt(wpos)) {
+                    Some(rendered) => Some(rendered),
+                    None => Some(Lerp::lerp(
+                        self.get_alt_approx(wpos)?,
+                        top_block_alt(block),
+                        weight as f32 / GROUND_EXACT as f32,
+                    )),
+                }
+            },
             Some(AuthoredCell::None) | None => self.get_alt_approx(wpos),
         }
     }
@@ -282,8 +289,14 @@ impl WorldSim {
             Some((AuthoredCell::Bank { bed_block }, ..)) => (bed_block + 1) as f32,
             Some((AuthoredCell::Ground { block, weight }, sea_fill, _)) => {
                 let top = self.exact_ground_top(wpos, block) as f32;
+                let rendered_ring = (weight != GROUND_EXACT)
+                    .then(|| self.authored_rasters.as_ref()?.site_levelled_alt(wpos))
+                    .flatten();
                 let land = if weight == GROUND_EXACT {
                     top
+                } else if let Some(rendered) = rendered_ring {
+                    // A ring cell a region allows under a listed site.
+                    (top_block_of_levelled_alt(rendered) + 1) as f32
                 } else {
                     Lerp::lerp(table_land(), top, weight as f32 / GROUND_EXACT as f32)
                 };
