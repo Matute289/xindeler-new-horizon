@@ -1335,6 +1335,23 @@ fn ground_cells_are_read_exactly() {
 }
 
 #[test]
+fn chunk_ground_alt_follows_lowered_ground_and_never_exceeds_the_sim_height() {
+    let ar = load(&[build_region(&plateau_spec()).unwrap()]).unwrap();
+    let authored = Vec2::new(1150 / 32, 1100 / 32);
+    let lowest = ar.chunk_summary(authored).unwrap().min_ground_block();
+    assert_eq!(lowest, 248);
+
+    // A cut of about 90 m: the sim says 340, the authored ground is far below.
+    assert_eq!(ar.chunk_ground_alt(authored, 340.0), 248.5);
+    // Raised ground: the sim height is already lower, so it is kept.
+    assert_eq!(ar.chunk_ground_alt(authored, 200.0), 200.0);
+    // A chunk with no authored cell reports exactly the sim height.
+    let procedural = Vec2::new(authored.x + 50, authored.y + 50);
+    assert!(ar.chunk_summary(procedural).is_none());
+    assert_eq!(ar.chunk_ground_alt(procedural, 340.0), 340.0);
+}
+
+#[test]
 fn resolve_exact_ground_drops_every_engine_term() {
     let cell = AuthoredCell::Ground {
         block: 251,

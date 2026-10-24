@@ -2178,6 +2178,22 @@ impl AuthoredRasters {
             .map(|s| s.min_ground_block() - FLOOR_MARGIN_BLOCKS)
     }
 
+    /// The altitude a chunk reports to the client as its ground level when
+    /// it carries authored cells: the top of its lowest authored bed, bank
+    /// or ground block, capped at `sim_alt` so raised ground never lifts it.
+    /// The client compares its position with this value to decide whether
+    /// it is underground, so it has to follow lowered ground instead of the
+    /// frozen sim height. `sim_alt` itself for a chunk without authored
+    /// cells (outside every region in particular).
+    pub fn chunk_ground_alt(&self, chunk_pos: Vec2<i32>, sim_alt: f32) -> f32 {
+        match self.chunk_summary.get(&chunk_pos) {
+            Some(s) if s.min_ground_block() != i32::MAX => {
+                sim_alt.min(s.min_ground_block() as f32 + 0.5)
+            },
+            _ => sim_alt,
+        }
+    }
+
     /// Every ground cell's 4-neighbour whose water the post-civ seam check
     /// compares with it (see [`queries::check_ground_seams`]), as `(ground
     /// cell, neighbour)` pairs in region and tile order. Empty when no

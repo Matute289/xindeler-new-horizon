@@ -681,10 +681,17 @@ impl World {
         let sim_chunk: &SimChunk = &sim_chunk;
 
         let chunk_water = self.sim.chunk_water(chunk_pos);
+        // The ground level the client compares itself with to detect being
+        // underground: follows authored lowered ground instead of the frozen
+        // sim height (identical to `sim_chunk.alt` for every other chunk).
+        let meta_alt = match self.sim.authored_rasters.as_ref() {
+            Some(rasters) => rasters.chunk_ground_alt(chunk_pos, sim_chunk.alt),
+            None => sim_chunk.alt,
+        };
         let meta = TerrainChunkMeta::new(
             sim_chunk.get_location_name(&index.sites, &self.civs.pois, chunk_center_wpos2d),
             sim_chunk.get_biome(),
-            sim_chunk.alt,
+            meta_alt,
             sim_chunk.tree_density,
             // XINDELER: authored-aware (authored water regions); clients use
             // these for ambience and weather.
