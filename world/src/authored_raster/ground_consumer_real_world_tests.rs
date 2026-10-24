@@ -400,7 +400,7 @@ fn bt10_towns_on_a_prepared_flat_and_on_a_slope() {
             inside.contains_point(b.min) && inside.contains_point(b.max - 1),
             "{id}: the town {b:?} must lie on the exact patch {inside:?}"
         );
-        let cells = site_ground_cells(&world, index_ref, b, &e);
+        let cells = site_ground_cells(&world, index_ref, None, b, &e);
         let row = lot_check(&world, index_ref, site);
         println!(
             "{id}: bounds {:?}..{:?}, {} plots; {row:?}; ring cells under it {}, exact columns \
@@ -591,7 +591,7 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
     world
         .sim
         .set_authored_rasters_for_test(Some(load_specs(&[spec(&[], whole)]).unwrap()));
-    let err = check_ground_consumers(&world, index_ref, None)
+    let err = check_ground_consumers(&world, index_ref, None, None)
         .unwrap_err()
         .0;
     println!("unlisted: {err}");
@@ -602,7 +602,7 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
     assert!(err.contains(&key) && err.contains("does not list them"));
     // Every site near the region (the chosen one and its procedural
     // neighbours), as the exporter's pins would list them.
-    let near: Vec<String> = super::post_civ::site_patch_report(&world, index_ref)
+    let near: Vec<String> = super::post_civ::site_patch_report(&world, index_ref, None)
         .unlisted
         .into_iter()
         .map(|s| s.site)
@@ -612,7 +612,7 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
     world
         .sim
         .set_authored_rasters_for_test(Some(load_specs(&[spec(&near, whole)]).unwrap()));
-    let report = check_ground_consumers(&world, index_ref, None).unwrap();
+    let report = check_ground_consumers(&world, index_ref, None, None).unwrap();
     rep.metric("listed_sites", report.sites.listed.len() as f64)
         .metric("expected_listed_sites", near.len() as f64)
         .metric("unlisted_after_listing", report.sites.unlisted.len() as f64)
@@ -651,7 +651,7 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
     world
         .sim
         .set_authored_rasters_for_test(Some(load_specs(&[spec(&near, short)]).unwrap()));
-    let err = check_ground_consumers(&world, index_ref, None)
+    let err = check_ground_consumers(&world, index_ref, None, None)
         .unwrap_err()
         .0;
     println!("ring under site: {err}");
@@ -660,6 +660,96 @@ fn bt10_unlisted_sites_and_sites_on_rings_are_refused() {
         err.contains(&key) && err.contains("blend (ring)"),
     );
     assert!(err.contains(&key) && err.contains("blend (ring)"));
+    // The same short patch where the region allows ring cells under its
+    // listed sites: accepted at the largest measured change, refused one
+    // block below it, and the ground queries answer the rendered altitude on
+    // the allowed cells.
+    let allow = |limit: u32| {
+        let mut s = spec(&near, short);
+        s.ring_under_sites_max_change_blocks = Some(limit);
+        load_specs(&[s]).unwrap()
+    };
+    world.sim.set_authored_rasters_for_test(Some(allow(1000)));
+    let report = check_ground_consumers(&world, index_ref, None, None).unwrap();
+    assert!(report.sites.ring_under_site.is_empty());
+    let allowed = report
+        .sites
+        .ring_allowed_under_site
+        .iter()
+        .find(|s| s.site == key)
+        .expect("the ring runs under the chosen site");
+    let largest = allowed.ring_change.unwrap().largest_blocks.unwrap();
+    assert!(
+        largest > 0,
+        "the ring must move the ground for this test to mean anything"
+    );
+    println!(
+        "ring allowed under {key}: {} cell(s), largest change {largest} block(s)",
+        allowed.cells
+    );
+    let example = allowed.example.unwrap();
+    world
+        .sim
+        .set_site_ring_levelling(report.sites.levelled_ring_columns.iter().copied());
+    assert_eq!(
+        world.sim.ground_alt_at(example),
+        Some(sampled_alt(&world, index_ref, example)),
+        "the ground query answers the rendered altitude on an allowed ring cell"
+    );
+    // The sampler hook: turning the ring off changes a ring cell and nothing
+    // else (an exact cell and an unauthored cell of the region sample alike).
+    {
+        let e = entry(&world, "bt10_gate");
+        let with_ring = crate::column::ColumnGen::new(&world.sim);
+        let without_ring = crate::column::ColumnGen::without_ring(&world.sim);
+        let alt_of =
+            |g: &crate::column::ColumnGen, p: Vec2<i32>| g.get((p, index_ref, None)).unwrap().alt;
+        let cells = site_ground_cells(&world, index_ref, None, b, &e);
+        assert!(
+            cells
+                .ring
+                .iter()
+                .any(|c| alt_of(&with_ring, c.pos) != alt_of(&without_ring, c.pos)),
+            "no ring cell changed when the ring was turned off"
+        );
+        let exact_at = b.min + Vec2::new(10, 10);
+        assert!(matches!(
+            world.sim.authored_cell_at(exact_at),
+            Some(AuthoredCell::Ground {
+                weight: GROUND_EXACT,
+                ..
+            })
+        ));
+        let unauthored_at = e.bounds.min + Vec2::new(1, 1);
+        assert!(matches!(
+            world.sim.authored_cell_at(unauthored_at),
+            Some(AuthoredCell::None) | None
+        ));
+        for p in [exact_at, unauthored_at] {
+            assert_eq!(alt_of(&with_ring, p), alt_of(&without_ring, p), "{p:?}");
+        }
+    }
+    world
+        .sim
+        .set_authored_rasters_for_test(Some(allow(largest)));
+    check_ground_consumers(&world, index_ref, None, None).unwrap();
+    if largest > 0 {
+        world
+            .sim
+            .set_authored_rasters_for_test(Some(allow(largest - 1)));
+        let err = check_ground_consumers(&world, index_ref, None, None)
+            .unwrap_err()
+            .0;
+        println!("ring over the allowance: {err}");
+        assert!(
+            err.contains(&key)
+                && err.contains(&format!(
+                    "move the ground by more than the {} block(s)",
+                    largest - 1
+                )),
+            "{err}"
+        );
+    }
 }
 
 /// Positions buried by +10 m and +90 m patches are lifted

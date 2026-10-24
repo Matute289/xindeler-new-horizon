@@ -75,6 +75,10 @@ pub struct RegionSpec {
     /// Passed through to [`RegionManifest::max_exposed_void_columns`].
     #[serde(default)]
     pub max_exposed_void_columns: u32,
+    /// Passed through to
+    /// [`RegionManifest::ring_under_sites_max_change_blocks`].
+    #[serde(default)]
+    pub ring_under_sites_max_change_blocks: Option<u32>,
 }
 
 impl RegionSpec {
@@ -103,6 +107,7 @@ impl RegionSpec {
             sites_on_patch: Vec::new(),
             site_levelling: true,
             max_exposed_void_columns: 0,
+            ring_under_sites_max_change_blocks: None,
         }
     }
 }
@@ -547,6 +552,7 @@ impl RegionRaster {
                 sites_on_patch: self.spec.sites_on_patch.clone(),
                 site_levelling: self.spec.site_levelling,
                 max_exposed_void_columns: self.spec.max_exposed_void_columns,
+                ring_under_sites_max_change_blocks: self.spec.ring_under_sites_max_change_blocks,
             },
             tiles: water_tiles,
             ground_tiles,

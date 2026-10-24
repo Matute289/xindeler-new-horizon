@@ -1762,6 +1762,7 @@ fn new_manifest_fields_at_their_defaults_do_not_change_the_digest() {
             sites_on_patch: vec![],
             site_levelling: true,
             max_exposed_void_columns: 0,
+            ring_under_sites_max_change_blocks: None,
         }],
     };
     let text = ron::ser::to_string(&m).unwrap();
@@ -1824,6 +1825,7 @@ fn region_digest_is_pinned() {
         sites_on_patch: vec![],
         site_levelling: true,
         max_exposed_void_columns: 0,
+        ring_under_sites_max_change_blocks: None,
     };
     assert_eq!(
         region_digest(&rm).unwrap(),
@@ -2209,6 +2211,33 @@ fn site_levelling_applies_on_ground_cells_only_when_the_region_levels() {
 }
 
 #[test]
+fn the_ring_allowance_needs_a_ground_layer() {
+    // A water-only region cannot set it; the refusal names only this field.
+    let mut water_only = river_spec();
+    water_only.ring_under_sites_max_change_blocks = Some(1);
+    let e = load(&[build_region(&water_only).unwrap()]).unwrap_err();
+    assert!(
+        e.0.contains(
+            "ring_under_sites_max_change_blocks configures the ground layer, and the region does \
+             not declare Ground"
+        ),
+        "{e}"
+    );
+    assert!(!e.0.contains("sites_on_patch"), "{e}");
+    // The older fields keep their refusal text.
+    let mut listed = river_spec();
+    listed.sites_on_patch = vec!["procedural:town:1,2".into()];
+    let e = load(&[build_region(&listed).unwrap()]).unwrap_err();
+    assert!(
+        e.0.contains(
+            "sites_on_patch, site_levelling and max_exposed_void_columns configure the ground \
+             layer, and the region does not declare Ground"
+        ),
+        "{e}"
+    );
+}
+
+#[test]
 fn region_digests_follow_each_region_and_the_new_fields_are_digest_stable() {
     let spec = |id: &str, x: i32, cm: i32| {
         region(id, (x, 1024), (x + 256, 1280), 32, vec![PaintOp::Ground {
@@ -2244,7 +2273,9 @@ fn region_digests_follow_each_region_and_the_new_fields_are_digest_stable() {
     no_level.site_levelling = false;
     let mut voids = spec("a", 1024, 24_000);
     voids.max_exposed_void_columns = 3;
-    for s in [listed, no_level, voids] {
+    let mut ring = spec("a", 1024, 24_000);
+    ring.ring_under_sites_max_change_blocks = Some(2);
+    for s in [listed, no_level, voids, ring] {
         let r = load(&[build_region(&s).unwrap()]).unwrap();
         assert_ne!(r.region_digests()["a"], da["a"]);
     }
@@ -2254,6 +2285,7 @@ fn region_digests_follow_each_region_and_the_new_fields_are_digest_stable() {
         "sites_on_patch",
         "site_levelling",
         "max_exposed_void_columns",
+        "ring_under_sites_max_change_blocks",
     ] {
         assert!(
             !text.contains(field),
@@ -2263,6 +2295,7 @@ fn region_digests_follow_each_region_and_the_new_fields_are_digest_stable() {
     let parsed: RegionManifest = ron::from_str(&text).unwrap();
     assert!(parsed.site_levelling && parsed.sites_on_patch.is_empty());
     assert_eq!(parsed.max_exposed_void_columns, 0);
+    assert_eq!(parsed.ring_under_sites_max_change_blocks, None);
 }
 
 #[test]

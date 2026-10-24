@@ -400,6 +400,43 @@ pub struct RegionManifest {
     /// accidental exposures and pays for them in memory.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub max_exposed_void_columns: u32,
+    /// Lets a *listed* site ([`Self::sites_on_patch`]) stand on blend (ring)
+    /// cells of this region, as long as the ring moves the ground there by at
+    /// most this many blocks. Default `None` (off): any ring cell under a
+    /// listed site stops world generation, and the patch must grow its exact
+    /// footprint over the site. Unlisted sites are refused near the region
+    /// whatever this says.
+    ///
+    /// The change measured at a ring cell is how far the ring moves the
+    /// rendered ground there: the column sampler's altitude at the cell, minus
+    /// the altitude of the same column with the ring turned into an
+    /// unauthored cell of the region. It is measured once at start-up, after
+    /// the sites are placed, so the engine's relief, warp, sea clamp, the
+    /// sites' plot levelling (a ring cell is levelled once more on top of the
+    /// natural column's levelling, so even a ring cell of weight 0 moves
+    /// under a partly levelled plot) and partial-chunk carving are all in
+    /// it. Under a fully levelled plot the change is 0. One cell over the
+    /// limit stops world generation, naming the site, the count of such cells
+    /// and the largest change; a cell that cannot be measured counts as over.
+    ///
+    /// What the limit bounds, and what it does not: each ring cell under a
+    /// listed site differs from the region's own unauthored ground there by
+    /// at most the limit. Two neighbouring ring cells can therefore differ
+    /// from each other by up to twice the limit plus the unauthored ground's
+    /// own step, and the step between a ring cell and an exact cell next to
+    /// it, or a column outside the region, is not bounded by it. The exact
+    /// cells under a site are not covered (they are reported, as before).
+    /// The ground queries answer the rendered altitude on the allowed ring
+    /// cells under a listed site, as they do on exact cells that levelling
+    /// moves. Only ring cells inside the site's bounds are measured: ring
+    /// cells just outside them are not. The measure uses the world's
+    /// calendar but not the regional terrain overrides, so a `Damage`
+    /// override over the site can move the rendered ground by more than the
+    /// measure shows. A very wide ring under a large site is the costly case
+    /// (two column samples per ring cell at start-up); the cell count is
+    /// logged. Needs a Ground layer, like the other site settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ring_under_sites_max_change_blocks: Option<u32>,
 }
 
 /// The digest of one region's manifest entry ([`RegionEntry::digest`]): the
@@ -689,6 +726,18 @@ impl AuthoredColumn {
                 self.settings.sea_fill == SeaFill::Auto && b < SEA_TOP_BLOCK
             },
             AuthoredCell::None => false,
+        }
+    }
+
+    /// This column with a blend (ring) cell turned into an unauthored cell:
+    /// what the region renders there without the ring.
+    pub fn without_ring(self) -> Self {
+        match self.cell {
+            AuthoredCell::Ground { weight, .. } if weight != GROUND_EXACT => Self {
+                cell: AuthoredCell::None,
+                ..self
+            },
+            _ => self,
         }
     }
 
@@ -989,6 +1038,8 @@ pub struct RegionEntry<'a> {
     pub max_exposed_void_columns: u32,
     /// [`RegionManifest::site_levelling`].
     pub site_levelling: bool,
+    /// [`RegionManifest::ring_under_sites_max_change_blocks`].
+    pub ring_under_sites_max_change_blocks: Option<u32>,
 }
 
 /// Per-chunk summary of the authored cells (water, banks and ground),
@@ -1078,6 +1129,8 @@ struct Region {
     sites_on_patch: Vec<String>,
     /// [`RegionManifest::max_exposed_void_columns`].
     max_exposed_void_columns: u32,
+    /// [`RegionManifest::ring_under_sites_max_change_blocks`].
+    ring_under_sites_max_change_blocks: Option<u32>,
     min: Vec2<i32>,
     max: Vec2<i32>,
     feather: i32,
@@ -1480,6 +1533,10 @@ pub struct AuthoredRasters {
     /// after civ generation, see [`Self::set_site_levelling`]; empty without
     /// a ground layer).
     site_levelled: HashMap<Vec2<i32>, f32>,
+    /// The ring cells a region allows under listed sites, with the altitude
+    /// the column sampler renders there ([`Self::set_site_ring_levelling`]);
+    /// empty (the ring-cell queries never look) unless a region allows them.
+    ring_levelled: HashMap<Vec2<i32>, f32>,
     /// What this manifest adds to the process-wide counter (released on
     /// drop).
     resident_bytes: usize,
@@ -1707,16 +1764,24 @@ impl AuthoredRasters {
                     rm.layers
                 )));
             }
-            if !rm.layers.contains(&LayerKind::Ground)
-                && (!rm.sites_on_patch.is_empty()
+            if !rm.layers.contains(&LayerKind::Ground) {
+                if !rm.sites_on_patch.is_empty()
                     || !rm.site_levelling
-                    || rm.max_exposed_void_columns > 0)
-            {
-                return Err(rerr(
-                    "sites_on_patch, site_levelling and max_exposed_void_columns configure the \
-                     ground layer, and the region does not declare Ground"
-                        .into(),
-                ));
+                    || rm.max_exposed_void_columns > 0
+                {
+                    return Err(rerr(
+                        "sites_on_patch, site_levelling and max_exposed_void_columns configure \
+                         the ground layer, and the region does not declare Ground"
+                            .into(),
+                    ));
+                }
+                if rm.ring_under_sites_max_change_blocks.is_some() {
+                    return Err(rerr(
+                        "ring_under_sites_max_change_blocks configures the ground layer, and the \
+                         region does not declare Ground"
+                            .into(),
+                    ));
+                }
             }
             if let Some((i, key)) = rm
                 .sites_on_patch
@@ -1945,6 +2010,7 @@ impl AuthoredRasters {
                 digest: region_digest,
                 sites_on_patch: rm.sites_on_patch,
                 max_exposed_void_columns: rm.max_exposed_void_columns,
+                ring_under_sites_max_change_blocks: rm.ring_under_sites_max_change_blocks,
                 min,
                 max,
                 feather: rm.feather_m,
@@ -1983,6 +2049,7 @@ impl AuthoredRasters {
             digest,
             has_ground_layer,
             site_levelled: HashMap::new(),
+            ring_levelled: HashMap::new(),
             resident_bytes: reserved.keep(),
         })
     }
@@ -2103,6 +2170,28 @@ impl AuthoredRasters {
         self.site_levelled.extend(columns);
     }
 
+    /// Record the ring cells a region allows under listed sites
+    /// (`post_civ::SitePatchReport::levelled_ring_columns`), so the ground
+    /// queries answer the altitude the column renders there.
+    pub(crate) fn set_site_ring_levelling(
+        &mut self,
+        columns: impl IntoIterator<Item = (Vec2<i32>, f32)>,
+    ) {
+        self.ring_levelled.extend(columns);
+    }
+
+    /// The rendered altitude of a ring cell a region allows under a listed
+    /// site ([`Self::set_site_ring_levelling`]); a no-lookup `None` when no
+    /// region allows ring cells under sites.
+    #[inline]
+    pub fn ring_levelled_alt(&self, wpos: Vec2<i32>) -> Option<f32> {
+        if self.ring_levelled.is_empty() {
+            None
+        } else {
+            self.ring_levelled.get(&wpos).copied()
+        }
+    }
+
     /// The levelled altitude of an exact ground column under a listed site,
     /// if its plot levelling moves it ([`Self::set_site_levelling`]).
     #[inline]
@@ -2132,6 +2221,7 @@ impl AuthoredRasters {
             sites_on_patch: &r.sites_on_patch,
             max_exposed_void_columns: r.max_exposed_void_columns,
             site_levelling: r.settings.site_levelling,
+            ring_under_sites_max_change_blocks: r.ring_under_sites_max_change_blocks,
         })
     }
 
