@@ -2185,10 +2185,15 @@ impl AuthoredRasters {
     /// it is underground, so it has to follow lowered ground instead of the
     /// frozen sim height. `sim_alt` itself for a chunk without authored
     /// cells (outside every region in particular).
+    ///
+    /// The value is the chunk-wide minimum authored block (bed, bank or
+    /// ground), not the centre column's. That is deliberate: the client has
+    /// one number per chunk, and a lower one is the safe direction (it can
+    /// only make the client less likely to think it is underground).
     pub fn chunk_ground_alt(&self, chunk_pos: Vec2<i32>, sim_alt: f32) -> f32 {
         match self.chunk_summary.get(&chunk_pos) {
             Some(s) if s.min_ground_block() != i32::MAX => {
-                sim_alt.min(s.min_ground_block() as f32 + 0.5)
+                sim_alt.min(top_block_alt(s.min_ground_block()))
             },
             _ => sim_alt,
         }
