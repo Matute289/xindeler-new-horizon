@@ -428,7 +428,13 @@ pub struct RegionManifest {
     /// cells under a site are not covered (they are reported, as before).
     /// The ground queries answer the rendered altitude on the allowed ring
     /// cells under a listed site, as they do on exact cells that levelling
-    /// moves. Needs a Ground layer, like the other site settings.
+    /// moves. Only ring cells inside the site's bounds are measured: ring
+    /// cells just outside them are not. The measure uses the world's
+    /// calendar but not the regional terrain overrides, so a `Damage`
+    /// override over the site can move the rendered ground by more than the
+    /// measure shows. A very wide ring under a large site is the costly case
+    /// (two column samples per ring cell at start-up); the cell count is
+    /// logged. Needs a Ground layer, like the other site settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ring_under_sites_max_change_blocks: Option<u32>,
 }
@@ -1527,6 +1533,10 @@ pub struct AuthoredRasters {
     /// after civ generation, see [`Self::set_site_levelling`]; empty without
     /// a ground layer).
     site_levelled: HashMap<Vec2<i32>, f32>,
+    /// The ring cells a region allows under listed sites, with the altitude
+    /// the column sampler renders there ([`Self::set_site_ring_levelling`]);
+    /// empty (the ring-cell queries never look) unless a region allows them.
+    ring_levelled: HashMap<Vec2<i32>, f32>,
     /// What this manifest adds to the process-wide counter (released on
     /// drop).
     resident_bytes: usize,
@@ -2039,6 +2049,7 @@ impl AuthoredRasters {
             digest,
             has_ground_layer,
             site_levelled: HashMap::new(),
+            ring_levelled: HashMap::new(),
             resident_bytes: reserved.keep(),
         })
     }
@@ -2150,14 +2161,35 @@ impl AuthoredRasters {
     }
 
     /// Record the exact ground columns that listed sites' plot levelling
-    /// moves, and the ring cells a region allows under them
-    /// (`post_civ::SitePatchReport::levelled_columns`), so the ground
-    /// queries answer the height the column renders there.
+    /// moves (`post_civ::SitePatchReport::levelled_columns`), so the ground
+    /// queries answer the levelled height the column renders there.
     pub(crate) fn set_site_levelling(
         &mut self,
         columns: impl IntoIterator<Item = (Vec2<i32>, f32)>,
     ) {
         self.site_levelled.extend(columns);
+    }
+
+    /// Record the ring cells a region allows under listed sites
+    /// (`post_civ::SitePatchReport::levelled_ring_columns`), so the ground
+    /// queries answer the altitude the column renders there.
+    pub(crate) fn set_site_ring_levelling(
+        &mut self,
+        columns: impl IntoIterator<Item = (Vec2<i32>, f32)>,
+    ) {
+        self.ring_levelled.extend(columns);
+    }
+
+    /// The rendered altitude of a ring cell a region allows under a listed
+    /// site ([`Self::set_site_ring_levelling`]); a no-lookup `None` when no
+    /// region allows ring cells under sites.
+    #[inline]
+    pub fn ring_levelled_alt(&self, wpos: Vec2<i32>) -> Option<f32> {
+        if self.ring_levelled.is_empty() {
+            None
+        } else {
+            self.ring_levelled.get(&wpos).copied()
+        }
     }
 
     /// The levelled altitude of an exact ground column under a listed site,

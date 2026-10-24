@@ -206,7 +206,7 @@ impl WorldSim {
     ///   relief times `1 - w`. Under a listed site the post-civ site check
     ///   refuses a ring cell unless its region allows it
     ///   (`ring_under_sites_max_change_blocks`); an allowed cell answers the
-    ///   altitude the column renders (`AuthoredRasters::site_levelled_alt`);
+    ///   altitude the column renders (`AuthoredRasters::ring_levelled_alt`);
     /// * everything else, and every column outside every region: the chunk
     ///   table ([`Self::get_alt_approx`]), bit for bit.
     ///
@@ -226,7 +226,7 @@ impl WorldSim {
                     .unwrap_or_else(|| top_block_alt(block)),
             ),
             Some(AuthoredCell::Ground { block, weight }) => {
-                match rasters.and_then(|r| r.site_levelled_alt(wpos)) {
+                match rasters.and_then(|r| r.ring_levelled_alt(wpos)) {
                     Some(rendered) => Some(rendered),
                     None => Some(Lerp::lerp(
                         self.get_alt_approx(wpos)?,
@@ -288,17 +288,21 @@ impl WorldSim {
             Some((AuthoredCell::Wet { surface_block, .. }, ..)) => (surface_block + 1) as f32,
             Some((AuthoredCell::Bank { bed_block }, ..)) => (bed_block + 1) as f32,
             Some((AuthoredCell::Ground { block, weight }, sea_fill, _)) => {
-                let top = self.exact_ground_top(wpos, block) as f32;
-                let rendered_ring = (weight != GROUND_EXACT)
-                    .then(|| self.authored_rasters.as_ref()?.site_levelled_alt(wpos))
-                    .flatten();
                 let land = if weight == GROUND_EXACT {
-                    top
-                } else if let Some(rendered) = rendered_ring {
+                    self.exact_ground_top(wpos, block) as f32
+                } else if let Some(rendered) = self
+                    .authored_rasters
+                    .as_ref()
+                    .and_then(|r| r.ring_levelled_alt(wpos))
+                {
                     // A ring cell a region allows under a listed site.
                     (top_block_of_levelled_alt(rendered) + 1) as f32
                 } else {
-                    Lerp::lerp(table_land(), top, weight as f32 / GROUND_EXACT as f32)
+                    Lerp::lerp(
+                        table_land(),
+                        (block + 1) as f32,
+                        weight as f32 / GROUND_EXACT as f32,
+                    )
                 };
                 match sea_fill {
                     // Below sea level the sea fills it: its surface.
@@ -360,6 +364,18 @@ impl WorldSim {
     ) {
         if let Some(r) = self.authored_rasters.as_mut() {
             r.set_site_levelling(columns);
+        }
+    }
+
+    /// Record the ring cells a region allows under listed sites (see
+    /// `AuthoredRasters::set_site_ring_levelling`); a no-op without authored
+    /// rasters.
+    pub(crate) fn set_site_ring_levelling(
+        &mut self,
+        columns: impl IntoIterator<Item = (Vec2<i32>, f32)>,
+    ) {
+        if let Some(r) = self.authored_rasters.as_mut() {
+            r.set_site_ring_levelling(columns);
         }
     }
 

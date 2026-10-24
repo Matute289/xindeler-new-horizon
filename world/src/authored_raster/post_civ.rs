@@ -49,6 +49,7 @@ use crate::{
     IndexRef, Land, World, column::ColumnGen, layer::authored_voids::AuthoredVoids,
     site::SpawnRules, util::Sampler,
 };
+use common::calendar::Calendar;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use tracing::{info, warn};
@@ -104,10 +105,13 @@ pub struct SitePatchReport {
     /// Listed sites whose plot levelling moves exact ground columns
     /// (reported).
     pub levelled_exact: Vec<SiteOnPatch>,
-    /// Every exact ground column the listed sites' levelling moves, and every
-    /// ring cell a region allows under a listed site, with the altitude the
-    /// column sampler renders there, by site then `(y, x)`.
+    /// Every exact ground column the listed sites' levelling moves, with the
+    /// levelled altitude the column sampler renders there, by site then
+    /// `(y, x)`.
     pub levelled_columns: Vec<(Vec2<i32>, f32)>,
+    /// Every ring cell a region allows under a listed site, with the
+    /// altitude the column sampler renders there, by site then `(y, x)`.
+    pub levelled_ring_columns: Vec<(Vec2<i32>, f32)>,
     /// `(region, key)` listings that name no site near the region (stale
     /// pins): reported.
     pub stale_listings: Vec<(String, String)>,
@@ -169,6 +173,7 @@ pub struct SiteGroundCells {
 pub fn site_ground_cells(
     world: &World,
     index: IndexRef,
+    calendar: Option<&Calendar>,
     bounds: Aabr<i32>,
     r: &RegionEntry,
 ) -> SiteGroundCells {
@@ -188,7 +193,23 @@ pub fn site_ground_cells(
         }
         Some(rules.get_preferred_alt())
     };
-    let counted: Vec<(Vec2<i32>, Counted)> = columns(bounds, r.bounds)
+    let cols = columns(bounds, r.bounds);
+    if measure_ring {
+        let ring_cells = cols
+            .par_iter()
+            .filter(|&&p| {
+                matches!(
+                    rasters.cell_at(p),
+                    Some(AuthoredCell::Ground { weight, .. }) if weight != GROUND_EXACT
+                )
+            })
+            .count();
+        info!(
+            region = r.id,
+            ring_cells, "Measuring ring cells under a site (two column samples each)"
+        );
+    }
+    let counted: Vec<(Vec2<i32>, Counted)> = cols
         .par_iter()
         .filter_map(|&wpos| {
             let AuthoredCell::Ground { block, weight } = rasters.cell_at(wpos)? else {
@@ -197,8 +218,8 @@ pub fn site_ground_cells(
             if weight != GROUND_EXACT {
                 let (change, alt) = if measure_ring {
                     match (
-                        with_ring.get((wpos, index, None)),
-                        without_ring.get((wpos, index, None)),
+                        with_ring.get((wpos, index, calendar)),
+                        without_ring.get((wpos, index, calendar)),
                     ) {
                         (Some(a), Some(b)) => ((a.alt - b.alt).abs(), a.alt),
                         // Cannot be measured, so it counts.
@@ -238,7 +259,11 @@ enum Counted {
 }
 
 /// The site check (see the module doc). Ordered by site key, then region.
-pub fn site_patch_report(world: &World, index: IndexRef) -> SitePatchReport {
+pub fn site_patch_report(
+    world: &World,
+    index: IndexRef,
+    calendar: Option<&Calendar>,
+) -> SitePatchReport {
     let mut report = SitePatchReport::default();
     let Some(rasters) = world.sim.authored_rasters.as_ref() else {
         return report;
@@ -266,7 +291,7 @@ pub fn site_patch_report(world: &World, index: IndexRef) -> SitePatchReport {
                 continue;
             }
             report_site(&mut report, r, key, *bounds, || {
-                site_ground_cells(world, index, *bounds, r)
+                site_ground_cells(world, index, calendar, *bounds, r)
             });
         }
         for key in r.sites_on_patch {
@@ -365,7 +390,7 @@ fn report_site(
         report
             .ring_allowed_under_site
             .push(allowed.site(&near, limit));
-        report.levelled_columns.extend(allowed_alts);
+        report.levelled_ring_columns.extend(allowed_alts);
     }
     if !cells.levelled_exact.is_empty() {
         let moved: Vec<Vec2<i32>> = cells.levelled_exact.iter().map(|c| c.0).collect();
@@ -635,6 +660,7 @@ pub(crate) fn check_ground_consumers(
     world: &World,
     index: IndexRef,
     voids: Option<&AuthoredVoids>,
+    calendar: Option<&Calendar>,
 ) -> Result<GroundConsumerReport, LoadError> {
     let has_ground = world
         .sim
@@ -645,7 +671,7 @@ pub(crate) fn check_ground_consumers(
         return Ok(GroundConsumerReport::default());
     }
     let report = GroundConsumerReport {
-        sites: site_patch_report(world, index),
+        sites: site_patch_report(world, index, calendar),
         voids: void_exposure(world, voids),
         roads: road_cliffs(world),
     };
@@ -782,7 +808,7 @@ mod tests {
         let report = file(&r, KEY, &[f32::INFINITY, f32::INFINITY]);
         assert_eq!(report.ring_under_site.len(), 1);
         assert!(report.ring_allowed_under_site.is_empty());
-        assert!(report.levelled_columns.is_empty());
+        assert!(report.levelled_ring_columns.is_empty());
         let errors = site_errors(&report);
         assert_eq!(errors.len(), 1);
         assert_eq!(
@@ -817,7 +843,8 @@ mod tests {
             })
         );
         // The rendered altitudes of the allowed cells.
-        assert_eq!(report.levelled_columns, vec![
+        assert!(report.levelled_columns.is_empty());
+        assert_eq!(report.levelled_ring_columns, vec![
             (Vec2::new(200, 300), 100.0),
             (Vec2::new(201, 300), 101.0),
             (Vec2::new(202, 300), 102.0),

@@ -250,8 +250,14 @@ impl World {
                 &world,
                 index.as_index_ref(),
                 layer::authored_regions::authored_voids(&index, &world.sim),
+                calendar.as_ref(),
             ) {
-                Ok(report) => world.sim.set_site_levelling(report.sites.levelled_columns),
+                Ok(report) => {
+                    world.sim.set_site_levelling(report.sites.levelled_columns);
+                    world
+                        .sim
+                        .set_site_ring_levelling(report.sites.levelled_ring_columns);
+                },
                 Err(err) => {
                     tracing::error!("{err}");
                     panic!("{err}")
