@@ -400,6 +400,35 @@ pub struct RegionManifest {
     /// accidental exposures and pays for them in memory.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub max_exposed_void_columns: u32,
+    /// Lets a *listed* site ([`Self::sites_on_patch`]) stand on blend (ring)
+    /// cells of this region, as long as the ring moves the ground there by at
+    /// most this many blocks. Default `None` (off): any ring cell under a
+    /// listed site stops world generation, and the patch must grow its exact
+    /// footprint over the site. Unlisted sites are refused near the region
+    /// whatever this says.
+    ///
+    /// The change measured at a ring cell is how far the ring moves the
+    /// rendered ground from what the same column renders without the ring,
+    /// the natural site ground: with `L(x) = x + (pref - x) * factor` (the
+    /// sites' plot levelling, which the column sampler applies to the natural
+    /// column and then once more to a ring cell; with
+    /// [`Self::site_levelling`] off, `L` is the identity), `natural =
+    /// L(table altitude)`, `ring = L(natural + w * (target - natural))` with
+    /// `w` the cell's blend weight (below 1), and the change is `|ring -
+    /// natural|`. Under a fully levelled plot (`factor` 1) it is 0; where the
+    /// plot is only partly levelled it also holds the second levelling the
+    /// ring cell gets (`factor * |pref - natural|`, even at weight 0). Every
+    /// ring cell under a listed site must stay within the limit, so the ring
+    /// never leaves a step or a seam larger than the limit against the
+    /// levelled site ground around it.
+    /// The engine's relief noise is not part of the measure (the table
+    /// altitude stands for the natural column, as in the site layout's own
+    /// ground query). One cell over the limit stops world generation,
+    /// naming the site and the count of such cells. The exact cells under a
+    /// site are not covered by this limit (they are reported, as before).
+    /// Needs a Ground layer, like the other site settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ring_under_sites_max_change_blocks: Option<u32>,
 }
 
 /// The digest of one region's manifest entry ([`RegionEntry::digest`]): the
@@ -989,6 +1018,8 @@ pub struct RegionEntry<'a> {
     pub max_exposed_void_columns: u32,
     /// [`RegionManifest::site_levelling`].
     pub site_levelling: bool,
+    /// [`RegionManifest::ring_under_sites_max_change_blocks`].
+    pub ring_under_sites_max_change_blocks: Option<u32>,
 }
 
 /// Per-chunk summary of the authored cells (water, banks and ground),
@@ -1078,6 +1109,8 @@ struct Region {
     sites_on_patch: Vec<String>,
     /// [`RegionManifest::max_exposed_void_columns`].
     max_exposed_void_columns: u32,
+    /// [`RegionManifest::ring_under_sites_max_change_blocks`].
+    ring_under_sites_max_change_blocks: Option<u32>,
     min: Vec2<i32>,
     max: Vec2<i32>,
     feather: i32,
@@ -1710,11 +1743,13 @@ impl AuthoredRasters {
             if !rm.layers.contains(&LayerKind::Ground)
                 && (!rm.sites_on_patch.is_empty()
                     || !rm.site_levelling
-                    || rm.max_exposed_void_columns > 0)
+                    || rm.max_exposed_void_columns > 0
+                    || rm.ring_under_sites_max_change_blocks.is_some())
             {
                 return Err(rerr(
-                    "sites_on_patch, site_levelling and max_exposed_void_columns configure the \
-                     ground layer, and the region does not declare Ground"
+                    "sites_on_patch, site_levelling, max_exposed_void_columns and \
+                     ring_under_sites_max_change_blocks configure the ground layer, and the \
+                     region does not declare Ground"
                         .into(),
                 ));
             }
@@ -1945,6 +1980,7 @@ impl AuthoredRasters {
                 digest: region_digest,
                 sites_on_patch: rm.sites_on_patch,
                 max_exposed_void_columns: rm.max_exposed_void_columns,
+                ring_under_sites_max_change_blocks: rm.ring_under_sites_max_change_blocks,
                 min,
                 max,
                 feather: rm.feather_m,
@@ -2132,6 +2168,7 @@ impl AuthoredRasters {
             sites_on_patch: &r.sites_on_patch,
             max_exposed_void_columns: r.max_exposed_void_columns,
             site_levelling: r.settings.site_levelling,
+            ring_under_sites_max_change_blocks: r.ring_under_sites_max_change_blocks,
         })
     }
 

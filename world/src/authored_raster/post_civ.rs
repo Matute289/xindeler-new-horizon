@@ -7,9 +7,12 @@
 //!   `sites_on_patch` (its layout follows the patch, so listing it is the
 //!   reviewed act that re-blesses its layout digest); a listed site must not
 //!   stand on ring cells (the authored-aware ground query only approximates
-//!   them); and every exact ground column a listed site's plot levelling moves
-//!   is counted (reported, not refused: houses level their lots) and handed to
-//!   the ground queries ([`SitePatchReport::levelled_columns`], applied by
+//!   them), unless the region allows it with
+//!   `ring_under_sites_max_change_blocks` and the ring moves the ground by no
+//!   more than that; and every exact ground column a listed site's plot
+//!   levelling moves is counted (reported, not refused: houses level their
+//!   lots) and handed to the ground queries
+//!   ([`SitePatchReport::levelled_columns`], applied by
 //!   `WorldSim::set_site_levelling`), so `WorldSim::ground_alt_at` there
 //!   answers the levelled height the column renders, not the patch under it.
 //! * **Voids** ([`void_exposure`]): an authored void (cave, interior) whose
@@ -63,6 +66,18 @@ pub struct SiteOnPatch {
     pub cells: usize,
     /// The first counted cell, by `(y, x)`.
     pub example: Option<Vec2<i32>>,
+    /// For ring cells under a site of a region that allows them: the limit
+    /// and the largest change among the counted cells.
+    pub ring_change: Option<RingChange>,
+}
+
+/// How far the counted ring cells under a site move the ground, against the
+/// region's allowance (`RegionManifest::ring_under_sites_max_change_blocks`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RingChange {
+    pub limit_blocks: u32,
+    /// The largest change among the counted cells, rounded up.
+    pub largest_blocks: u32,
 }
 
 /// What [`site_patch_report`] found.
@@ -72,8 +87,13 @@ pub struct SitePatchReport {
     pub listed: Vec<SiteOnPatch>,
     /// Sites near a ground region that the region does not list: an error.
     pub unlisted: Vec<SiteOnPatch>,
-    /// Listed sites whose footprint holds ring (blend) cells: an error.
+    /// Listed sites whose footprint holds ring (blend) cells the region does
+    /// not allow (all of them without an allowance, those that move the
+    /// ground more than the allowance with one): an error.
     pub ring_under_site: Vec<SiteOnPatch>,
+    /// Listed sites whose ring cells the region allows (within its
+    /// `ring_under_sites_max_change_blocks`): reported.
+    pub ring_allowed_under_site: Vec<SiteOnPatch>,
     /// Listed sites whose plot levelling moves exact ground columns
     /// (reported).
     pub levelled_exact: Vec<SiteOnPatch>,
@@ -110,8 +130,11 @@ fn columns(a: Aabr<i32>, b: Aabr<i32>) -> Vec<Vec2<i32>> {
 /// The ground cells under one site's footprint.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SiteGroundCells {
-    /// Blend (ring) cells, by `(y, x)`.
-    pub ring: Vec<Vec2<i32>>,
+    /// Blend (ring) cells, by `(y, x)`, with how far the ring moves the
+    /// ground there, in blocks ([`ring_change`]). Measured only when the
+    /// region allows ring cells under sites; otherwise infinite (every ring
+    /// cell counts, unmeasured).
+    pub ring: Vec<(Vec2<i32>, f32)>,
     /// Exact cells whose top block the sites' plot levelling moves (only
     /// when the region levels sites), with the levelled altitude, by `(y, x)`.
     pub levelled_exact: Vec<(Vec2<i32>, f32)>,
@@ -131,38 +154,88 @@ pub fn site_ground_cells(
         return SiteGroundCells::default();
     };
     let land = Land::from_sim(&world.sim);
-    // `(column, levelled altitude)`; `None` for a ring cell.
-    let counted: Vec<(Vec2<i32>, Option<f32>)> = columns(bounds, r.bounds)
+    let measure_ring = r.ring_under_sites_max_change_blocks.is_some();
+    // The sites' preferred altitude and blend factor at a column.
+    let plot_rule = |wpos: Vec2<i32>| -> Option<(f32, f32)> {
+        let chunk = world.sim.get_wpos(wpos)?;
+        let mut rules = SpawnRules::default();
+        for s in &chunk.sites {
+            index.sites[*s].spawn_rules(&mut rules, &land, wpos);
+        }
+        Some(rules.get_preferred_alt())
+    };
+    let counted: Vec<(Vec2<i32>, Counted)> = columns(bounds, r.bounds)
         .par_iter()
         .filter_map(|&wpos| {
             let AuthoredCell::Ground { block, weight } = rasters.cell_at(wpos)? else {
                 return None;
             };
             if weight != GROUND_EXACT {
-                return Some((wpos, None));
+                let change = if measure_ring {
+                    let plot = if r.site_levelling {
+                        plot_rule(wpos)
+                    } else {
+                        Some((0.0, 0.0))
+                    };
+                    match (plot, world.sim.get_alt_approx(wpos)) {
+                        (Some(plot), Some(table)) => {
+                            ring_change(table, top_block_alt(block), weight, plot)
+                        },
+                        // Outside the map: cannot be measured, so it counts.
+                        _ => f32::INFINITY,
+                    }
+                } else {
+                    f32::INFINITY
+                };
+                return Some((wpos, Counted::Ring(change)));
             }
             if !r.site_levelling {
                 return None;
             }
-            let chunk = world.sim.get_wpos(wpos)?;
-            let mut rules = SpawnRules::default();
-            for s in &chunk.sites {
-                index.sites[*s].spawn_rules(&mut rules, &land, wpos);
-            }
-            let (pref, factor) = rules.get_preferred_alt();
+            let (pref, factor) = plot_rule(wpos)?;
             let alt = top_block_alt(block);
             let levelled = alt + (pref - alt) * factor.clamped(0.0, 1.0);
-            (factor > 0.0 && levelled as i32 != alt as i32).then_some((wpos, Some(levelled)))
+            (factor > 0.0 && levelled as i32 != alt as i32)
+                .then_some((wpos, Counted::Levelled(levelled)))
         })
         .collect();
     let mut cells = SiteGroundCells::default();
-    for (p, levelled) in counted {
-        match levelled {
-            None => cells.ring.push(p),
-            Some(alt) => cells.levelled_exact.push((p, alt)),
+    for (p, c) in counted {
+        match c {
+            Counted::Ring(change) => cells.ring.push((p, change)),
+            Counted::Levelled(alt) => cells.levelled_exact.push((p, alt)),
         }
     }
     cells
+}
+
+/// A ground column under a site that the check counts.
+enum Counted {
+    /// A ring cell, with [`ring_change`] of it.
+    Ring(f32),
+    /// An exact cell the plot levelling moves, with the levelled altitude.
+    Levelled(f32),
+}
+
+/// How far, in blocks, a ring cell of blend weight `weight` moves the
+/// rendered ground away from the natural site ground in its column.
+///
+/// `table` is the chunk table's altitude, `target` the authored block's
+/// altitude, `plot` the sites' `(preferred altitude, factor)` there. The
+/// column sampler levels the natural column (`natural`), blends it toward the
+/// target by the ring weight, and levels the ring cell once more, so
+/// `natural = L(table)` and `ring = L(natural + w * (target - natural))` with
+/// `L(x) = x + (pref - x) * factor`. Under a fully levelled plot (factor 1)
+/// both are the preferred altitude and the change is 0; a plot nowhere near
+/// levelled (factor 0) sees the ring's own `w * |target - natural|`; in
+/// between the change also holds the second levelling the ring cell gets
+/// (`factor * |pref - natural|`, even at weight 0), which is why the measure
+/// is the rendered change and not just the distance to the target.
+pub fn ring_change(table: f32, target: f32, weight: u8, (pref, factor): (f32, f32)) -> f32 {
+    let level = |a: f32| a + (pref - a) * factor.clamped(0.0, 1.0);
+    let natural = level(table);
+    let ring = level(natural + (target - natural) * (weight as f32 / GROUND_EXACT as f32));
+    (ring - natural).abs()
 }
 
 /// The site check (see the module doc). Ordered by site key, then region.
@@ -193,32 +266,9 @@ pub fn site_patch_report(world: &World, index: IndexRef) -> SitePatchReport {
             if !overlaps(grown(*bounds, SITE_PATCH_MARGIN_M), r.bounds) {
                 continue;
             }
-            let near = SiteOnPatch {
-                site: key.clone(),
-                region: r.id.to_string(),
-                bounds: *bounds,
-                cells: 0,
-                example: None,
-            };
-            if !r.sites_on_patch.contains(key) {
-                report.unlisted.push(near);
-                continue;
-            }
-            let cells = site_ground_cells(world, index, *bounds, r);
-            let tally = |hits: &[Vec2<i32>]| SiteOnPatch {
-                cells: hits.len(),
-                example: hits.first().copied(),
-                ..near.clone()
-            };
-            if !cells.ring.is_empty() {
-                report.ring_under_site.push(tally(&cells.ring));
-            }
-            if !cells.levelled_exact.is_empty() {
-                let moved: Vec<Vec2<i32>> = cells.levelled_exact.iter().map(|c| c.0).collect();
-                report.levelled_exact.push(tally(&moved));
-                report.levelled_columns.extend(cells.levelled_exact);
-            }
-            report.listed.push(near);
+            report_site(&mut report, r, key, *bounds, || {
+                site_ground_cells(world, index, *bounds, r)
+            });
         }
         for key in r.sites_on_patch {
             if !report
@@ -231,6 +281,61 @@ pub fn site_patch_report(world: &World, index: IndexRef) -> SitePatchReport {
         }
     }
     report
+}
+
+/// Files one site that is near region `r` in `report`. `cells` gives the
+/// ground cells under the site; it is not called for an unlisted site.
+fn report_site(
+    report: &mut SitePatchReport,
+    r: &RegionEntry,
+    key: &str,
+    bounds: Aabr<i32>,
+    cells: impl FnOnce() -> SiteGroundCells,
+) {
+    let near = SiteOnPatch {
+        site: key.to_string(),
+        region: r.id.to_string(),
+        bounds,
+        cells: 0,
+        example: None,
+        ring_change: None,
+    };
+    if !r.sites_on_patch.iter().any(|k| k == key) {
+        report.unlisted.push(near);
+        return;
+    }
+    let cells = cells();
+    let tally = |hits: &[Vec2<i32>]| SiteOnPatch {
+        cells: hits.len(),
+        example: hits.first().copied(),
+        ..near.clone()
+    };
+    let limit = r.ring_under_sites_max_change_blocks;
+    let ring_tally = |hits: &[(Vec2<i32>, f32)]| SiteOnPatch {
+        ring_change: limit.map(|limit_blocks| RingChange {
+            limit_blocks,
+            largest_blocks: hits.iter().map(|h| h.1).fold(0.0, f32::max).ceil() as u32,
+        }),
+        ..tally(&hits.iter().map(|h| h.0).collect::<Vec<_>>())
+    };
+    // A cell is allowed only when its change is known and within the limit.
+    let (allowed, refused): (Vec<_>, Vec<_>) = cells
+        .ring
+        .iter()
+        .copied()
+        .partition(|c| limit.is_some_and(|l| c.1 <= l as f32));
+    if !refused.is_empty() {
+        report.ring_under_site.push(ring_tally(&refused));
+    }
+    if !allowed.is_empty() {
+        report.ring_allowed_under_site.push(ring_tally(&allowed));
+    }
+    if !cells.levelled_exact.is_empty() {
+        let moved: Vec<Vec2<i32>> = cells.levelled_exact.iter().map(|c| c.0).collect();
+        report.levelled_exact.push(tally(&moved));
+        report.levelled_columns.extend(cells.levelled_exact);
+    }
+    report.listed.push(near);
 }
 
 /// One region's result of [`void_exposure`].
@@ -411,6 +516,56 @@ pub fn road_cliffs(world: &World) -> RoadCliffReport {
     }
 }
 
+fn site_names(v: &[SiteOnPatch], with_cells: bool) -> String {
+    v.iter()
+        .take(10)
+        .map(|s| {
+            if let Some(c) = s.ring_change.filter(|_| with_cells) {
+                format!(
+                    "{} (region '{}', {} cell(s) move the ground by more than the {} block(s) the \
+                     region allows, by up to {} block(s), e.g. {:?})",
+                    s.site, s.region, s.cells, c.limit_blocks, c.largest_blocks, s.example
+                )
+            } else if with_cells {
+                format!(
+                    "{} (region '{}', {} cell(s), e.g. {:?})",
+                    s.site, s.region, s.cells, s.example
+                )
+            } else {
+                format!(
+                    "{} (region '{}', bounds {:?}..{:?})",
+                    s.site, s.region, s.bounds.min, s.bounds.max
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The start-up errors of the site check: sites near a region that does not
+/// list them, and listed sites on ring cells the region does not allow.
+fn site_errors(sites: &SitePatchReport) -> Vec<String> {
+    let mut errors = Vec::new();
+    if !sites.unlisted.is_empty() {
+        errors.push(format!(
+            "{} site(s) come within {SITE_PATCH_MARGIN_M} m of a ground region that does not list \
+             them in sites_on_patch: {}. Their layout would follow every patch edit: list them \
+             (and re-bless their layout digests) or move the region",
+            sites.unlisted.len(),
+            site_names(&sites.unlisted, false)
+        ));
+    }
+    if !sites.ring_under_site.is_empty() {
+        errors.push(format!(
+            "{} listed site(s) stand on blend (ring) cells, where the ground query only \
+             approximates the rendered terrain: {}. Grow the exact footprint over the site",
+            sites.ring_under_site.len(),
+            site_names(&sites.ring_under_site, true)
+        ));
+    }
+    errors
+}
+
 /// Everything the post-civ ground checks found.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GroundConsumerReport {
@@ -450,6 +605,16 @@ pub(crate) fn check_ground_consumers(
             "Site plot levelling moves exact authored ground columns (site_levelling)"
         );
     }
+    for s in &report.sites.ring_allowed_under_site {
+        info!(
+            site = s.site,
+            region = s.region,
+            cells = s.cells,
+            largest_change_blocks = ?s.ring_change.map(|c| c.largest_blocks),
+            "Ring (blend) cells under a listed site, within the region's \
+             ring_under_sites_max_change_blocks"
+        );
+    }
     for (region, key) in &report.sites.stale_listings {
         warn!(
             region,
@@ -468,42 +633,7 @@ pub(crate) fn check_ground_consumers(
         );
     }
     let mut errors = Vec::new();
-    let names = |v: &[SiteOnPatch], with_cells: bool| -> String {
-        v.iter()
-            .take(10)
-            .map(|s| {
-                if with_cells {
-                    format!(
-                        "{} (region '{}', {} cell(s), e.g. {:?})",
-                        s.site, s.region, s.cells, s.example
-                    )
-                } else {
-                    format!(
-                        "{} (region '{}', bounds {:?}..{:?})",
-                        s.site, s.region, s.bounds.min, s.bounds.max
-                    )
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    if !report.sites.unlisted.is_empty() {
-        errors.push(format!(
-            "{} site(s) come within {SITE_PATCH_MARGIN_M} m of a ground region that does not list \
-             them in sites_on_patch: {}. Their layout would follow every patch edit: list them \
-             (and re-bless their layout digests) or move the region",
-            report.sites.unlisted.len(),
-            names(&report.sites.unlisted, false)
-        ));
-    }
-    if !report.sites.ring_under_site.is_empty() {
-        errors.push(format!(
-            "{} listed site(s) stand on blend (ring) cells, where the ground query only \
-             approximates the rendered terrain: {}. Grow the exact footprint over the site",
-            report.sites.ring_under_site.len(),
-            names(&report.sites.ring_under_site, true)
-        ));
-    }
+    errors.extend(site_errors(&report.sites));
     for v in report.voids.iter().filter(|v| v.is_error()) {
         let features: Vec<String> = v
             .features
@@ -539,5 +669,160 @@ pub(crate) fn check_ground_consumers(
             "authored rasters: {}",
             errors.join("; ")
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY: &str = "settlement:kalthis";
+    const BOUNDS: Aabr<i32> = Aabr {
+        min: Vec2::new(100, 100),
+        max: Vec2::new(900, 900),
+    };
+
+    fn region(listed: &[String], limit: Option<u32>) -> RegionEntry<'_> {
+        RegionEntry {
+            id: "pit",
+            bounds: Aabr {
+                min: Vec2::new(0, 0),
+                max: Vec2::new(1024, 1024),
+            },
+            digest: "",
+            has_ground: true,
+            sites_on_patch: listed,
+            max_exposed_void_columns: 0,
+            site_levelling: true,
+            ring_under_sites_max_change_blocks: limit,
+        }
+    }
+
+    /// The report of one site standing on ring cells with the given changes.
+    fn file(r: &RegionEntry, key: &str, changes: &[f32]) -> SitePatchReport {
+        let ring = changes
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (Vec2::new(200 + i as i32, 300), *c))
+            .collect();
+        let mut report = SitePatchReport::default();
+        report_site(&mut report, r, key, BOUNDS, || SiteGroundCells {
+            ring,
+            levelled_exact: Vec::new(),
+        });
+        report
+    }
+
+    #[test]
+    fn without_an_allowance_any_ring_cell_under_a_listed_site_is_refused() {
+        let listed = vec![KEY.to_string()];
+        let r = region(&listed, None);
+        // What the cell scan gives without an allowance: unmeasured.
+        let report = file(&r, KEY, &[f32::INFINITY, f32::INFINITY]);
+        assert_eq!(report.ring_under_site.len(), 1);
+        assert!(report.ring_allowed_under_site.is_empty());
+        let errors = site_errors(&report);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0],
+            "1 listed site(s) stand on blend (ring) cells, where the ground query only \
+             approximates the rendered terrain: settlement:kalthis (region 'pit', 2 cell(s), e.g. \
+             Some(Vec2 { x: 200, y: 300 })). Grow the exact footprint over the site"
+        );
+        // A measured change does not matter while the allowance is off.
+        let report = file(&r, KEY, &[0.0, 0.5]);
+        assert_eq!(report.ring_under_site.len(), 1);
+        assert_eq!(report.ring_under_site[0].ring_change, None);
+    }
+
+    #[test]
+    fn ring_cells_within_the_allowance_are_accepted() {
+        let listed = vec![KEY.to_string()];
+        let r = region(&listed, Some(3));
+        let report = file(&r, KEY, &[0.0, 2.5, 3.0]);
+        assert!(report.ring_under_site.is_empty());
+        assert!(site_errors(&report).is_empty());
+        assert_eq!(report.listed.len(), 1);
+        assert_eq!(report.ring_allowed_under_site.len(), 1);
+        let allowed = &report.ring_allowed_under_site[0];
+        assert_eq!(allowed.cells, 3);
+        assert_eq!(
+            allowed.ring_change,
+            Some(RingChange {
+                limit_blocks: 3,
+                largest_blocks: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn one_ring_cell_over_the_allowance_is_refused_naming_site_and_count() {
+        let listed = vec![KEY.to_string()];
+        let r = region(&listed, Some(3));
+        let report = file(&r, KEY, &[1.0, 2.0, 3.5, 3.0]);
+        assert_eq!(report.ring_under_site.len(), 1);
+        assert_eq!(report.ring_under_site[0].cells, 1);
+        assert_eq!(report.ring_allowed_under_site[0].cells, 3);
+        let errors = site_errors(&report);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains(KEY), "{}", errors[0]);
+        assert!(errors[0].contains("blend (ring)"), "{}", errors[0]);
+        assert!(
+            errors[0].contains(
+                "1 cell(s) move the ground by more than the 3 block(s) the region allows, by up \
+                 to 4 block(s)"
+            ),
+            "{}",
+            errors[0]
+        );
+        // A cell that cannot be measured counts as over the limit.
+        for bad in [f32::INFINITY, f32::NAN] {
+            let report = file(&r, KEY, &[0.0, bad]);
+            assert_eq!(report.ring_under_site[0].cells, 1);
+        }
+    }
+
+    #[test]
+    fn an_unlisted_site_stays_strict_whatever_the_allowance() {
+        let listed = vec!["settlement:other".to_string()];
+        let r = region(&listed, Some(1000));
+        let mut report = SitePatchReport::default();
+        report_site(&mut report, &r, KEY, BOUNDS, || {
+            unreachable!("an unlisted site's cells are never looked at")
+        });
+        assert_eq!(report.unlisted.len(), 1);
+        assert!(report.listed.is_empty() && report.ring_allowed_under_site.is_empty());
+        let errors = site_errors(&report);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("does not list"), "{}", errors[0]);
+        assert!(errors[0].contains(KEY), "{}", errors[0]);
+    }
+
+    #[test]
+    fn ring_change_follows_the_levelling_rule() {
+        // No levelling: the ring's own blend toward the target.
+        let got = ring_change(100.0, 110.0, 128, (0.0, 0.0));
+        assert!((got - 10.0 * (128.0 / 255.0)).abs() < 1e-4, "{got}");
+        assert_eq!(ring_change(100.0, 90.0, 0, (0.0, 0.0)), 0.0);
+        // A fully levelled plot ignores the ring.
+        assert_eq!(ring_change(100.0, 130.0, 200, (101.0, 1.0)), 0.0);
+        // Half levelled: the natural ground is already half way to the plot
+        // altitude, and the ring cell is levelled once more.
+        let natural: f32 = 100.0 + (110.0 - 100.0) * 0.5;
+        let ring = natural + (130.0 - natural) * (200.0 / 255.0);
+        let ring = ring + (110.0 - ring) * 0.5;
+        let got = ring_change(100.0, 130.0, 200, (110.0, 0.5));
+        assert!((got - (ring - natural).abs()).abs() < 1e-4, "{got}");
+    }
+
+    #[test]
+    fn ring_change_counts_the_second_levelling_of_a_ring_cell() {
+        // Even a ring cell of weight 0 is levelled again on top of the
+        // natural column's levelling: half way to the plot altitude (50)
+        // from the natural 75 is 12.5 blocks, whatever the target.
+        let got = ring_change(100.0, 70.0, 0, (50.0, 0.5));
+        assert!((got - 12.5).abs() < 1e-4, "{got}");
+        let got = ring_change(100.0, 999.0, 0, (50.0, 0.5));
+        assert!((got - 12.5).abs() < 1e-4, "{got}");
     }
 }

@@ -1723,6 +1723,7 @@ fn new_manifest_fields_at_their_defaults_do_not_change_the_digest() {
             sites_on_patch: vec![],
             site_levelling: true,
             max_exposed_void_columns: 0,
+            ring_under_sites_max_change_blocks: None,
         }],
     };
     let text = ron::ser::to_string(&m).unwrap();
@@ -1785,6 +1786,7 @@ fn region_digest_is_pinned() {
         sites_on_patch: vec![],
         site_levelling: true,
         max_exposed_void_columns: 0,
+        ring_under_sites_max_change_blocks: None,
     };
     assert_eq!(
         region_digest(&rm).unwrap(),
@@ -2205,7 +2207,9 @@ fn region_digests_follow_each_region_and_the_new_fields_are_digest_stable() {
     no_level.site_levelling = false;
     let mut voids = spec("a", 1024, 24_000);
     voids.max_exposed_void_columns = 3;
-    for s in [listed, no_level, voids] {
+    let mut ring = spec("a", 1024, 24_000);
+    ring.ring_under_sites_max_change_blocks = Some(2);
+    for s in [listed, no_level, voids, ring] {
         let r = load(&[build_region(&s).unwrap()]).unwrap();
         assert_ne!(r.region_digests()["a"], da["a"]);
     }
@@ -2215,6 +2219,7 @@ fn region_digests_follow_each_region_and_the_new_fields_are_digest_stable() {
         "sites_on_patch",
         "site_levelling",
         "max_exposed_void_columns",
+        "ring_under_sites_max_change_blocks",
     ] {
         assert!(
             !text.contains(field),
@@ -2224,6 +2229,7 @@ fn region_digests_follow_each_region_and_the_new_fields_are_digest_stable() {
     let parsed: RegionManifest = ron::from_str(&text).unwrap();
     assert!(parsed.site_levelling && parsed.sites_on_patch.is_empty());
     assert_eq!(parsed.max_exposed_void_columns, 0);
+    assert_eq!(parsed.ring_under_sites_max_change_blocks, None);
 }
 
 #[test]
