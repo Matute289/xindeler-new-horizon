@@ -1335,6 +1335,45 @@ fn ground_cells_are_read_exactly() {
 }
 
 #[test]
+fn chunk_ground_alt_follows_lowered_ground_and_never_exceeds_the_sim_height() {
+    let ar = load(&[build_region(&plateau_spec()).unwrap()]).unwrap();
+    let authored = Vec2::new(1150 / 32, 1100 / 32);
+    let lowest = ar.chunk_summary(authored).unwrap().min_ground_block();
+    assert_eq!(lowest, 248);
+
+    // A cut of about 90 m: the sim says 340, the authored ground is far below.
+    assert_eq!(ar.chunk_ground_alt(authored, 340.0), 248.5);
+    // Raised ground: the sim height is already lower, so it is kept.
+    assert_eq!(ar.chunk_ground_alt(authored, 200.0), 200.0);
+    // A chunk with no authored cell reports exactly the sim height.
+    let procedural = Vec2::new(authored.x + 50, authored.y + 50);
+    assert!(ar.chunk_summary(procedural).is_none());
+    assert_eq!(ar.chunk_ground_alt(procedural, 340.0), 340.0);
+}
+
+#[test]
+fn chunk_ground_alt_counts_a_wet_bed_and_handles_negative_blocks() {
+    // A chunk with water cells and no ground cell: the lowest bed counts.
+    let mut ar = load(&[build_region(&river_spec()).unwrap()]).unwrap();
+    let wet_chunk = Vec2::new(1300 / 32, 1110 / 32);
+    let s = *ar.chunk_summary(wet_chunk).unwrap();
+    assert!(s.wet_columns > 0);
+    assert_eq!(s.min_ground_cell_block, i32::MAX);
+    assert_eq!(s.min_bed_block, 232);
+    assert_eq!(ar.chunk_ground_alt(wet_chunk, 300.0), 232.5);
+    assert_eq!(ar.chunk_ground_alt(wet_chunk, 200.0), 200.0);
+
+    // Below block 0 the altitude is the block itself, not `block + 0.5`.
+    let deep = Vec2::new(1000, 1000);
+    ar.chunk_summary.insert(deep, ChunkWaterSummary {
+        min_ground_cell_block: -7,
+        ..Default::default()
+    });
+    assert_eq!(ar.chunk_ground_alt(deep, 50.0), -7.0);
+    assert_eq!(ar.chunk_ground_alt(deep, -20.0), -20.0);
+}
+
+#[test]
 fn resolve_exact_ground_drops_every_engine_term() {
     let cell = AuthoredCell::Ground {
         block: 251,
