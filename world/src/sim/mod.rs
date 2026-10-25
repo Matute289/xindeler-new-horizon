@@ -3745,7 +3745,14 @@ impl WorldSim {
                     dh[lake_idx],
                     lake_is_authored_elevated,
                 ) {
-                    0.0
+                    // PLAN-B PROTOTYPE (scratch only): a flowing corridor chunk whose
+                    // authored surface sits above sea level keeps its own surface as
+                    // the water level instead of being forced to sea level (which
+                    // sinks it into a `alt.min(water_alt - 5)` pit).
+                    let is_corridor = authored_cromatolis_v0
+                        && (authored_mask_hit(map_size_lg, &authored_river_channels_layer, chunk_idx)
+                            || authored_mask_hit(map_size_lg, &authored_elevated_rivers_layer, chunk_idx));
+                    if is_corridor && alt[chunk_idx] > 0.0 { alt[chunk_idx] as f32 } else { 0.0 }
                 } else {
                     // This is not flowing into the ocean, so we can use the existing water_alt.
                     water_alt[chunk_idx] as f32
