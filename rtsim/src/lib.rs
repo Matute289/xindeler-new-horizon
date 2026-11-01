@@ -136,7 +136,7 @@
 //!
 //! See [`rule::npc_ai`].
 
-#![feature(never_type, binary_heap_drain_sorted)]
+#![feature(binary_heap_drain_sorted)]
 
 pub mod ai;
 pub mod data;
