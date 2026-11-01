@@ -4,7 +4,7 @@
     clippy::needless_pass_by_ref_mut // until we find a better way for specs
 )]
 #![deny(clippy::clone_on_ref_ptr)]
-#![feature(box_patterns, option_zip, const_type_name, slice_partition_dedup)]
+#![feature(option_zip, const_type_name, slice_partition_dedup)]
 
 // NH-79 Phase 2: `server-cli`'s `/player_api/v1` auth middleware needs
 // `authc::AuthClient`/`CharacterAccessToken` directly (via

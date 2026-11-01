@@ -49,12 +49,12 @@ pub struct CharacterScreenResponse {
 
 impl CharacterScreenResponse {
     pub fn is_err(&self) -> bool {
-        matches!(
-            &self.response_kind,
-            CharacterScreenResponseKind::CharacterData(box Err(_))
-                | CharacterScreenResponseKind::CharacterList(Err(_))
-                | CharacterScreenResponseKind::CharacterCreation(Err(_))
-        )
+        match &self.response_kind {
+            CharacterScreenResponseKind::CharacterData(data) => data.is_err(),
+            CharacterScreenResponseKind::CharacterList(Err(_))
+            | CharacterScreenResponseKind::CharacterCreation(Err(_)) => true,
+            _ => false,
+        }
     }
 }
 
