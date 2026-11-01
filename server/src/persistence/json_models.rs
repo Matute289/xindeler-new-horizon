@@ -1335,8 +1335,8 @@ pub mod tests {
         fn every_slot_index_round_trips_independently() {
             let pool = four_keys();
             let mut before = TriggerSlots::default();
-            for index in 0..MAX_TRIGGER_SLOTS {
-                before.slots[index] = Some(TriggerSlot::from_pool_index(
+            for (index, slot) in before.slots.iter_mut().enumerate() {
+                *slot = Some(TriggerSlot::from_pool_index(
                     index,
                     TriggerCondition::EnergyBelow(0.1 * index as f32),
                 ));

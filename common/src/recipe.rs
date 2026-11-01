@@ -450,19 +450,6 @@ impl RecipeBookManifest {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn complete_recipe_book_valid_key_check() {
-        let recipe_book = complete_recipe_book().read();
-        let is_invalid_key =
-            |input: &str| input.chars().any(|c| c.is_uppercase() || c.is_whitespace());
-        assert!(!recipe_book.iter().any(|(k, _)| is_invalid_key(k)));
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RawRecipeInput {
     Item(String),
@@ -891,5 +878,18 @@ impl Asset for ReverseComponentRecipeBook {
             recipes.insert(recipe.itemdef_output(), recipe.clone());
         }
         Ok(ReverseComponentRecipeBook { recipes })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn complete_recipe_book_valid_key_check() {
+        let recipe_book = complete_recipe_book().read();
+        let is_invalid_key =
+            |input: &str| input.chars().any(|c| c.is_uppercase() || c.is_whitespace());
+        assert!(!recipe_book.iter().any(|(k, _)| is_invalid_key(k)));
     }
 }
