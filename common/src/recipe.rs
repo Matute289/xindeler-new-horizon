@@ -764,7 +764,7 @@ impl<'a> IntoIterator for &'a ComponentRecipe {
         ComponentRecipeInputsIterator {
             material: Some(&self.material),
             modifier: self.modifier.as_ref(),
-            additional_inputs: self.additional_inputs.as_slice().iter(),
+            additional_inputs: self.additional_inputs.iter(),
         }
     }
 }

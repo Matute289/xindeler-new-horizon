@@ -1591,7 +1591,7 @@ fn handle_make_sprite(
                 terrain_persistence.set_block(pos, block);
             }
         };
-        if let Ok(sk) = SpriteKind::try_from(sprite_name.as_str()) {
+        if let Ok(sk) = SpriteKind::from_str(sprite_name.as_str()) {
             set_block(old_block.with_sprite(sk));
 
             Ok(())
@@ -4235,7 +4235,7 @@ fn handle_outcome(
         "SpriteDelete" => Outcome::SpriteDelete {
             pos: pos_arg!(),
             sprite: parse!("command-outcome-expected_sprite_kind", |arg| {
-                SpriteKind::try_from(arg.as_str()).ok()
+                SpriteKind::from_str(arg.as_str()).ok()
             })?,
         },
         "SpriteUnlocked" => Outcome::SpriteUnlocked { pos: pos_arg!() },

@@ -2267,7 +2267,12 @@ fn best_eulerian_circuit_segments(
                 if !current_segment.is_empty() {
                     current_segment.push(value);
                     segments.push(current_segment);
-                    current_segment = Vec::new();
+                    // `current_segment` was just moved into `segments`, so this must
+                    // allocate a new Vec rather than `.clear()` the moved-out one.
+                    #[allow(clippy::new_instead_of_clear)]
+                    {
+                        current_segment = Vec::new();
+                    }
                 }
             }
             if starting_index < usize::MAX {

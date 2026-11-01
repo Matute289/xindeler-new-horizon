@@ -54,11 +54,7 @@ use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use num_derive::FromPrimitive;
 use serde::{Deserialize, Serialize};
-use std::{
-    borrow::Cow,
-    convert::{Infallible, TryFrom},
-    fmt,
-};
+use std::{borrow::Cow, convert::Infallible, fmt, str::FromStr};
 use strum::EnumIter;
 use vek::*;
 
@@ -1387,11 +1383,11 @@ lazy_static! {
         SpriteKind::iter().map(|sk| (sk.to_string(), sk)).collect();
 }
 
-impl<'a> TryFrom<&'a str> for SpriteKind {
-    type Error = ();
+impl FromStr for SpriteKind {
+    type Err = ();
 
     #[inline]
-    fn try_from(s: &'a str) -> Result<Self, Self::Error> { SPRITE_KINDS.get(s).copied().ok_or(()) }
+    fn from_str(s: &str) -> Result<Self, Self::Err> { SPRITE_KINDS.get(s).copied().ok_or(()) }
 }
 
 // TODO: Free and Requires are currently unused.
