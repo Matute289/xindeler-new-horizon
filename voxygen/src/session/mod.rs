@@ -766,7 +766,7 @@ impl PlayState for SessionState {
                 .state()
                 .read_storage::<comp::CanBuild>()
                 .get(player_entity)
-                .map_or_else(|| false, |cb| cb.enabled);
+                .map_or(false, |cb| cb.enabled);
 
             let active_mine_tool: Option<ToolKind> = if client.is_wielding() == Some(true) {
                 client

@@ -53,7 +53,7 @@ impl Tui {
                     debug!(?input, "tui mode: command entered");
                     cli::parse_command(input, msg_s);
 
-                    *input = String::new();
+                    input.clear();
                 },
                 _ => {},
             }
