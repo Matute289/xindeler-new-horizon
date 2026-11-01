@@ -221,7 +221,8 @@ pub fn create_sprites(
 
     // Only summons sprites if summon distance is greater than achieved radius
     for radius in achieved_radius..=summon_distance {
-        // 1 added to make range correct, too lazy to add 1 to both variables above
+        // 1 added to make range correct, too lazy to add 1 to both variables
+        // above
         let radius = radius + 1;
         // Creates a spiral iterator for the newly achieved radius
         let spiral = Spiral2d::with_edge_radius(radius);

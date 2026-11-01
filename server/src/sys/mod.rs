@@ -57,7 +57,8 @@ pub fn add_server_systems(dispatch_builder: &mut DispatcherBuilder) {
     dispatch::<wiring::Sys>(dispatch_builder, &[]);
     // no dependency, as we only work once per sec anyway.
     dispatch::<chunk_serialize::Sys>(dispatch_builder, &[]);
-    // don't depend on chunk_serialize, as we assume everything is done in a SlowJow
+    // don't depend on chunk_serialize, as we assume everything is done in a
+    // SlowJow
     dispatch::<chunk_send::Sys>(dispatch_builder, &[]);
     dispatch::<item::Sys>(dispatch_builder, &[]);
     dispatch::<server_info::Sys>(dispatch_builder, &[]);
@@ -72,12 +73,13 @@ pub fn add_server_systems(dispatch_builder: &mut DispatcherBuilder) {
     // computed `sys_name()`: `"Common_buff_sys"`.
     //
     // No declared ordering against `phys::Sys` for the `scrying` sensor's
-    // per-tick `Pos` write: safe today only because `Body::Object(RemoteSensor)`
-    // uses `AIR_DENSITY` (matching the already-shipped `clairvoyance` sensor),
-    // which keeps the entity's `Vel` near zero via buoyancy instead of
-    // accumulating gravity, so whichever system runs first this tick makes no
-    // visible difference. Revisit if `RemoteSensor`'s density or buoyancy
-    // handling ever changes.
+    // per-tick `Pos` write: safe today only because
+    // `Body::Object(RemoteSensor)` uses `AIR_DENSITY` (matching the
+    // already-shipped `clairvoyance` sensor), which keeps the entity's
+    // `Vel` near zero via buoyancy instead of accumulating gravity, so
+    // whichever system runs first this tick makes no visible difference.
+    // Revisit if `RemoteSensor`'s density or buoyancy handling ever
+    // changes.
     dispatch::<remote_sense::Sys>(dispatch_builder, &["Common_buff_sys"]);
     // Same reason as `remote_sense` above for depending on the buff system by
     // its computed name: it must see this tick's buff removals before deciding
@@ -85,10 +87,10 @@ pub fn add_server_systems(dispatch_builder: &mut DispatcherBuilder) {
     dispatch::<pact_talisman::Sys>(dispatch_builder, &["Common_buff_sys"]);
     // Must run after the buff system, which rebuilds `Stats` (and with it the
     // active-sense declarations this reads) from scratch every tick; running
-    // earlier would evaluate the previous tick's declarations and keep honouring
-    // a sense for one tick after its buff was removed. Same naming caveat as
-    // above: that system is private to `common-systems`, so the dependency is
-    // named by its computed `sys_name()`.
+    // earlier would evaluate the previous tick's declarations and keep
+    // honouring a sense for one tick after its buff was removed. Same
+    // naming caveat as above: that system is private to `common-systems`,
+    // so the dependency is named by its computed `sys_name()`.
     //
     // Deliberately registered here and never in
     // `common_systems::add_local_systems`: keeping the code that computes a

@@ -301,8 +301,8 @@ where
             }
         };
 
-        // Whether soft max slider needs to be displayed and main slider faded to look
-        // like a ghost.
+        // Whether soft max slider needs to be displayed and main slider faded
+        // to look like a ghost.
         let over_soft_max = new_value > self.soft_max;
 
         let (x, y, w, h) = slider_rect(new_value).x_y_w_h();

@@ -84,11 +84,13 @@ impl QueryClient {
 
         for _ in 0..MAX_REQUEST_RETRIES {
             let request = if let Some(init) = &self.init {
-                // TODO: Use the maximum version supported by both the client and server once
-                // new protocol versions are added
+                // TODO: Use the maximum version supported by both the client
+                // and server once new protocol versions are
+                // added
                 RawQueryServerRequest { p: init.p, request }
             } else {
-                // TODO: Use the legacy version here once new protocol versions are added
+                // TODO: Use the legacy version here once new protocol versions
+                // are added
                 RawQueryServerRequest {
                     p: 0,
                     request: QueryServerRequest::Init,

@@ -330,9 +330,11 @@ pub mod figuredata {
                     .iter()
                     .enumerate()
                 {
-                    // TODO: Currently both client and server load models and manifests from
-                    // "common.voxel.". In order to support CSG procedural airships, we probably
-                    // need to load them in the server and sync them as an ECS resource.
+                    // TODO: Currently both client and server load models and
+                    // manifests from "common.voxel.". In
+                    // order to support CSG procedural airships, we probably
+                    // need to load them in the server and sync them as an ECS
+                    // resource.
                     let vox = cache.load::<DotVox>(&["common.voxel.", &bone.central.0].concat())?;
 
                     let base_structure = load_base_structure(&vox.read().0, |col| col);

@@ -129,12 +129,14 @@ impl Sys {
             },
             ClientGeneral::Character(character_id, requested_view_distances) => {
                 if let Some(player) = data.players.get(entity) {
-                    // NOTE: Because clients retain their Uid when exiting to the character
-                    // selection screen, we rely on this check to prevent them from immediately
-                    // re-entering in-game in the same tick so that we can synchronize their
-                    // removal without this being mixed up (and e.g. telling other clients to
-                    // delete the re-joined version) or requiring more complex handling to avoid
-                    // this.
+                    // NOTE: Because clients retain their Uid when exiting to
+                    // the character selection screen, we
+                    // rely on this check to prevent them from immediately
+                    // re-entering in-game in the same tick so that we can
+                    // synchronize their removal without
+                    // this being mixed up (and e.g. telling other clients to
+                    // delete the re-joined version) or requiring more complex
+                    // handling to avoid this.
                     if data.presences.contains(entity) {
                         debug!("player already ingame, aborting");
                     } else if character_updater.has_pending_database_action(character_id) {
@@ -144,7 +146,8 @@ impl Sys {
                                 .to_string(),
                         )))?;
                     } else if character_updater.disconnect_all_clients_requested() {
-                        // If we're in the middle of disconnecting all clients due to a persistence
+                        // If we're in the middle of disconnecting all clients
+                        // due to a persistence
                         // transaction failure, prevent new logins
                         // temporarily.
                         debug!(
@@ -169,8 +172,9 @@ impl Sys {
                             suspension.reason, end_date
                         ))))?;
                     } else {
-                        // Send a request to load the character's component data from the
-                        // DB. Once loaded, persisted components such as stats and inventory
+                        // Send a request to load the character's component data
+                        // from the DB. Once loaded,
+                        // persisted components such as stats and inventory
                         // will be inserted for the entity
                         data.character_loader.load_character_data(
                             entity,
@@ -180,8 +184,9 @@ impl Sys {
 
                         send_join_messages()?;
 
-                        // Start inserting non-persisted/default components for the entity
-                        // while we load the DB data
+                        // Start inserting non-persisted/default components for
+                        // the entity while we load the
+                        // DB data
                         emitters.emit(InitializeCharacterEvent {
                             entity,
                             character_id,
@@ -227,7 +232,8 @@ impl Sys {
                 } else if let Some(player) = data.players.get(entity) {
                     #[cfg(feature = "worldgen")]
                     let waypoint = start_site.and_then(|site_idx| {
-                        // Don't allow starting here if it's not a possible starting site.
+                        // Don't allow starting here if it's not a possible
+                        // starting site.
                         if !data
                             .world_map_msg
                             .possible_starting_sites
@@ -238,9 +244,10 @@ impl Sys {
 
                         // TODO: This corresponds to the ID generation logic in
                         // `world/src/lib.rs`. Really, we should have
-                        // a way to consistently refer to sites, but that's a job for rtsim2
-                        // and the site changes that it will require. Until then, this code is
-                        // very hacky.
+                        // a way to consistently refer to sites, but that's a
+                        // job for rtsim2 and the site
+                        // changes that it will require. Until then, this code
+                        // is very hacky.
                         data.world
                             .civs()
                             .sites

@@ -937,7 +937,8 @@ mod tests {
 
     #[test]
     fn class_attributes_apply_combat_resolution() {
-        // BL-52: accuracy/evasion/crit + magic_* scale per class via level_scaled.
+        // BL-52: accuracy/evasion/crit + magic_* scale per class via
+        // level_scaled.
         use crate::comp::Stats;
         let body = crate::comp::Body::Humanoid(crate::comp::humanoid::Body::random());
 

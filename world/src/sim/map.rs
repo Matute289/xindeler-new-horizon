@@ -180,7 +180,8 @@ pub fn sample_pos(
                 .and_then(Option::as_ref)
         })
         .map(|sample| {
-            // TODO: Eliminate the redundancy between this and the block renderer.
+            // TODO: Eliminate the redundancy between this and the block
+            // renderer.
             let alt = sample.alt;
             let basement = sample.basement;
             let grass_depth = (1.5 + 2.0 * sample.chaos).min(alt - basement);

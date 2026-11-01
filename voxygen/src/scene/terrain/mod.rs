@@ -62,11 +62,11 @@ struct Visibility {
 impl Visibility {
     /// Should the chunk actually get rendered?
     fn is_visible(&self) -> bool {
-        // Currently, we don't take into account in_range to allow all chunks to do
-        // pop-in. This isn't really a problem because we no longer have VD mist
-        // or anything like that. Also, we don't load chunks outside of the VD
-        // anyway so this literally just controls which chunks get actually
-        // rendered.
+        // Currently, we don't take into account in_range to allow all chunks to
+        // do pop-in. This isn't really a problem because we no longer
+        // have VD mist or anything like that. Also, we don't load
+        // chunks outside of the VD anyway so this literally just
+        // controls which chunks get actually rendered.
         /* self.in_range && */
         self.in_frustum
     }
@@ -168,8 +168,8 @@ pub(super) fn get_sprite_instances<'a, I: 'a>(
         let Some(sprite) = block.get_sprite() else {
             continue;
         };
-        // Short-circuit and skip hashmap interaction since this is every fluid block
-        // (including air)
+        // Short-circuit and skip hashmap interaction since this is every fluid
+        // block (including air)
         if matches!(sprite, SpriteKind::Empty) {
             continue;
         }
@@ -225,8 +225,8 @@ pub(super) fn get_sprite_instances<'a, I: 'a>(
                 );
             // Add an instance for each page in the sprite model
             for page in model_data.vert_pages.clone() {
-                // TODO: could be more efficient to create once outside this loop and clone
-                // while modifying vert_page?
+                // TODO: could be more efficient to create once outside this
+                // loop and clone while modifying vert_page?
                 let instance = SpriteInstance::new(
                     mat,
                     data.wind_sway,
@@ -600,9 +600,10 @@ impl SpriteRenderContext {
         let init = core::cell::OnceCell::new();
         let mut join_handle = Some(join_handle);
         let mut closure = move |renderer: &mut Renderer| {
-            // The second unwrap can only fail if the sprite meshing thread panics, which
-            // implies that our sprite assets either were not found or did not
-            // satisfy the size requirements for meshing, both of which are
+            // The second unwrap can only fail if the sprite meshing thread
+            // panics, which implies that our sprite assets either
+            // were not found or did not satisfy the size
+            // requirements for meshing, both of which are
             // considered invariant violations.
             let SpriteWorkerResponse {
                 //sprite_config,
@@ -649,8 +650,8 @@ impl<V: RectRasterableVol> Terrain<V> {
         lod_data: &LodData,
         sprite_render_context: SpriteRenderContext,
     ) -> Self {
-        // Create a new mpsc (Multiple Produced, Single Consumer) pair for communicating
-        // with worker threads that are meshing chunks.
+        // Create a new mpsc (Multiple Produced, Single Consumer) pair for
+        // communicating with worker threads that are meshing chunks.
         let (send, recv) = channel::unbounded();
 
         let (atlas, atlas_textures) =
@@ -739,8 +740,9 @@ impl<V: RectRasterableVol> Terrain<V> {
     }
 
     fn remove_chunk_meta(&mut self, _pos: Vec2<i32>, chunk: &TerrainChunkData) {
-        // No need to free the allocation if the chunk is not allocated in the current
-        // atlas, since we don't bother tracking it at that point.
+        // No need to free the allocation if the chunk is not allocated in the
+        // current atlas, since we don't bother tracking it at that
+        // point.
         if let Some(atlas_alloc) = chunk.atlas_alloc {
             self.atlas.deallocate(atlas_alloc);
         }
@@ -850,9 +852,9 @@ impl<V: RectRasterableVol> Terrain<V> {
         } = camera.dependents();
 
         // Remove any models for chunks that have been recently removed.
-        // Note: Does this before adding to todo list just in case removed chunks were
-        // replaced with new chunks (although this would probably be recorded as
-        // modified chunks)
+        // Note: Does this before adding to todo list just in case removed
+        // chunks were replaced with new chunks (although this would
+        // probably be recorded as modified chunks)
         for &pos in &scene_data.state.terrain_changes().removed_chunks {
             self.remove_chunk(pos);
             common::telemetry!("co", op = "unload", cx = pos.x, cy = pos.y);
@@ -872,8 +874,8 @@ impl<V: RectRasterableVol> Terrain<V> {
         // The visible bounding box of all chunks, not including culled regions
         let mut visible_bounding_box: Option<Aabb<f32>> = None;
 
-        // Add any recently created or changed chunks to the list of chunks to be
-        // meshed.
+        // Add any recently created or changed chunks to the list of chunks to
+        // be meshed.
         span!(guard, "Add new/modified chunks to mesh todo list");
         for (modified, pos) in scene_data
             .state
@@ -891,9 +893,10 @@ impl<V: RectRasterableVol> Terrain<V> {
             )
         {
             // TODO: ANOTHER PROBLEM HERE!
-            // What happens if the block on the edge of a chunk gets modified? We need to
-            // spawn a mesh worker to remesh its neighbour(s) too since their
-            // ambient occlusion and face elision information changes too!
+            // What happens if the block on the edge of a chunk gets modified?
+            // We need to spawn a mesh worker to remesh its
+            // neighbour(s) too since their ambient occlusion and
+            // face elision information changes too!
             for i in -1..2 {
                 for j in -1..2 {
                     let pos = pos + Vec2::new(i, j);
@@ -925,23 +928,25 @@ impl<V: RectRasterableVol> Terrain<V> {
         }
         drop(guard);
 
-        // Add the chunks belonging to recently changed blocks to the list of chunks to
-        // be meshed
+        // Add the chunks belonging to recently changed blocks to the list of
+        // chunks to be meshed
         span!(guard, "Add chunks with modified blocks to mesh todo list");
         // TODO: would be useful if modified blocks were grouped by chunk
         for (&pos, &old_block) in scene_data.state.terrain_changes().modified_blocks.iter() {
-            // terrain_changes() are both set and applied during the same tick on the
-            // client, so the current state is the new state and modified_blocks
-            // stores the old state.
+            // terrain_changes() are both set and applied during the same tick
+            // on the client, so the current state is the new state
+            // and modified_blocks stores the old state.
             let new_block = scene_data.state.get_block(pos);
 
             let (skip_color, skip_lights) = if let Some(new_block) = new_block {
                 Self::skip_remesh(old_block, new_block)
             } else {
-                // The block coordinates of a modified block should be in bounds, since they are
-                // only retained if setting the block was successful during the state tick in
-                // client.  So this is definitely a bug, but we can recover safely by just
-                // conservatively doing a full remesh in this case, rather than crashing the
+                // The block coordinates of a modified block should be in
+                // bounds, since they are only retained if
+                // setting the block was successful during the state tick in
+                // client.  So this is definitely a bug, but we can recover
+                // safely by just conservatively doing a full
+                // remesh in this case, rather than crashing the
                 // game.
                 warn!(
                     "Invariant violation: pos={:?} should be a valid block position.  This is a \
@@ -955,35 +960,37 @@ impl<V: RectRasterableVol> Terrain<V> {
             // colors don't need to be reworked.
             let skip_remesh = skip_color && skip_lights;
 
-            // TODO: Be cleverer about this to avoid remeshing all neighbours. There are a
-            // few things that can create an 'effect at a distance'. These are
-            // as follows:
+            // TODO: Be cleverer about this to avoid remeshing all neighbours.
+            // There are a few things that can create an 'effect at
+            // a distance'. These are as follows:
             // - A glowing block is added or removed, thereby causing a lighting
             //   recalculation proportional to its glow radius.
-            // - An opaque block that was blocking sunlight from entering a cavity is
-            //   removed (or added) thereby
+            // - An opaque block that was blocking sunlight from entering a
+            //   cavity is removed (or added) thereby
             // changing the way that sunlight propagates into the cavity.
             //
-            // We can and should be cleverer about this, but it's non-trivial. For now, we
-            // don't remesh if only a block color changed or a sprite was
-            // altered in a way that doesn't affect its glow, but we make no
-            // attempt to do smarter cavity checking (to see if altering the
-            // block changed the sunlight neighbors could get).
+            // We can and should be cleverer about this, but it's non-trivial.
+            // For now, we don't remesh if only a block color
+            // changed or a sprite was altered in a way that doesn't
+            // affect its glow, but we make no attempt to do smarter
+            // cavity checking (to see if altering the block changed
+            // the sunlight neighbors could get).
             // let block_effect_radius = block.get_glow().unwrap_or(0).max(1);
             let block_effect_radius = crate::mesh::terrain::MAX_LIGHT_DIST;
 
             // Handle block changes on chunk borders
             // Remesh all neighbours because we have complex lighting now
-            // TODO: if lighting is on the server this can be updated to only remesh when
-            // lighting changes in that neighbouring chunk or if the block
-            // change was on the border
+            // TODO: if lighting is on the server this can be updated to only
+            // remesh when lighting changes in that neighbouring
+            // chunk or if the block change was on the border
             for x in -1..2 {
                 for y in -1..2 {
                     let neighbour_pos = pos + Vec3::new(x, y, 0) * block_effect_radius;
                     let neighbour_chunk_pos = scene_data.state.terrain().pos_key(neighbour_pos);
 
                     if skip_lights && !(x == 0 && y == 0) {
-                        // We don't need to remesh neighboring chunks if this block change doesn't
+                        // We don't need to remesh neighboring chunks if this
+                        // block change doesn't
                         // require relighting.
                         continue;
                     }
@@ -1009,12 +1016,15 @@ impl<V: RectRasterableVol> Terrain<V> {
                                     skip_remesh,
                                 });
 
-                        // Make sure not to skip remeshing a chunk if it already had to be
-                        // fully meshed for other reasons.  Even if the mesh is currently active
-                        // (so relighting would be redundant), we currently have to remesh
-                        // everything unless the previous mesh was also able to skip remeshing,
-                        // since otherwise the active remesh is computing new lighting values
-                        // that we don't have yet.
+                        // Make sure not to skip remeshing a chunk if it already
+                        // had to be fully meshed for
+                        // other reasons.  Even if the mesh is currently active
+                        // (so relighting would be redundant), we currently have
+                        // to remesh everything unless
+                        // the previous mesh was also able to skip remeshing,
+                        // since otherwise the active remesh is computing new
+                        // lighting values that we don't
+                        // have yet.
                         todo.skip_remesh &= skip_remesh;
                         todo.is_worker_active = false;
                         todo.started_tick = current_tick;
@@ -1034,8 +1044,8 @@ impl<V: RectRasterableVol> Terrain<V> {
 
         span!(guard, "Queue meshing from todo list");
         let mesh_focus_pos = focus_pos.map(|e| e.trunc()).xy().as_::<i64>();
-        //TODO: this is actually no loop, it just runs for a single entry because of
-        // the `min_by_key`. Evaluate actually looping here
+        //TODO: this is actually no loop, it just runs for a single entry
+        // because of the `min_by_key`. Evaluate actually looping here
         while let Some((todo, chunk)) = self
             .mesh_todo
             .values_mut()
@@ -1070,9 +1080,9 @@ impl<V: RectRasterableVol> Terrain<V> {
                 }),
             };
 
-            // Copy out the chunk data we need to perform the meshing. We do this by taking
-            // a sample of the terrain that includes both the chunk we want and
-            // its neighbours.
+            // Copy out the chunk data we need to perform the meshing. We do
+            // this by taking a sample of the terrain that includes
+            // both the chunk we want and its neighbours.
             let volume = match scene_data.state.terrain().sample(aabr) {
                 Ok(sample) => sample, /* TODO: Ensure that all of the chunk's neighbours still
                                         * exist to avoid buggy shadow borders */
@@ -1134,9 +1144,9 @@ impl<V: RectRasterableVol> Terrain<V> {
         }
         drop(guard);
 
-        // Receive a chunk mesh from a worker thread and upload it to the GPU, then
-        // store it. Vary the rate at which we pull items out to correlate with the
-        // framerate, preventing tail latency.
+        // Receive a chunk mesh from a worker thread and upload it to the GPU,
+        // then store it. Vary the rate at which we pull items out to
+        // correlate with the framerate, preventing tail latency.
         span!(guard, "Get/upload meshed chunk");
         const CHUNKS_PER_SECOND: f32 = 240.0;
         let recv_count =
@@ -1176,17 +1186,22 @@ impl<V: RectRasterableVol> Terrain<V> {
                         );
 
                         let allocation = atlas.allocate(alloc_size).unwrap_or_else(|| {
-                            // Atlas allocation failure: try allocating a new texture and atlas.
+                            // Atlas allocation failure: try allocating a new
+                            // texture and atlas.
                             let (new_atlas, new_atlas_textures) =
                                 Self::make_atlas(renderer).expect("Failed to create atlas texture");
 
-                            // We reset the atlas and clear allocations from existing chunks,
-                            // even though we haven't yet
+                            // We reset the atlas and clear allocations from
+                            // existing chunks, even
+                            // though we haven't yet
                             // checked whether the new allocation can fit in
-                            // the texture.  This is reasonable because we don't have a fallback
-                            // if a single chunk can't fit in an empty atlas of maximum size.
+                            // the texture.  This is reasonable because we don't
+                            // have a fallback
+                            // if a single chunk can't fit in an empty atlas of
+                            // maximum size.
                             //
-                            // TODO: Consider attempting defragmentation first rather than just
+                            // TODO: Consider attempting defragmentation first
+                            // rather than just
                             // always moving everything into the new chunk.
                             chunks.iter_mut().for_each(|(_, chunk)| {
                                 chunk.atlas_alloc = None;
@@ -1257,7 +1272,8 @@ impl<V: RectRasterableVol> Terrain<V> {
                             cy = response.pos.y
                         );
                     } else if let Some(chunk) = self.chunks.get_mut(&response.pos) {
-                        // There was an update that didn't require a remesh (probably related to
+                        // There was an update that didn't require a remesh
+                        // (probably related to
                         // non-glowing sprites) so we just update those.
                         chunk.sprite_instances = sprite_instances;
                         chunk.blocks_of_interest = response.blocks_of_interest;
@@ -1291,8 +1307,8 @@ impl<V: RectRasterableVol> Terrain<V> {
 
             chunk.can_shadow_sun = false;
 
-            // Limit focus_pos to chunk bounds and ensure the chunk is within the fog
-            // boundary
+            // Limit focus_pos to chunk bounds and ensure the chunk is within
+            // the fog boundary
             let nearest_in_chunk = Vec2::from(focus_pos).clamped(chunk_pos, chunk_pos + chunk_sz);
             let distance_2 = Vec2::<f32>::from(focus_pos).distance_squared(nearest_in_chunk);
             let in_range = distance_2 < loaded_distance.powi(2);
@@ -1326,8 +1342,9 @@ impl<V: RectRasterableVol> Terrain<V> {
                     .map(|e| e.union(visible_box))
                     .or(Some(visible_box));
             }
-            // FIXME: Hack that only works when only the lantern casts point shadows
-            // (and hardcodes the shadow distance).  Should ideally exist per-light, too.
+            // FIXME: Hack that only works when only the lantern casts point
+            // shadows (and hardcodes the shadow distance).  Should
+            // ideally exist per-light, too.
             chunk.can_shadow_point = distance_2 < (128.0 * 128.0);
         }
         drop(guard);
@@ -1404,8 +1421,9 @@ impl<V: RectRasterableVol> Terrain<V> {
                 collides_with_aabr(chunk_from_light, visible_bounds)
             };
 
-            // Handle potential shadow casters (chunks that aren't visible, but are still in
-            // range) to see if they could cast shadows.
+            // Handle potential shadow casters (chunks that aren't visible, but
+            // are still in range) to see if they could cast
+            // shadows.
             self.chunks.iter_mut()
                 // NOTE: We deliberately avoid doing this computation for chunks we already know
                 // are visible, since by definition they'll always intersect the visible view
@@ -1415,25 +1433,27 @@ impl<V: RectRasterableVol> Terrain<V> {
                     chunk.can_shadow_sun = can_shadow_sun(pos, chunk);
                 });
 
-            // Handle dead chunks that we kept around only to make sure shadows don't blink
-            // out when a chunk disappears.
+            // Handle dead chunks that we kept around only to make sure shadows
+            // don't blink out when a chunk disappears.
             //
-            // If the sun can currently cast shadows, we retain only those shadow chunks
-            // that both: 1. have not been replaced by a real chunk instance,
-            // and 2. are currently potential shadow casters (as witnessed by
-            // `can_shadow_sun` returning true).
+            // If the sun can currently cast shadows, we retain only those
+            // shadow chunks that both: 1. have not been replaced by
+            // a real chunk instance, and 2. are currently potential
+            // shadow casters (as witnessed by `can_shadow_sun`
+            // returning true).
             //
-            // NOTE: Please make sure this runs *after* any code that could insert a chunk!
-            // Otherwise we may end up with multiple instances of the chunk trying to cast
-            // shadows at the same time.
+            // NOTE: Please make sure this runs *after* any code that could
+            // insert a chunk! Otherwise we may end up with multiple
+            // instances of the chunk trying to cast shadows at the
+            // same time.
             let chunks = &self.chunks;
             self.shadow_chunks
                 .retain(|(pos, chunk)| !chunks.contains_key(pos) && can_shadow_sun(*pos, chunk));
 
             (visible_light_volume, visible_bounds)
         } else {
-            // There's no daylight or no shadows, so there's no reason to keep any
-            // shadow chunks around.
+            // There's no daylight or no shadows, so there's no reason to keep
+            // any shadow chunks around.
             self.shadow_chunks.clear();
             (Vec::new(), math::Aabr {
                 min: math::Vec2::zero(),
@@ -1527,9 +1547,10 @@ impl<V: RectRasterableVol> Terrain<V> {
 
         // Directed shadows
         //
-        // NOTE: We also render shadows for dead chunks that were found to still be
-        // potential shadow casters, to avoid shadows suddenly disappearing at
-        // very steep sun angles (e.g. sunrise / sunset).
+        // NOTE: We also render shadows for dead chunks that were found to still
+        // be potential shadow casters, to avoid shadows suddenly
+        // disappearing at very steep sun angles (e.g. sunrise /
+        // sunset).
         chunk_iter
             .filter(|chunk| chunk.can_shadow_sun())
             .chain(self.shadow_chunks.iter().map(|(_, chunk)| chunk))
@@ -1597,8 +1618,8 @@ impl<V: RectRasterableVol> Terrain<V> {
 
         // Point shadows
         //
-        // NOTE: We don't bother retaining chunks unless they cast sun shadows, so we
-        // don't use `shadow_chunks` here.
+        // NOTE: We don't bother retaining chunks unless they cast sun shadows,
+        // so we don't use `shadow_chunks` here.
         chunk_iter
             .filter(|chunk| chunk.can_shadow_point)
             .filter_map(|chunk| {
@@ -1709,7 +1730,8 @@ impl<V: RectRasterableVol> Terrain<V> {
                         4
                     };
 
-                    // Always draw all of close chunks to avoid terrain 'popping'
+                    // Always draw all of close chunks to avoid terrain
+                    // 'popping'
                     let culling_mode = if rpos.magnitude_squared() < NEVER_CULL_DIST.pow(2) {
                         CullingMode::None
                     } else {

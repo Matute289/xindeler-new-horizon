@@ -211,8 +211,8 @@ impl Structure for DesertCityTemple {
         }
 
         // temple decor carve out
-        // apply three carve options (horizontal, vertical, none) with two spread
-        // options (for horizontal and vertical)
+        // apply three carve options (horizontal, vertical, none) with two
+        // spread options (for horizontal and vertical)
         for s in 0..2 {
             // decor carve out style
             let spread_select = ((RandomField::new(0).get((center - 1).with_z(base))) % 2) as i32;
@@ -369,8 +369,8 @@ impl Structure for DesertCityTemple {
         top.fill(sandstone.clone());
 
         // temple top decoration
-        // apply two decoration options (horizontal, vertical, none) with two spread
-        // options for hor/ver options
+        // apply two decoration options (horizontal, vertical, none) with two
+        // spread options for hor/ver options
         for s in 0..2 {
             // decor carve out style
             let spread_select =

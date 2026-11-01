@@ -580,7 +580,8 @@ mod tests {
             .first()
             .expect("no tiered health effect authored");
 
-        // Most severe first — resolution takes the first match, it does not sort.
+        // Most severe first — resolution takes the first match, it does not
+        // sort.
         let thresholds = effect
             .tiers
             .iter()

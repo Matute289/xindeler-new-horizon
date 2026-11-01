@@ -144,8 +144,9 @@ impl CharacterUpdater {
         let builder = std::thread::Builder::new().name("persistence_updater".into());
         let handle = builder
             .spawn(move || {
-                // Unwrap here is safe as there is no code that can panic when the write lock is
-                // taken that could cause the RwLock to become poisoned.
+                // Unwrap here is safe as there is no code that can panic when
+                // the write lock is taken that could cause the
+                // RwLock to become poisoned.
                 let mut conn =
                     establish_connection(&settings.read().unwrap(), ConnectionMode::ReadWrite);
                 while let Ok(action) = update_rx.recv() {
@@ -249,7 +250,8 @@ impl CharacterUpdater {
                                 "CharacterUpdater received DisconnectedSuccess event, resuming \
                                  batch updates"
                             );
-                            // Reset the disconnection request as we have had confirmation that all
+                            // Reset the disconnection request as we have had
+                            // confirmation that all
                             // clients have been disconnected
                             disconnect_all_clients_requested_clone.store(false, Ordering::Relaxed);
                         },
@@ -382,9 +384,10 @@ impl CharacterUpdater {
         requesting_player_uuid: String,
         character_id: CharacterId,
     ) {
-        // Insert the delete as a pending database action - if the player has recently
-        // logged out this will replace their pending update with a delete which
-        // is fine, as the user has actively chosen to delete the character.
+        // Insert the delete as a pending database action - if the player has
+        // recently logged out this will replace their pending update
+        // with a delete which is fine, as the user has actively chosen
+        // to delete the character.
         self.pending_database_actions.insert(
             character_id,
             DatabaseAction::New(DatabaseActionKind::DeleteCharacter {
@@ -398,8 +401,8 @@ impl CharacterUpdater {
     pub fn batch_update(&mut self, updates: impl Iterator<Item = CharacterUpdateData>) {
         let batch_id = self.next_pending_database_event_id();
 
-        // Collect any new updates, ignoring updates from a previous update that are
-        // still pending completion
+        // Collect any new updates, ignoring updates from a previous update that
+        // are still pending completion
         let existing_pending_actions = self
             .pending_database_actions
             .iter_mut()

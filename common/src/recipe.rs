@@ -52,17 +52,19 @@ impl RecipeInput {
         input_slots: I,
     ) {
         let mut required = amount;
-        // contains_any check used for recipes that have an input that is not consumed,
-        // e.g. craftsman hammer
-        // Goes through each slot and marks some amount from each slot as claimed
+        // contains_any check used for recipes that have an input that is not
+        // consumed, e.g. craftsman hammer
+        // Goes through each slot and marks some amount from each slot as
+        // claimed
         let contains_any = input_slots.into_iter().all(|slot| {
             // Checks that the item in the slot can be used for the input
             if let Some(item) = inv
                 .get(slot)
                 .filter(|item| item.matches_recipe_input(self, amount))
             {
-                // Gets the number of items claimed from the slot, or sets to 0 if slot has
-                // not been claimed by another input yet
+                // Gets the number of items claimed from the slot, or sets to 0
+                // if slot has not been claimed by another input
+                // yet
                 let claimed = slot_claims.entry(slot).or_insert(0);
                 let available = item.amount().saturating_sub(*claimed);
                 let provided = available.min(required);
@@ -73,8 +75,9 @@ impl RecipeInput {
                 false
             }
         });
-        // If there were not sufficient items to cover requirement between all provided
-        // slots, or if non-consumed item was not present, mark input as not satisfied
+        // If there were not sufficient items to cover requirement between all
+        // provided slots, or if non-consumed item was not present, mark
+        // input as not satisfied
         if required > 0 || !contains_any {
             unsatisfied_requirements.push((self, required));
         }
@@ -104,38 +107,44 @@ impl Recipe {
         let mut unsatisfied_requirements = Vec::new();
         let mut component_slots = Vec::new();
 
-        // Checks each input against slots in the inventory. If the slots contain an
-        // item that fulfills the need of the input, marks some of the item as claimed
-        // up to quantity needed for the crafting input. If the item either
-        // cannot be used, or there is insufficient quantity, adds input and
-        // number of materials needed to unsatisfied requirements.
+        // Checks each input against slots in the inventory. If the slots
+        // contain an item that fulfills the need of the input, marks
+        // some of the item as claimed up to quantity needed for the
+        // crafting input. If the item either cannot be used, or there
+        // is insufficient quantity, adds input and number of materials
+        // needed to unsatisfied requirements.
         self.inputs.iter().enumerate().for_each(
             |(i, &(ref input, ref amount, mut is_component))| {
                 let mut required = *amount;
-                // Check used for recipes that have an input that is not consumed, e.g.
-                // craftsman hammer
+                // Check used for recipes that have an input that is not
+                // consumed, e.g. craftsman hammer
                 let mut contains_any = false;
                 // Gets all slots provided for this input by the frontend
                 let input_slots = slots
                     .iter()
                     .filter_map(|(j, slot)| if i as u32 == *j { Some(slot) } else { None });
-                // Goes through each slot and marks some amount from each slot as claimed
+                // Goes through each slot and marks some amount from each slot
+                // as claimed
                 for slot in input_slots {
-                    // Checks that the item in the slot can be used for the input
+                    // Checks that the item in the slot can be used for the
+                    // input
                     if let Some(item) = inv
                         .get(*slot)
                         .filter(|item| item.matches_recipe_input(input, *amount))
                     {
-                        // Gets the number of items claimed from the slot, or sets to 0 if slot has
+                        // Gets the number of items claimed from the slot, or
+                        // sets to 0 if slot has
                         // not been claimed by another input yet
                         let claimed = slot_claims.entry(*slot).or_insert(0);
                         let available = item.amount().saturating_sub(*claimed);
                         let provided = available.min(required);
                         required -= provided;
                         *claimed += provided;
-                        // If input is a component and provided amount from this slot at least 1,
-                        // mark 1 piece as coming from that slot and set is_component to false to
-                        // indicate it has been claimed.
+                        // If input is a component and provided amount from this
+                        // slot at least 1, mark 1 piece
+                        // as coming from that slot and set is_component to
+                        // false to indicate it has been
+                        // claimed.
                         if provided > 0 && is_component {
                             component_slots.push(*slot);
                             is_component = false;
@@ -143,17 +152,19 @@ impl Recipe {
                         contains_any = true;
                     }
                 }
-                // If there were not sufficient items to cover requirement between all provided
-                // slots, or if non-consumed item was not present, mark input as not satisfied
+                // If there were not sufficient items to cover requirement
+                // between all provided slots, or if
+                // non-consumed item was not present, mark input as not
+                // satisfied
                 if required > 0 || !contains_any {
                     unsatisfied_requirements.push((input, required));
                 }
             },
         );
 
-        // If there are no unsatisfied requirements, create the items produced by the
-        // recipe in the necessary quantity and remove the items that the recipe
-        // consumes
+        // If there are no unsatisfied requirements, create the items produced
+        // by the recipe in the necessary quantity and remove the items
+        // that the recipe consumes
         if unsatisfied_requirements.is_empty() {
             let mut components = Vec::new();
             for slot in component_slots.iter() {
@@ -227,8 +238,8 @@ impl Recipe {
             let needed = amount as f32;
             let mut input_max = HashMap::<InvSlotId, u32>::new();
 
-            // Checks through every slot, filtering to only those that contain items that
-            // can satisfy the input.
+            // Checks through every slot, filtering to only those that contain
+            // items that can satisfy the input.
             for (inv_slot_id, slot) in inv.slots_with_id() {
                 if let Some(item) = slot
                     .as_ref()
@@ -238,8 +249,8 @@ impl Recipe {
                 }
             }
 
-            // Updates maximum craftable amount based on least recipe-proportional
-            // availability.
+            // Updates maximum craftable amount based on least
+            // recipe-proportional availability.
             let max_item_proportion =
                 ((input_max.values().sum::<u32>() as f32) / needed).floor() as u32;
             max_recipes = Some(match max_recipes {
@@ -276,8 +287,8 @@ fn inventory_contains_ingredients<'a, I: Iterator<Item = (&'a RecipeInput, u32)>
     for (i, (input, amount)) in ingredients.enumerate() {
         let mut needed = amount * recipe_amount;
         let mut contains_any = false;
-        // Checks through every slot, filtering to only those that contain items that
-        // can satisfy the input
+        // Checks through every slot, filtering to only those that contain items
+        // that can satisfy the input
         for (inv_slot_id, slot) in inv.slots_with_id() {
             if let Some(item) = slot
                 .as_ref()
@@ -324,8 +335,9 @@ pub fn try_salvage(
             .collect();
         if salvage_output.is_empty() {
             // If no output items, assume salvaging was a failure
-            // TODO: If we ever change salvaging to have a percent chance, remove the check
-            // of outputs being empty (requires assets to exist for rock and wood materials
+            // TODO: If we ever change salvaging to have a percent chance,
+            // remove the check of outputs being empty (requires
+            // assets to exist for rock and wood materials
             // so that salvaging doesn't silently fail)
             Err(SalvageError::NotSalvageable)
         } else {
@@ -365,14 +377,14 @@ pub fn modular_weapon(
         })
     }
 
-    // Checks if both components are compatible, and if so returns the toolkind to
-    // make weapon of
+    // Checks if both components are compatible, and if so returns the toolkind
+    // to make weapon of
     let compatiblity = if let (Some(primary_component), Some(secondary_component)) = (
         unwrap_modular(inv, primary_component),
         unwrap_modular(inv, secondary_component),
     ) {
-        // Checks that damage and held component slots each contain a damage and held
-        // modular component respectively
+        // Checks that damage and held component slots each contain a damage and
+        // held modular component respectively
         if let (
             ModularComponent::ToolPrimaryComponent {
                 toolkind: tool_a,
@@ -388,7 +400,8 @@ pub fn modular_weapon(
         {
             // Checks that both components are of the same tool kind
             if tool_a == tool_b {
-                // Checks that if both components have a hand restriction, they are the same
+                // Checks that if both components have a hand restriction, they
+                // are the same
                 let hands_check = hands_a.zip(*hands_b).is_none_or(|(a, b)| a == b);
                 if hands_check {
                     Ok(())
@@ -597,11 +610,12 @@ impl ComponentRecipe {
         let mut slot_claims = HashMap::new();
         let mut unsatisfied_requirements = Vec::new();
 
-        // Checks each input against slots in the inventory. If the slots contain an
-        // item that fulfills the need of the input, marks some of the item as claimed
-        // up to quantity needed for the crafting input. If the item either
-        // cannot be used, or there is insufficient quantity, adds input and
-        // number of materials needed to unsatisfied requirements.
+        // Checks each input against slots in the inventory. If the slots
+        // contain an item that fulfills the need of the input, marks
+        // some of the item as claimed up to quantity needed for the
+        // crafting input. If the item either cannot be used, or there
+        // is insufficient quantity, adds input and number of materials
+        // needed to unsatisfied requirements.
         self.material.0.handle_requirement(
             self.material.1,
             &mut slot_claims,
@@ -610,8 +624,8 @@ impl ComponentRecipe {
             core::iter::once(material_slot),
         );
         if let Some((modifier_input, modifier_amount)) = &self.modifier {
-            // TODO: Better way to get slot to use that ensures this requirement fails if no
-            // slot provided?
+            // TODO: Better way to get slot to use that ensures this requirement
+            // fails if no slot provided?
             modifier_input.handle_requirement(
                 *modifier_amount,
                 &mut slot_claims,
@@ -629,7 +643,8 @@ impl ComponentRecipe {
                     .iter()
                     .filter_map(|(j, slot)| if i as u32 == *j { Some(slot) } else { None })
                     .copied();
-                // Checks if requirement is met, and if not marks it as unsatisfied
+                // Checks if requirement is met, and if not marks it as
+                // unsatisfied
                 input.handle_requirement(
                     *amount,
                     &mut slot_claims,
@@ -639,9 +654,9 @@ impl ComponentRecipe {
                 );
             });
 
-        // If there are no unsatisfied requirements, create the items produced by the
-        // recipe in the necessary quantity and remove the items that the recipe
-        // consumes
+        // If there are no unsatisfied requirements, create the items produced
+        // by the recipe in the necessary quantity and remove the items
+        // that the recipe consumes
         if unsatisfied_requirements.is_empty() {
             for (slot, to_remove) in slot_claims.iter() {
                 for _ in 0..*to_remove {

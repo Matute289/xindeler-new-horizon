@@ -543,8 +543,8 @@ pub struct PipelineModes {
 
 impl PipelineModes {
     pub fn remove_unsupported(&mut self) {
-        // Only enable experimental shaders that are supported by the game's current
-        // state
+        // Only enable experimental shaders that are supported by the game's
+        // current state
         self.experimental_shaders.retain(|s| {
             if s.is_supported() {
                 true

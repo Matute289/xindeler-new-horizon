@@ -75,7 +75,8 @@ impl EventMapper for VehicleEventMapper {
 
                 let speed = vel.0.magnitude();
 
-                // Determines whether we play low-speed chuggs or high-speed chugging
+                // Determines whether we play low-speed chuggs or high-speed
+                // chugging
                 let chugg_lerp = ((speed - 20.0) / 25.0).clamp(0.0, 1.0);
 
                 // Low-speed chugging

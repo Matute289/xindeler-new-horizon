@@ -60,9 +60,9 @@ pub fn handle_initialize_character(server: &mut Server, ev: InitializeCharacterE
             );
         }
     } else {
-        // A character delete or update was somehow initiated after the login commenced,
-        // so kick the client out of "ingame" without saving any data and abort
-        // the character loading process.
+        // A character delete or update was somehow initiated after the login
+        // commenced, so kick the client out of "ingame" without saving
+        // any data and abort the character loading process.
         handle_exit_ingame(server, ev.entity, true);
     }
 }
@@ -327,8 +327,9 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
                                 .map(|g| (g, c))
                         })
                         .map(|(g, c)| {
-                            // Might be unnecessary, but maybe pets can somehow have map
-                            // markers in the future
+                            // Might be unnecessary, but maybe pets can somehow
+                            // have map markers in
+                            // the future
                             update_map_markers(&map_markers, &uids, c, &group_change);
                             c.send_fallible(ServerGeneral::GroupUpdate(g));
                         });
@@ -452,8 +453,8 @@ pub fn handle_create_ship(server: &mut Server, ev: CreateShipEvent) {
     let collider = ev.ship.make_collider();
     let voxel_colliders_manifest = VOXEL_COLLIDER_MANIFEST.read();
 
-    // TODO: Find better solution for this, maybe something like a serverside block
-    // of interests.
+    // TODO: Find better solution for this, maybe something like a serverside
+    // block of interests.
     let (mut steering, mut _seats) = {
         let mut steering = Vec::new();
         let mut seats = Vec::new();
@@ -620,8 +621,9 @@ pub fn handle_throw(server: &mut Server, ev: ThrowEvent) {
                 let msm = state.ecs().read_resource::<MaterialStatManifest>();
                 let time = state.ecs().read_resource::<Time>();
 
-                // If stackable, try to remove the throwable from inv stacks before
-                // removing the equipped one to avoid having to reequip after each throw
+                // If stackable, try to remove the throwable from inv stacks
+                // before removing the equipped one to avoid
+                // having to reequip after each throw
                 if let Some(inv_slot) = inv.get_slot_of_item(thrown_item)
                     && thrown_item.is_stackable()
                 {
@@ -681,8 +683,8 @@ pub fn handle_arc(server: &mut Server, ev: ArcingEvent) {
 
 pub fn handle_create_pool(server: &mut Server, ev: CreatePoolEvent) {
     let state = server.state_mut();
-    //Pool entities must inherit the xy orientation of their spawner to maintain
-    // visual consistency
+    //Pool entities must inherit the xy orientation of their spawner to
+    // maintain visual consistency
     let flat_ori =
         comp::Ori::from_unnormalized_vec(ev.ori.look_vec().xy().with_z(0.0)).unwrap_or_default();
     let pos = comp::Pos(ev.pos.0 + vek::Vec3::unit_z() * 0.05);
@@ -808,8 +810,8 @@ pub fn handle_create_object(
             let state = server.state_mut();
             let time = *state.ecs().read_resource::<Time>();
 
-            // HACK: Spawn slightly damaged so that the health bar is visible and players
-            // are aware it is a killable entity
+            // HACK: Spawn slightly damaged so that the health bar is visible
+            // and players are aware it is a killable entity
             let mut health = comp::Health::new(Body::Object(body));
             health.set_fraction(0.99996);
 
@@ -985,10 +987,10 @@ pub fn handle_summon_beam_pillars(server: &mut Server, ev: SummonBeamPillarsEven
             .find_ground(integer_pos)
             .z as f32;
 
-        // If the distance from the attempted spawn position and the nearest valid
-        // position is too far, avoid spawning the fire pillar to prevent
-        // ability usage in a cave from spawning pillars on the surface or other
-        // edge cases
+        // If the distance from the attempted spawn position and the nearest
+        // valid position is too far, avoid spawning the fire pillar to
+        // prevent ability usage in a cave from spawning pillars on the
+        // surface or other edge cases
         if (ground_height - pos.z).abs() <= 16.0 {
             let ecs = server.state_mut().ecs_mut();
 

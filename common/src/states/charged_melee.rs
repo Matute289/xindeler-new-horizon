@@ -129,7 +129,8 @@ impl CharacterBehavior for Data {
                         c.charge_amount = charge;
                     }
 
-                    // Consumes energy if there's enough left and RMB is held down
+                    // Consumes energy if there's enough left and RMB is held
+                    // down
                     update
                         .energy
                         .change_by(-self.static_data.energy_drain * data.dt.0);
@@ -141,7 +142,8 @@ impl CharacterBehavior for Data {
                         c.timer = tick_attack_or_default(data, self.timer, None);
                     }
 
-                    // Consumes energy if there's enough left and RMB is held down
+                    // Consumes energy if there's enough left and RMB is held
+                    // down
                     update
                         .energy
                         .change_by(-self.static_data.energy_drain * data.dt.0 / 5.0);

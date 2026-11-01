@@ -158,9 +158,9 @@ impl<'a> System<'a> for Sys {
         // Set to false to avoid spamming server
         stats.set_event_emission(false);
 
-        // Put out underwater campfires. Logically belongs here since this system also
-        // removes burning, but campfires don't have healths/stats/energies/buffs, so
-        // this needs a separate loop.
+        // Put out underwater campfires. Logically belongs here since this
+        // system also removes burning, but campfires don't have
+        // healths/stats/energies/buffs, so this needs a separate loop.
         job.cpu_stats.measure(ParMode::Rayon);
         let to_put_out_campfires = (
             &read_data.entities,
@@ -204,8 +204,8 @@ impl<'a> System<'a> for Sys {
         job.cpu_stats.measure(ParMode::Single);
         {
             prof_span!(_guard, "write deferred campfire deletion");
-            // Assume that to_put_out_campfires is near to zero always, so this access isn't
-            // slower than parallel checking above
+            // Assume that to_put_out_campfires is near to zero always, so this
+            // access isn't slower than parallel checking above
             for e in to_put_out_campfires {
                 {
                     emitters.emit(ChangeBodyEvent {
@@ -219,8 +219,9 @@ impl<'a> System<'a> for Sys {
         }
 
         let mut rng = rand::rng();
-        // Racial passives manifest: one cache access per system run (hot-reloads
-        // between runs); per-entity asset-cache hits are banned in tick paths.
+        // Racial passives manifest: one cache access per system run
+        // (hot-reloads between runs); per-entity asset-cache hits are
+        // banned in tick paths.
         let racial_traits = common::comp::class::racial_traits_manifest();
         // BL-01 per-class scaling manifest: one cache access per system run.
         let class_attributes = common::comp::class::class_attributes_manifest();
@@ -292,9 +293,11 @@ impl<'a> System<'a> for Sys {
                             // NOTE: setting source as the burned character is
                             // problematic for whole array of reasons.
                             // 1) It would show non-sensical death message.
-                            // 2) It makes NPCs hate the victim of fire, which is rather annoying.
-                            // 3) It makes NPCs hate other NPCs and attempting to attack them, even
-                            //    when they are in the same group.
+                            // 2) It makes NPCs hate the victim of fire, which
+                            //    is rather annoying.
+                            // 3) It makes NPCs hate other NPCs and attempting
+                            //    to attack them, even when they are in the same
+                            //    group.
                             //
                             // We could reference original source, but it might
                             // have some cheesing & griefing potential.
@@ -364,9 +367,11 @@ impl<'a> System<'a> for Sys {
                     Some(SpriteKind::HaniwaTrap)
                 ) && !body.immune_to(BuffKind::Bleeding)
                 {
-                    // TODO: Determine a better place to emit sprite change events
+                    // TODO: Determine a better place to emit sprite change
+                    // events
                     if let Some(pos) = read_data.positions.get(entity) {
-                        // If touching Trap - change sprite and apply Bleeding buff
+                        // If touching Trap - change sprite and apply Bleeding
+                        // buff
                         emitters.emit(CreateSpriteEvent {
                             pos: Vec3::new(pos.0.x as i32, pos.0.y as i32, pos.0.z as i32 - 1),
                             sprite: SpriteKind::HaniwaTrapTriggered,
@@ -444,7 +449,8 @@ impl<'a> System<'a> for Sys {
                     })
                 ) && buff_comp.kinds[BuffKind::Burning].is_some()
                 {
-                    // If in water fluid and currently burning, remove burning debuffs
+                    // If in water fluid and currently burning, remove burning
+                    // debuffs
                     emitters.emit(BuffEvent {
                         entity,
                         buff_change: BuffChange::RemoveByKind(BuffKind::Burning),
@@ -454,8 +460,8 @@ impl<'a> System<'a> for Sys {
 
             let mut expired_buffs = Vec::<BuffKey>::new();
 
-            // Replace buffs from an active aura with a normal buff when out of range of the
-            // aura or link no longer active
+            // Replace buffs from an active aura with a normal buff when out of
+            // range of the aura or link no longer active
             for (buff_key, buff) in &buff_comp.buffs {
                 let keep = buff.cat_ids.iter().all(|cat| match cat {
                     BuffCategory::FromActiveAura(source, key) => {
@@ -533,10 +539,12 @@ impl<'a> System<'a> for Sys {
             buff_comp.buffs.iter().for_each(|(buff_key, buff)| {
                 if buff.end_time.is_some_and(|end| end.0 < read_data.time.0) {
                     expired_buffs.push(buff_key);
-                    // BL-05 RD-7: a BleedingMark detonates for a burst when it runs
-                    // its full course (natural timer expiry). Dispel/cleanse before
-                    // then removes it via RemoveByKind and skips this path — the
-                    // counterplay. Attribution mirrors the bleed DoT.
+                    // BL-05 RD-7: a BleedingMark detonates for a burst when it
+                    // runs its full course (natural timer
+                    // expiry). Dispel/cleanse before
+                    // then removes it via RemoveByKind and skips this path —
+                    // the counterplay. Attribution mirrors
+                    // the bleed DoT.
                     if buff.kind == BuffKind::BleedingMark {
                         let by = match buff.source {
                             BuffSource::Character { by, .. } => Some(by),
@@ -598,9 +606,10 @@ impl<'a> System<'a> for Sys {
 
             // Equipped-item `ItemCondition`s: short-circuits before touching
             // `read_data.ethos`, re-fetching the inventory, or evaluating any
-            // predicate at all, unless the cached `DerivedStats::has_item_condition`
-            // flag says at least one equipped item actually declares a
-            // condition. That flag is recomputed only when `Inventory`
+            // predicate at all, unless the cached
+            // `DerivedStats::has_item_condition` flag says at least
+            // one equipped item actually declares a condition. That
+            // flag is recomputed only when `Inventory`
             // changes (same trigger as every other `DerivedStats` field), so
             // this no longer costs an `equipped_items()` scan every tick for
             // every entity — no item in the game declares a condition yet
@@ -675,8 +684,9 @@ impl<'a> System<'a> for Sys {
                     .unwrap_or_default()
                     .apply(&mut stat);
 
-                // BL-01: permanent per-class + per-level scaling, same tick slot
-                // as racial passives (derived level → no persistence).
+                // BL-01: permanent per-class + per-level scaling, same tick
+                // slot as racial passives (derived level → no
+                // persistence).
                 if let (Some(character_class), Some(skill_set)) = (
                     read_data.character_classes.get(entity),
                     read_data.skill_sets.get(entity),
@@ -755,7 +765,8 @@ impl<'a> System<'a> for Sys {
             // BL-65: every body contributes a combat-stat baseline by threat
             // tier; humanoid bodies contribute 0 here (PCs/class-gated NPCs get
             // accuracy/evasion/crit from ClassAttributes above, not the body).
-            // One `threat_tier()` eval per entity (skips the work for humanoids).
+            // One `threat_tier()` eval per entity (skips the work for
+            // humanoids).
             let (npc_accuracy, npc_evasion, npc_crit) = body.base_combat_stats();
             stat.accuracy += npc_accuracy;
             stat.evasion += npc_evasion;
@@ -786,7 +797,8 @@ impl<'a> System<'a> for Sys {
                 }
                 for buff_key in active_buff_keys.into_iter() {
                     if let Some(buff) = buff_comp.buffs.get(buff_key) {
-                        // Skip the effect of buffs whose start delay hasn't expired.
+                        // Skip the effect of buffs whose start delay hasn't
+                        // expired.
                         if buff.start_time.0 > read_data.time.0 {
                             continue;
                         }
@@ -912,25 +924,26 @@ fn execute_effect(
         let dt = dt as f64;
         // Number of ticks has 3 parts
         //
-        // First part checks if delta time was larger than the tick duration, if it was
-        // determines number of ticks in that time
+        // First part checks if delta time was larger than the tick duration, if
+        // it was determines number of ticks in that time
         //
-        // Second part checks if delta time has just passed the threshold for a tick
-        // ending/starting (and accounts for if that delta time was longer than the tick
-        // duration)
-        // 0.000001 is to account for floating imprecision so this is not applied on the
-        // first tick
+        // Second part checks if delta time has just passed the threshold for a
+        // tick ending/starting (and accounts for if that delta time was
+        // longer than the tick duration)
+        // 0.000001 is to account for floating imprecision so this is not
+        // applied on the first tick
         //
-        // Third part returns the fraction of the current time passed since the last
-        // time a tick duration would have happened, this is ignored (by flooring) when
-        // the buff is not ending, but is used if the buff is ending this tick
+        // Third part returns the fraction of the current time passed since the
+        // last time a tick duration would have happened, this is
+        // ignored (by flooring) when the buff is not ending, but is
+        // used if the buff is ending this tick
         let curr_tick = (time_passed / tick_dur.0).floor();
         let prev_tick = ((time_passed - dt).max(0.0) / tick_dur.0).floor();
         let whole_ticks = curr_tick - prev_tick;
 
         if buff_will_expire {
-            // If the buff is ending, include the fraction of progress towards the next
-            // tick.
+            // If the buff is ending, include the fraction of progress towards
+            // the next tick.
             let fractional_tick = (time_passed % tick_dur.0) / tick_dur.0;
             Some((whole_ticks + fractional_tick) as f32)
         } else if whole_ticks >= 1.0 {
@@ -1124,12 +1137,13 @@ fn execute_effect(
                 .or(Some(*val));
         },
         BuffEffect::BodyChange(b) => {
-            // For when an entity is under the effects of multiple de/buffs that change the
-            // body, to avoid flickering between many bodies only change the body if the
-            // override body is not equal to the current body. (If the buff that caused the
-            // current body is still active, body override will eventually pick up on it,
-            // otherwise this will end up with a new body, though random depending on
-            // iteration order)
+            // For when an entity is under the effects of multiple de/buffs that
+            // change the body, to avoid flickering between many
+            // bodies only change the body if the override body is
+            // not equal to the current body. (If the buff that caused the
+            // current body is still active, body override will eventually pick
+            // up on it, otherwise this will end up with a new body,
+            // though random depending on iteration order)
             if Some(current_body) != body_override.as_ref() {
                 *body_override = Some(*b)
             }

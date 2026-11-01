@@ -103,7 +103,8 @@ impl<'a> System<'a> for Sys {
                     .last()
                     .and_then(|uid| read_data.id_maps.uid_entity(*uid));
 
-                // Update arc entity position to position of last hit target entity
+                // Update arc entity position to position of last hit target
+                // entity
                 let arc_pos =
                     if let Some(tgt_pos) = last_target.and_then(|e| positions.get(e)).copied() {
                         if let Some(pos) = positions.get_mut(entity) {
@@ -154,9 +155,11 @@ impl<'a> System<'a> for Sys {
                     let scale_b = read_data.scales.get(target).map_or(1.0, |s| s.0);
                     let rad_b = body_b.max_radius() * scale_b;
 
-                    // If the z ranges of each cylinder overlap, there is no z delta and the
-                    // shortest path will be a horizontal line, otherwise the shortest path will go
-                    // from the bottom of one range to the top of the other range
+                    // If the z ranges of each cylinder overlap, there is no z
+                    // delta and the shortest path will be a
+                    // horizontal line, otherwise the shortest path will go
+                    // from the bottom of one range to the top of the other
+                    // range
                     let z_delta = {
                         let pos_bzh = pos_b.0.z + body_b.height() * scale_b;
                         let tgt_range = pos_b.0.z..=pos_bzh;
@@ -254,7 +257,8 @@ impl<'a> System<'a> for Sys {
                             arc_owner,
                             target,
                         );
-                        // Arcs aren't precise, and thus cannot be a precise strike
+                        // Arcs aren't precise, and thus cannot be a precise
+                        // strike
                         let precision_mult = None;
                         let attack_options = AttackOptions {
                             target_dodging,
@@ -278,8 +282,8 @@ impl<'a> System<'a> for Sys {
                             0,
                         );
 
-                        // Once we hit the first entity, break the loop since we only arc to a
-                        // single entity
+                        // Once we hit the first entity, break the loop since we
+                        // only arc to a single entity
                         arc.hit_entities.push(*uid_b);
                         arc.last_arc_time = *read_data.time;
                         break;

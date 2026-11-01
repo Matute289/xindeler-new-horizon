@@ -1218,9 +1218,9 @@ impl Show {
     fn toggle_trade(&mut self) { self.trade(!self.trade); }
 
     fn toggle_map(&mut self) {
-        // Emitted here rather than at any one call site so every path that opens
-        // or closes the map (keybind, minimap button, …) shows up in the session
-        // telemetry stream under one event shape.
+        // Emitted here rather than at any one call site so every path that
+        // opens or closes the map (keybind, minimap button, …) shows up
+        // in the session telemetry stream under one event shape.
         common::telemetry!("ui", widget = "Map", action = "toggle");
         self.map(!self.map)
     }
@@ -1505,8 +1505,9 @@ impl Hud {
         // Load world map
         let mut layers = Vec::new();
         for layer in client.world_data().map_layers() {
-            // NOTE: Use a border the same color as the LOD ocean color (but with a
-            // translucent alpha since UI have transparency and LOD doesn't).
+            // NOTE: Use a border the same color as the LOD ocean color (but
+            // with a translucent alpha since UI have transparency
+            // and LOD doesn't).
             layers.push(ui.add_graphic_with_rotations(Graphic::Image(
                 Arc::clone(layer),
                 Some(default_water_color()),
@@ -1673,9 +1674,9 @@ impl Hud {
             let items = ecs.read_storage::<PickupItem>();
             // The nameplate loop below is the single heaviest `combat_rating`
             // consumer in the codebase — one read per nearby entity, per frame.
-            // It is joined (not `.get()`-ed per entity) so the rating is a plain
-            // field access on the joined tuple and no loadout is ever walked
-            // here.
+            // It is joined (not `.get()`-ed per entity) so the rating is a
+            // plain field access on the joined tuple and no loadout
+            // is ever walked here.
             let derived_stats = ecs.read_storage::<comp::DerivedStats>();
             let entities = ecs.entities();
             let me = info.viewpoint_entity;
@@ -1699,8 +1700,8 @@ impl Hud {
             let colliders = ecs.read_storage::<comp::Collider>();
             let char_states = ecs.read_storage::<comp::CharacterState>();
 
-            // Check if there was a persistence load error of the skillset, and if so
-            // display a dialog prompt
+            // Check if there was a persistence load error of the skillset, and
+            // if so display a dialog prompt
             if self.show.prompt_dialog.is_none()
                 && let Some(persistence_error) = info.persistence_load_error
             {
@@ -1727,7 +1728,8 @@ impl Hud {
                     .get_content(&Content::localized("hud-skill-persistence-common_message"));
 
                 warn!("{}\n{}", persistence_error, common_message);
-                // TODO: Let the player see the more detailed message `persistence_error`?
+                // TODO: Let the player see the more detailed message
+                // `persistence_error`?
                 let prompt_dialog = PromptDialogSettings::new(
                     format!("{}\n", common_message),
                     Event::AcknowledgePersistenceLoadError,
@@ -1877,7 +1879,8 @@ impl Hud {
                             &mut self.ids.player_scts,
                             &mut ui_widgets.widget_id_generator(),
                         );
-                        // Clamp the amount so you don't have absurdly large damage numbers
+                        // Clamp the amount so you don't have absurdly large
+                        // damage numbers
                         let max_hp_frac = floater
                             .info
                             .amount
@@ -1900,8 +1903,9 @@ impl Hud {
                         // Timer sets text transparency
                         let hp_fade = calc_fade(floater);
 
-                        // Increase font size based on fraction of maximum health
-                        // "flashes" by having a larger size in the first 100ms
+                        // Increase font size based on fraction of maximum
+                        // health "flashes" by having a
+                        // larger size in the first 100ms
                         let font_size =
                             30 + (if precise {
                                 (max_hp_frac * 10.0) as u32 * 3 + 10
@@ -1980,8 +1984,9 @@ impl Hud {
                         &mut self.ids.player_scts,
                         &mut ui_widgets.widget_id_generator(),
                     );*/
-                    // Increase font size based on fraction of maximum Experience
-                    // "flashes" by having a larger size in the first 100ms
+                    // Increase font size based on fraction of maximum
+                    // Experience "flashes" by having a
+                    // larger size in the first 100ms
                     let font_size_xp = 30
                         + ((floater.exp_change as f32 / 300.0).min(1.0) * 50.0) as u32
                         + if floater.jump_timer < 0.1 {
@@ -1990,8 +1995,8 @@ impl Hud {
                             0
                         };
                     let y = floater.timer as f64 * number_speed; // Timer sets the widget offset
-                    //let fade = ((4.0 - floater.timer as f32) * 0.25) + 0.2; // Timer sets
-                    // text transparency
+                    //let fade = ((4.0 - floater.timer as f32) * 0.25) + 0.2;
+                    // // Timer sets text transparency
                     let fade = floater.timer.min(1.0);
 
                     if floater.exp_change > 0 {
@@ -2417,9 +2422,10 @@ impl Hud {
                 };
 
                 if let Some(sprite) = block.get_sprite() {
-                    // TODO: Handle this better. The items returned from `try_reclaim_from_block`
-                    // are based on rng. We probably want some function to get only gauranteed items
-                    // from `LootSpec`.
+                    // TODO: Handle this better. The items returned from
+                    // `try_reclaim_from_block` are based on
+                    // rng. We probably want some function to get only
+                    // gauranteed items from `LootSpec`.
                     let interactable_item = if sprite.should_drop_mystery() {
                         None
                     } else {
@@ -2529,10 +2535,11 @@ impl Hud {
                 .set(overitem_id, ui_widgets);
             }
 
-            // Render an in-world label for every world point a magical sense has
-            // revealed to us (e.g. a revealed path's waypoint). These are bare
-            // positions rather than entities, so they get their own label pass
-            // instead of riding along with the figure tint.
+            // Render an in-world label for every world point a magical sense
+            // has revealed to us (e.g. a revealed path's waypoint).
+            // These are bare positions rather than entities, so
+            // they get their own label pass instead of riding along
+            // with the figure tint.
             let detecteds = ecs.read_storage::<Detected>();
             if let Some(detected) = detecteds.get(me) {
                 let mut detected_point_walker = self.ids.detected_points.walk();
@@ -2654,8 +2661,10 @@ impl Hud {
                         // whether the 3-D model itself is drawn.
                         let visible_to_me = is_concealed.is_none() || pierces_concealment;
 
-                        // Determine whether to display nametag and healthbar based on whether the
-                        // entity is mounted, has been damaged, is targeted/selected, or is in your
+                        // Determine whether to display nametag and healthbar
+                        // based on whether the
+                        // entity is mounted, has been damaged, is
+                        // targeted/selected, or is in your
                         // group
                         // Note: even if this passes the healthbar can
                         // be hidden in some cases if it is at maximum
@@ -2716,7 +2725,8 @@ impl Hud {
                             marked: is_marked,
                             creature_kind: stats.creature_kind,
                         });
-                        // Only render bubble if nearby or if its me and setting is on
+                        // Only render bubble if nearby or if its me and setting
+                        // is on
                         let bubble = if visible_to_me
                             && ((dist_sqr < SPEECH_BUBBLE_RANGE.powi(2) && !is_me)
                                 || (is_me && global_state.settings.interface.speech_bubble_self))
@@ -2832,8 +2842,8 @@ impl Hud {
                         DARK_ORANGE,
                         RED_ORANGE,
                     ];
-                    // Largest value that select the first color is 40, then it shifts colors
-                    // every 5
+                    // Largest value that select the first color is 40, then it
+                    // shifts colors every 5
                     let font_col = |font_size: u32, precise: bool| {
                         if precise {
                             Rgb::new(1.0, 0.9, 0.0)
@@ -2848,7 +2858,8 @@ impl Hud {
                             .next(&mut self.ids.scts, &mut ui_widgets.widget_id_generator());
                         let sct_bg_id = sct_bg_walker
                             .next(&mut self.ids.sct_bgs, &mut ui_widgets.widget_id_generator());
-                        // Clamp the amount so you don't have absurdly large damage numbers
+                        // Clamp the amount so you don't have absurdly large
+                        // damage numbers
                         let max_hp_frac = floater
                             .info
                             .amount
@@ -2869,8 +2880,9 @@ impl Hud {
                         let precise = floater.info.precise;
                         // Timer sets text transparency
                         let fade = calc_fade(floater);
-                        // Increase font size based on fraction of maximum health
-                        // "flashes" by having a larger size in the first 100ms
+                        // Increase font size based on fraction of maximum
+                        // health "flashes" by having a
+                        // larger size in the first 100ms
                         let font_size =
                             30 + (if precise {
                                 (max_hp_frac * 10.0) as u32 * 3 + 10
@@ -2919,7 +2931,8 @@ impl Hud {
                             .font_id(self.fonts.cyri.conrod_id)
                             .x_y(x, y)
                             .color(if floater.miss {
-                                // BL-52 P4: a miss is neutral grey and fades out
+                                // BL-52 P4: a miss is neutral grey and fades
+                                // out
                                 // (not heal-green / non-fading).
                                 Color::Rgba(0.8, 0.8, 0.8, fade)
                             } else if floater.info.amount < 0.0 {
@@ -3352,7 +3365,8 @@ impl Hud {
 
                 for (i, timing) in gpu_timings.iter().enumerate() {
                     let label = timing.1;
-                    // We skip displaying these since they aren't present every frame.
+                    // We skip displaying these since they aren't present every
+                    // frame.
                     if label.starts_with(crate::render::UI_PREMULTIPLY_PASS) {
                         continue;
                     }
@@ -3376,9 +3390,9 @@ impl Hud {
                 }
             }
 
-            // TODO: Use a more accurate method for calculating background width from text
-            // content/length. Multiplying by font scale then dividing by 2.0 is
-            // only an ad-hoc approach.
+            // TODO: Use a more accurate method for calculating background width
+            // from text content/length. Multiplying by font scale
+            // then dividing by 2.0 is only an ad-hoc approach.
             let debug_bg_width =
                 (H_PAD * 2.0) + (largest_str_len as f64) * (FONT_SCALE as f64) / 2.0;
             let debug_bg_height =
@@ -3496,10 +3510,11 @@ impl Hud {
 
         // Identify inspect card: only rendered while `self.show.identify_card`
         // names a target AND that target still carries a `DetectDetail` the
-        // local player is currently permitted to see. `info.identified_entities`
-        // (built from the player's own owner-private `Detected` component) is
-        // the entire permission check -- an entry existing there at all already
-        // proves this client is the one who cast Identify on that entity, see
+        // local player is currently permitted to see.
+        // `info.identified_entities` (built from the player's own
+        // owner-private `Detected` component) is the entire permission
+        // check -- an entry existing there at all already proves this
+        // client is the one who cast Identify on that entity, see
         // `HudInfo::identified_entities`'s own doc comment.
         if let Some(target) = self.show.identify_card {
             match info.identified_entities.get(&target) {
@@ -3974,10 +3989,11 @@ impl Hud {
         // Chat box
         // Draw this after loot scroller and subtitles so it can be dragged
         // even when hovering over them
-        // TODO look into parenting and then settings movable widgets to floating
+        // TODO look into parenting and then settings movable widgets to
+        // floating
         if global_state.settings.interface.toggle_chat || self.force_chat {
-            // `rev` since we push to the front of the queue and want the oldest message to
-            // be the last pushed to the front.
+            // `rev` since we push to the front of the queue and want the oldest
+            // message to be the last pushed to the front.
             for hidden in self
                 .persisted_state
                 .borrow_mut()
@@ -4122,7 +4138,8 @@ impl Hud {
                 match event {
                     settings_window::Event::ChangeTab(tab) => self.show.open_setting_tab(tab),
                     settings_window::Event::Close => {
-                        // Unpause the game if we are on singleplayer so that we can logout
+                        // Unpause the game if we are on singleplayer so that we
+                        // can logout
                         #[cfg(feature = "singleplayer")]
                         global_state.unpause();
                         self.show.want_grab = true;
@@ -4424,7 +4441,8 @@ impl Hud {
                 },
                 Some(esc_menu::Event::Logout) => {
                     common::telemetry!("ui", widget = "EscMenu", btn = "Logout");
-                    // Unpause the game if we are on singleplayer so that we can logout
+                    // Unpause the game if we are on singleplayer so that we can
+                    // logout
                     #[cfg(feature = "singleplayer")]
                     global_state.unpause();
 
@@ -4436,7 +4454,8 @@ impl Hud {
                 },
                 Some(esc_menu::Event::CharacterSelection) => {
                     common::telemetry!("ui", widget = "EscMenu", btn = "CharacterSelection");
-                    // Unpause the game if we are on singleplayer so that we can logout
+                    // Unpause the game if we are on singleplayer so that we can
+                    // logout
                     #[cfg(feature = "singleplayer")]
                     global_state.unpause();
 
@@ -4864,8 +4883,10 @@ impl Hud {
                         self.hotbar.get(h).map(|s| match s {
                             hotbar::SlotContents::Inventory(i, _) => {
                                 if let Some(inv) = inventories.get(info.viewpoint_entity) {
-                                    // If the item in the inactive main hand is the same as the item
-                                    // pressed in the hotbar, then swap active and inactive hands
+                                    // If the item in the inactive main hand is
+                                    // the same as the item
+                                    // pressed in the hotbar, then swap active
+                                    // and inactive hands
                                     // instead of looking for
                                     // the item in the inventory
                                     if inv
@@ -5331,8 +5352,10 @@ impl Hud {
                 hotbar.get(slot).map(|s| match s {
                     hotbar::SlotContents::Inventory(i, _) => {
                         if just_pressed && let Some(inv) = client_inventory {
-                            // If the item in the inactive main hand is the same as the item
-                            // pressed in the hotbar, then swap active and inactive hands
+                            // If the item in the inactive main hand is the same
+                            // as the item
+                            // pressed in the hotbar, then swap active and
+                            // inactive hands
                             // instead of looking for the item
                             // in the inventory
                             if inv
@@ -5371,11 +5394,13 @@ impl Hud {
                     .clamped(1.25, max_zoom / 64.0);
                 global_state.settings.interface.map_zoom = new_zoom_lvl;
             } else if global_state.settings.interface.minimap_show {
-                // Duplicated code from voxygen/src/hud/minimap.rs:522 in the update fn
-                // TODO: Consolidate minimap zooming, because having duplicate handlers for
-                // hotkey and interface is error prone. Find the other occurrence by searching
-                // for this comment. Don't forget to update the code in
-                // minimap.rs when updating this!
+                // Duplicated code from voxygen/src/hud/minimap.rs:522 in the
+                // update fn TODO: Consolidate minimap zooming,
+                // because having duplicate handlers for
+                // hotkey and interface is error prone. Find the other
+                // occurrence by searching for this comment.
+                // Don't forget to update the code in minimap.rs
+                // when updating this!
                 let min_zoom = 1.0;
                 let max_zoom = world_size
                     .reduce_partial_max() as f64/*.min(f64::MAX)*/;
@@ -5722,10 +5747,11 @@ impl Hud {
                 true
             },
             WinEvent::Moved(_) => {
-                // Prevent the cursor from being grabbed while the window is being moved as this
-                // causes the window to move erratically
-                // TODO: this creates an issue where if you move the window then you need to
-                // close a menu to re-grab the mouse (and if one isn't already
+                // Prevent the cursor from being grabbed while the window is
+                // being moved as this causes the window to move
+                // erratically TODO: this creates an issue where
+                // if you move the window then you need to close
+                // a menu to re-grab the mouse (and if one isn't already
                 // open you need to open and close a menu)
                 self.show.want_grab = false;
                 true
@@ -5778,7 +5804,8 @@ impl Hud {
             }
         }
 
-        // Remove extra map markers that we've wandered a long distance away from
+        // Remove extra map markers that we've wandered a long distance away
+        // from
         if let Some(pos) = client.position() {
             self.extra_markers.retain(|em| {
                 const EXTRA_DISTANCE: f32 = 100.0;
@@ -5805,8 +5832,8 @@ impl Hud {
                 .handle_event(conrod_core::event::Input::Text("\t".to_string()));
         }
 
-        // Stop selecting a sprite to perform crafting with when out of range or sprite
-        // has been removed
+        // Stop selecting a sprite to perform crafting with when out of range or
+        // sprite has been removed
         self.show.crafting_fields.craft_sprite =
             self.show
                 .crafting_fields
@@ -5862,9 +5889,9 @@ impl Hud {
 
         // Check if item images need to be reloaded
         self.item_imgs.reload_if_changed(&mut self.ui);
-        // TODO: using a thread pool in the obvious way for speeding up map zoom results
-        // in flickering artifacts, figure out a better way to make use of the
-        // thread pool
+        // TODO: using a thread pool in the obvious way for speeding up map zoom
+        // results in flickering artifacts, figure out a better way to
+        // make use of the thread pool
         let _pool = client.state().ecs().read_resource::<SlowJobPool>();
         self.ui.maintain(
             global_state.window.renderer_mut(),
@@ -6054,7 +6081,8 @@ impl Hud {
                         },
                         None => hit_me,
                     } {
-                        // Group up damage from the same tick and instance number
+                        // Group up damage from the same tick and instance
+                        // number
                         for floater in floater_list.floaters.iter_mut().rev() {
                             if floater.timer > 0.0 {
                                 break;
@@ -6073,8 +6101,8 @@ impl Hud {
                             }
                         }
 
-                        // To separate healing and damage floaters alongside the precise and
-                        // non-precise ones
+                        // To separate healing and damage floaters alongside the
+                        // precise and non-precise ones
                         let last_floater = if !info.precise || hit_me {
                             floater_list.floaters.iter_mut().rev().find(|f| {
                                 (if info.amount < 0.0 {

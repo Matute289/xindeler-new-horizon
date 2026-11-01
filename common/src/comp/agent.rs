@@ -453,8 +453,9 @@ impl<'a> From<&'a Body> for Psyche {
                     biped_large::Species::Gigasfrost | biped_large::Species::Gigasfire
                 ),
                 Body::BirdMedium(bird_medium) => {
-                    // Skip stop_pursuing, as that function breaks when the health fraction is 0.0
-                    // (to keep aggro after death transform)
+                    // Skip stop_pursuing, as that function breaks when the
+                    // health fraction is 0.0 (to keep aggro
+                    // after death transform)
                     !matches!(bird_medium.species, bird_medium::Species::BloodmoonBat)
                 },
                 _ => true,

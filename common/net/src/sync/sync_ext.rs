@@ -54,8 +54,8 @@ impl WorldSyncExt for specs::World {
     fn create_entity_synced(&mut self) -> specs::EntityBuilder<'_> {
         // TODO: Add metric for number of new entities created in a tick? Most
         // convenient would be to store counter in `IdMaps` so that we don't
-        // have to fetch another resource nor require an additional parameter here
-        // nor use globals.
+        // have to fetch another resource nor require an additional parameter
+        // here nor use globals.
         let builder = self.create_entity();
         let uid = builder
             .world
@@ -120,10 +120,11 @@ impl WorldSyncExt for specs::World {
 
         // Attempt to delete entities that were marked for deletion
         deleted_entities.into_iter().for_each(|uid| {
-            // Skip deleting the client's own entity. It will appear here when exiting
-            // "in-game" and the client already handles cleaning things up
-            // there. Although the client might not get this anyway since it
-            // should no longer be subscribed to any regions.
+            // Skip deleting the client's own entity. It will appear here when
+            // exiting "in-game" and the client already handles
+            // cleaning things up there. Although the client might
+            // not get this anyway since it should no longer be
+            // subscribed to any regions.
             if client_uid != Some(uid) {
                 self.delete_entity_and_clear_uid_mapping(uid);
             }
@@ -159,8 +160,8 @@ fn create_entity_with_uid(specs_world: &mut specs::World, entity_uid: Uid) -> sp
     let existing_entity = specs_world.read_resource::<IdMaps>().uid_entity(entity_uid);
 
     // TODO: Are there any expected cases where there is an existing entity with
-    // this UID? If not, we may want to log an error. Otherwise, it may be useful to
-    // document these cases.
+    // this UID? If not, we may want to log an error. Otherwise, it may be
+    // useful to document these cases.
     match existing_entity {
         Some(entity) => entity,
         None => {

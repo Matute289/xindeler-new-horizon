@@ -142,8 +142,9 @@ pub struct InventoryScroller<'a> {
 }
 
 impl<'a> InventoryScroller<'a> {
-    // InventoryScroller is only used by the trade screen now, and should be removed
-    // sometime TODO: replace this with the new bag defined further below
+    // InventoryScroller is only used by the trade screen now, and should be
+    // removed sometime TODO: replace this with the new bag defined further
+    // below
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         client: &'a Client,
@@ -324,7 +325,8 @@ impl<'a> InventoryScroller<'a> {
             .scroll_kids_vertically()
             .set(state.ids.inv_alignment, ui);
 
-        // Adds spacing above the slots to make scrolling feel a bit more natural
+        // Adds spacing above the slots to make scrolling feel a bit more
+        // natural
         Rectangle::fill_with([grid_width, 5.0], color::TRANSPARENT)
             .mid_top_of(state.ids.inv_alignment)
             .set(state.ids.spacing_above, ui);
@@ -775,9 +777,9 @@ impl Widget for BagManager<'_> {
             events.push(event)
         }
 
-        // This is the secondary bag, visibile in split screen mode to show gear next to
-        // the inventory; should only be visible for the player, and should not be
-        // visible when trading
+        // This is the secondary bag, visibile in split screen mode to show gear
+        // next to the inventory; should only be visible for the player,
+        // and should not be visible when trading
         if self.show.bag_menu_split && !self.show.trade {
             for event in BagWindow::new(
                 self.global_state,
@@ -1018,8 +1020,9 @@ impl Widget for BagWindow<'_> {
 
         // If no primary bag ids were passed in, assume it is secondary bag
         let is_primary = self.primary_bg_ids.is_none();
-        // The gear tab should not be opened in the primary window if using split screen
-        // When trading, split screen is temporarily minimized
+        // The gear tab should not be opened in the primary window if using
+        // split screen When trading, split screen is temporarily
+        // minimized
         let block_gear_tab = self.show.bag_menu_split && !self.show.trade;
 
         // The bag is force-opened alongside Crafting/Trade (both call
@@ -1027,13 +1030,14 @@ impl Widget for BagWindow<'_> {
         // inventory), and Crafting/Trade consume `MenuInput`s of their own for
         // their own navigation. With the bag's grids and paperdoll also
         // navigable at the same time, a single dpad press would move both this
-        // window's highlight AND Crafting's/Trade's, and `Apply` could open this
-        // window's Use/Drop/Cancel context menu on whatever slot happened to be
-        // highlighted here — a real risk of an unintended item drop/use while
-        // trying to navigate Crafting/Trade. Crafting and Trade each handle their
-        // own `MenuInput::Back` independently of this window's `Close` events, so
-        // suppressing navigation here costs nothing: Back still closes both
-        // windows correctly.
+        // window's highlight AND Crafting's/Trade's, and `Apply` could open
+        // this window's Use/Drop/Cancel context menu on whatever slot
+        // happened to be highlighted here — a real risk of an
+        // unintended item drop/use while trying to navigate
+        // Crafting/Trade. Crafting and Trade each handle their
+        // own `MenuInput::Back` independently of this window's `Close` events,
+        // so suppressing navigation here costs nothing: Back still
+        // closes both windows correctly.
         let bag_nav_allowed = !(self.show.crafting || self.show.trade);
 
         // MENU INPUTS: change bag tabs
@@ -1076,8 +1080,8 @@ impl Widget for BagWindow<'_> {
             }
         }
 
-        // Block any attempts to open the gear screen when it shouldn't be open (i.e.,
-        // split screen is being used)
+        // Block any attempts to open the gear screen when it shouldn't be open
+        // (i.e., split screen is being used)
         if block_gear_tab && state.active_tab == BagTab::Gear && is_primary {
             state.update(|s| {
                 s.active_tab = BagTab::Inventory;
@@ -1109,7 +1113,8 @@ impl Widget for BagWindow<'_> {
                 bg = bg.left_from(primary_ids.bg, 0.0);
             } else {
                 // Fallback---shouldn't ever be called, but just in case
-                // Only rendered next to players inventory, so always bottom right
+                // Only rendered next to players inventory, so always bottom
+                // right
                 bg = bg.bottom_right_with_margins_on(ui.window, bag_pos.y, bag_pos.x)
             }
         }
@@ -1544,9 +1549,9 @@ impl Widget for InventoryMenu<'_> {
             }
         }*/
 
-        // The grid width and item slot size are all pixel perferct in their alignment
-        // However, the slot spacing has a few pixel mismatches, but shouldn't be
-        // noticable
+        // The grid width and item slot size are all pixel perferct in their
+        // alignment However, the slot spacing has a few pixel
+        // mismatches, but shouldn't be noticable
         let grid_width = 376.0;
         let grid_height = 586.0;
 
@@ -1556,7 +1561,8 @@ impl Widget for InventoryMenu<'_> {
             .scroll_kids_vertically()
             .set(state.ids.inv_alignment, ui);
 
-        // Adds spacing above the slots to make scrolling feel a bit more natural
+        // Adds spacing above the slots to make scrolling feel a bit more
+        // natural
         Rectangle::fill_with([grid_width, 5.0], color::TRANSPARENT)
             .mid_top_of(state.ids.inv_alignment)
             .set(state.ids.spacing_above, ui);
@@ -2173,7 +2179,8 @@ impl Widget for GearMenu<'_> {
             .set(state.ids.inv_alignment, ui);
 
         if !self.show.bag_menu_split || self.show.trade {
-            // Adds spacing above the slots to make scrolling feel a bit more natural
+            // Adds spacing above the slots to make scrolling feel a bit more
+            // natural
             Rectangle::fill_with([grid_width, 5.0], color::TRANSPARENT)
                 .mid_top_of(state.ids.inv_alignment)
                 .set(state.ids.spacing_above, ui);
@@ -2305,8 +2312,8 @@ impl Widget for GearMenu<'_> {
         // So considering how many times we copy-paste this code
         // and how easy this macro looks it sounds like lawful evil.
         //
-        // What this actually does is checks if we have equipped item on this slot
-        // and if we do, display item tooltip for it.
+        // What this actually does is checks if we have equipped item on this
+        // slot and if we do, display item tooltip for it.
         // If not, just show text of slot name.
         macro_rules! set_tooltip {
             ($slot_maker:expr, $slot_id:expr, $slot:expr, $desc:expr) => {
@@ -2514,7 +2521,8 @@ impl Widget for GearMenu<'_> {
         set_tooltip!(slot, slot_id, item_slot, "hud-bag-neck");
 
         // Chest
-        //Image::new(self.imgs.armor_slot) // different graphics for empty/non empty
+        //Image::new(self.imgs.armor_slot) // different graphics for empty/non
+        // empty
         let item_slot = EquipSlot::Armor(ArmorSlot::Chest);
         let slot = slot_maker
             .fabricate(

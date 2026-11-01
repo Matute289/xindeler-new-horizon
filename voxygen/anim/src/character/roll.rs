@@ -314,9 +314,10 @@ impl Animation for RollAnimation {
         };
         let roll_spin = Quaternion::rotation_x(-0.3 + movement1 * -0.4 + movement2 * -2.0 * PI);
         next.torso.orientation = if let Some(prev_aimed_dir) = prev_aimed_dir {
-            // This is *slightly* hacky. Because rolling is not strafed movement, we
-            // actually correct for the entity orientation to make sure that our
-            // rolling motion is correct with respect to our original orientation
+            // This is *slightly* hacky. Because rolling is not strafed
+            // movement, we actually correct for the entity
+            // orientation to make sure that our rolling motion is
+            // correct with respect to our original orientation
             roll_spin
                 * Dir::from_unnormalized(orientation.into_array().into())
                     .zip(prev_aimed_dir.to_horizontal())

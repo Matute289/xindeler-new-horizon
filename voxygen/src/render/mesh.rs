@@ -43,8 +43,8 @@ impl<V: Vertex> Mesh<V> {
 
     /// Push a new quad onto the end of this mesh.
     pub fn push_quad(&mut self, quad: Quad<V>) {
-        // A quad is composed of two triangles. The code below converts the former to
-        // the latter.
+        // A quad is composed of two triangles. The code below converts the
+        // former to the latter.
         if V::QUADS_INDEX.is_some() {
             // 0, 1, 2, 2, 1, 3
             // b, c, a, a, c, d
@@ -94,8 +94,8 @@ impl<V: Vertex> Mesh<V> {
 
     /// Map and push the vertices of another mesh onto the end of this mesh.
     pub fn push_mesh_map<F: FnMut(V) -> V>(&mut self, other: &Mesh<V>, mut f: F) {
-        // Reserve enough space in our Vec. This isn't necessary, but it tends to reduce
-        // the number of required (re)allocations.
+        // Reserve enough space in our Vec. This isn't necessary, but it tends
+        // to reduce the number of required (re)allocations.
         self.verts.reserve(other.vertices().len());
 
         for vert in other.vertices() {

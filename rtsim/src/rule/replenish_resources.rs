@@ -20,8 +20,8 @@ impl Rule for ReplenishResources {
             let world_size = ctx.world.sim().get_size();
             let mut data = ctx.state.data_mut();
 
-            // How much should be replenished for each chosen chunk to hit our target
-            // replenishment rate?
+            // How much should be replenished for each chosen chunk to hit our
+            // target replenishment rate?
             let replenish_amount = world_size.product() as f32
                 * ctx.event.dt
                 * (1.0 / REPLENISH_TIME / REPLENISH_PER_TICK as f32);

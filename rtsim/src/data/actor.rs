@@ -503,13 +503,13 @@ impl Actor {
     }
 
     // // TODO: have a dedicated `NpcBuilder` type for this.
-    // pub fn with_profession(mut self, profession: impl Into<Option<Profession>>)
-    // -> Self {     if let Role::Humanoid(p) = &mut self.role {
-    //         *p = profession.into();
+    // pub fn with_profession(mut self, profession: impl
+    // Into<Option<Profession>>) -> Self {     if let Role::Humanoid(p) =
+    // &mut self.role {         *p = profession.into();
     //     } else {
-    //         panic!("Tried to assign profession {:?} to NPC, but has role {:?},
-    // which cannot have a profession", profession.into(), self.role);     }
-    //     self
+    //         panic!("Tried to assign profession {:?} to NPC, but has role
+    // {:?}, which cannot have a profession", profession.into(), self.role);
+    // }     self
     // }
 
     // TODO: have a dedicated `NpcBuilder` type for this.
@@ -561,8 +561,8 @@ impl Actor {
     pub fn cleanup(&mut self, reports: &Reports) {
         if let ActorKind::Npc(npc) = &mut self.kind {
             // Clear old or superfluous sentiments
-            // TODO: It might be worth giving more important NPCs a higher sentiment
-            // 'budget' than less important ones.
+            // TODO: It might be worth giving more important NPCs a higher
+            // sentiment 'budget' than less important ones.
             npc.sentiments
                 .cleanup(crate::data::sentiment::NPC_MAX_SENTIMENTS);
             // Clear reports that have been forgotten
@@ -682,7 +682,8 @@ impl ActorLinks {
                         Err(MountingError::HasSteerer)
                     }
                 } else {
-                    // TODO: Maybe have some limit on the number of riders depending on the mount?
+                    // TODO: Maybe have some limit on the number of riders
+                    // depending on the mount?
                     let id = self.links.insert(ActorLink {
                         mount,
                         rider,

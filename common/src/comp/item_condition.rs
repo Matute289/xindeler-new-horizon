@@ -196,7 +196,8 @@ mod tests {
 
     #[test]
     fn moral_predicate_with_no_ethos_reads_as_true_neutral() {
-        // No Ethos component (e.g. a beast) reads as Ethos::default() == Neutral.
+        // No Ethos component (e.g. a beast) reads as Ethos::default() ==
+        // Neutral.
         assert!(ConditionPredicate::MoralAtLeast(Moral::Neutral).met_by(None, &human()));
         assert!(ConditionPredicate::MoralAtMost(Moral::Neutral).met_by(None, &human()));
         assert!(!ConditionPredicate::MoralAtLeast(Moral::Good).met_by(None, &human()));

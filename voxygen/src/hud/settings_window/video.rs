@@ -1321,8 +1321,9 @@ impl Widget for Video<'_> {
                 })));
             }
 
-            // TODO: Consider fixing to avoid allocation (it's probably not a bottleneck but
-            // there's no reason to allocate for numbers).
+            // TODO: Consider fixing to avoid allocation (it's probably not a
+            // bottleneck but there's no reason to allocate for
+            // numbers).
             Text::new(&format!("{}", shadow_map_mode.resolution))
                 .right_from(state.ids.shadow_mode_map_resolution_slider, 8.0)
                 .font_size(self.fonts.cyri.scale(14))

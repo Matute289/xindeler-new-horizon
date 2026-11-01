@@ -275,8 +275,8 @@ pub fn handle_attack_aggression(
         };
     }
 
-    // If agent has not moved, assume agent was unable to move and reset attempted
-    // path positions if occurs for too long
+    // If agent has not moved, assume agent was unable to move and reset
+    // attempted path positions if occurs for too long
     if agent_data.vel.0.magnitude_squared() < 1_f32.powi(2) {
         agent.combat_state.timers[timer_pos_timeout_index] += read_data.dt.0;
     } else {
@@ -315,8 +315,8 @@ pub fn handle_attack_aggression(
                 true
             } else {
                 if attack_data.dist_sqrd > 10_f32.powi(2) {
-                    // Choose random point to either side when looking at target and move
-                    // towards it
+                    // Choose random point to either side when looking at target
+                    // and move towards it
                     if let Some(pos) = agent.combat_state.positions[position_guarded_cover_index] {
                         if pos.distance_squared(agent_data.pos.0) < 5_f32.powi(2) {
                             agent.combat_state.positions[position_guarded_cover_index] = None;

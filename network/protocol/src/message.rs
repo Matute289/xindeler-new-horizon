@@ -83,7 +83,8 @@ impl OTMessage {
 impl ITMessage {
     pub(crate) fn new(sid: Sid, length: u64, _allocator: &mut BytesMut) -> Self {
         //allocator.reserve(ALLOC_BLOCK);
-        //TODO: grab mem from the allocatior, but this is only possible with unsafe
+        //TODO: grab mem from the allocatior, but this is only possible with
+        // unsafe
         Self {
             sid,
             length,

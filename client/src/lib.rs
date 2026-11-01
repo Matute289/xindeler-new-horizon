@@ -242,8 +242,8 @@ impl WeatherLerp {
         self.old = mem::replace(&mut self.new, (weather, Instant::now()));
     }
 
-    // TODO: Make improvements to this interpolation, it's main issue is assuming
-    // that updates come at regular intervals.
+    // TODO: Make improvements to this interpolation, it's main issue is
+    // assuming that updates come at regular intervals.
     fn update(&mut self, to_update: &mut WeatherGrid) {
         prof_span!("WeatherLerp::update");
         self.update_local_wind();
@@ -474,8 +474,8 @@ impl Client {
         client_type: ClientType,
     ) -> Result<Self, Error> {
         let _ = rustls::crypto::ring::default_provider().install_default(); // needs to be initialized before usage
-        // Use `usize::MAX` as the output limit: we implicitly trust servers to not send
-        // us too much data (TODO: should we?)
+        // Use `usize::MAX` as the output limit: we implicitly trust servers to
+        // not send us too much data (TODO: should we?)
         let network = Network::new(Pid::new(), &runtime);
 
         init_stage_update(ClientInitStage::ConnectionEstablish);
@@ -487,9 +487,10 @@ impl Client {
                 validate_tls,
                 use_quic,
             } => {
-                // Try to create a resolver backed by /etc/resolv.conf or the Windows Registry
-                // first. If that fails, create a resolver being hard-coded to
-                // Google's 8.8.8.8 public resolver.
+                // Try to create a resolver backed by /etc/resolv.conf or the
+                // Windows Registry first. If that fails, create
+                // a resolver being hard-coded to Google's 8.8.
+                // 8.8 public resolver.
                 let resolver = Resolver::builder_tokio()
                     .unwrap_or_else(|error| {
                         error!(
@@ -518,8 +519,8 @@ impl Client {
                     Tcp,
                 }
 
-                // Push the results of both futures into `srv_rr`. This uses map_or_else purely
-                // for side effects.
+                // Push the results of both futures into `srv_rr`. This uses
+                // map_or_else purely for side effects.
                 let mut srv_rr = Vec::new();
                 let () = quic_rr.map_or_else(
                     |error| {
@@ -550,13 +551,15 @@ impl Client {
                     },
                 );
 
-                // SRV records have a priority; lowest priority hosts MUST be contacted first.
+                // SRV records have a priority; lowest priority hosts MUST be
+                // contacted first.
                 let srv_rr_slice = srv_rr.as_mut_slice();
                 srv_rr_slice.sort_by_key(|(_, srv)| srv.priority);
 
                 let mut iter = srv_rr_slice.iter();
 
-                // This loops exits as soon as the above iter over `srv_rr_slice` is exhausted
+                // This loops exits as soon as the above iter over
+                // `srv_rr_slice` is exhausted
                 loop {
                     if let Some((conn_mode, srv_rr)) = iter.next() {
                         let hostname = format!("{}", srv_rr.target);
@@ -587,7 +590,8 @@ impl Client {
                         warn!(
                             "No SRV hosts succeeded connection, falling back to direct connection"
                         );
-                        // This case is also hit if no SRV host was returned from the query, so we
+                        // This case is also hit if no SRV host was returned
+                        // from the query, so we
                         // check for QUIC/TCP preference.
                         let c = if use_quic {
                             connect_quic(&network, hostname, None, prefer_ipv6, validate_tls)
@@ -659,8 +663,8 @@ impl Client {
                 *common::util::DISPLAY_VERSION,
             );
         }
-        // Pass the server info back to the caller to ensure they can access it even
-        // if this function errors.
+        // Pass the server info back to the caller to ensure they can access it
+        // even if this function errors.
         *mismatched_server_info = Some(server_info.clone());
         debug!("Auth Server: {:?}", server_info.auth_provider);
 
@@ -669,12 +673,13 @@ impl Client {
         init_stage_update(ClientInitStage::Authentication);
         // Register client
         //
-        // This can take a long time: for OAuth logins, `register` waits on the player
-        // completing an entire browser-based provider consent flow, which can easily
-        // exceed the server's default `client_timeout` (40s). Keep sending pings on the
-        // usual ~1-second cadence while registration is in flight so the server doesn't
-        // time out the connection for going silent (mirrors the ping loop used below
-        // while waiting for the initial sync).
+        // This can take a long time: for OAuth logins, `register` waits on the
+        // player completing an entire browser-based provider consent
+        // flow, which can easily exceed the server's default
+        // `client_timeout` (40s). Keep sending pings on the
+        // usual ~1-second cadence while registration is in flight so the server
+        // doesn't time out the connection for going silent (mirrors the
+        // ping loop used below while waiting for the initial sync).
         let mut ping_interval = tokio::time::interval(Duration::from_secs(1));
         // Scoped so the pinned future (and its borrows of `server_info` and
         // `register_stream`) is dropped as soon as registration finishes,
@@ -725,8 +730,8 @@ impl Client {
         };
 
         init_stage_update(ClientInitStage::StartingClient);
-        // Spawn in a blocking thread (leaving the network thread free).  This is mostly
-        // useful for bots.
+        // Spawn in a blocking thread (leaving the network thread free).  This
+        // is mostly useful for bots.
         let mut task = tokio::task::spawn_blocking(move || {
             let map_size_lg =
                 common::terrain::MapSizeLg::new(world_map.dimensions_lg).map_err(|_| {
@@ -898,7 +903,8 @@ impl Client {
                     let [r, g, b, _a] = rgba[pos].to_le_bytes();
                     let is_water = is_water_color(r, g, b);
                     let alti = alt[pos];
-                    // Compute contours (chunks are assigned in the river code below)
+                    // Compute contours (chunks are assigned in the river code
+                    // below)
                     let altj = rescale_height(scale_height_big(alti));
                     let contour_interval = 50.0;
                     let chunk_contour = (altj * gain / contour_interval) as u32;
@@ -1545,8 +1551,9 @@ impl Client {
             const C_TYPE: ClientType = ClientType::Game;
             let verified = msg.verify(C_TYPE, self.registered, self.presence);
 
-            // Due to the fact that character loading is performed asynchronously after
-            // initial connect it is possible to receive messages after a character load
+            // Due to the fact that character loading is performed
+            // asynchronously after initial connect it is possible
+            // to receive messages after a character load
             // error while in the wrong state.
             if !verified {
                 warn!(
@@ -1717,9 +1724,10 @@ impl Client {
 
     /// Character deletion
     pub fn delete_character(&mut self, character_id: CharacterId) {
-        // Pre-emptively remove the character to be deleted from the character list as
-        // character deletes are processed asynchronously by the server so we can't rely
-        // on a timely response to update the character list
+        // Pre-emptively remove the character to be deleted from the character
+        // list as character deletes are processed asynchronously by the
+        // server so we can't rely on a timely response to update the
+        // character list
         if let Some(pos) = self
             .character_list
             .characters
@@ -2300,7 +2308,8 @@ impl Client {
 
     pub fn respawn(&mut self) -> bool {
         if self.current::<comp::Health>().is_some_and(|h| h.is_dead) {
-            // Hardcore characters cannot respawn, kick them to character selection
+            // Hardcore characters cannot respawn, kick them to character
+            // selection
             if self.current::<Hardcore>().is_some() {
                 self.request_remove_character();
             } else {
@@ -2746,22 +2755,25 @@ impl Client {
     /// the given duration.
     pub fn tick(&mut self, inputs: ControllerInputs, dt: Duration) -> Result<Vec<Event>, Error> {
         span!(_guard, "tick", "Client::tick");
-        // This tick function is the centre of the Veloren universe. Most client-side
-        // things are managed from here, and as such it's important that it
-        // stays organised. Please consult the core developers before making
-        // significant changes to this code. Here is the approximate order of
-        // things. Please update it as this code changes.
+        // This tick function is the centre of the Veloren universe. Most
+        // client-side things are managed from here, and as such it's
+        // important that it stays organised. Please consult the core
+        // developers before making significant changes to this code.
+        // Here is the approximate order of things. Please update it as
+        // this code changes.
         //
-        // 1) Collect input from the frontend, apply input effects to the state of the
-        //    game
+        // 1) Collect input from the frontend, apply input effects to the state
+        //    of the game
         // 2) Handle messages from the server
-        // 3) Go through any events (timer-driven or otherwise) that need handling and
-        //    apply them to the state of the game
-        // 4) Perform a single LocalState tick (i.e: update the world and entities in
-        //    the world)
-        // 5) Go through the terrain update queue and apply all changes to the terrain
+        // 3) Go through any events (timer-driven or otherwise) that need
+        //    handling and apply them to the state of the game
+        // 4) Perform a single LocalState tick (i.e: update the world and
+        //    entities in the world)
+        // 5) Go through the terrain update queue and apply all changes to the
+        //    terrain
         // 6) Sync information to the server
-        // 7) Finish the tick, passing actions of the main thread back to the frontend
+        // 7) Finish the tick, passing actions of the main thread back to the
+        //    frontend
 
         // 1) Handle input from frontend.
         // Pass character actions from frontend input to the player's entity.
@@ -2793,7 +2805,8 @@ impl Client {
             self.send_msg_err(ClientGeneral::ControllerInputs(Box::new(inputs)))?;
         }
 
-        // 2) Build up a list of events for this frame, to be passed to the frontend.
+        // 2) Build up a list of events for this frame, to be passed to the
+        //    frontend.
         let mut frontend_events = Vec::new();
 
         // Prepare for new events
@@ -2842,8 +2855,9 @@ impl Client {
             self.target_time_of_day = None;
         }
 
-        // Save dead hardcore character ids to avoid displaying in the character list
-        // while the server is still in the process of deleting the character
+        // Save dead hardcore character ids to avoid displaying in the character
+        // list while the server is still in the process of deleting the
+        // character
         if self.current::<Hardcore>().is_some()
             && self.is_dead()
             && let Some(PresenceKind::Character(character_id)) = self.presence
@@ -2860,12 +2874,13 @@ impl Client {
             |_, _| {},
         );
 
-        // TODO: avoid emitting these in the first place OR actually use outcomes
-        // generated locally on the client (if they can be deduplicated from
-        // ones that the server generates or if the client can reliably generate
-        // them (e.g. syncing skipping character states past certain
-        // stages might skip points where outcomes are generated, however we might not
-        // care about this?) and the server doesn't need to send them)
+        // TODO: avoid emitting these in the first place OR actually use
+        // outcomes generated locally on the client (if they can be
+        // deduplicated from ones that the server generates or if the
+        // client can reliably generate them (e.g. syncing skipping
+        // character states past certain stages might skip points where
+        // outcomes are generated, however we might not care about
+        // this?) and the server doesn't need to send them)
         let _ = self.state.ecs().fetch::<EventBus<Outcome>>().recv_all();
 
         // 5) Terrain
@@ -2935,9 +2950,10 @@ impl Client {
             self.state.terrain().iter().for_each(|(key, _)| {
                 // Subtract 2 from the offset before computing squared magnitude
                 // 1 for the chunks needed bordering other chunks for meshing
-                // 1 as a buffer so that if the player moves back in that direction the chunks
-                //   don't need to be reloaded
-                // Take the minimum of the adjusted difference vs the view_distance + 1 to
+                // 1 as a buffer so that if the player moves back in that
+                // direction the chunks   don't need to be
+                // reloaded Take the minimum of the adjusted
+                // difference vs the view_distance + 1 to
                 //   prevent magnitude_squared from overflowing
 
                 if (chunk_pos - key)
@@ -2957,14 +2973,15 @@ impl Client {
             self.loaded_distance = ((view_distance * TerrainChunkSize::RECT_SIZE.x) as f32).powi(2);
             // +1 so we can find a chunk that's outside the vd for better fog
             for dist in 0..view_distance as i32 + 1 {
-                // Only iterate through chunks that need to be loaded for circular vd
-                // The (dist - 2) explained:
-                // -0.5 because a chunk is visible if its corner is within the view distance
-                // -0.5 for being able to move to the corner of the current chunk
-                // -1 because chunks are not meshed if they don't have all their neighbors
+                // Only iterate through chunks that need to be loaded for
+                // circular vd The (dist - 2) explained:
+                // -0.5 because a chunk is visible if its corner is within the
+                // view distance -0.5 for being able to move to
+                // the corner of the current chunk -1 because
+                // chunks are not meshed if they don't have all their neighbors
                 //     (notice also that view_distance is decreased by 1)
-                //     (this subtraction on vd is omitted elsewhere in order to provide
-                //     a buffer layer of loaded chunks)
+                //     (this subtraction on vd is omitted elsewhere in order to
+                // provide     a buffer layer of loaded chunks)
                 let top = if 2 * (dist - 2).max(0).pow(2) > (view_distance - 1).pow(2) as i32 {
                     ((view_distance - 1).pow(2) as f32 - (dist - 2).pow(2) as f32)
                         .sqrt()
@@ -3130,15 +3147,18 @@ impl Client {
                 }
             },
             ServerGeneral::PlayerListUpdate(PlayerListUpdate::Remove(uid)) => {
-                // Instead of removing players, mark them as offline because we need to
-                // remember the names of disconnected players in chat.
+                // Instead of removing players, mark them as offline because we
+                // need to remember the names of disconnected
+                // players in chat.
                 //
-                // TODO: consider alternatives since this leads to an ever growing list as
-                // players log out and in. Keep in mind we might only want to
-                // keep only so many messages in chat the history. We could
+                // TODO: consider alternatives since this leads to an ever
+                // growing list as players log out and in. Keep
+                // in mind we might only want to keep only so
+                // many messages in chat the history. We could
                 // potentially use an ID that's more persistent than the Uid.
-                // One of the reasons we don't just store the string of the player name
-                // into the message is to make alias changes reflected in older messages.
+                // One of the reasons we don't just store the string of the
+                // player name into the message is to make alias
+                // changes reflected in older messages.
 
                 if let Some(player_info) = self.player_list.get_mut(&uid) {
                     if player_info.is_online {
@@ -3233,8 +3253,9 @@ impl Client {
                 *self.state.ecs_mut().write_resource() = time_scale;
                 let mut time = self.state.ecs_mut().write_resource::<Time>();
                 // Avoid side-eye from Einstein
-                // If new time from server is at least 5 seconds ahead, replace client time.
-                // Otherwise try to slightly twean client time (by 1%) to keep it in line with
+                // If new time from server is at least 5 seconds ahead, replace
+                // client time. Otherwise try to slightly twean
+                // client time (by 1%) to keep it in line with
                 // server time.
                 self.dt_adjustment = if new_time.0 > time.0 + 5.0 {
                     *time = new_time;
@@ -3296,12 +3317,13 @@ impl Client {
         match msg {
             ServerGeneral::GroupUpdate(change_notification) => {
                 use comp::group::ChangeNotification::*;
-                // Note: we use a hashmap since this would not work with entities outside
-                // the view distance
+                // Note: we use a hashmap since this would not work with
+                // entities outside the view distance
                 match change_notification {
                     Added(uid, role) => {
-                        // Check if this is a newly formed group by looking for absence of
-                        // other non pet group members
+                        // Check if this is a newly formed group by looking for
+                        // absence of other non pet
+                        // group members
                         if !matches!(role, group::Role::Pet)
                             && !self
                                 .group_members
@@ -3360,10 +3382,11 @@ impl Client {
                     NewGroup { leader, members } => {
                         self.group_leader = Some(leader);
                         self.group_members = members.into_iter().collect();
-                        // Currently add/remove messages treat client as an implicit member
-                        // of the group whereas this message explicitly includes them so to
-                        // be consistent for now we will remove the client from the
-                        // received hashset
+                        // Currently add/remove messages treat client as an
+                        // implicit member of the group
+                        // whereas this message explicitly includes them so to
+                        // be consistent for now we will remove the client from
+                        // the received hashset
                         if let Some(uid) = self.uid() {
                             self.group_members.remove(&uid);
                         }
@@ -3424,8 +3447,9 @@ impl Client {
                 }
                 if update_inventory {
                     // Push the updated inventory component to the client
-                    // FIXME: Figure out whether this error can happen under normal gameplay,
-                    // if not find a better way to handle it, if so maybe consider kicking the
+                    // FIXME: Figure out whether this error can happen under
+                    // normal gameplay, if not find a better
+                    // way to handle it, if so maybe consider kicking the
                     // client back to login?
                     let entity = self.entity();
                     if let Err(e) = self
@@ -3452,8 +3476,8 @@ impl Client {
             ServerGeneral::SetViewDistance(vd) => {
                 self.view_distance = Some(vd);
                 frontend_events.push(Event::SetViewDistance(vd));
-                // If the server is correcting client vd selection we assume this is the max
-                // allowed view distance.
+                // If the server is correcting client vd selection we assume
+                // this is the max allowed view distance.
                 self.server_view_distance_limit = Some(vd);
             },
             ServerGeneral::Outcomes(outcomes) => {
@@ -3597,8 +3621,9 @@ impl Client {
                 self.last_server_pong = self.state.get_program_time();
                 self.last_ping_delta = self.state.get_program_time() - self.last_server_ping;
 
-                // Maintain the correct number of deltas for calculating the rolling average
-                // ping. The client sends a ping to the server every second so we should be
+                // Maintain the correct number of deltas for calculating the
+                // rolling average ping. The client sends a ping
+                // to the server every second so we should be
                 // receiving a pong reply roughly every second.
                 while self.ping_deltas.len() > PING_ROLLING_AVERAGE_SECS - 1 {
                     self.ping_deltas.pop_front();
@@ -3664,12 +3689,13 @@ impl Client {
         let mut frontend_events = Vec::new();
 
         // Check that we have an valid connection.
-        // Use the last ping time as a 1s rate limiter, we only notify the user once per
-        // second
+        // Use the last ping time as a 1s rate limiter, we only notify the user
+        // once per second
         if self.state.get_program_time() - self.last_server_ping > 1. {
             let duration_since_last_pong = self.state.get_program_time() - self.last_server_pong;
 
-            // Dispatch a notification to the HUD warning they will be kicked in {n} seconds
+            // Dispatch a notification to the HUD warning they will be kicked in
+            // {n} seconds
             const KICK_WARNING_AFTER_REL_TO_TIMEOUT_FRACTION: f64 = 0.75;
             if duration_since_last_pong
                 >= (self.client_timeout.as_secs() as f64

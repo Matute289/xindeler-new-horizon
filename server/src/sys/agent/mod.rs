@@ -103,11 +103,13 @@ impl<'a> System<'a> for Sys {
                         return;
                     }
 
-                    // The entity that is moving, if riding it's the mount, otherwise it's itself
+                    // The entity that is moving, if riding it's the mount,
+                    // otherwise it's itself
                     let moving_entity = is_rider
                         .and_then(|is_rider| {
                             let mut mount = is_rider.mount;
-                            // Find the root mount, i.e the one that's doing the moving.
+                            // Find the root mount, i.e the one that's doing the
+                            // moving.
                             loop {
                                 let e = read_data.id_maps.uid_entity(mount)?;
 
@@ -136,8 +138,9 @@ impl<'a> System<'a> for Sys {
                         .get(moving_entity)
                         .unwrap_or(physics_state);
 
-                    // Hack, replace with better system when groups are more sophisticated
-                    // Override alignment if in a group unless entity is owned already
+                    // Hack, replace with better system when groups are more
+                    // sophisticated Override alignment if
+                    // in a group unless entity is owned already
                     let alignment = if matches!(
                         &read_data.alignments.get(entity),
                         &Some(Alignment::Owned(_))
@@ -162,7 +165,8 @@ impl<'a> System<'a> for Sys {
                         // (can be overridden below)
                         //
                         // This definitely breaks LeapMelee, Glide and
-                        // probably not only that, do we really need this at all?
+                        // probably not only that, do we really need this at
+                        // all?
                         controller.reset();
                         controller.inputs.look_dir = ori.look_dir();
                     }

@@ -296,11 +296,12 @@ impl Widget for Social<'_> {
         });
 
         // MENU INPUTS: Up/Down highlights a player in the list below, Apply
-        // selects them (same as clicking their row) — the `ContextMenu` list-nav
-        // shape from `slot_grid.rs`, replicated locally since that struct isn't
-        // exported. Inviting the highlighted player to a group is out of scope
-        // for this pass (a separate, single "Invite" button elsewhere in the
-        // window); the existing mouse-emulation fallback still reaches it.
+        // selects them (same as clicking their row) — the `ContextMenu`
+        // list-nav shape from `slot_grid.rs`, replicated locally since
+        // that struct isn't exported. Inviting the highlighted player
+        // to a group is out of scope for this pass (a separate, single
+        // "Invite" button elsewhere in the window); the existing
+        // mouse-emulation fallback still reaches it.
         let visible_player_count = player_list.len();
         let mut player_apply = false;
         for key in self.menu_events {

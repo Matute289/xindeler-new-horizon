@@ -197,7 +197,8 @@ impl CharacterBehavior for Data {
                         c.timer = tick_attack_or_default(data, self.timer, None);
                     }
 
-                    // Consumes energy if there's enough left and ability key is held down
+                    // Consumes energy if there's enough left and ability key is
+                    // held down
                     update
                         .energy
                         .change_by(-self.static_data.energy_drain * data.dt.0);

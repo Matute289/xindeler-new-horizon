@@ -85,8 +85,8 @@ impl AirshipDockingSide {
     /// | South             |  Port         |
     /// | Southwest         |  Starboard    |
     pub fn from_dir_to_platform(dir: &Vec2<f32>, platform: &AirshipDockPlatform) -> Self {
-        // get the reference vector and precompute whether to flip the angle based on
-        // the dir input.
+        // get the reference vector and precompute whether to flip the angle
+        // based on the dir input.
         let (ref_vec, negate_angle) = match platform {
             AirshipDockPlatform::NorthPlatform => (&AirshipDockingSide::NORTH_REF_VEC, dir.x < 0.0),
             AirshipDockPlatform::EastPlatform => (&AirshipDockingSide::EAST_REF_VEC, dir.y > 0.0),
@@ -288,8 +288,8 @@ impl AirshipDockPositions {
             .iter()
             .find_map(|&docking_position| {
                 // The docking position is the one that matches the platform.
-                // The platform is determined by the direction of the docking position
-                // relative to the center of the dock.
+                // The platform is determined by the direction of the docking
+                // position relative to the center of the dock.
                 let docking_position_platform =
                     AirshipDockPlatform::from_dir(docking_position.1.xy() - self.center);
                 if docking_position_platform == platform {
@@ -405,19 +405,22 @@ impl AirshipDockPlatform {
             if dir.x < 0.0 {
                 angle = -angle;
             }
-            // This code works similar to the Direction enum in the common crate.
-            // Angle between produces the smallest angle between two vectors,
-            // so when dir.x is negative, we force the angle to be negative.
-            // 0 or 360 is North. It is assumed that the angle ranges from -360 to 360
+            // This code works similar to the Direction enum in the common
+            // crate. Angle between produces the smallest angle
+            // between two vectors, so when dir.x is negative, we
+            // force the angle to be negative. 0 or 360 is North. It
+            // is assumed that the angle ranges from -360 to 360
             // degrees even though angles less than -180 or greater than 180
             // should never be seen.
             match angle as i32 {
                 -360..=-135 => {
                     // primary is SouthPlatform
-                    // As a fallback (for when the south platform is already claimed),
-                    // if the direction is more towards the west, use the west platform,
-                    // and if the direction is more towards the east, use the east platform.
-                    // The north platform is always the last resort. All fallback blocks
+                    // As a fallback (for when the south platform is already
+                    // claimed), if the direction is more
+                    // towards the west, use the west platform,
+                    // and if the direction is more towards the east, use the
+                    // east platform. The north platform is
+                    // always the last resort. All fallback blocks
                     // below work similarly.
                     if angle as i32 > -180 {
                         &SWEN_PLATFORMS
@@ -650,8 +653,8 @@ impl Airships {
             let mut used_platforms = DHashSet::default();
             for origin in edges {
                 let origin_location = dock_locations[*origin];
-                // Determine the platform to dock using the direction from the dock location
-                // to the origin location
+                // Determine the platform to dock using the direction from the
+                // dock location to the origin location
                 let rev_approach_dir = origin_location - dock_location;
                 let docking_platforms = AirshipDockPlatform::choices_from_dir(rev_approach_dir);
                 let docking_platform = docking_platforms
@@ -673,10 +676,10 @@ impl Airships {
         self.nominal_speed = common::comp::ship::Body::DefaultAirship.get_speed();
         debug_airships!(4, "Nominal speed {}", self.nominal_speed);
 
-        // The incoming edges control the docking platforms used for each leg of the
-        // route. The outgoing platform for leg i must match the incoming
-        // platform for leg i-1. For the first leg, get the 'from' platform from
-        // the last pair of nodes in the segment.
+        // The incoming edges control the docking platforms used for each leg of
+        // the route. The outgoing platform for leg i must match the
+        // incoming platform for leg i-1. For the first leg, get the
+        // 'from' platform from the last pair of nodes in the segment.
         let mut routes = Vec::new();
         route_segments
             .iter()
@@ -714,10 +717,12 @@ impl Airships {
                     );
                     let dest_dock_pos = dest_dock_positions.docking_position(to_platform).xy();
 
-                    // depature cruise (DC) from the end of the previous ascent to the leg midpoint.
-                    // The departure platform is not known here, so just use the dock center.
-                    // distance is from the departure dock center to the midpoint.
-                    // duration is distance / nominal speed
+                    // depature cruise (DC) from the end of the previous ascent
+                    // to the leg midpoint. The departure
+                    // platform is not known here, so just use the dock center.
+                    // distance is from the departure dock center to the
+                    // midpoint. duration is distance /
+                    // nominal speed
                     let dc_dist = from_dock_positions
                         .center
                         .as_::<f64>()
@@ -725,8 +730,9 @@ impl Airships {
                     let dc_dur = dc_dist / self.nominal_speed as f64;
                     let dc_completion_time = route_time + dc_dur;
 
-                    // approach cruise (AC) from the leg midpoint to the transition start.
-                    // distance is from the midpoint to approach_transition_pos.
+                    // approach cruise (AC) from the leg midpoint to the
+                    // transition start. distance is from
+                    // the midpoint to approach_transition_pos.
                     // duration is distance / nominal speed
                     let ac_dist = midpoint
                         .as_::<f64>()
@@ -734,9 +740,11 @@ impl Airships {
                     let ac_dur = ac_dist / self.nominal_speed as f64;
                     let ac_completion_time = dc_completion_time + ac_dur;
 
-                    // transition (T) from approach_transition_pos to above the dock.
-                    // distance is from approach_transition_pos to the dock position.
-                    // duration is distance / (nominal speed * AIRSHIP_TRANSITION_SPEED_RATIO)
+                    // transition (T) from approach_transition_pos to above the
+                    // dock. distance is from
+                    // approach_transition_pos to the dock position.
+                    // duration is distance / (nominal speed *
+                    // AIRSHIP_TRANSITION_SPEED_RATIO)
                     let t_dist = approach_transition_pos
                         .as_::<f64>()
                         .distance(dest_dock_pos.as_());
@@ -864,8 +872,8 @@ impl Airships {
     }
 
     pub fn calculate_spawning_locations(&mut self) {
-        // Spawn airships according to route time so that they are spaced out evenly in
-        // time.
+        // Spawn airships according to route time so that they are spaced out
+        // evenly in time.
         for (route_index, route) in self.routes.iter_mut().enumerate() {
             let spawn_time_limit = route.total_time - route.airship_time_spacing;
             let mut next_spawn_time = 0.0;
@@ -885,20 +893,25 @@ impl Airships {
 
                 for seg in leg.segments.iter() {
                     while next_spawn_time <= seg.route_time && next_spawn_time <= spawn_time_limit {
-                        // spawn an airship on this leg segment at time next_spawn_time
-                        // The spawning location depends on the flight phase.
+                        // spawn an airship on this leg segment at time
+                        // next_spawn_time The spawning
+                        // location depends on the flight phase.
                         // DepartureCruise:
-                        //     dist = (next_spawn_time - prev_leg.segments[5].route_time) *
+                        //     dist = (next_spawn_time -
+                        // prev_leg.segments[5].route_time) *
                         // nominal_speed     pos = (midpoint - previous leg
-                        // docking position).normalized() * dist + previous leg docking position
+                        // docking position).normalized() * dist + previous leg
+                        // docking position
                         // ApproachCruise:
-                        //     dist = (next_spawn_time - leg.segments[0].route_time) * nominal_speed
-                        //     pos = (transition_pos - midpoint).normalized() * dist + midpoint
-                        // Transition:
-                        //     dist = (next_spawn_time - leg.segments[1].route_time)
-                        //     pos = (dock_pos - transition_pos).normalized() * dist +
-                        // transition_pos Descent:
-                        //     pos = dock_pos
+                        //     dist = (next_spawn_time -
+                        // leg.segments[0].route_time) * nominal_speed
+                        //     pos = (transition_pos - midpoint).normalized() *
+                        // dist + midpoint Transition:
+                        //     dist = (next_spawn_time -
+                        // leg.segments[1].route_time)
+                        //     pos = (dock_pos - transition_pos).normalized() *
+                        // dist + transition_pos
+                        // Descent:     pos = dock_pos
                         // Docked:
                         //     pos = dock_pos
                         // Ascent:
@@ -1136,25 +1149,27 @@ impl Airships {
         );
 
         // Docking positions are specified in world coordinates, not chunks.
-        // Limit the max route leg length to 1000 chunks no matter the world size.
+        // Limit the max route leg length to 1000 chunks no matter the world
+        // size.
         let blocks_per_chunk = 1 << TERRAIN_CHUNK_BLOCKS_LG;
         let max_route_leg_length = 1000.0 * blocks_per_chunk as f32;
 
-        // eulerized_route_segments is fairly expensive as the number of graph nodes
-        // (docking sites) increases. The number of graph nodes grows linearly
-        // with the world area and is given by the number of airship docks,
-        // which is all_dock_points.len(). Experimentally, good results are
-        // obtained without excessive processing time by limiting the number of
-        // iterations based on the number of docking sites.
-        // Docking Sites    Iterations
+        // eulerized_route_segments is fairly expensive as the number of graph
+        // nodes (docking sites) increases. The number of graph nodes
+        // grows linearly with the world area and is given by the number
+        // of airship docks, which is all_dock_points.len().
+        // Experimentally, good results are obtained without excessive
+        // processing time by limiting the number of iterations based on
+        // the number of docking sites. Docking Sites    Iterations
         //   35             50
         //   175            25
         //   415            5
         //   850            2
         //   1680           1
-        // The best fit for this data is a exponential decay function of the form:
-        // iterations = a0 * (1-alpha)^x, where x is the number of docking sites
-        // (all_dock_points.len()). a0 = 60, alpha = 0.005450282
+        // The best fit for this data is a exponential decay function of the
+        // form: iterations = a0 * (1-alpha)^x, where x is the number of
+        // docking sites (all_dock_points.len()). a0 = 60, alpha =
+        // 0.005450282
         /*
            R code for fitting the curve:
            rm(list = ls())
@@ -1351,11 +1366,13 @@ impl Airships {
         platform: AirshipDockPlatform,
         map_size_lg: &MapSizeLg,
     ) -> (Vec2<f32>, Vec2<f32>) {
-        // Get the route leg midpoint. This is the vector from the from_dock_position
-        // to the to_dock_position rotated ROUTE_LEG_MID_POINT_OFFSET_RADIANS
-        // at 1/2 the distance from the from_dock_position to the to_dock_position (so
+        // Get the route leg midpoint. This is the vector from the
+        // from_dock_position to the to_dock_position rotated
+        // ROUTE_LEG_MID_POINT_OFFSET_RADIANS at 1/2 the distance from
+        // the from_dock_position to the to_dock_position (so
         // not quite the exact midpoint but close enough).
-        // Clamp midpoint so that it stays within the world bounds (with some margin).
+        // Clamp midpoint so that it stays within the world bounds (with some
+        // margin).
         let blocks_per_chunk = 1 << TERRAIN_CHUNK_BLOCKS_LG;
         let world_blocks = map_size_lg.chunks().map(|u| u as f32) * blocks_per_chunk as f32;
         let midpoint = {
@@ -1378,8 +1395,8 @@ impl Airships {
         );
 
         let transition_point = {
-            // calculate the transition point looking from the destination position back to
-            // the midpoint.
+            // calculate the transition point looking from the destination
+            // position back to the midpoint.
             let to_dir_rev = (midpoint - to_dock_positions.center).normalized();
             let docking_position = to_dock_positions.docking_position(platform);
             docking_position.xy() + to_dir_rev * Airships::DOCKING_TRANSITION_OFFSET
@@ -1511,10 +1528,11 @@ impl Airships {
         // specified side. The dock alignment position is where the airship
         // should touch or come closest to the dock. The side_rotation is the
         // angle the ship needs to rotate from to be perpendicular to the vector
-        // from the dock center to the docking position. For example, if the docking
-        // position is directly north (0 degrees, or aligned with the unit_y
-        // vector), the ship needs to rotate 90 degrees CCW to dock on the port
-        // side or 270 degrees CCW to dock on the starboard side.
+        // from the dock center to the docking position. For example, if the
+        // docking position is directly north (0 degrees, or aligned
+        // with the unit_y vector), the ship needs to rotate 90 degrees
+        // CCW to dock on the port side or 270 degrees CCW to dock on
+        // the starboard side.
         let (dock_align_to_captain, side_rotation) = if dock_side == AirshipDockingSide::Starboard {
             (
                 Airships::DOCK_ALIGN_POS_STARBOARD,
@@ -1523,16 +1541,16 @@ impl Airships {
         } else {
             (Airships::DOCK_ALIGN_POS_PORT, std::f32::consts::FRAC_PI_2)
         };
-        // get the vector from the dock center to the docking platform point where the
-        // airship should touch or come closest to.
+        // get the vector from the dock center to the docking platform point
+        // where the airship should touch or come closest to.
         let dock_pos_offset = (docking_pos - airship_dock_center).xy();
-        // The airship direction when docked is the dock_pos_offset rotated by the
-        // side_rotation angle.
+        // The airship direction when docked is the dock_pos_offset rotated by
+        // the side_rotation angle.
         let airship_dir =
             Dir::from_unnormalized(dock_pos_offset.rotated_z(side_rotation).with_z(0.0))
                 .unwrap_or_default();
-        // The dock_align_to_captain vector is rotated by the angle between unit_y and
-        // the airship direction.
+        // The dock_align_to_captain vector is rotated by the angle between
+        // unit_y and the airship direction.
         let ship_dock_rotation =
             Airships::angle_between_vectors_ccw(Vec2::unit_y(), airship_dir.vec().xy());
         let captain_offset = dock_align_to_captain
@@ -1676,8 +1694,8 @@ impl TriangulationExt for Triangulation {
             let a = t[0];
             let b = t[1];
             let c = t[2];
-            // The edges hashset must have edges specified in increasing order to avoid
-            // duplicates.
+            // The edges hashset must have edges specified in increasing order
+            // to avoid duplicates.
             edges.insert(if a < b { (a, b) } else { (b, a) });
             edges.insert(if b < c { (b, c) } else { (c, b) });
             edges.insert(if a < c { (a, c) } else { (c, a) });
@@ -1750,26 +1768,30 @@ impl TriangulationExt for Triangulation {
     ) -> Option<(Vec<Vec<usize>>, Vec<usize>, usize, f32, usize)> {
         let mut edges_to_remove = DHashSet::default();
 
-        // There can be at most four incoming and four outgoing edges per node because
-        // there are only four docking positions per docking site and for deconfliction
-        // purposes, no two "routes" can use the same docking position. This means that
-        // the maximum number of edges per node is 8. Remove the shortest edges from
+        // There can be at most four incoming and four outgoing edges per node
+        // because there are only four docking positions per docking
+        // site and for deconfliction purposes, no two "routes" can use
+        // the same docking position. This means that the maximum number
+        // of edges per node is 8. Remove the shortest edges from
         // nodes with more than 8 edges.
 
-        // The tessellation algorithm produces convex hull, and there can be edges
-        // connecting outside nodes where the distance between the points is a
-        // significant fraction of the hull diameter. We want to keep airship
-        // route legs as short as possible, while not removing interior edges
-        // that may already be fairly long due to the configuration of the
-        // docking sites relative to the entire map. For the standard world map,
-        // with 2^10 chunks (1024x1024), the hull diameter is about 1000 chunks.
-        // Experimentally, the standard world map can have interior edges that are
-        // around 800 chunks long. A world map with 2^12 chunks (4096x4096) can
-        // have hull edges that are around 2000 chunks long, but interior edges
-        // still have a max of around 800 chunks. For the larger world maps,
-        // removing edges that are longer than 1000 chunks is a good heuristic.
+        // The tessellation algorithm produces convex hull, and there can be
+        // edges connecting outside nodes where the distance between the
+        // points is a significant fraction of the hull diameter. We
+        // want to keep airship route legs as short as possible, while
+        // not removing interior edges that may already be fairly long
+        // due to the configuration of the docking sites relative to the
+        // entire map. For the standard world map, with 2^10 chunks
+        // (1024x1024), the hull diameter is about 1000 chunks.
+        // Experimentally, the standard world map can have interior edges that
+        // are around 800 chunks long. A world map with 2^12 chunks
+        // (4096x4096) can have hull edges that are around 2000 chunks
+        // long, but interior edges still have a max of around 800
+        // chunks. For the larger world maps, removing edges that are
+        // longer than 1000 chunks is a good heuristic.
 
-        // First, use these heuristics to remove excess edges from the node graph.
+        // First, use these heuristics to remove excess edges from the node
+        // graph.
         // 1. remove edges that are longer than 1000 blocks.
         // 2. remove the shortest edges from nodes with more than 8 edges
 
@@ -1781,8 +1803,8 @@ impl TriangulationExt for Triangulation {
             let pt2 = &all_dock_points[edge.1];
             let v1 = Vec2 { x: pt1.x, y: pt1.y };
             let v2 = Vec2 { x: pt2.x, y: pt2.y };
-            // Remove the edge if the distance between the points is greater than
-            // max_leg_length
+            // Remove the edge if the distance between the points is greater
+            // than max_leg_length
             if v1.distance_squared(v2) > max_distance_squared {
                 edges_to_remove.insert(*edge);
             }
@@ -1866,10 +1888,10 @@ impl TriangulationExt for Triangulation {
             );
         }
 
-        // Now eurlerize the node graph by adding edges to connect nodes with an odd
-        // number of connections. Eurlerization means that every node will have
-        // an even number of degrees (edges), which is a requirement for
-        // creating a Eulerian Circuit.
+        // Now eurlerize the node graph by adding edges to connect nodes with an
+        // odd number of connections. Eurlerization means that every
+        // node will have an even number of degrees (edges), which is a
+        // requirement for creating a Eulerian Circuit.
 
         // Get the keys (node ids, which is the same as the node's index in the
         // all_dock_points vector) of nodes with an odd number of edges.
@@ -1881,22 +1903,24 @@ impl TriangulationExt for Triangulation {
 
         let mut rng = ChaChaRng::from_seed(seed_expan::rng_state(seed));
 
-        // There will always be an even number of odd nodes in a connected graph (one
-        // where all nodes are reachable from any other node). The goal is to
-        // pair the odd nodes, adding edges between each pair such that the
-        // added edges are as short as possible. After adding edges, the graph
-        // will have an even number of edges for each node.
+        // There will always be an even number of odd nodes in a connected graph
+        // (one where all nodes are reachable from any other node). The
+        // goal is to pair the odd nodes, adding edges between each pair
+        // such that the added edges are as short as possible. After
+        // adding edges, the graph will have an even number of edges for
+        // each node.
 
-        // The starting node index for finding pairs is arbitrary, and starting from
-        // different nodes will yield different Eulerian circuits.
+        // The starting node index for finding pairs is arbitrary, and starting
+        // from different nodes will yield different Eulerian circuits.
 
         // Do a number of iterations and find the best results. The criteria is
-        // 1. The number of route groups (the outer Vec in best_route_segments) This
-        //    will be a maximum of 4 because there are at most 4 docking positions per
-        //    docking site. More is better.
-        // 2. The 'spread' of the lengths of the inner Vecs in best_route_segments. The
-        //    calculated spread is the standard deviation of the lengths. Smaller is
-        //    better (more uniform lengths of the route groups.)
+        // 1. The number of route groups (the outer Vec in best_route_segments)
+        //    This will be a maximum of 4 because there are at most 4 docking
+        //    positions per docking site. More is better.
+        // 2. The 'spread' of the lengths of the inner Vecs in
+        //    best_route_segments. The calculated spread is the standard
+        //    deviation of the lengths. Smaller is better (more uniform lengths
+        //    of the route groups.)
         let mut best_circuit = Vec::new();
         let mut best_route_segments = Vec::new();
         let mut best_max_seg_len = 0;
@@ -1904,8 +1928,8 @@ impl TriangulationExt for Triangulation {
         let mut best_iteration = 0;
 
         for i in 0..iterations {
-            // Deterministically randomize the node order to search for the best route
-            // segments.
+            // Deterministically randomize the node order to search for the best
+            // route segments.
             let mut eulerized_node_connections = mutable_node_connections.clone();
 
             let mut odd_connected_count = odd_keys.len();
@@ -1922,12 +1946,13 @@ impl TriangulationExt for Triangulation {
                         .count()
             );
 
-            // It's possible that the graphs starts with no odd nodes after removing edges
-            // above.
+            // It's possible that the graphs starts with no odd nodes after
+            // removing edges above.
             if odd_connected_count > 0 {
                 odd_keys.shuffle(&mut rng);
 
-                // The edges to be added. An edge is a tuple of two node ids/indices.
+                // The edges to be added. An edge is a tuple of two node
+                // ids/indices.
                 let mut edges_to_add = DHashSet::default();
                 // Each odd node will be paired with only one other odd node.
                 // Keep track of which nodes have been paired already.
@@ -1939,7 +1964,8 @@ impl TriangulationExt for Triangulation {
                         continue;
                     }
                     if let Some(node) = mutable_node_connections.get(node_key) {
-                        // find the closest node other than nodes that are already connected to
+                        // find the closest node other than nodes that are
+                        // already connected to
                         // this one.
                         let mut closest_node_id = None;
                         let mut closest_distance = f64::MAX;
@@ -1951,13 +1977,15 @@ impl TriangulationExt for Triangulation {
                             if let Some(candidate_node) =
                                 mutable_node_connections.get(candidate_key)
                             {
-                                // Skip the node itself and nodes that are already connected to this
+                                // Skip the node itself and nodes that are
+                                // already connected to this
                                 // node.
                                 if *candidate_key != *node_key
                                     && !node.connected.contains(candidate_key)
                                     && !candidate_node.connected.contains(node_key)
                                 {
-                                    // make sure the edge is specified in increasing node index
+                                    // make sure the edge is specified in
+                                    // increasing node index
                                     // order to
                                     // avoid duplicates.
                                     let edge_to_add = if *node_key < *candidate_key {
@@ -1965,7 +1993,8 @@ impl TriangulationExt for Triangulation {
                                     } else {
                                         (*candidate_key, *node_key)
                                     };
-                                    // Skip the edge if it is already in the edges_to_add set.
+                                    // Skip the edge if it is already in the
+                                    // edges_to_add set.
                                     if !edges_to_add.contains(&edge_to_add) {
                                         let pt1 = &all_dock_points[*node_key];
                                         let pt2 = &all_dock_points[*candidate_key];
@@ -1980,14 +2009,17 @@ impl TriangulationExt for Triangulation {
                                 }
                             }
                         }
-                        // It's possible that the only odd nodes remaining are already connected to
+                        // It's possible that the only odd nodes remaining are
+                        // already connected to
                         // this node, but we still need to pair them. In
                         // this case, the connections become bidirectional,
-                        // but that's okay for Eulerization and airships will still only follow each
+                        // but that's okay for Eulerization and airships will
+                        // still only follow each
                         // other in one direction.
                         if closest_node_id.is_none() {
-                            // If no suitable node was found, repeat the search but allow
-                            // connecting to nodes that are already connected to this one.
+                            // If no suitable node was found, repeat the search
+                            // but allow connecting
+                            // to nodes that are already connected to this one.
                             for candidate_key in odd_keys.iter() {
                                 // Skip nodes that are already paired.
                                 if paired_odd_nodes.contains(candidate_key) {
@@ -1995,7 +2027,8 @@ impl TriangulationExt for Triangulation {
                                 }
                                 // Skip the node itself
                                 if *candidate_key != *node_key {
-                                    // make sure the edge is specified in increasing node index
+                                    // make sure the edge is specified in
+                                    // increasing node index
                                     // order to
                                     // avoid duplicates.
                                     let edge_to_add = if *node_key < *candidate_key {
@@ -2003,7 +2036,8 @@ impl TriangulationExt for Triangulation {
                                     } else {
                                         (*candidate_key, *node_key)
                                     };
-                                    // Skip the edge if it is already in the edges_to_add set.
+                                    // Skip the edge if it is already in the
+                                    // edges_to_add set.
                                     if !edges_to_add.contains(&edge_to_add) {
                                         let pt1 = &all_dock_points[*node_key];
                                         let pt2 = &all_dock_points[*candidate_key];
@@ -2018,8 +2052,10 @@ impl TriangulationExt for Triangulation {
                                 }
                             }
                         }
-                        // If a closest node was found that is not already paired, add the edge.
-                        // Note that this should not fail since we are guaranteed to have
+                        // If a closest node was found that is not already
+                        // paired, add the edge.
+                        // Note that this should not fail since we are
+                        // guaranteed to have
                         // an even number of odd nodes.
                         if let Some(close_node_id) = closest_node_id {
                             // add the edge between node_id and closest_node_id
@@ -2036,9 +2072,11 @@ impl TriangulationExt for Triangulation {
                         }
                     }
                     if edges_to_add.len() == odd_connected_count / 2 {
-                        // If we have paired all odd nodes, break out of the loop.
-                        // The break is necessary because the outer loop iterates over
-                        // all odd keys but we only need make 1/2 that many pairs of nodes.
+                        // If we have paired all odd nodes, break out of the
+                        // loop. The break is necessary
+                        // because the outer loop iterates over
+                        // all odd keys but we only need make 1/2 that many
+                        // pairs of nodes.
                         break;
                     }
                 }
@@ -2068,10 +2106,12 @@ impl TriangulationExt for Triangulation {
                 }
             }
 
-            // If all nodes have an even number of edges, proceed with finding the best
-            // Eulerian circuit for the given node configuration.
+            // If all nodes have an even number of edges, proceed with finding
+            // the best Eulerian circuit for the given node
+            // configuration.
             if odd_connected_count == 0 {
-                // Find the best Eulerian circuit for the current node connections
+                // Find the best Eulerian circuit for the current node
+                // connections
                 if let Some((route_segments, circuit, max_seg_len, min_spread, _)) =
                     find_best_eulerian_circuit(&eulerized_node_connections)
                 {
@@ -2085,8 +2125,8 @@ impl TriangulationExt for Triangulation {
                             debug_airship_eulerization!("  {} : {}", segment.0, segment.1.len());
                         });
                     }
-                    // A Eulerian circuit was found, apply the goal criteria to find the best
-                    // circuit.
+                    // A Eulerian circuit was found, apply the goal criteria to
+                    // find the best circuit.
                     if max_seg_len > best_max_seg_len
                         || (max_seg_len == best_max_seg_len && min_spread < best_min_spread)
                     {
@@ -2164,7 +2204,8 @@ fn find_best_eulerian_circuit(
 
         let mut current_vertex = start_vertex;
 
-        // The algorithm for finding a Eulerian Circuit (Hierholzer's algorithm).
+        // The algorithm for finding a Eulerian Circuit (Hierholzer's
+        // algorithm).
         while !stack.is_empty() || !graph[&current_vertex].connected.is_empty() {
             if graph[&current_vertex].connected.is_empty() {
                 circuit.push(current_vertex);
@@ -2267,8 +2308,9 @@ fn best_eulerian_circuit_segments(
                 if !current_segment.is_empty() {
                     current_segment.push(value);
                     segments.push(current_segment);
-                    // `current_segment` was just moved into `segments`, so this must
-                    // allocate a new Vec rather than `.clear()` the moved-out one.
+                    // `current_segment` was just moved into `segments`, so this
+                    // must allocate a new Vec rather than
+                    // `.clear()` the moved-out one.
                     current_segment = Vec::new();
                 }
             }
@@ -2279,14 +2321,16 @@ fn best_eulerian_circuit_segments(
                 prev_value = value;
             }
 
-            // Stop cycling once we've looped back to the value before the starting index.
-            // There is a bug here if only checking for index == end_index, because
-            // sorted_node_ids may contain node ids that are no longer in the
+            // Stop cycling once we've looped back to the value before the
+            // starting index. There is a bug here if only checking
+            // for index == end_index, because sorted_node_ids may
+            // contain node ids that are no longer in the
             // circuit. This happens for world maps where one or both dimensions
             // are smaller than 2^8 or maybe 2^9 chunks because the tessellation
             // algorithm produces a hull with fewer nodes, and the Eulerization
-            // process may not include all nodes. To prevent an infinite loop, also break if
-            // the index has cycled more than twice the circuit length.
+            // process may not include all nodes. To prevent an infinite loop,
+            // also break if the index has cycled more than twice
+            // the circuit length.
             if index == end_index || index > 2 * circuit_len {
                 break;
             }
@@ -2310,8 +2354,9 @@ fn best_eulerian_circuit_segments(
             .sqrt()
             / segments.len() as f32;
 
-        // First take the longest segment count, then if the segment count is the same
-        // as the longest so far, take the one with the least length spread.
+        // First take the longest segment count, then if the segment count is
+        // the same as the longest so far, take the one with the least
+        // length spread.
         if segments.len() > max_segments_count {
             max_segments_count = segments.len();
             min_segments_len_spread = seg_lengths_spread;
@@ -2591,8 +2636,8 @@ mod tests {
 
     #[test]
     fn docking_side_for_platform_test() {
-        // Approximately: 0, 22, 45, 67, 90, 112, 135, 157, 180, 202, 225, 247, 270,
-        // 292, 315, 337 degrees
+        // Approximately: 0, 22, 45, 67, 90, 112, 135, 157, 180, 202, 225, 247,
+        // 270, 292, 315, 337 degrees
         let dirs = [
             Vec2::new(0.0, 100.0) - Vec2::zero(),
             Vec2::new(100.0, 100.0) - Vec2::zero(),

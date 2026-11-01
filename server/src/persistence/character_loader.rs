@@ -91,11 +91,12 @@ impl CharacterLoader {
         let builder = std::thread::Builder::new().name("persistence_loader".into());
         builder
             .spawn(move || {
-                // Unwrap here is safe as there is no code that can panic when the write lock is
-                // taken that could cause the RwLock to become poisoned.
+                // Unwrap here is safe as there is no code that can panic when
+                // the write lock is taken that could cause the
+                // RwLock to become poisoned.
                 //
-                // This connection -must- remain read-only to avoid lock contention with the
-                // CharacterUpdater thread.
+                // This connection -must- remain read-only to avoid lock
+                // contention with the CharacterUpdater thread.
                 let mut conn =
                     establish_connection(&settings.read().unwrap(), ConnectionMode::ReadOnly);
 

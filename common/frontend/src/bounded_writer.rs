@@ -221,7 +221,8 @@ impl Drop for BoundedWriter<'_> {
         if needs_time_rotate || needs_size_rotate {
             let _ = self.state.writer.flush();
             let old_path = self.state.path.clone();
-            // queue old file for gzip; non-blocking (sync_channel with capacity)
+            // queue old file for gzip; non-blocking (sync_channel with
+            // capacity)
             if self
                 .compress_tx
                 .try_send(CompressMsg::Compress(old_path.clone()))

@@ -147,10 +147,12 @@ impl ServerEvent for RemoteUnlockEvent {
         (mut block_change, terrain, positions): Self::SystemData<'_>,
     ) {
         for ev in events {
-            // Defense-in-depth range re-check: the `knock` CharacterState already validates
-            // range against its own (data-driven) ability range before ever emitting this
-            // event, but a caster's `Pos` is authoritative server data, so it costs nothing
-            // to check again here, mirroring `ToggleSpriteLightEvent`'s handler.
+            // Defense-in-depth range re-check: the `knock` CharacterState
+            // already validates range against its own (data-driven)
+            // ability range before ever emitting this event, but a
+            // caster's `Pos` is authoritative server data, so it costs nothing
+            // to check again here, mirroring `ToggleSpriteLightEvent`'s
+            // handler.
             let Some(caster_pos) = positions.get(ev.entity) else {
                 continue;
             };
@@ -171,7 +173,8 @@ impl ServerEvent for RemoteUnlockEvent {
             let Some(kind_to_destroy) =
                 remote_unlock_target(sprite_kind, terrain.sprite_cfg_at(ev.pos))
             else {
-                // Either not a keyhole/lock sprite at all, or one flagged `no_knock`.
+                // Either not a keyhole/lock sprite at all, or one flagged
+                // `no_knock`.
                 continue;
             };
 
@@ -342,8 +345,9 @@ impl ServerEvent for InventoryManipEvent {
                     {
                         item_entity
                     } else {
-                        // Item entity could not be found - most likely because the entity
-                        // attempted to pick up the same item very quickly before its deletion
+                        // Item entity could not be found - most likely because
+                        // the entity attempted to pick
+                        // up the same item very quickly before its deletion
                         // of the world from the first pickup
                         // attempt was processed.
                         debug!("Failed to get entity for item Uid: {}", pickup_uid);
@@ -360,8 +364,9 @@ impl ServerEvent for InventoryManipEvent {
                         continue;
                     }
 
-                    // If there's a loot owner for the item being picked up, then
-                    // determine whether the pickup should be rejected.
+                    // If there's a loot owner for the item being picked up,
+                    // then determine whether the pickup
+                    // should be rejected.
                     let ownership_check_passed =
                         data.loot_owners.get(item_entity).is_none_or(|loot_owner| {
                             let can_pickup = loot_owner.can_pickup(
@@ -393,14 +398,17 @@ impl ServerEvent for InventoryManipEvent {
                         continue;
                     }
 
-                    // First, we remove the item, assuming picking it up will succeed (we do this to
-                    // avoid cloning the item, as we should not call Item::clone and it
+                    // First, we remove the item, assuming picking it up will
+                    // succeed (we do this to avoid cloning
+                    // the item, as we should not call Item::clone and it
                     // may be removed!).
                     let item = if let Some(item) = data.items.remove(item_entity) {
                         item
                     } else {
-                        // Item component could not be found - most likely because the entity
-                        // attempted to pick up the same item very quickly before its deletion of
+                        // Item component could not be found - most likely
+                        // because the entity
+                        // attempted to pick up the same item very quickly
+                        // before its deletion of
                         // the world from the first pickup attempt was
                         // processed.
                         debug!(
@@ -420,12 +428,14 @@ impl ServerEvent for InventoryManipEvent {
 
                     // Next, we try to equip the picked up item
                     let event = match inventory.try_equip(item).or_else(|returned_item| {
-                        // If we couldn't equip it (no empty slot for it or unequippable) then
-                        // attempt to add the item to the entity's inventory
+                        // If we couldn't equip it (no empty slot for it or
+                        // unequippable) then attempt to
+                        // add the item to the entity's inventory
                         inventory.pickup_item(returned_item)
                     }) {
                         Err((returned_item, inserted)) => {
-                            // If we had a `reinsert_item`, merge returned_item into it
+                            // If we had a `reinsert_item`, merge returned_item
+                            // into it
                             let returned_item = if let Some(mut reinsert_item) = reinsert_item {
                                 reinsert_item
                                     .try_merge(PickupItem::new(
@@ -442,14 +452,16 @@ impl ServerEvent for InventoryManipEvent {
                                 PickupItem::new(returned_item, *data.program_time, true)
                             };
 
-                            // Inventory was full, so we need to put back the item (note that we
+                            // Inventory was full, so we need to put back the
+                            // item (note that we
                             // know there was no old item component for
                             // this entity).
                             data.items
                                 .insert(item_entity, returned_item)
                                 .expect(ITEM_ENTITY_EXPECT_MESSAGE);
 
-                            // If the item was partially picked up, send a loot annoucement.
+                            // If the item was partially picked up, send a loot
+                            // annoucement.
                             if let Some(inserted) = inserted {
                                 // Update the frontend item to the new amount
                                 item_msg
@@ -479,7 +491,8 @@ impl ServerEvent for InventoryManipEvent {
                             }
                         },
                         Ok(_) => {
-                            // We succeeded in picking up the item, so we may now delete its old
+                            // We succeeded in picking up the item, so we may
+                            // now delete its old
                             // entity entirely.
                             if let Some(reinsert_item) = reinsert_item {
                                 data.items
@@ -525,8 +538,8 @@ impl ServerEvent for InventoryManipEvent {
                     let mut inventory_update_buffer = data.inventory_update_buffers.get_mut(entity);
 
                     if let Some(block) = block {
-                        // If there are items to be reclaimed from the block, add it to the
-                        // inventory
+                        // If there are items to be reclaimed from the block,
+                        // add it to the inventory
                         if block.is_directly_collectible()
                             && data.block_change.can_set_block(sprite_pos)
                         {
@@ -545,7 +558,8 @@ impl ServerEvent for InventoryManipEvent {
                                     actor,
                                 );
                             }
-                            // If an item was required to collect the sprite, consume it now
+                            // If an item was required to collect the sprite,
+                            // consume it now
                             if let Some((inv_slot, true)) = required_item {
                                 inventory.take(inv_slot, &data.ability_map, &data.msm);
                             }
@@ -564,7 +578,8 @@ impl ServerEvent for InventoryManipEvent {
                                         Err((item, inserted)) => {
                                             drop_items.push(item);
                                             if let Some(inserted) = inserted {
-                                                // Update the amount of the frontend item
+                                                // Update the amount of the
+                                                // frontend item
                                                 item_msg.set_amount(inserted.get()).expect(
                                                     "Inserted must be > 0 and <= item.max_amount()",
                                                 );
@@ -597,10 +612,12 @@ impl ServerEvent for InventoryManipEvent {
                                 }
                             }
 
-                            // We made sure earlier the block was not already modified this tick
+                            // We made sure earlier the block was not already
+                            // modified this tick
                             data.block_change.set(sprite_pos, block.into_collected());
 
-                            // If the block was a keyhole, remove nearby door blocks
+                            // If the block was a keyhole, remove nearby door
+                            // blocks
                             if let Some(kind_to_destroy) =
                                 block.get_sprite().and_then(keyhole_swap_target)
                             {
@@ -849,7 +866,8 @@ impl ServerEvent for InventoryManipEvent {
                             }
 
                             if let Some(pos) = data.positions.get(entity) {
-                                // Unequip the item, any items that no longer fit within the
+                                // Unequip the item, any items that no longer
+                                // fit within the
                                 // inventory (due to unequipping a
                                 // bag for example) will be dropped on the floor
                                 if let Ok(Some(leftover_items)) =
@@ -975,8 +993,9 @@ impl ServerEvent for InventoryManipEvent {
                     if let Some(pos) = data.positions.get(entity) {
                         let mut merged_stacks = false;
 
-                        // If both slots have items and we're attempting to drag from one stack
-                        // into another, stack the items.
+                        // If both slots have items and we're attempting to drag
+                        // from one stack into another,
+                        // stack the items.
                         if let (Slot::Inventory(slot_a), Slot::Inventory(slot_b)) = (a, b) {
                             merged_stacks |= inventory.merge_stack_into(slot_a, slot_b);
                         }
@@ -1001,9 +1020,11 @@ impl ServerEvent for InventoryManipEvent {
                     }
                 },
                 comp::InventoryManip::SplitSwap(slot, target) => {
-                    // If both slots have items and we're attempting to split from one stack
-                    // into another, ensure that they are the same type of item. If they are
-                    // the same type do nothing, as you don't want to overwrite the existing item.
+                    // If both slots have items and we're attempting to split
+                    // from one stack into another, ensure
+                    // that they are the same type of item. If they are
+                    // the same type do nothing, as you don't want to overwrite
+                    // the existing item.
 
                     if let (
                         Slot::Inventory(source_inv_slot_id),
@@ -1041,7 +1062,8 @@ impl ServerEvent for InventoryManipEvent {
                         Slot::Overflow(slot) => inventory.overflow_remove(slot),
                     };
 
-                    // FIXME: We should really require the drop and write to be atomic!
+                    // FIXME: We should really require the drop and write to be
+                    // atomic!
                     if let (Some(mut item), Some(pos)) = (item, data.positions.get(entity)) {
                         item.put_in_world();
                         dropped_items.push((
@@ -1066,7 +1088,8 @@ impl ServerEvent for InventoryManipEvent {
                         },
                     };
 
-                    // FIXME: We should really require the drop and write to be atomic!
+                    // FIXME: We should really require the drop and write to be
+                    // atomic!
                     if let (Some(mut item), Some(pos)) = (item, data.positions.get(entity)) {
                         item.put_in_world();
                         dropped_items.push((
@@ -1244,8 +1267,8 @@ impl ServerEvent for InventoryManipEvent {
                         },
                     };
 
-                    // Attempt to insert items into inventory, dropping them if there is not enough
-                    // space
+                    // Attempt to insert items into inventory, dropping them if
+                    // there is not enough space
                     let items_were_crafted = if let Some(crafted_items) = crafted_items {
                         let mut dropped: Vec<PickupItem> = Vec::new();
                         for item in crafted_items {
@@ -1281,7 +1304,8 @@ impl ServerEvent for InventoryManipEvent {
                         false
                     };
 
-                    // FIXME: We should really require the drop and write to be atomic!
+                    // FIXME: We should really require the drop and write to be
+                    // atomic!
                     if items_were_crafted
                         && let Some(buf) = data.inventory_update_buffers.get_mut(entity)
                     {
@@ -1292,12 +1316,14 @@ impl ServerEvent for InventoryManipEvent {
                     inventory.sort(sort_order);
                 },
                 comp::InventoryManip::SwapEquippedWeapons => {
-                    // The inactive weapon set is about to become active — re-check
-                    // requirements for whatever's sitting there, the same gate
-                    // direct-equip already applies. Without this, a gated item that
-                    // somehow ended up in the inactive set (e.g. legacy save data
-                    // predating this gating feature) reaches the active slot with
-                    // zero re-validation.
+                    // The inactive weapon set is about to become active —
+                    // re-check requirements for whatever's
+                    // sitting there, the same gate
+                    // direct-equip already applies. Without this, a gated item
+                    // that somehow ended up in the inactive
+                    // set (e.g. legacy save data
+                    // predating this gating feature) reaches the active slot
+                    // with zero re-validation.
                     let character_class = data.character_classes.get(entity);
                     let requirements_ok = [
                         slot::EquipSlot::InactiveMainhand,
@@ -1325,7 +1351,8 @@ impl ServerEvent for InventoryManipEvent {
                 },
             }
             if data.trades.in_mutable_trade(uid) {
-                // manipulating the inventory mutated the trade, so reset the accept flags
+                // manipulating the inventory mutated the trade, so reset the
+                // accept flags
                 data.trades.implicit_mutation_occurred(uid);
             }
         }
@@ -1425,15 +1452,15 @@ mod tests {
 
     #[test]
     fn knock_opens_unflagged_ordinary_keyhole() {
-        // An ordinary keyhole with no `SpriteCfg` at all (the common case) opens
-        // normally.
+        // An ordinary keyhole with no `SpriteCfg` at all (the common case)
+        // opens normally.
         assert_eq!(
             remote_unlock_target(SpriteKind::HaniwaKeyhole, None),
             Some(SpriteKind::HaniwaKeyDoor)
         );
-        // Also true with an explicit but unflagged `SpriteCfg` (e.g. one with an
-        // unrelated `loot_table` set, matching the shape of `jungle_ruin`'s
-        // chests).
+        // Also true with an explicit but unflagged `SpriteCfg` (e.g. one with
+        // an unrelated `loot_table` set, matching the shape of
+        // `jungle_ruin`'s chests).
         let unflagged = common::terrain::sprite::SpriteCfg::default();
         assert_eq!(
             remote_unlock_target(SpriteKind::HaniwaKeyhole, Some(&unflagged)),
@@ -1443,9 +1470,10 @@ mod tests {
 
     #[test]
     fn knock_refuses_no_knock_flagged_keyhole() {
-        // The Haniwa dungeon's keyhole (world/src/site/plot/haniwa.rs) is flagged
-        // `no_knock: true` as a worked example of a progression-gated keyhole: `knock`
-        // must not be able to open it.
+        // The Haniwa dungeon's keyhole (world/src/site/plot/haniwa.rs) is
+        // flagged `no_knock: true` as a worked example of a
+        // progression-gated keyhole: `knock` must not be able to open
+        // it.
         let no_knock_cfg = common::terrain::sprite::SpriteCfg {
             no_knock: true,
             ..Default::default()
@@ -1458,7 +1486,8 @@ mod tests {
 
     #[test]
     fn knock_ignores_non_keyhole_sprites() {
-        // Sprites unrelated to locks are never affected by `knock`, flagged or not.
+        // Sprites unrelated to locks are never affected by `knock`, flagged or
+        // not.
         assert_eq!(remote_unlock_target(SpriteKind::Apple, None), None);
     }
 }

@@ -85,7 +85,8 @@ impl Profile {
         let path = Profile::get_path(config_dir);
 
         let profile = common::util::ron_from_path_recoverable::<Self>(&path);
-        // Save profile to add new fields or create the file if it is not already there
+        // Save profile to add new fields or create the file if it is not
+        // already there
         profile.save_to_file_warn(config_dir);
         profile
     }

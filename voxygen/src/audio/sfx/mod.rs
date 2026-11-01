@@ -500,7 +500,8 @@ impl SfxMgr {
                 if power > 0.0 {
                     let sfx_trigger_item = triggers.0.get_key_value(&SfxEvent::Lightning);
                     let volume = (power * 3.0).min(2.9);
-                    // Delayed based on distance / speed of sound (approxmately 340 m/s)
+                    // Delayed based on distance / speed of sound (approxmately
+                    // 340 m/s)
                     audio.play_ambience_oneshot(
                         super::channel::AmbienceChannelTag::Thunder,
                         sfx_trigger_item,
@@ -918,8 +919,9 @@ impl SfxMgr {
                     let sfx_trigger_item =
                         triggers.0.get_key_value(&SfxEvent::Utterance(*kind, voice));
                     if let Some(sfx_trigger_item) = sfx_trigger_item {
-                        // TODO: Dirty hack to turn down the volume of one creature. Need another
-                        // way to do this.
+                        // TODO: Dirty hack to turn down the volume of one
+                        // creature. Need another way to
+                        // do this.
                         if matches!(voice, VoiceKind::Wolf) {
                             audio.emit_sfx(Some(sfx_trigger_item), *pos, Some(0.75));
                         } else {

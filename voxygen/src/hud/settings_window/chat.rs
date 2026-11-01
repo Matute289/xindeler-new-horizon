@@ -705,7 +705,8 @@ impl Widget for Chat<'_> {
             }
 
             if chat_tab != &updated_chat_tab {
-                //insert to front to avoid errors where the tab is moved or removed
+                //insert to front to avoid errors where the tab is moved or
+                // removed
                 events.insert(0, Event::ChatChange(ChatTabUpdate(index, updated_chat_tab)));
             }
         }

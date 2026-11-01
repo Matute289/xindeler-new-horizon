@@ -138,20 +138,25 @@ impl CharacterBehavior for Data {
                         let tgt_dir_ori = Ori::from(tgt_dir);
                         let tgt_dir_up = tgt_dir_ori.up();
                         // The desired up vector of our glider.
-                        // We begin by projecting the flow dir on the plane with the normal of
-                        // our tgt_dir to get an idea of how it will hit the glider
+                        // We begin by projecting the flow dir on the plane with
+                        // the normal of our tgt_dir to
+                        // get an idea of how it will hit the glider
                         let tgt_up = flow_dir
                             .projected(&Plane::from(tgt_dir))
                             .map(|d| {
                                 let d = if d.dot(*tgt_dir_up).is_sign_negative() {
-                                    // when the final direction of flow is downward we don't roll
-                                    // upside down but instead mirror the target up vector
+                                    // when the final direction of flow is
+                                    // downward we don't roll
+                                    // upside down but instead mirror the target
+                                    // up vector
                                     Quaternion::rotation_3d(PI, *tgt_dir_ori.right()) * d
                                 } else {
                                     d
                                 };
-                                // slerp from untilted up towards the direction by a factor of
-                                // lateral wind to prevent overly reactive adjustments
+                                // slerp from untilted up towards the direction
+                                // by a factor of
+                                // lateral wind to prevent overly reactive
+                                // adjustments
                                 let lateral_wind_speed =
                                     air_flow.0.projected(&self.ori.right()).magnitude();
                                 tgt_dir_up.slerped_to(d, lateral_wind_speed / 15.0)

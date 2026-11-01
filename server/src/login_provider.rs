@@ -86,12 +86,13 @@ impl LoginProvider {
                 // The service credential authenticates this game server to the
                 // auth server's service endpoints (/verify, /uuid_to_username).
                 // It is read from the environment rather than settings.ron,
-                // because that file is written to disk and shared, and this is a
-                // shared secret.
+                // because that file is written to disk and shared, and this is
+                // a shared secret.
                 //
-                // Failing here is deliberate: without it every single login would
-                // be rejected with 401, and a server that cannot authenticate
-                // anyone should not come up pretending it can.
+                // Failing here is deliberate: without it every single login
+                // would be rejected with 401, and a server that
+                // cannot authenticate anyone should not come up
+                // pretending it can.
                 let service_token = std::env::var(AUTH_SERVICE_TOKEN_VAR).unwrap_or_else(|_| {
                     panic!(
                         "{AUTH_SERVICE_TOKEN_VAR} must be set when auth_server_address is \
@@ -179,13 +180,14 @@ impl LoginProvider {
                     return Some(Err(RegisterError::Banned(ban.info())));
                 }
 
-                // non-admins can only join if the whitelist is empty (everyone can join)
-                // or their name is in the whitelist.
+                // non-admins can only join if the whitelist is empty (everyone
+                // can join) or their name is in the whitelist.
                 if admin.is_none() && !whitelist.is_empty() && !whitelist.contains_key(&uuid) {
                     return Some(Err(RegisterError::NotOnWhitelist));
                 }
 
-                // non-admins can only join if the player count has not been exceeded.
+                // non-admins can only join if the player count has not been
+                // exceeded.
                 let (player_count_exceeded, res) = player_count_exceeded(username, uuid);
                 if admin.is_none() && player_count_exceeded {
                     return Some(Err(RegisterError::TooManyPlayers));

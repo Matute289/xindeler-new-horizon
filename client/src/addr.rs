@@ -76,8 +76,8 @@ where
         .await
         .map_err(Error::HostnameLookupFailed)?
     {
-        // Override the port if one was passed. Used for SRV lookups which get port info
-        // out-of-band
+        // Override the port if one was passed. Used for SRV lookups which get
+        // port info out-of-band
         if let Some(port) = override_port {
             addr.set_port(port);
         }

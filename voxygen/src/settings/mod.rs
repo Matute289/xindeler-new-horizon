@@ -61,7 +61,8 @@ impl Default for Settings {
         //  - The VOXYGEN_SCREENSHOT environment variable
         //  - The user's picture directory
         //  - The executable's directory
-        // This only selects if there isn't already an entry in the settings file
+        // This only selects if there isn't already an entry in the settings
+        // file
         let screenshots_path = std::env::var_os("VOXYGEN_SCREENSHOT")
             .map(PathBuf::from)
             .or_else(|| user_dirs.picture_dir().map(|dir| dir.join("veloren")))
@@ -107,7 +108,8 @@ impl Settings {
             .trusted_auth_servers
             .insert(VINZCLORTHO_AUTH_HOST.to_string());
 
-        // Save settings to add new fields or create the file if it is not already there
+        // Save settings to add new fields or create the file if it is not
+        // already there
         settings.save_to_file_warn(config_dir);
         settings
     }

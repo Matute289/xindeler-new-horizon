@@ -177,8 +177,8 @@ fn failed_listen_on_used_ports() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn api_stream_send_main() -> Result<(), Box<dyn std::error::Error>> {
     let (_, _) = helper::setup(false, 0);
-    // Create a Network, listen on Port `1200` and wait for a Stream to be opened,
-    // then answer `Hello World`
+    // Create a Network, listen on Port `1200` and wait for a Stream to be
+    // opened, then answer `Hello World`
     let r = Arc::new(Runtime::new().unwrap());
     let network = Network::new(Pid::new(), &r);
     let remote = Network::new(Pid::new(), &r);
@@ -206,8 +206,8 @@ fn api_stream_send_main() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn api_stream_recv_main() -> Result<(), Box<dyn std::error::Error>> {
     let (_, _) = helper::setup(false, 0);
-    // Create a Network, listen on Port `1220` and wait for a Stream to be opened,
-    // then listen on it
+    // Create a Network, listen on Port `1220` and wait for a Stream to be
+    // opened, then listen on it
     let r = Arc::new(Runtime::new().unwrap());
     let network = Network::new(Pid::new(), &r);
     let remote = Network::new(Pid::new(), &r);

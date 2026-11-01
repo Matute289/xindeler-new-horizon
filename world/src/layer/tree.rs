@@ -814,8 +814,8 @@ impl ProceduralTree {
 
     // Recursively add a branch (with sub-branches) to the tree's branch graph,
     // returning the index and AABB of the branch. This AABB gets propagated
-    // down to the parent and is used later during sampling to cull the branches to
-    // be sampled.
+    // down to the parent and is used later during sampling to cull the branches
+    // to be sampled.
     fn add_branch(
         &mut self,
         config: &TreeConfig,
@@ -845,8 +845,8 @@ impl ProceduralTree {
             && start.xy().distance(end.xy()) < (start.z - end.z).abs() * 1.5;
         let bark_radius = if has_stairs { 5.0 } else { 0.0 } + wood_radius * 0.25;
 
-        // The AABB that covers this branch, along with wood and leaves that eminate
-        // from it
+        // The AABB that covers this branch, along with wood and leaves that
+        // eminate from it
         let mut aabb = Aabb {
             min: Vec3::partial_min(start, end) - (wood_radius + bark_radius).max(leaf_radius),
             max: Vec3::partial_max(start, end) + (wood_radius + bark_radius).max(leaf_radius),
@@ -875,10 +875,11 @@ impl ProceduralTree {
                 let screw = (screw_shift + i as f32 * RAD_PER_BRANCH).sin() * x_axis
                     + (screw_shift + i as f32 * RAD_PER_BRANCH).cos() * y_axis;
 
-                // Choose a point close to the branch to act as the target direction for the
-                // branch to grow in let split_factor =
-                // rng.random_range(config.split_range.start,
-                // config.split_range.end).clamped(0.0, 1.0);
+                // Choose a point close to the branch to act as the target
+                // direction for the branch to grow in let
+                // split_factor = rng.random_range(config.
+                // split_range.start, config.split_range.end).
+                // clamped(0.0, 1.0);
                 let split_factor =
                     Lerp::lerp(config.split_range.start, config.split_range.end, dist);
                 let tgt = Lerp::lerp_unclamped(start, end, split_factor)
@@ -889,8 +890,8 @@ impl ProceduralTree {
                     );
                 // Start the branch at the closest point to the target
                 let branch_start = line.projected_point(tgt);
-                // Now, interpolate between the target direction and the parent branch's
-                // direction to find a direction
+                // Now, interpolate between the target direction and the parent
+                // branch's direction to find a direction
                 let branch_dir =
                     Lerp::lerp_unclamped(tgt - branch_start, dir, config.straightness).normalized();
 
@@ -911,8 +912,8 @@ impl ProceduralTree {
                     rng,
                 );
                 child_idx = Some(branch_idx);
-                // Parent branches AABBs include the AABBs of child branches to allow for
-                // culling during sampling
+                // Parent branches AABBs include the AABBs of child branches to
+                // allow for culling during sampling
                 aabb.expand_to_contain(branch_aabb);
             }
         }
@@ -937,7 +938,8 @@ impl ProceduralTree {
         self.branches[self.trunk_idx].aabb.union(self.root_aabb)
     }
 
-    // Recursively search for branches or leaves by walking the tree's branch graph.
+    // Recursively search for branches or leaves by walking the tree's branch
+    // graph.
     fn walk_inner(
         &self,
         descend: &mut impl FnMut(&Branch, &Branch) -> bool,
@@ -945,15 +947,15 @@ impl ProceduralTree {
         branch_idx: usize,
     ) {
         let branch = &self.branches[branch_idx];
-        // Always probe the sibling branch, since it's not a child of the current
-        // branch.
+        // Always probe the sibling branch, since it's not a child of the
+        // current branch.
         let _branch_or_leaves = branch
             .sibling_idx
             .map(|idx| self.walk_inner(descend, parent, idx));
 
-        // Only continue probing this sub-graph of the tree if the branch maches a
-        // criteria (usually that it falls within the region we care about
-        // sampling)
+        // Only continue probing this sub-graph of the tree if the branch maches
+        // a criteria (usually that it falls within the region we care
+        // about sampling)
         if descend(branch, parent) {
             // Probe the children of this branch
             let _children = branch

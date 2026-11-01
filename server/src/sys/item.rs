@@ -41,8 +41,8 @@ impl<'a> System<'a> for Sys {
             delete_bus,
         ): Self::SystemData,
     ) {
-        // Contains items that have been checked for merge, or that were merged into
-        // another one
+        // Contains items that have been checked for merge, or that were merged
+        // into another one
         let mut merged = HashMap::new();
         // Contains merges that will be performed (from, into)
         let mut merges = Vec::new();
@@ -57,13 +57,14 @@ impl<'a> System<'a> for Sys {
                 continue;
             }
 
-            // For items that merge, exponentially back off the frequency of the merge check
+            // For items that merge, exponentially back off the frequency of the
+            // merge check
             if !item.should_merge || program_time.0 < item.next_merge_check().0 {
                 continue;
             }
 
-            // We do not want to allow merging this item if it isn't already being
-            // merged into another
+            // We do not want to allow merging this item if it isn't already
+            // being merged into another
             merged.insert(entity, true);
 
             for (source_entity, _) in get_nearby_mergeable_items(
@@ -94,13 +95,15 @@ impl<'a> System<'a> for Sys {
                 .expect("We know this entity must have an item.");
 
             if let Err(item) = target_item.try_merge(source_item) {
-                // We re-insert the item, should be unreachable since we already checked whether
-                // the items were mergeable in the above loop
+                // We re-insert the item, should be unreachable since we already
+                // checked whether the items were mergeable in
+                // the above loop
                 items
                     .insert(source, item)
                     .expect("PickupItem was removed from this entity earlier");
             } else {
-                // If the merging was successfull, we remove the old item entity from the ECS
+                // If the merging was successfull, we remove the old item entity
+                // from the ECS
                 delete_emitter.emit(DeleteEvent(source));
             }
         }

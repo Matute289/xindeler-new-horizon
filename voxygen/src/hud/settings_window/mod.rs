@@ -179,10 +179,11 @@ impl Widget for SettingsWindow<'_> {
         // MENU INPUTS: `Back` closes the settings window, same as the X button
         // (also aborting any pending gamepad remap). Up/Down highlights a tab,
         // Apply switches to it — reusing the `ContextMenu` list-nav shape from
-        // `slot_grid.rs`. Per-row navigation of each tab's own content is out of
-        // scope for this pass (9 sub-widgets, one per tab, most of them sliders/
-        // checkboxes/dropdowns); the existing mouse-emulation fallback (left stick
-        // moves the cursor, a bound button clicks) still reaches every control,
+        // `slot_grid.rs`. Per-row navigation of each tab's own content is out
+        // of scope for this pass (9 sub-widgets, one per tab, most of
+        // them sliders/ checkboxes/dropdowns); the existing
+        // mouse-emulation fallback (left stick moves the cursor, a
+        // bound button clicks) still reaches every control,
         // including dragging a scrollbar thumb.
         let tabs_len = SettingsTab::iter().count();
         let last_input = self.global_state.window.last_input();

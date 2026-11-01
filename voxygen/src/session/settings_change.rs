@@ -469,7 +469,8 @@ impl SettingsChange {
 
                 // reset gamepad
                 Control::ResetKeyBindingsGamepad => {
-                    // Currently resets everything on the controller to the default controls, this
+                    // Currently resets everything on the controller to the
+                    // default controls, this
                     // should be intended behavior
                     settings.controller = ControllerSettings::default();
                 },

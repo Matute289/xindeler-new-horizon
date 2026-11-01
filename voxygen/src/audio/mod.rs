@@ -342,8 +342,8 @@ impl AudioFrontend {
         buffer_size: usize,
         set_samplerate: Option<u32>,
     ) -> Self {
-        // Generate a supported config if the default samplerate is too high or is
-        // manually set.
+        // Generate a supported config if the default samplerate is too high or
+        // is manually set.
         let mut device = cpal::default_host().default_output_device();
         let mut supported_config = None;
         let mut samplerate = 44100;
@@ -601,9 +601,10 @@ impl AudioFrontend {
                 },
             };
 
-            // NOTE: Threshold here is meant to give subtitles some idea of the duration of
-            // the audio, it doesn't have to be perfect but in the future, if possible we
-            // might want to switch it out for the actual duration.
+            // NOTE: Threshold here is meant to give subtitles some idea of the
+            // duration of the audio, it doesn't have to be perfect
+            // but in the future, if possible we might want to
+            // switch it out for the actual duration.
             (file, item.threshold, item.subtitle.as_deref())
         })
     }
@@ -637,7 +638,8 @@ impl AudioFrontend {
                 let sound = load_ogg(sfx_file, false);
                 channel.set_pos(emitter_pos);
 
-                // Initial calculation of player position attenuation to avoid popping
+                // Initial calculation of player position attenuation to avoid
+                // popping
                 let ratio = calculate_player_attenuation(inner.player_pos, emitter_pos);
 
                 let source_volume = volume.unwrap_or(1.0);
@@ -645,8 +647,9 @@ impl AudioFrontend {
 
                 let is_instrument = matches!(trigger_item, Some((SfxEvent::Music(_, _), _)));
 
-                // We build new tracks here because we have to set the emitter position
-                // initially, which isn't possible to synchronize with the start of a new sound.
+                // We build new tracks here because we have to set the emitter
+                // position initially, which isn't possible to
+                // synchronize with the start of a new sound.
                 let sfx_track_builder = SpatialTrackBuilder::new()
                     .distances((1.0, SFX_DIST_LIMIT))
                     .attenuation_function(Some(kira::Easing::OutPowf(0.66)));

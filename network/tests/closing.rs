@@ -103,7 +103,8 @@ fn stream_simple_3msg_then_close() {
 
 #[test]
 fn stream_send_first_then_receive() {
-    // recv should still be possible even if stream got closed if they are in queue
+    // recv should still be possible even if stream got closed if they are in
+    // queue
     let (_, _) = helper::setup(false, 0);
     let (r, _n_a, _p_a, s1_a, _n_b, _p_b, mut s1_b) = network_participant_stream(tcp());
 
@@ -437,8 +438,8 @@ fn dont_panic_on_multiply_recv_after_close() {
     std::thread::sleep(SLEEP_EXTERNAL);
     assert_eq!(s1_b.try_recv::<u32>(), Ok(Some(11u32)));
     assert_eq!(s1_b.try_recv::<String>(), Err(StreamError::StreamClosed));
-    // There was a "Feature" in futures::channels that they panic when you call recv
-    // a second time after it showed end of stream
+    // There was a "Feature" in futures::channels that they panic when you call
+    // recv a second time after it showed end of stream
     assert_eq!(s1_b.try_recv::<String>(), Err(StreamError::StreamClosed));
 }
 

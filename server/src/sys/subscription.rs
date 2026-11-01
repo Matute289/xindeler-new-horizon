@@ -60,8 +60,8 @@ impl<'a> System<'a> for Sys {
         // To update subscriptions
         // 1. Iterate through clients
         // 2. Calculate current chunk position
-        // 3. If chunk is different (use fuzziness) or the client view distance has
-        //    changed continue, otherwise return
+        // 3. If chunk is different (use fuzziness) or the client view distance
+        //    has changed continue, otherwise return
         // 4. Iterate through subscribed regions
         // 5. Check if region is still in range (use fuzziness)
         // 6. If not in range
@@ -82,11 +82,11 @@ impl<'a> System<'a> for Sys {
             let vd = presence.entity_view_distance.current();
             // Calculate current chunk
             let chunk = (Vec2::<f32>::from(pos.0)).as_::<i32>().wpos_to_cpos();
-            // Only update regions when moving to a new chunk or if view distance has
-            // changed.
+            // Only update regions when moving to a new chunk or if view
+            // distance has changed.
             //
-            // Uses a fuzzy border to prevent rapid triggering when moving along chunk
-            // boundaries.
+            // Uses a fuzzy border to prevent rapid triggering when moving along
+            // chunk boundaries.
             if chunk != subscription.fuzzy_chunk
                 && (subscription
                     .fuzzy_chunk
@@ -125,12 +125,14 @@ impl<'a> System<'a> for Sys {
 
                 // Iterate through regions to remove
                 for key in regions_to_remove.drain(..) {
-                    // Remove region from this client's set of subscribed regions
+                    // Remove region from this client's set of subscribed
+                    // regions
                     subscription.regions.remove(&key);
-                    // Tell the client to delete the entities in that region if it exists in the
-                    // RegionMap
+                    // Tell the client to delete the entities in that region if
+                    // it exists in the RegionMap
                     if let Some(region) = region_map.get(key) {
-                        // Process entity left events since they won't be processed during entity
+                        // Process entity left events since they won't be
+                        // processed during entity
                         // sync because this region is no longer subscribed to
                         // TODO: consider changing system ordering??
                         for event in region.events() {
@@ -141,8 +143,10 @@ impl<'a> System<'a> for Sys {
                                 },
                                 RegionEvent::Left(id, maybe_key) => {
                                     // Lookup UID for entity
-                                    // Doesn't overlap with entity deletion in sync packages
-                                    // because the uid would not be available if the entity was
+                                    // Doesn't overlap with entity deletion in
+                                    // sync packages
+                                    // because the uid would not be available if
+                                    // the entity was
                                     // deleted
                                     if let Some(&uid) = uids.get(entities.entity(*id))
                                         && !maybe_key
@@ -163,8 +167,8 @@ impl<'a> System<'a> for Sys {
                             client.send_fallible(ServerGeneral::DeleteEntity(uid));
                         }
                     }
-                    // Send deleted entities since they won't be processed for this client
-                    // in entity sync
+                    // Send deleted entities since they won't be processed for
+                    // this client in entity sync
                     for uid in deleted_entities.get_deleted_in_region(key).iter() {
                         client.send_fallible(ServerGeneral::DeleteEntity(*uid));
                     }
@@ -175,8 +179,9 @@ impl<'a> System<'a> for Sys {
                     (vd as f32 * chunk_size)
                         + (presence::CHUNK_FUZZ as f32 + chunk_size) * 2.0f32.sqrt(),
                 ) {
-                    // Send client initial info about the entities in this region if it was not
-                    // already within the set of subscribed regions
+                    // Send client initial info about the entities in this
+                    // region if it was not already within
+                    // the set of subscribed regions
                     if subscription.regions.insert(key)
                         && let Some(region) = region_map.get(key)
                     {
@@ -255,8 +260,8 @@ pub fn initialize_region_subscription(world: &World, entity: specs::Entity) {
                 });
             }
         }
-        // If client position was modified it might not be updated in the region system
-        // so we send its components here
+        // If client position was modified it might not be updated in the region
+        // system so we send its components here
         if let Some(pkg) = tracked_comps.create_entity_package(
             entity,
             Some(*client_pos),

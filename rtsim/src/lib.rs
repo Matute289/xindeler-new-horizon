@@ -302,8 +302,8 @@ impl RtState {
         world: &World,
         index: IndexRef,
     ) {
-        // TODO: Queue these events up and handle them on a regular rtsim tick instead
-        // of executing their handlers immediately.
+        // TODO: Queue these events up and handle them on a regular rtsim tick
+        // instead of executing their handlers immediately.
         if let Some(handlers) = self.event_handlers.get::<EventHandlersOf<E>>() {
             handlers
                 .iter()

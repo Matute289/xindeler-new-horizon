@@ -92,13 +92,14 @@ impl EventMapper for CombatEventMapper {
                     sfx_state.time = Instant::now();
                 }
 
-                // update state to determine the next event. We only record the time (above) if
-                // it was dispatched
+                // update state to determine the next event. We only record the
+                // time (above) if it was dispatched
                 sfx_state.event = mapped_event;
                 sfx_state.weapon_drawn = Self::weapon_drawn(character);
 
-                // Battle Refrain: layered on top of the event above, tracked on its
-                // own independent timer so a fast attack can't starve it (or vice-versa).
+                // Battle Refrain: layered on top of the event above, tracked on
+                // its own independent timer so a fast attack
+                // can't starve it (or vice-versa).
                 let refrain_event = inventory
                     .and_then(|inv| Self::map_refrain(character, inv))
                     .unwrap_or(SfxEvent::Idle);

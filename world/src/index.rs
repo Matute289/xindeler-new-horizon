@@ -125,7 +125,8 @@ impl IndexOwned {
         let features_reloaded = self.features_reload_watcher.reloaded();
         let reloaded = colors_reloaded || features_reloaded;
         reloaded.then(move || {
-            // Reload the fields from the asset handle, which is updated automatically
+            // Reload the fields from the asset handle, which is updated
+            // automatically
             self.colors = self.index.colors.cloned();
             self.features = self.index.features.cloned();
             // Update wildlife spawns which is based on base_density in features

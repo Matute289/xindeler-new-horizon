@@ -213,13 +213,15 @@ impl GroupManager {
 
         let group = if let Some(group) = group {
             // Increment group size
-            // Note: unwrap won't fail since we just retrieved the group successfully above
+            // Note: unwrap won't fail since we just retrieved the group
+            // successfully above
             self.group_info_mut(group).unwrap().num_members += 1;
             group
         } else {
             let new_group = self.create_group(leader, 2);
-            // Unwrap should not fail since we just found these entities and they should
-            // still exist Note: if there is an issue replace with a warn
+            // Unwrap should not fail since we just found these entities and
+            // they should still exist Note: if there is an issue
+            // replace with a warn
             groups.insert(leader, new_group).unwrap();
             // Inform
             notifier(leader, ChangeNotification::NewLeader(leader));
@@ -245,8 +247,8 @@ impl GroupManager {
         notifier(new_member, ChangeNotification::NewLeader(leader));
 
         // Add group id for new member and pets
-        // Unwrap should not fail since we just found these entities and they should
-        // still exist
+        // Unwrap should not fail since we just found these entities and they
+        // should still exist
         // Note: if there is an issue replace with a warn
         let _ = groups.insert(new_member, group).unwrap();
         new_pets.iter().for_each(|e| {
@@ -428,7 +430,8 @@ impl GroupManager {
             if let Some(special_group) = alignments.get(member).and_then(|a| a.group())
                 && !to_be_deleted
             {
-                // Set NPC and pets back to their the special alignment based group
+                // Set NPC and pets back to their the special alignment based
+                // group
                 for entity in iter::once(member).chain(leaving_pets.iter().copied()) {
                     groups
                         .insert(entity, special_group)
@@ -465,8 +468,8 @@ impl GroupManager {
                 });
             }
 
-            // Handle updates for the rest of the group, potentially disbanding it if there
-            // is now only one member left.
+            // Handle updates for the rest of the group, potentially disbanding
+            // it if there is now only one member left.
             if let Some(info) = self.group_info_mut(group) {
                 // If not pet, decrement number of members
                 if !matches!(alignments.get(member), Some(Alignment::Owned(owner)) if uids.get(member) != Some(owner))

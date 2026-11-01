@@ -189,30 +189,44 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                     if dist2 > 0.5f32.powi(2) {
                         match actor.body {
                             Body::Ship(comp::ship::Body::DefaultAirship) => {
-                                // RTSim NPCs don't interract with terrain, and their position is
+                                // RTSim NPCs don't interract with terrain, and
+                                // their position is
                                 // independent of ground level.
-                                // While movement is simulated, airships will happily stay at ground
+                                // While movement is simulated, airships will
+                                // happily stay at ground
                                 // level or fly through mountains.
-                                // The code at the end of this block "Make sure NPCs remain in a
+                                // The code at the end of this block "Make sure
+                                // NPCs remain in a
                                 // valid location" just forces
-                                // airships to be at least above ground (on the ground actually).
-                                // The reason is that when docking, airships need to descend much
+                                // airships to be at least above ground (on the
+                                // ground actually).
+                                // The reason is that when docking, airships
+                                // need to descend much
                                 // closer to the terrain
-                                // than when cruising between sites, so airships cannot be forced to
+                                // than when cruising between sites, so airships
+                                // cannot be forced to
                                 // stay at a fixed height above
-                                // terrain (i.e. flying_height()). Instead, when mode is
-                                // FlightMode::FlyThrough, set the airship altitude directly to
+                                // terrain (i.e. flying_height()). Instead, when
+                                // mode is
+                                // FlightMode::FlyThrough, set the airship
+                                // altitude directly to
                                 // terrain height + height (if Some)
-                                // or terrain height + default height (npc.body.flying_height()).
-                                // When mode is FlightMode::Braking, the airship is allowed to
+                                // or terrain height + default height
+                                // (npc.body.flying_height()).
+                                // When mode is FlightMode::Braking, the airship
+                                // is allowed to
                                 // descend below flying height
-                                // because it is near or at the dock. In this mode, if height is
+                                // because it is near or at the dock. In this
+                                // mode, if height is
                                 // Some, set the airship altitude to
-                                // the maximum of target.z or terrain height + height. If height is
+                                // the maximum of target.z or terrain height +
+                                // height. If height is
                                 // None, set the airship altitude to
-                                // target.z. By forcing the airship altitude to be at a specific
+                                // target.z. By forcing the airship altitude to
+                                // be at a specific
                                 // value, when the airship is
-                                // suddenly in a loaded chunk it will not be below or at the ground
+                                // suddenly in a loaded chunk it will not be
+                                // below or at the ground
                                 // and will not get stuck.
 
                                 // Move in x,y
@@ -227,10 +241,13 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                                     actor.wpos.x += offsetxy.x;
                                     actor.wpos.y += offsetxy.y;
                                 }
-                                // The diff is not computed for z like x,y. Rather, the altitude is
+                                // The diff is not computed for z like x,y.
+                                // Rather, the altitude is
                                 // set directly so that when the
-                                // simulated ship is suddenly in a loaded chunk it will not be below
-                                // or at the ground level and risk getting stuck.
+                                // simulated ship is suddenly in a loaded chunk
+                                // it will not be below
+                                // or at the ground level and risk getting
+                                // stuck.
                                 let base_height =
                                     if mode == FlightMode::FlyThrough || height.is_some() {
                                         ctx.world

@@ -310,8 +310,8 @@ impl<'frame> Drawer<'frame> {
     /// Returns None if all the pipelines are not available
     pub fn first_pass(&mut self) -> Option<FirstPassDrawer<'_>> {
         let pipelines = self.borrow.pipelines.all()?;
-        // Note: this becomes Some once pipeline creation is complete even if shadows
-        // are not enabled
+        // Note: this becomes Some once pipeline creation is complete even if
+        // shadows are not enabled
         let shadow = self.borrow.shadow?;
 
         let mut render_pass =
@@ -446,8 +446,8 @@ impl<'frame> Drawer<'frame> {
             _ => return,
         };
 
-        // TODO: consider consolidating optional bloom bind groups and optional pipeline
-        // into a single structure?
+        // TODO: consider consolidating optional bloom bind groups and optional
+        // pipeline into a single structure?
         let (bloom_tgts, bloom_binds) =
             match views.bloom_tgts.as_ref().zip(locals.bloom_binds.as_ref()) {
                 Some((t, b)) => (t, b),
@@ -484,9 +484,10 @@ impl<'frame> Drawer<'frame> {
             let bind = &bloom_binds[index].bind_group;
             let view = &bloom_tgts[index + 1];
             // Do filtering during the first downsample
-            // NOTE: We currently blur all things without filtering by brightness.
-            // This is left in for those that might want to experminent with filtering by
-            // brightness, and it is used to filter out NaNs/Infs that would infect all the
+            // NOTE: We currently blur all things without filtering by
+            // brightness. This is left in for those that might want
+            // to experminent with filtering by brightness, and it
+            // is used to filter out NaNs/Infs that would infect all the
             // pixels they are blurred with.
             let (label, pipeline) = if index == 0 {
                 (
@@ -519,11 +520,12 @@ impl<'frame> Drawer<'frame> {
                 label,
                 &bloom_pipelines.upsample,
                 if index + 2 == bloom::NUM_SIZES {
-                    // Clear for the final image since that is just stuff from the previous frame.
+                    // Clear for the final image since that is just stuff from
+                    // the previous frame.
                     wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
                 } else {
-                    // Add to less blurred images to get gradient of blur instead of a smudge>
-                    // https://catlikecoding.com/unity/tutorials/advanced-rendering/bloom/
+                    // Add to less blurred images to get gradient of blur
+                    // instead of a smudge> https://catlikecoding.com/unity/tutorials/advanced-rendering/bloom/
                     wgpu::LoadOp::Load
                 },
             );
@@ -710,8 +712,9 @@ impl<'frame> Drawer<'frame> {
             );
         }
 
-        // PaintCallback is not used to my knowledge so this should always be empty
-        // Couldn't figure out a nice way to get it into Drawer's Drop impl, anyway
+        // PaintCallback is not used to my knowledge so this should always be
+        // empty Couldn't figure out a nice way to get it into Drawer's
+        // Drop impl, anyway
         let _ = self.borrow.egui_renderer.update_buffers(
             self.borrow.device,
             self.borrow.queue,
@@ -901,14 +904,15 @@ impl<'frame> Drawer<'frame> {
 impl Drop for Drawer<'_> {
     fn drop(&mut self) {
         // If taking a screenshot and the blit pipeline is available
-        // NOTE: blit pipeline should always be available for now so we don't report an
-        // error if it isn't
+        // NOTE: blit pipeline should always be available for now so we don't
+        // report an error if it isn't
         let download_and_handle_screenshot = self
             .taking_screenshot
             .take()
             .zip(self.borrow.pipelines.blit())
             .map(|(screenshot, blit)| {
-                // Image needs to be copied from the screenshot texture to the swapchain texture
+                // Image needs to be copied from the screenshot texture to the
+                // swapchain texture
                 let mut render_pass = self.encoder.scoped_render_pass(
                     "screenshot blit",
                     wgpu::RenderPassDescriptor {
@@ -931,8 +935,9 @@ impl Drop for Drawer<'_> {
                 render_pass.set_bind_group(0, screenshot.bind_group(), &[]);
                 render_pass.draw(0..3, 0..1);
                 drop(render_pass);
-                // Issues a command to copy from the texture to a buffer and returns a closure
-                // that will send the buffer off to another thread to be mapped
+                // Issues a command to copy from the texture to a buffer and
+                // returns a closure that will send the buffer
+                // off to another thread to be mapped
                 // and processed.
                 screenshot.copy_to_buffer(self.encoder.encoder())
             });
@@ -942,8 +947,9 @@ impl Drop for Drawer<'_> {
 
         // It is recommended to only do one submit per frame
         self.borrow.queue.submit(std::iter::once(encoder.finish()));
-        // Need to call this after submit so the async mapping doesn't occur before
-        // copying the screenshot to the buffer which will be mapped.
+        // Need to call this after submit so the async mapping doesn't occur
+        // before copying the screenshot to the buffer which will be
+        // mapped.
         if let Some(f) = download_and_handle_screenshot {
             f();
         }
@@ -1295,8 +1301,8 @@ pub struct ParticleDrawer<'pass_ref, 'pass: 'pass_ref> {
 }
 
 impl<'pass_ref, 'pass: 'pass_ref> ParticleDrawer<'pass_ref, 'pass> {
-    // Note: if we ever need to draw less than the whole model, these APIs can be
-    // changed
+    // Note: if we ever need to draw less than the whole model, these APIs can
+    // be changed
     pub fn draw<'data: 'pass>(
         &mut self,
         model: &'data Model<particle::Vertex>,
@@ -1319,8 +1325,8 @@ pub struct RopeDrawer<'pass_ref, 'pass: 'pass_ref> {
 }
 
 impl<'pass_ref, 'pass: 'pass_ref> RopeDrawer<'pass_ref, 'pass> {
-    // Note: if we ever need to draw less than the whole model, these APIs can be
-    // changed
+    // Note: if we ever need to draw less than the whole model, these APIs can
+    // be changed
     pub fn draw<'data: 'pass>(
         &mut self,
         model: &'data Model<rope::Vertex>,
@@ -1328,8 +1334,8 @@ impl<'pass_ref, 'pass: 'pass_ref> RopeDrawer<'pass_ref, 'pass> {
     ) {
         self.render_pass.set_vertex_buffer(0, model.buf().slice(..));
         self.render_pass.set_bind_group(2, &locals.bind_group, &[]);
-        // TODO: since we cast to u32 maybe this should returned by the len/count
-        // functions?
+        // TODO: since we cast to u32 maybe this should returned by the
+        // len/count functions?
         self.render_pass
             .draw_indexed(0..model.len() as u32 / 4 * 6, 0, 0..1);
     }

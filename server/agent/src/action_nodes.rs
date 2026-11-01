@@ -150,10 +150,10 @@ impl AgentData<'_> {
                 .contains_key(read_data.terrain.pos_key(pos.map(|e| e.floor() as i32)))
         };
 
-        // If current position lies inside a loaded chunk, we need to plan routes using
-        // voxel info. If target happens to be in an unloaded chunk,
-        // we need to make our way to the current chunk border, and
-        // then reroute if needed.
+        // If current position lies inside a loaded chunk, we need to plan
+        // routes using voxel info. If target happens to be in an
+        // unloaded chunk, we need to make our way to the current chunk
+        // border, and then reroute if needed.
         let is_target_loaded = in_loaded_chunk(pathing_pos);
 
         if let Some((bearing, speed, stuck)) = agent.chaser.chase(
@@ -337,14 +337,14 @@ impl AgentData<'_> {
         // Only emit event for agents that have a lantern equipped
         if lantern_equipped && rng.random_bool(0.001) {
             if day_period.is_dark() && !lantern_turned_on {
-                // Agents with turned off lanterns turn them on randomly once it's
-                // nighttime and keep them on.
+                // Agents with turned off lanterns turn them on randomly once
+                // it's nighttime and keep them on.
                 // Only emit event for agents that sill need to
                 // turn on their lantern.
                 controller.push_event(ControlEvent::EnableLantern)
             } else if lantern_turned_on && day_period.is_light() {
-                // agents with turned on lanterns turn them off randomly once it's
-                // daytime and keep them off.
+                // agents with turned on lanterns turn them off randomly once
+                // it's daytime and keep them off.
                 controller.push_event(ControlEvent::DisableLantern)
             }
         };
@@ -373,8 +373,9 @@ impl AgentData<'_> {
 
                     agent.bearing = Vec2::zero();
 
-                    // If it has an rtsim destination and can fly, then it should.
-                    // If it is flying and bumps something above it, then it should move down.
+                    // If it has an rtsim destination and can fly, then it
+                    // should. If it is flying and bumps
+                    // something above it, then it should move down.
                     if self.traversal_config.can_fly
                         && !read_data
                             .terrain
@@ -438,9 +439,11 @@ impl AgentData<'_> {
                                 // NOTE: costs 15-20 us (imbris)
                                 for i in 0..=NUM_RAYS {
                                     let magnitude = self.body.map_or(20.0, |b| b.flying_height());
-                                    // Lerp between a line straight ahead and straight down to
+                                    // Lerp between a line straight ahead and
+                                    // straight down to
                                     // detect a
-                                    // wedge of obstacles we might fly into (inclusive so that both
+                                    // wedge of obstacles we might fly into
+                                    // (inclusive so that both
                                     // vectors are sampled)
                                     if let Some(dir) = Lerp::lerp(
                                         -Vec3::unit_z(),
@@ -506,15 +509,19 @@ impl AgentData<'_> {
                     if self.traversal_config.vectored_propulsion {
                         // This is the action for Airships.
 
-                        // Note - when the Agent code is run, the entity will be the captain that is
+                        // Note - when the Agent code is run, the entity will be
+                        // the captain that is
                         // mounted on the ship and the movement calculations
                         // must be done relative to the captain's position
-                        // which is offset from the ship's position and apparently scaled.
-                        // When the State system runs to apply the movement accel and velocity, the
+                        // which is offset from the ship's position and
+                        // apparently scaled.
+                        // When the State system runs to apply the movement
+                        // accel and velocity, the
                         // ship entity will be the subject entity.
 
-                        // entities that have vectored propulsion should always be flying
-                        // and do not depend on forward movement or displacement to move.
+                        // entities that have vectored propulsion should always
+                        // be flying and do not depend
+                        // on forward movement or displacement to move.
                         // E.g., Airships.
                         controller.push_basic_input(InputKind::Fly);
 
@@ -522,37 +529,47 @@ impl AgentData<'_> {
                         // - Move in any direction, following the terrain
                         // - Move essentially vertically, as in
                         //   - Hover in place (station-keeping), like at a dock
-                        //   - Move straight up or down, as when taking off or landing
+                        //   - Move straight up or down, as when taking off or
+                        //     landing
 
-                        // If there is lateral movement, then the entity's direction should be
+                        // If there is lateral movement, then the entity's
+                        // direction should be
                         // aligned with that movement direction. If there is
                         // no or minimal lateral movement, then the entity
-                        // is either hovering or moving vertically, and the entity's direction
-                        // should not change. This is indicated by the direction_override parameter.
+                        // is either hovering or moving vertically, and the
+                        // entity's direction should not
+                        // change. This is indicated by the direction_override
+                        // parameter.
 
-                        // If a direction override is provided, attempt to orient the entity in that
+                        // If a direction override is provided, attempt to
+                        // orient the entity in that
                         // direction.
                         if let Some(direction) = direction_override {
                             controller.inputs.look_dir = direction;
                         } else {
-                            // else orient the entity in the direction of travel, but keep it level
+                            // else orient the entity in the direction of
+                            // travel, but keep it level
                             controller.inputs.look_dir =
                                 Dir::from_unnormalized((travel_to - self.pos.0).xy().with_z(0.0))
                                     .unwrap_or_default();
                         }
 
-                        // the look_dir will be used as the orientation override. Orientation
+                        // the look_dir will be used as the orientation
+                        // override. Orientation
                         // override is always enabled for airships, so this
                         // code must set controller.inputs.look_dir for
                         // all cases (vertical or lateral movement).
 
-                        // When pid_mode is PureZ, only the z component of movement is is adjusted
+                        // When pid_mode is PureZ, only the z component of
+                        // movement is is adjusted
                         // by the PID controller.
 
-                        // If the PID controller is not set or the mode or gain has changed, create
+                        // If the PID controller is not set or the mode or gain
+                        // has changed, create
                         // a new one. PidControllers is a wrapper around one
                         // or more PID controllers. Each controller acts on
-                        // one axis of movement. There are three controllers for FixedDirection mode
+                        // one axis of movement. There are three controllers for
+                        // FixedDirection mode
                         // and one for PureZ mode.
                         if agent
                             .multi_pid_controllers
@@ -568,7 +585,8 @@ impl AgentData<'_> {
 
                         #[allow(unused_variables)]
                         let terrain_alt_with_lookahead = |dist: f32| -> f32 {
-                            // look ahead some blocks to sample the terrain altitude
+                            // look ahead some blocks to sample the terrain
+                            // altitude
                             #[cfg(feature = "worldgen")]
                             let terrain_alt = read_data
                                 .world
@@ -597,7 +615,8 @@ impl AgentData<'_> {
                             mpid.add_measurement(sample_time, self.pos.0);
                             // check if getting close to terrain
                             if terrain_alt >= self.pos.0.z - 32.0 {
-                                // It's likely the airship will hit an upslope. Maximize the climb
+                                // It's likely the airship will hit an upslope.
+                                // Maximize the climb
                                 // rate.
                                 controller.inputs.move_z = 1.0 * speed_factor;
                                 // try to stop forward movement
@@ -609,13 +628,16 @@ impl AgentData<'_> {
                                 controller.inputs.move_z =
                                     mpid.calc_err_z().unwrap_or(0.0).min(1.0) * speed_factor;
                             }
-                            // PID controllers that change the setpoint suffer from "windup", where
+                            // PID controllers that change the setpoint suffer
+                            // from "windup", where
                             // the integral term accumulates error.
-                            // There are several ways to compensate for this. One way is to limit
+                            // There are several ways to compensate for this.
+                            // One way is to limit
                             // the integral term to a range.
                             mpid.limit_windup_z(|z| *z = z.clamp(-20.0, 20.0));
                         } else {
-                            // When doing step-wise movement, the target waypoint changes. Make sure
+                            // When doing step-wise movement, the target
+                            // waypoint changes. Make sure
                             // the PID controller setpoints keep up with
                             // the changes.
                             if let Some(x_controller) = mpid.x_controller.as_mut() {
@@ -625,8 +647,9 @@ impl AgentData<'_> {
                                 y_controller.sp = travel_to.y;
                             }
 
-                            // If terrain following, get the terrain altitude at the current
-                            // position. Set the z setpoint to the max
+                            // If terrain following, get the terrain altitude at
+                            // the current position.
+                            // Set the z setpoint to the max
                             // of terrain alt + height offset or the
                             // target z.
                             let z_setpoint = if let Some(height) = height_offset {
@@ -647,7 +670,8 @@ impl AgentData<'_> {
                             controller.inputs.move_z =
                                 mpid.calc_err_z().unwrap_or(0.0).min(1.0) * speed_factor;
 
-                            // Limit the integral term to a range to prevent windup.
+                            // Limit the integral term to a range to prevent
+                            // windup.
                             mpid.limit_windup_x(|x| *x = x.clamp(-1.0, 1.0));
                             mpid.limit_windup_y(|y| *y = y.clamp(-1.0, 1.0));
                             mpid.limit_windup_z(|z| *z = z.clamp(-1.0, 1.0));
@@ -751,7 +775,8 @@ impl AgentData<'_> {
                 .and_then(|owner| read_data.positions.get(owner))
                 .is_some_and(|pos| pos.0.distance_squared(self.pos.0) < MAX_MOUNT_RANGE.powi(2));
 
-            // Idle NPCs should try to jump on the shoulders of their owner, sometimes.
+            // Idle NPCs should try to jump on the shoulders of their owner,
+            // sometimes.
             if read_data.is_riders.contains(*self.entity) {
                 if rng.random_bool(0.0001) {
                     self.dismount_uncontrollable(controller, read_data);
@@ -768,7 +793,8 @@ impl AgentData<'_> {
             }
 
             // Bats should fly
-            // Use a proportional controller as the bouncing effect mimics bat flight
+            // Use a proportional controller as the bouncing effect mimics bat
+            // flight
             if self.traversal_config.can_fly
                 && self
                     .inventory
@@ -793,7 +819,8 @@ impl AgentData<'_> {
                         })
                     })
             {
-                // Bats don't like the ground, so make sure they are always flying
+                // Bats don't like the ground, so make sure they are always
+                // flying
                 controller.push_basic_input(InputKind::Fly);
                 // Use a proportional controller with a coefficient of 1.0 to
                 // maintain altitude
@@ -1007,8 +1034,9 @@ impl AgentData<'_> {
         // If we already have a healing buff active, don't start another one.
         if self.buffs.is_some_and(|buffs| {
             buffs.iter_active().flatten().any(|buff| {
-                // We don't care about seeing the optional combat requirements that can be
-                // tacked onto buff effects, so we'll just pass in None to this
+                // We don't care about seeing the optional combat requirements
+                // that can be tacked onto buff effects, so
+                // we'll just pass in None to this
                 buff.kind
                     .effects(&buff.data, None, None)
                     .iter()
@@ -1026,7 +1054,8 @@ impl AgentData<'_> {
             return false;
         }
 
-        // Wait for potion sickness to wear off if potions are less than 50% effective.
+        // Wait for potion sickness to wear off if potions are less than 50%
+        // effective.
         let heal_multiplier = self.stats.map_or(1.0, |s| s.item_effect_reduction);
         if heal_multiplier < 0.5 {
             return false;
@@ -1041,8 +1070,10 @@ impl AgentData<'_> {
                 },
                 Effect::Buff(BuffEffect { kind, data, .. }) => {
                     if let Some(duration) = data.duration {
-                        // We don't care about seeing the optional combat requirements that can be
-                        // tacked onto buff effects, so we'll just pass in None to this
+                        // We don't care about seeing the optional combat
+                        // requirements that can be
+                        // tacked onto buff effects, so we'll just pass in None
+                        // to this
                         for effect in kind.effects(data, None, None) {
                             match effect {
                                 comp::BuffEffect::HealthChangeOverTime { rate, kind, .. } => {
@@ -1097,8 +1128,9 @@ impl AgentData<'_> {
                     },
                 }
             }
-            // Prefer non-potion sources of healing when under at least one stack of potion
-            // sickness, or when incurring potion sickness is unnecessary
+            // Prefer non-potion sources of healing when under at least one
+            // stack of potion sickness, or when incurring potion
+            // sickness is unnecessary
             if heal_multiplier_value < 1.0 && (heal_multiplier < 1.0 || relaxed) {
                 value *= 0.1;
             }
@@ -1198,13 +1230,14 @@ impl AgentData<'_> {
                             ..
                         }))
                     );
-                    // If the agent is humanoid, it will pick up all kinds of item drops. If the
-                    // agent isn't humanoid, it will pick up only consumable item drops.
+                    // If the agent is humanoid, it will pick up all kinds of
+                    // item drops. If the agent isn't
+                    // humanoid, it will pick up only consumable item drops.
                     let wants_pickup = !avoids_item_drops
                         && (is_humanoid || matches!(item, body::item::Body::Consumable));
 
-                    // The agent will attempt to pickup the item if it wants to pick it up and
-                    // is allowed to
+                    // The agent will attempt to pickup the item if it wants to
+                    // pick it up and is allowed to
                     let attempt_pickup = wants_pickup
                     && read_data
                         .loot_owners
@@ -1261,7 +1294,8 @@ impl AgentData<'_> {
                                 !interactors.has_interaction(InteractionKind::HelpDowned)
                             }) && self.char_state.can_interact();
 
-                    // TODO: Make targets that need saving have less priority as a target.
+                    // TODO: Make targets that need saving have less priority as
+                    // a target.
                     Some((entity, !(needs_saving && wants_to_save)))
                 } else {
                     None
@@ -1538,7 +1572,8 @@ impl AgentData<'_> {
         controller.push_action(ControlAction::Wield);
 
         // Information for attack checks
-        // 'min_attack_dist' uses DEFAULT_ATTACK_RANGE, while 'body_dist' does not
+        // 'min_attack_dist' uses DEFAULT_ATTACK_RANGE, while 'body_dist' does
+        // not
         let self_radius = self.body.map_or(0.5, |b| b.max_radius()) * self.scale;
         let self_attack_range =
             (self.body.map_or(0.5, |b| b.front_radius()) + DEFAULT_ATTACK_RANGE) * self.scale;
@@ -1579,9 +1614,9 @@ impl AgentData<'_> {
 
         // FIXME:
         // 1) Retrieve actual projectile speed!
-        // We have to assume projectiles are faster than base speed because there are
-        // skills that increase it, and in most cases this will cause agents to
-        // overshoot
+        // We have to assume projectiles are faster than base speed because
+        // there are skills that increase it, and in most cases this
+        // will cause agents to overshoot
         //
         // 2) We use eye_offset-s which isn't actually ideal.
         // Some attacks (beam for example) may use different offsets,
@@ -1735,8 +1770,8 @@ impl AgentData<'_> {
             angle_xy,
         };
 
-        // Match on tactic. Each tactic has different controls depending on the distance
-        // from the agent to the target.
+        // Match on tactic. Each tactic has different controls depending on the
+        // distance from the agent to the target.
         match tactic {
             Tactic::SimpleFlyingMelee => self.handle_simple_flying_melee(
                 agent,
@@ -2217,9 +2252,10 @@ impl AgentData<'_> {
         if let Some(sound) = agent.sounds_heard.last() {
             let sound_pos = Pos(sound.pos);
             let dist_sqrd = self.pos.0.distance_squared(sound_pos.0);
-            // NOTE: There is an implicit distance requirement given that sound volume
-            // dissipates as it travels, but we will not want to flee if a sound is super
-            // loud but heard from a great distance, regardless of how loud it was.
+            // NOTE: There is an implicit distance requirement given that sound
+            // volume dissipates as it travels, but we will not want
+            // to flee if a sound is super loud but heard from a
+            // great distance, regardless of how loud it was.
             // `is_close` is this limiter.
             let is_close = dist_sqrd < 35.0_f32.powi(2);
 
@@ -2288,10 +2324,10 @@ impl AgentData<'_> {
                     let target_data = TargetData::new(tgt_pos, target, read_data);
                     // TODO: Reimplement this in rtsim
                     // if let Some(tgt_name) =
-                    //     read_data.stats.get(target).map(|stats| stats.name.clone())
-                    // {
-                    //     agent.add_fight_to_memory(&tgt_name, read_data.time.0)
-                    // }
+                    //     read_data.stats.get(target).map(|stats|
+                    // stats.name.clone()) {
+                    //     agent.add_fight_to_memory(&tgt_name,
+                    // read_data.time.0) }
                     self.attack(agent, controller, &target_data, read_data, rng);
                 }
             }
@@ -2396,9 +2432,10 @@ impl AgentData<'_> {
 
         entity_pos.is_some_and(|entity_pos| {
             target_pos.is_none_or(|target_pos| {
-                // Fuzzy factor that makes it harder for players to cheese enemies by making
-                // them quickly flip aggro between two players.
-                // It does this by only switching aggro if the entity is closer to the enemy by
+                // Fuzzy factor that makes it harder for players to cheese
+                // enemies by making them quickly flip aggro
+                // between two players. It does this by only
+                // switching aggro if the entity is closer to the enemy by
                 // a specific proportional threshold.
                 const FUZZY_DIST_COMPARISON: f32 = 0.8;
 
@@ -2410,8 +2447,8 @@ impl AgentData<'_> {
                     .zip(self.alignment)
                     .is_some_and(|(entity, me)| me.hostile_towards(*entity));
 
-                // Consider entity more dangerous than target if entity is closer or if target
-                // had not triggered aggro.
+                // Consider entity more dangerous than target if entity is
+                // closer or if target had not triggered aggro.
                 !target.aggro_on || (is_target_further && is_entity_hostile)
             })
         })
@@ -3096,8 +3133,9 @@ mod sense_radius_tests {
     #[test]
     fn the_floor_does_not_bind_for_any_stealth_combination_shipped_today() {
         // Best shipped gear (head-slot stealth 0.15) + sneaking per the
-        // game-balance-designer review: multiplier ~0.608, radius ~3.04 m -- above the
-        // floor, so it is the raw formula that applies, not the floor.
+        // game-balance-designer review: multiplier ~0.608, radius ~3.04 m --
+        // above the floor, so it is the raw formula that applies, not
+        // the floor.
         let today_worst_case_multiplier = 0.608;
         let radius = sense_radius_from_stealth_multiplier(today_worst_case_multiplier);
         assert!(
@@ -3108,9 +3146,9 @@ mod sense_radius_tests {
 
     #[test]
     fn a_future_large_stealth_buff_is_caught_by_the_floor() {
-        // A hypothetical high-strength BuffEffect::Stealth (no shipped RON grants one
-        // today) pushing the multiplier toward 0 must still leave a real,
-        // non-collapsing sense radius.
+        // A hypothetical high-strength BuffEffect::Stealth (no shipped RON
+        // grants one today) pushing the multiplier toward 0 must still
+        // leave a real, non-collapsing sense radius.
         assert_eq!(sense_radius_from_stealth_multiplier(0.0), 3.0);
         assert_eq!(sense_radius_from_stealth_multiplier(0.1), 3.0);
     }

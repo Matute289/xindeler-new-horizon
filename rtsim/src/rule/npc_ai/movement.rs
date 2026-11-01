@@ -379,7 +379,8 @@ where
                         }),
                 ))
             } else {
-                // No intra-site path found, just attempt to move towards the exit node
+                // No intra-site path found, just attempt to move towards the
+                // exit node
                 ControlFlow::Continue(Either::Right(
                     goto_2d(site_exit, speed_factor, 8.0)
                         .debug(move || {

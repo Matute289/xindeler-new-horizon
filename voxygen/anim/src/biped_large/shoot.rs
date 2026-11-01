@@ -165,7 +165,8 @@ impl Animation for ShootAnimation {
                     let move1abs = move1base * pullback;
                     let move2abs = move2base * pullback;
                     //   next.main.position = Vec3::new(-10.0, -8.0, 12.0);
-                    //                    next.main.orientation = Quaternion::rotation_y(2.5) *
+                    //                    next.main.orientation =
+                    // Quaternion::rotation_y(2.5) *
                     // Quaternion::rotation_z(PI / 2.0);
 
                     next.hand_l.position =

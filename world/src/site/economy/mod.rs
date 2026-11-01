@@ -333,7 +333,8 @@ impl Economy {
         SitePrices {
             values: {
                 let labor_values = normalize(self.labor_values);
-                // Use labor values as prices. Not correct (doesn't care about exchange value)
+                // Use labor values as prices. Not correct (doesn't care about
+                // exchange value)
                 let prices = normalize(self.values).map(|good, value| {
                     ((labor_values[good].unwrap_or(Economy::MINIMUM_PRICE)
                         + value.unwrap_or(Economy::MINIMUM_PRICE))
@@ -360,10 +361,11 @@ impl Economy {
         // TODO: Do we have some latency of information here (using last years
         // capacity?)
         //let total_transport_capacity = self.stocks[Transportation];
-        // TODO: We don't count the capacity per site, but globally (so there might be
-        // some imbalance in dispatch vs collection across sites (e.g. more dispatch
-        // than collection at one while more collection than dispatch at another))
-        // transport capacity works both ways (going there and returning)
+        // TODO: We don't count the capacity per site, but globally (so there
+        // might be some imbalance in dispatch vs collection across
+        // sites (e.g. more dispatch than collection at one while more
+        // collection than dispatch at another)) transport capacity
+        // works both ways (going there and returning)
         let mut dispatch_capacity = transportation_capacity;
         let mut collect_capacity = transportation_capacity;
         let mut missing_dispatch: f32 = 0.0;
@@ -428,8 +430,8 @@ impl Economy {
                 })
             })
             .collect();
-        // TODO: we need to introduce priority (according to available transportation
-        // capacity)
+        // TODO: we need to introduce priority (according to available
+        // transportation capacity)
         let mut neighbor_orders: DHashMap<Id<Site>, GoodMap<f32>> = self
             .neighbors
             .iter()
@@ -487,7 +489,8 @@ impl Economy {
                                 amount2 = amount2.min(balance / price2); // pay until balance is even
                                 let effort2 = transportation_effort(*g2);
                                 let mut dispatch = amount2 * effort2;
-                                // limit by separate transport budget (on way back)
+                                // limit by separate transport budget (on way
+                                // back)
                                 if dispatch > dispatch_capacity && effort2 > 0.0 {
                                     let transportable_amount = dispatch_capacity / effort2;
                                     let missing_trade = amount2 - transportable_amount;
@@ -542,7 +545,8 @@ impl Economy {
                     amount: *orders,
                 };
                 if let Some(o) = self.orders.get_mut(&n.id) {
-                    // this is just to catch unbound growth (happened in development)
+                    // this is just to catch unbound growth (happened in
+                    // development)
                     if o.len() < 100 {
                         o.push(to);
                     } else {
@@ -619,8 +623,8 @@ impl Economy {
             0.0,
         );
         for o in orders.drain(..) {
-            // amount, local value (sell low value, buy high value goods first (trading
-            // town's interest))
+            // amount, local value (sell low value, buy high value goods first
+            // (trading town's interest))
             let mut sorted_sell: Vec<(GoodIndex, f32, f32)> = o
                 .amount
                 .iter()
@@ -736,7 +740,8 @@ impl Economy {
         );
         // TODO: properly rate benefits created by merchants (done below?)
         for mut d in self.deliveries.drain(..) {
-            // let mut ictx = ctx.context(&format!("suppl {}", d.supplier.id()));
+            // let mut ictx = ctx.context(&format!("suppl {}",
+            // d.supplier.id()));
             for i in d.amount.iter() {
                 last_exports[i.0] -= *i.1;
             }
@@ -801,8 +806,8 @@ impl Economy {
 
         // for i in production.iter() {
         //     vc.context("production")
-        //         .value(&std::format!("{:?}{:?}", i.0, Good::from(i.1.0)), i.1.1);
-        // }
+        //         .value(&std::format!("{:?}{:?}", i.0, Good::from(i.1.0)),
+        // i.1.1); }
 
         let mut demand = GoodMap::from_default(0.0);
         for (labor, orders) in orders.iter() {
@@ -854,8 +859,8 @@ impl Economy {
         // plan trading with other sites
         // let external_orders = &mut index.trade.orders;
         let mut potential_trade = GoodMap::from_default(0.0);
-        // use last year's generated transportation for merchants (could we do better?
-        // this is in line with the other professions)
+        // use last year's generated transportation for merchants (could we do
+        // better? this is in line with the other professions)
         let transportation_capacity = self.stocks[*TRANSPORTATION_INDEX];
         let trade = if INTER_SITE_TRADE {
             let trade =
@@ -880,8 +885,8 @@ impl Economy {
         };
 
         // Update values according to the surplus of each stock
-        // Note that values are used for workforce allocation and are not the same thing
-        // as price
+        // Note that values are used for workforce allocation and are not the
+        // same thing as price
         // fall back to old (less wrong than other goods) coin logic
         let old_coin_surplus = self.stocks[*COIN_INDEX] - demand[*COIN_INDEX];
         let values = &mut self.values;
@@ -916,9 +921,9 @@ impl Economy {
             .map(|(g, _)| g)
             .collect();
         //let empty_goods: DHashSet<GoodIndex> = DHashSet::default();
-        // TODO: Does avg/max/sum make most sense for labors creating more than one good
-        // summing favors merchants too much (as they will provide multiple
-        // goods, so we use max instead)
+        // TODO: Does avg/max/sum make most sense for labors creating more than
+        // one good summing favors merchants too much (as they will
+        // provide multiple goods, so we use max instead)
         let labor_ratios: LaborMap<f32> = LaborMap::from_iter(
             production.iter().map(|(labor, goodvec)| {
                 (
@@ -971,12 +976,13 @@ impl Economy {
             assert!(workers >= 0.0);
             let is_merchant = merchant_labor == labor;
 
-            // For each order, we try to find the minimum satisfaction rate - this limits
-            // how much we can produce! For example, if we need 0.25 fish and
-            // 0.75 oats to make 1 unit of food, but only 0.5 units of oats are
-            // available then we only need to consume 2/3rds
-            // of other ingredients and leave the rest in stock
-            // In effect, this is the productivity
+            // For each order, we try to find the minimum satisfaction rate -
+            // this limits how much we can produce! For example, if
+            // we need 0.25 fish and 0.75 oats to make 1 unit of
+            // food, but only 0.5 units of oats are available then
+            // we only need to consume 2/3rds of other ingredients
+            // and leave the rest in stock In effect, this is the
+            // productivity
             let (labor_productivity, limited_by) = orders
                 .iter()
                 .map(|(good, amount)| {
@@ -984,7 +990,8 @@ impl Economy {
                     let _quantity = *amount * workers;
                     assert!(stocks_before[*good] >= 0.0);
                     assert!(demand[*good] >= 0.0);
-                    // What proportion of this order is the economy able to satisfy?
+                    // What proportion of this order is the economy able to
+                    // satisfy?
                     ((stocks_before[*good] / demand[*good]).min(1.0), *good)
                 })
                 .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Less))
@@ -1021,7 +1028,8 @@ impl Economy {
                         if *a < 0.0 {
                             // take these goods to the road
                             if self.stocks[g] + *a < 0.0 {
-                                // we have a problem: Probably due to a shift in productivity we
+                                // we have a problem: Probably due to a shift in
+                                // productivity we
                                 // have less goods available than
                                 // planned, so we would need to
                                 // reduce the amount shipped
@@ -1081,8 +1089,8 @@ impl Economy {
             for (stock, amount) in produced_goods.iter() {
                 let cost_weight = amount / produced_amount.max(0.001);
                 // Materials cost per unit
-                // TODO: How to handle this reasonably for multiple producers (collect upper and
-                // lower term separately)
+                // TODO: How to handle this reasonably for multiple producers
+                // (collect upper and lower term separately)
                 self.material_costs[stock] = total_materials_cost / amount.max(0.001) * cost_weight;
                 // Labor costs
                 let wages = 1.0;

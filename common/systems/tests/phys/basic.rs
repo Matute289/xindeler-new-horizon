@@ -470,7 +470,8 @@ fn acc_with_frict_tick(
                 // https://www.wolframalpha.com/input?i=V*tan%28x*g%2FV+%2B+atan%28v%2FV%29%29+%3D+0+solve+for+x
                 let dt_to_zero = vel_t * (vel / vel_t).atan() / acc.abs();
                 if dt_to_zero < dt {
-                    // Step with only part of dt that is left after reaching 0 vel
+                    // Step with only part of dt that is left after reaching 0
+                    // vel
                     let lower = vel_t.powi(2) * (vel / vel_t).atan().cos().ln() / acc;
                     let upper = -vel_t.powi(2)
                         * (acc * dt_to_zero / vel_t + (vel / vel_t).atan()).cos().ln()

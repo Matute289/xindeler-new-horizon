@@ -669,12 +669,14 @@ impl Controls {
                     && let ConnectionState::TwoFaPrompt { code } = connection_state
                 {
                     let code = std::mem::take(code);
-                    // Deliberately no `ConnectionState::InProgress` reset here (unlike the
-                    // trust prompt above): a wrong/expired code ends the whole connect
-                    // attempt (see `Event::TwoFaCodeSubmit`'s handling in `menu/main/mod.rs`
-                    // -- routes through the existing `Msg::Done(Err(..))` failure path,
-                    // never back to this screen), so there is no in-place retry loop to
-                    // reset into.
+                    // Deliberately no `ConnectionState::InProgress` reset here
+                    // (unlike the trust prompt above): a
+                    // wrong/expired code ends the whole connect
+                    // attempt (see `Event::TwoFaCodeSubmit`'s handling in
+                    // `menu/main/mod.rs` -- routes through
+                    // the existing `Msg::Done(Err(..))` failure path,
+                    // never back to this screen), so there is no in-place retry
+                    // loop to reset into.
                     events.push(Event::TwoFaCodeSubmit(code));
                 }
             },

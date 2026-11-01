@@ -85,8 +85,8 @@ impl<'a> System<'a> for Sys {
         for (entity, _) in (&read_data.entities, &targets).join() {
             let Some(inventory) = read_data.inventories.get(entity) else {
                 // No inventory (never had one, or just lost it) means no cache:
-                // every read site falls back to `DerivedStats::default()`, which
-                // is exactly the no-inventory result.
+                // every read site falls back to `DerivedStats::default()`,
+                // which is exactly the no-inventory result.
                 derived_stats.remove(entity);
                 continue;
             };

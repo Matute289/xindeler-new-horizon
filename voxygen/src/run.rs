@@ -23,8 +23,8 @@ pub fn run(
     });
 
     // Used to ignore every other `MainEventsCleared`
-    // This is a workaround for a bug on macos in which mouse motion events are only
-    // reported every other cycle of the event loop
+    // This is a workaround for a bug on macos in which mouse motion events are
+    // only reported every other cycle of the event loop
     // See: https://github.com/rust-windowing/winit/issues/1418
     let mut polled_twice = false;
 
@@ -261,9 +261,9 @@ fn handle_main_events_cleared(
         // Wait for the next tick.
         span!(guard, "Main thread sleep");
 
-        // Enforce an FPS cap for the non-game session play states to prevent them
-        // running at hundreds/thousands of FPS resulting in high GPU usage for
-        // effectively doing nothing.
+        // Enforce an FPS cap for the non-game session play states to prevent
+        // them running at hundreds/thousands of FPS resulting in high
+        // GPU usage for effectively doing nothing.
         let max_fps = get_fps(global_state.settings.graphics.max_fps);
         let max_background_fps = u32::min(
             max_fps,
@@ -293,8 +293,8 @@ fn handle_main_events_cleared(
             static PERF_COUNTER: AtomicU32 = AtomicU32::new(0);
             let count = PERF_COUNTER.fetch_add(1, Ordering::Relaxed);
             if count.is_multiple_of(30) {
-                // upstream split Clock::dt() into real_dt()/game_dt(); perf/FPS wants
-                // wall-clock
+                // upstream split Clock::dt() into real_dt()/game_dt(); perf/FPS
+                // wants wall-clock
                 let dt = global_state.clock.real_dt();
                 let frame_ms = dt.as_millis() as u32;
                 let fps = 1000u32.checked_div(frame_ms).unwrap_or(0);

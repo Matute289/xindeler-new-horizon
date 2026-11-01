@@ -41,9 +41,9 @@ impl AirshipDock {
     ) -> Self {
         // dock is 30 blocks in radius
         // airships are 37 blocks wide.
-        // distance from the center to the outside edge of the airship when docked is 67
-        // blocks. The area covered by all four airships is a square 134 blocks
-        // on a side.
+        // distance from the center to the outside edge of the airship when
+        // docked is 67 blocks. The area covered by all four airships is
+        // a square 134 blocks on a side.
 
         let door_tile_pos: Vec2<i32> = site.tile_center_wpos(door_tile);
         let bounds = Aabr {
@@ -55,13 +55,14 @@ impl AirshipDock {
         // bounds and center are in world blocks.
 
         // The bounds will be 54 blocks square.
-        // That's enough for the dock structure itself minus 1/2 an overlap tile on each
-        // side. In city towns with low buildings, this allows airships to dock
-        // above the buildings.
+        // That's enough for the dock structure itself minus 1/2 an overlap tile
+        // on each side. In city towns with low buildings, this allows
+        // airships to dock above the buildings.
 
-        // For airship clearance however, the terrain must be sampled across the entire
-        // area where an airship might be docked (134 blocks square), plus some
-        // extra to allow for when the airship overshoots the dock on descent.
+        // For airship clearance however, the terrain must be sampled across the
+        // entire area where an airship might be docked (134 blocks
+        // square), plus some extra to allow for when the airship
+        // overshoots the dock on descent.
         let halfspan = 66;
         let min_clearance_x = center.x - halfspan;
         let max_clearance_x = center.x + halfspan;
@@ -70,9 +71,9 @@ impl AirshipDock {
         let mut max_surface_alt = i32::MIN;
         let mut surface_colors = vec![];
         let mut sub_surface_colors = vec![];
-        // Since this range is from -66 to +66 (132 blocks), sampling every 22 blocks
-        // will give exactly 7 samples along each axis (because 132 is divisible by 22)
-        // as long as the range is inclusive.
+        // Since this range is from -66 to +66 (132 blocks), sampling every 22
+        // blocks will give exactly 7 samples along each axis (because
+        // 132 is divisible by 22) as long as the range is inclusive.
         for x in (min_clearance_x..=max_clearance_x).step_by(22) {
             for y in (min_clearance_y..=max_clearance_y).step_by(22) {
                 let pos = Vec2::new(x, y);
@@ -95,9 +96,9 @@ impl AirshipDock {
         let color_component_to_u8 =
             |compf32: f32| -> u8 { (compf32.clamp(0.0, 1.0) * 255.0).floor() as u8 };
 
-        // Since this range is from -20 to +20 (40 blocks), sampling every 10 blocks
-        // will give exactly 5 samples along each axis (because 40 is divisible by 10)
-        // as long as the range is inclusive.
+        // Since this range is from -20 to +20 (40 blocks), sampling every 10
+        // blocks will give exactly 5 samples along each axis (because
+        // 40 is divisible by 10) as long as the range is inclusive.
         for x in (min_foundation_x..=max_foundation_x).step_by(10) {
             for y in (min_foundation_y..=max_foundation_y).step_by(10) {
                 let pos = Vec2::new(x, y);
@@ -114,17 +115,18 @@ impl AirshipDock {
                 }
             }
         }
-        // When docked, the bottom of the airship will be at the platform height.
-        // The platform height must be at or above max_surface_alt.
-        // The platform height must be at least 36 blocks above the base of the tower
-        // (the tower must be at least 36 blocks tall).
-        // The base of the tower must be at or above max_foundation_alt.
+        // When docked, the bottom of the airship will be at the platform
+        // height. The platform height must be at or above
+        // max_surface_alt. The platform height must be at least 36
+        // blocks above the base of the tower (the tower must be at
+        // least 36 blocks tall). The base of the tower must be at or
+        // above max_foundation_alt.
         let min_base = max_surface_alt - 36;
         let base = min_base.max(max_foundation_alt);
 
         let upper_alt = base + 28;
-        // negate the rotation angle because Mat3::rotation_z is CCW, but atan2 returns
-        // PI/2 for (1,0) which is a CW rotation.
+        // negate the rotation angle because Mat3::rotation_z is CCW, but atan2
+        // returns PI/2 for (1,0) which is a CW rotation.
         let rotation = -f32::atan2(door_dir.x as f32, door_dir.y as f32);
         let mut docking_positions = vec![];
         for dir in CARDINALS {
@@ -241,8 +243,8 @@ impl Structure for AirshipDock {
                 } else {
                     avg_color
                 };
-                // the final color is a lerp from avg_color 25% to 75% of the way to the
-                // randomly selected color index.
+                // the final color is a lerp from avg_color 25% to 75% of the
+                // way to the randomly selected color index.
                 let lerp_factor = (RandomField::new(1).get(wpos) % 51 + 25) as f32 / 100.0;
                 let block_color = Rgb::new(
                     Lerp::lerp(avg_color.r, color.r, lerp_factor),
@@ -381,8 +383,8 @@ impl Structure for AirshipDock {
 
         let foundation_radius: f32 = 17.0;
 
-        // The rampart court is below the base except for a low stone wall at the top.
-        // Build the low stone wall before the main column.
+        // The rampart court is below the base except for a low stone wall at
+        // the top. Build the low stone wall before the main column.
         painter
             .cylinder_with_radius(center.with_z(base - 1), foundation_radius, 2.0)
             .rotate_about(Mat3::rotation_z(self.rotation).as_(), center.with_z(base))
@@ -1086,8 +1088,8 @@ impl Structure for AirshipDock {
                     .rotate_about(Mat3::rotation_z(rot).as_(), center.with_z(base)),
                 Fill::Block(Block::empty()),
             );
-            // The edge near the stairs is filled in with bricks and gaps at the edge of the
-            // stair wall that was removed.
+            // The edge near the stairs is filled in with bricks and gaps at the
+            // edge of the stair wall that was removed.
             let picketx = 3;
             for i in 0..3 {
                 painter

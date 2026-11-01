@@ -83,7 +83,8 @@ impl FindDist<Cylinder> for Cube {
         let z_center_dist = (self.min.z + self.side_length / 2.0 - other.center.z).abs();
         // Distance between surfaces projected onto the z-axis
         let z_dist = (z_center_dist - (self.side_length + other.height) / 2.0).max(0.0);
-        // Distance between shapes projected onto the xy plane as a square/circle
+        // Distance between shapes projected onto the xy plane as a
+        // square/circle
         let square_aabr = Aabr {
             min: self.min.xy(),
             max: self.min.xy() + self.side_length,

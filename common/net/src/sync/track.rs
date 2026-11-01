@@ -42,21 +42,23 @@ where
         for event in storage.channel().read(&mut self.reader_id) {
             match event {
                 specs::storage::ComponentEvent::Inserted(id) => {
-                    // If previously removed/modified we don't need to know that anymore
+                    // If previously removed/modified we don't need to know that
+                    // anymore
                     self.removed.remove(*id);
                     self.modified.remove(*id);
                     self.inserted.add(*id);
                 },
                 specs::storage::ComponentEvent::Modified(id) => {
-                    // We don't care about modification if the component was just added
+                    // We don't care about modification if the component was
+                    // just added
                     if !self.inserted.contains(*id) {
                         debug_assert!(!self.removed.contains(*id)); // Theoretically impossible
                         self.modified.add(*id);
                     }
                 },
                 specs::storage::ComponentEvent::Removed(id) => {
-                    // Don't need to know that it was inserted/modified if it was subsequently
-                    // removed
+                    // Don't need to know that it was inserted/modified if it
+                    // was subsequently removed
                     self.inserted.remove(*id);
                     self.modified.remove(*id);
                     self.removed.add(*id);
@@ -143,7 +145,8 @@ impl<C: Component + Clone + Send + Sync> UpdateTracker<C> {
         let id = entity.id();
         // Generate update if one exists.
         //
-        // Note: presence of the id in these bitsets should be mutually exclusive
+        // Note: presence of the id in these bitsets should be mutually
+        // exclusive
         if force_sync {
             storage
                 .get(entity)

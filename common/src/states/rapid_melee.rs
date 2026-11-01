@@ -111,7 +111,8 @@ impl CharacterBehavior for Data {
                     .try_change_by(-self.static_data.energy_cost)
                     .is_ok()
                 {
-                    // TODO: Remove this, this should never have been added this way
+                    // TODO: Remove this, this should never have been added this
+                    // way
                     if self.static_data.frontend_specifier == Some(FrontendSpecifier::CultistVortex)
                     {
                         let damage = AttackDamage::new(

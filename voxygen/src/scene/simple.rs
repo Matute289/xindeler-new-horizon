@@ -356,7 +356,8 @@ impl Scene {
                 &mut 0.0,
                 &anim::character::SkeletonAttr::from(&body),
             );
-            // Apply different animations to the character depending occasionally
+            // Apply different animations to the character depending
+            // occasionally
             let tgt_skeleton = if !is_edit && (scene_data.time + 113.0) % 80.0 < 10.0 {
                 anim::character::SitAnimation::update_skeleton(
                     &tgt_skeleton,

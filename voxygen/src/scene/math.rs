@@ -153,57 +153,58 @@ fn append_intersection_points<T: Float + core::fmt::Debug>(
 ) {
     // NOTE: We use decoded versions of each polygon, with rounded entries.
     //
-    // The line segments in intersection_points are consistently ordered as follows:
-    // each segment represents the intersection of the cutting plane with the
-    // polygon from which the segment came.  The polygon can thus be split into
-    // two parts: the part "inside" the new surface (below the plane), and the
-    // part "outside" it (above the plane).  Thus, when oriented
-    // with the polygon normal pointing into the camera, and the cutting plane as
-    // the x axis, with the "outside" part on top and the "inside" part on the
-    // bottom, there is a leftmost point (the point going from outside to
-    // inside, counterclockwise) and a rightmost point (the point going from
-    // inside to outside, counterclockwise).  Our consistent ordering guarantees
-    // that the leftmost point comes before the rightmost point in each line
-    // segment.
+    // The line segments in intersection_points are consistently ordered as
+    // follows: each segment represents the intersection of the cutting
+    // plane with the polygon from which the segment came.  The polygon can
+    // thus be split into two parts: the part "inside" the new surface
+    // (below the plane), and the part "outside" it (above the plane).
+    // Thus, when oriented with the polygon normal pointing into the camera,
+    // and the cutting plane as the x axis, with the "outside" part on top
+    // and the "inside" part on the bottom, there is a leftmost point (the
+    // point going from outside to inside, counterclockwise) and a rightmost
+    // point (the point going from inside to outside, counterclockwise).
+    // Our consistent ordering guarantees that the leftmost point comes
+    // before the rightmost point in each line segment.
     //
     // Why does this help us?  To see that, consider the polygon adjacent to the
     // considered polygon which also has the same right intersection point (we
     // know there will be exactly one of these, because we have a solid
     // structure and are only considering polygons that intersect the plane
-    // exactly two times; this means that we are ignoring polygons that intersect
-    // the plane at just one point, which means the two polygons must share a
-    // point, not be coplanar, and both intersect the plane; no theorem here,
-    // but I believe there can provably be at most one such instance given that
-    // we have at least three polygons with such a line segment).
+    // exactly two times; this means that we are ignoring polygons that
+    // intersect the plane at just one point, which means the two polygons
+    // must share a point, not be coplanar, and both intersect the plane; no
+    // theorem here, but I believe there can provably be at most one such
+    // instance given that we have at least three polygons with such a line
+    // segment).
     //
-    // Now, for the adjacent polygon, repeat the above process.  If the intersection
-    // point shared by the polygons is on the right in both cases, then we can
-    // see that the polygon's normal must be facing in the opposite direction of
-    // the original polygon despite being adjacent.  But this
-    // should be impossible for a closed object!  The same applies to the leftmost
-    // point.
+    // Now, for the adjacent polygon, repeat the above process.  If the
+    // intersection point shared by the polygons is on the right in both
+    // cases, then we can see that the polygon's normal must be facing in
+    // the opposite direction of the original polygon despite being
+    // adjacent.  But this should be impossible for a closed object!  The
+    // same applies to the leftmost point.
     //
-    // What is the practical upshot of all this?  It means that we can consistently
-    // hash each line segment by its first point, which we can look up using the
-    // second point of a previous line segment.  This will produce a chain of
-    // entries terminating in the original segment we looked up.  As an added
-    // bonus, by going from leftmost point to leftmost point, we also ensure that
-    // we produce a polygon whose face is oriented counterclockwise around its
-    // normal; this can be seen by following the right-hand rule (TODO: provide
-    // more rigorous proof).
+    // What is the practical upshot of all this?  It means that we can
+    // consistently hash each line segment by its first point, which we can
+    // look up using the second point of a previous line segment.  This will
+    // produce a chain of entries terminating in the original segment we
+    // looked up.  As an added bonus, by going from leftmost point to
+    // leftmost point, we also ensure that we produce a polygon whose face
+    // is oriented counterclockwise around its normal; this can be seen by
+    // following the right-hand rule (TODO: provide more rigorous proof).
     let tol = tolerance.recip();
     let make_key = move |point: Vec3<T>| {
-        // We use floating points rounded to tolerance in order to make our HashMap
-        // lookups work. Otherwise we'd have to use a sorted structure, like a
-        // btree, which wouldn't be the end of the world but would have
-        // theoretically worse complexity.
+        // We use floating points rounded to tolerance in order to make our
+        // HashMap lookups work. Otherwise we'd have to use a sorted
+        // structure, like a btree, which wouldn't be the end of the
+        // world but would have theoretically worse complexity.
         //
-        // NOTE: Definitely non-ideal that we panic if the rounded value can't fit in an
-        // i64...
+        // NOTE: Definitely non-ideal that we panic if the rounded value can't
+        // fit in an i64...
         //
-        // TODO: If necessary, let the caller specify how to hash these keys, since in
-        // cases where we know the kind of floating point we're using we can
-        // just cast to bits or something.
+        // TODO: If necessary, let the caller specify how to hash these keys,
+        // since in cases where we know the kind of floating point we're
+        // using we can just cast to bits or something.
         point.map(|e| {
             (e * tol)
                 .round()
@@ -218,13 +219,14 @@ fn append_intersection_points<T: Float + core::fmt::Debug>(
         .filter_map(|uv| {
             let u_key = make_key(uv[0]);
             let v = uv[1];
-            // NOTE: The reason we need to make sure this doesn't happen is that it's
-            // otherwise possible for two points to hash to the same value due to
-            // epsilon being too low. Because of the ordering mentioned previously,
-            // we know we should *eventually* find a pair of points starting with
-            // make_key(u) and ending with a different make_key(v) in such cases, so
-            // we just discard all the other pairs (treating them as points rather
-            // than lines).
+            // NOTE: The reason we need to make sure this doesn't happen is that
+            // it's otherwise possible for two points to hash to the
+            // same value due to epsilon being too low. Because of
+            // the ordering mentioned previously, we know we should
+            // *eventually* find a pair of points starting with
+            // make_key(u) and ending with a different make_key(v) in such
+            // cases, so we just discard all the other pairs
+            // (treating them as points rather than lines).
             (u_key != make_key(v)).then_some((u_key, v))
         });
 
@@ -234,14 +236,14 @@ fn append_intersection_points<T: Float + core::fmt::Debug>(
             // You need at least 3 sides for a polygon
             return;
         }
-        // NOTE: Guaranteed to terminate, provided we have no cycles besides the one
-        // that touches every point (which should be the case given how these
-        // points were generated).
+        // NOTE: Guaranteed to terminate, provided we have no cycles besides the
+        // one that touches every point (which should be the case given
+        // how these points were generated).
         let poly_iter = iter::successors(Some(first), |&cur| lines.get(&make_key(cur)).copied());
         let poly: Vec<_> = poly_iter.collect();
         // We have to check to make sure we really went through the whole cycle.
-        // TODO: Consider adaptively decreasing precision until we can make the cycle
-        // happen.
+        // TODO: Consider adaptively decreasing precision until we can make the
+        // cycle happen.
         if poly.last().copied().map(make_key) == Some(last_key) {
             // Push the new polygon onto the object.
             polys.push(poly);
@@ -258,22 +260,23 @@ pub fn clip_object_by_plane<T: Float + MulAdd<T, T, Output = T> + core::fmt::Deb
     polys.retain_mut(|points| {
         let len = intersection_points.len();
         let outside_first = clip_points_by_plane(points, plane, &mut intersection_points);
-        // Only remember intersections that are not coplanar with this side; i.e. those
-        // that have segment length 2.
+        // Only remember intersections that are not coplanar with this side;
+        // i.e. those that have segment length 2.
         if len + 2 != intersection_points.len() {
             intersection_points.truncate(len);
         } else if !outside_first {
-            // Order the two intersection points consistently, so that, when considered
-            // counterclockwise:
-            // - the first point goes from the exterior of the polygon (above the cutting
-            //   plane) to its interior.
-            // - the second point goes from the interior of the polygon (below the cutting
-            //   plane) to its exterior.
+            // Order the two intersection points consistently, so that, when
+            // considered counterclockwise:
+            // - the first point goes from the exterior of the polygon (above
+            //   the cutting plane) to its interior.
+            // - the second point goes from the interior of the polygon (below
+            //   the cutting plane) to its exterior.
             // the second is always going
             //
-            // This allows us to uniquely map each line segment to an "owning" point (the
-            // one going from outside to inside), which happens to also point
-            // the segment in a counterclockwise direction around the new
+            // This allows us to uniquely map each line segment to an "owning"
+            // point (the one going from outside to inside), which
+            // happens to also point the segment in a
+            // counterclockwise direction around the new
             // polygon normal composed of all the lines we clipped.
             intersection_points.swap(len, len + 1);
         }

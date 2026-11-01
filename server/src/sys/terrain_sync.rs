@@ -66,28 +66,32 @@ impl<'a> System<'a> for Sys {
         terrain_changes.modified_chunks.par_iter().for_each_init(
             || chunk_send_bus.emitter(),
             |chunk_send_emitter, &chunk_key| {
-                // We only have to check players inside the maximum view distance of the server
-                // of our own position.
+                // We only have to check players inside the maximum view
+                // distance of the server of our own position.
                 //
-                // We start by partitioning by X, finding only entities in chunks within the X
-                // range of us.  These are guaranteed in bounds due to restrictions on max view
-                // distance (namely: the square of any chunk coordinate plus the max view
-                // distance along both axes must fit in an i32).
+                // We start by partitioning by X, finding only entities in
+                // chunks within the X range of us.  These are
+                // guaranteed in bounds due to restrictions on max view
+                // distance (namely: the square of any chunk coordinate plus the
+                // max view distance along both axes must fit in
+                // an i32).
                 let min_chunk_x = chunk_key.x - real_max_view_distance;
                 let max_chunk_x = chunk_key.x + real_max_view_distance;
                 let start = presences_position_entities
                     .partition_point(|((pos, _), _)| i32::from(pos.x) < min_chunk_x);
-                // NOTE: We *could* just scan forward until we hit the end, but this way we save
-                // a comparison in the inner loop, since also needs to check the
+                // NOTE: We *could* just scan forward until we hit the end, but
+                // this way we save a comparison in the inner
+                // loop, since also needs to check the
                 // list length.  We could also save some time by starting from
                 // start rather than end, but the hope is that this way the
                 // compiler (and machine) can reorder things so both ends are
-                // fetched in parallel; since the vast majority of the time both fetched
-                // elements should already be in cache, this should not use any
-                // extra memory bandwidth.
+                // fetched in parallel; since the vast majority of the time both
+                // fetched elements should already be in cache,
+                // this should not use any extra memory
+                // bandwidth.
                 //
-                // TODO: Benchmark and figure out whether this is better in practice than just
-                // scanning forward.
+                // TODO: Benchmark and figure out whether this is better in
+                // practice than just scanning forward.
                 let end = presences_position_entities
                     .partition_point(|((pos, _), _)| i32::from(pos.x) < max_chunk_x);
                 let interior = &presences_position_entities[start..end];

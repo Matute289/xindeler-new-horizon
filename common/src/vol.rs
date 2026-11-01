@@ -254,8 +254,8 @@ impl DefaultPosIterator {
         let end = if lower_bound.map2(upper_bound, |l, u| l < u).reduce_and() {
             upper_bound
         } else {
-            // Special case because our implementation doesn't handle empty ranges for x or
-            // y:
+            // Special case because our implementation doesn't handle empty
+            // ranges for x or y:
             lower_bound
         };
         Self {

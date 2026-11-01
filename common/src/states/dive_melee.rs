@@ -89,7 +89,8 @@ impl CharacterBehavior for Data {
                             .unwrap_or_default();
                     }
                 } else {
-                    // In character state for too long, leaving in case somethign went wrong
+                    // In character state for too long, leaving in case
+                    // somethign went wrong
                     end_ability(data, &mut update);
                 }
             },

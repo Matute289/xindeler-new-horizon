@@ -64,7 +64,8 @@ impl Source for FileSystem {
         // It's easy to get wrong, so here's the algorithm:
         //
         // 1) Read default assets directory first, gather directories it has.
-        // 2) Read override assets directory second, gather directories *it* has.
+        // 2) Read override assets directory second, gather directories *it*
+        //    has.
         // 3) Call callback on each new directory (or file).
         //
         // This should route to src.read() above, which does read override

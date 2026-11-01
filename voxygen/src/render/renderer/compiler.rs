@@ -90,10 +90,11 @@ impl Compiler for ShaderCCompiler {
 
         // Uncomment me to dump shaders to files
         //
-        // std::fs::create_dir_all("dumpped-shaders").expect("Couldn't create shader
-        // dumps folders");
+        // std::fs::create_dir_all("dumpped-shaders").expect("Couldn't create
+        // shader dumps folders");
         //
-        // let mut file = std::fs::File::create(format!("dumpped-shaders/{}.spv",
+        // let mut file =
+        // std::fs::File::create(format!("dumpped-shaders/{}.spv",
         // file_name))     .expect("Couldn't open shader out");
         //
         // use std::io::Write;

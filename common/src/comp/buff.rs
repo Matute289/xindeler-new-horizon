@@ -762,8 +762,8 @@ impl BuffKind {
         source_entity: Option<Uid>,
     ) -> Vec<BuffEffect> {
         // Normalized nonlinear scaling
-        // TODO: Do we want to make denominator term parameterized. Come back to if we
-        // add nn_scaling3.
+        // TODO: Do we want to make denominator term parameterized. Come back to
+        // if we add nn_scaling3.
         let nn_scaling = |a: f32| a.abs() / (a.abs() + 0.5) * a.signum();
         let nn_scaling_custom = |a: f32, b: f32| a.abs() / (a.abs() + b.max(0.1)) * a.signum();
         let instance = rand::random();
@@ -1211,11 +1211,13 @@ impl BuffKind {
             },
             BuffKind::Terrified => {
                 // BL-05 Fear rider, redesigned on the BL-52 combat-resolution
-                // engine: slowed AND fights at a disadvantage. The flee behaviour
-                // lives in the agent AI (`is_terrified`); the disadvantage is a
+                // engine: slowed AND fights at a disadvantage. The flee
+                // behaviour lives in the agent AI
+                // (`is_terrified`); the disadvantage is a
                 // flat **−accuracy** (more misses, same damage when it lands) —
-                // not a damage cut. −12 acc ≈ −18% hit vs an equal-evasion target
-                // (balance note §8); scales with buff strength.
+                // not a damage cut. −12 acc ≈ −18% hit vs an equal-evasion
+                // target (balance note §8); scales with buff
+                // strength.
                 vec![
                     BuffEffect::MovementSpeed(1.0 - nn_scaling(data.strength)),
                     BuffEffect::Accuracy(-12.0 * nn_scaling(data.strength)),
@@ -2286,8 +2288,8 @@ impl Buffs {
                 self.kinds[kind] = None;
             } else {
                 let buffs = &self.buffs;
-                // Intentionally sorted in reverse so that the strongest buffs are earlier in
-                // the vector
+                // Intentionally sorted in reverse so that the strongest buffs
+                // are earlier in the vector
                 buff_order
                     .0
                     .sort_by(|a, b| buffs[*b].partial_cmp(&buffs[*a]).unwrap_or(Ordering::Equal));
@@ -2306,8 +2308,8 @@ impl Buffs {
 
     pub fn insert(&mut self, buff: Buff, current_time: Time) -> BuffKey {
         let kind = buff.kind;
-        // Try to find another overlaping non-queueable buff with same data, cat_ids and
-        // source.
+        // Try to find another overlaping non-queueable buff with same data,
+        // cat_ids and source.
         let other_key = if kind.queues() {
             None
         } else {
@@ -2327,7 +2329,8 @@ impl Buffs {
             })
         };
 
-        // If another buff with the same fields is found, update end_time and effects
+        // If another buff with the same fields is found, update end_time and
+        // effects
         let key = if !kind.stacks()
             && let Some((other_buff, key)) =
                 other_key.and_then(|key| Some((self.buffs.get_mut(key)?, key)))
@@ -2358,7 +2361,8 @@ impl Buffs {
         kinds.iter().any(|kind| self.contains(*kind))
     }
 
-    // Iterate through buffs of a given kind in effect order (most powerful first)
+    // Iterate through buffs of a given kind in effect order (most powerful
+    // first)
     pub fn iter_kind(&self, kind: BuffKind) -> impl Iterator<Item = (BuffKey, &Buff)> + '_ {
         self.kinds[kind]
             .as_ref()
@@ -2386,8 +2390,8 @@ impl Buffs {
             .filter_map(|(kind, keys)| keys.as_ref().map(|keys| (kind, keys)))
             .map(move |(kind, keys)| {
                 if kind.stacks() {
-                    // Iterate stackable buffs in reverse order to show the timer of the soonest one
-                    // to expire
+                    // Iterate stackable buffs in reverse order to show the
+                    // timer of the soonest one to expire
                     Either::Left(keys.0.iter().filter_map(|key| self.buffs.get(*key)).rev())
                 } else {
                     Either::Right(self.buffs.get(keys.0[0]).into_iter())
@@ -2412,19 +2416,24 @@ impl Buffs {
         if let Some(buffs) = self.kinds[kind].as_mut() {
             buffs.0.iter().for_each(|key| {
                 if let Some(buff) = self.buffs.get_mut(*key) {
-                    // End time only being updated when there is some next_start_time will
-                    // technically cause buffs to "end early" if they have a weaker strength than a
-                    // buff with an infinite duration, but this is fine since those buffs wouldn't
+                    // End time only being updated when there is some
+                    // next_start_time will technically
+                    // cause buffs to "end early" if they have a weaker strength
+                    // than a buff with an infinite
+                    // duration, but this is fine since those buffs wouldn't
                     // matter anyways
                     if let Some(next_start_time) = next_start_time {
-                        // Delays buff so that it has the same progress it has now at the time the
+                        // Delays buff so that it has the same progress it has
+                        // now at the time the
                         // previous buff would end.
                         //
-                        // Shift should be relative to current time, unless the buff is delayed and
+                        // Shift should be relative to current time, unless the
+                        // buff is delayed and
                         // hasn't started yet
                         let reference_time = current_time.0.max(buff.start_time.0);
-                        // If buff has a delay, ensure that queueables shuffling queue does not
-                        // potentially allow skipping delay
+                        // If buff has a delay, ensure that queueables shuffling
+                        // queue does not potentially
+                        // allow skipping delay
                         buff.start_time = Time(next_start_time.0.max(buff.start_time.0));
                         buff.end_time = buff.end_time.map(|end| {
                             Time(end.0 + next_start_time.0.max(reference_time) - reference_time)
@@ -2491,8 +2500,8 @@ pub mod tests {
 
     #[cfg(test)]
     fn create_test_queueable_buff(buff_data: BuffData, time: Time) -> Buff {
-        // Change to another buff that queues if we ever add one and remove saturation,
-        // otherwise maybe add a test buff kind?
+        // Change to another buff that queues if we ever add one and remove
+        // saturation, otherwise maybe add a test buff kind?
         debug_assert!(BuffKind::Saturation.queues());
         Buff::new(
             BuffKind::Saturation,
@@ -2520,7 +2529,8 @@ pub mod tests {
 
     #[test]
     fn antimagic_disables_magic() {
-        // BL-36: the antimagic debuff sets the disable-magic flag and nothing else.
+        // BL-36: the antimagic debuff sets the disable-magic flag and nothing
+        // else.
         let effects = BuffKind::Antimagic.effects(&BuffData::new(1.0, None), None, None);
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], BuffEffect::DisableMagic));
@@ -2538,7 +2548,8 @@ pub mod tests {
 
     #[test]
     fn asleep_incapacitates() {
-        // BL-05 rider: sleep roots (MovementSpeed 0) + locks auxiliary abilities.
+        // BL-05 rider: sleep roots (MovementSpeed 0) + locks auxiliary
+        // abilities.
         let effects = BuffKind::Asleep.effects(&BuffData::new(1.0, None), None, None);
         assert!(
             effects
@@ -2550,7 +2561,8 @@ pub mod tests {
                 .iter()
                 .any(|e| matches!(e, BuffEffect::DisableAuxiliaryAbilities))
         );
-        // Can't deal damage while asleep (no "disable all abilities" primitive).
+        // Can't deal damage while asleep (no "disable all abilities"
+        // primitive).
         assert!(
             effects
                 .iter()
@@ -2730,7 +2742,8 @@ pub mod tests {
     #[test]
     fn bleeding_mark_bleeds_and_is_a_debuff() {
         // BL-05 RD-7: bleeds over time (DoT) like Bleeding; the on-expire
-        // detonation burst is emitted by the buff system, not as an effect here.
+        // detonation burst is emitted by the buff system, not as an effect
+        // here.
         let effects = BuffKind::BleedingMark.effects(&BuffData::new(5.0, None), None, None);
         assert!(matches!(
             effects.as_slice(),
@@ -2761,11 +2774,13 @@ pub mod tests {
         buff_comp.insert(create_test_queueable_buff(buff_data, time_b), time_b);
         let time_c = Time(11.0);
         buff_comp.insert(create_test_queueable_buff(buff_data, time_c), time_c);
-        // Check that all buffs have an end_time less than or equal to 30, and that at
-        // least one has an end_time greater than or equal to 30.
+        // Check that all buffs have an end_time less than or equal to 30, and
+        // that at least one has an end_time greater than or equal to
+        // 30.
         //
-        // This should be true because 3 buffs that each lasted for 10 seconds were
-        // inserted at various times, so the total duration should be 30 seconds.
+        // This should be true because 3 buffs that each lasted for 10 seconds
+        // were inserted at various times, so the total duration should
+        // be 30 seconds.
         assert!(
             buff_comp
                 .buffs
@@ -2791,13 +2806,15 @@ pub mod tests {
         buff_comp.insert(create_test_queueable_buff(queued_buff_data, time_a), time_a);
         let time_b = Time(6.0);
         buff_comp.insert(create_test_queueable_buff(buff_data, time_b), time_b);
-        // Check that all buffs have an end_time less than or equal to 26, and that at
-        // least one has an end_time greater than or equal to 26.
+        // Check that all buffs have an end_time less than or equal to 26, and
+        // that at least one has an end_time greater than or equal to
+        // 26.
         //
-        // This should be true because the first buff added had a delay of 10 seconds
-        // and a duration of 10 seconds, the second buff added at 6 seconds had no
-        // delay, and a duration of 10 seconds. When it finishes at 16 seconds the first
-        // buff is past the delay time so should finish at 26 seconds.
+        // This should be true because the first buff added had a delay of 10
+        // seconds and a duration of 10 seconds, the second buff added
+        // at 6 seconds had no delay, and a duration of 10 seconds. When
+        // it finishes at 16 seconds the first buff is past the delay
+        // time so should finish at 26 seconds.
         assert!(
             buff_comp
                 .buffs
@@ -2823,17 +2840,19 @@ pub mod tests {
         buff_comp.insert(create_test_queueable_buff(queued_buff_data, time_a), time_a);
         let time_b = Time(10.0);
         buff_comp.insert(create_test_queueable_buff(buff_data, time_b), time_b);
-        // Check that all buffs have either an end time less than or equal to 20 seconds
-        // XOR a start time greater than or equal to 50 seconds, that all buffs have a
-        // start time less than or equal to 50 seconds, that all buffs have an end time
-        // less than or equal to 60 seconds, and that at least one buff has an end time
+        // Check that all buffs have either an end time less than or equal to 20
+        // seconds XOR a start time greater than or equal to 50 seconds,
+        // that all buffs have a start time less than or equal to 50
+        // seconds, that all buffs have an end time less than or equal
+        // to 60 seconds, and that at least one buff has an end time
         // greater than or equal to 60 seconds
         //
-        // This should be true because the first buff has a delay of 50 seconds, the
-        // second buff added has no delay at 10 seconds and lasts 10 seconds, so should
-        // end at 20 seconds and not affect the start time of the delayed buff, and
-        // since the delayed buff was not affected the end time should be 10 seconds
-        // after the start time: 60 seconds != used here to emulate xor
+        // This should be true because the first buff has a delay of 50 seconds,
+        // the second buff added has no delay at 10 seconds and lasts 10
+        // seconds, so should end at 20 seconds and not affect the start
+        // time of the delayed buff, and since the delayed buff was not
+        // affected the end time should be 10 seconds after the start
+        // time: 60 seconds != used here to emulate xor
         assert!(
             buff_comp
                 .buffs
@@ -2867,8 +2886,9 @@ pub mod tests {
         assert!(!concentration_breaks(0.0, max_hp));
     }
 
-    // ENG-C2 refinement (Matias): a more powerful (higher-max-HP) bearer resists
-    // more — the same hit that breaks a weak caster may not break a strong one.
+    // ENG-C2 refinement (Matias): a more powerful (higher-max-HP) bearer
+    // resists more — the same hit that breaks a weak caster may not break a
+    // strong one.
     #[test]
     fn concentration_threshold_scales_with_power() {
         let weak = concentration_break_threshold(50.0);
@@ -2879,8 +2899,9 @@ pub mod tests {
         assert!(!concentration_breaks(hit, 800.0)); // same hit spares the strong one
     }
 
-    // Concentration is a buff category so concentration-sustained effects can be
-    // tagged in RON and removed together (one-at-a-time + break-on-damage).
+    // Concentration is a buff category so concentration-sustained effects can
+    // be tagged in RON and removed together (one-at-a-time +
+    // break-on-damage).
     #[test]
     fn concentration_is_a_buff_category() {
         let cat: BuffCategory = ron::from_str("Concentration").expect("Concentration must parse");

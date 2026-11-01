@@ -127,8 +127,9 @@ impl GnarlingFortification {
         let gate_index = rng.random_range(0..outer_wall_corners.len());
 
         let chieftain_indices = {
-            // Will not be adjacent to gate and needs two sections, so subtract 4 (3 to get
-            // rid of gate and adjacent, 1 to account for taking 2 sections)
+            // Will not be adjacent to gate and needs two sections, so subtract
+            // 4 (3 to get rid of gate and adjacent, 1 to account
+            // for taking 2 sections)
             let chosen = rng.random_range(0..(outer_wall_corners.len() - 4));
             let index = if gate_index < 2 {
                 chosen + gate_index + 2
@@ -157,8 +158,8 @@ impl GnarlingFortification {
             })
             .collect::<Vec<_>>();
 
-        // Structures will not spawn in wall corner triangles corresponding to these
-        // indices
+        // Structures will not spawn in wall corner triangles corresponding to
+        // these indices
         let forbidden_indices = [gate_index, chieftain_indices[0], chieftain_indices[1]];
         // Structures will be weighted to spawn further from these indices when
         // selecting a point in the triangle
@@ -197,8 +198,9 @@ impl GnarlingFortification {
 
                 let center_weight: f32 = rng.random_range(0.15..0.7);
 
-                // Forbidden and restricted indices are near walls, so don't spawn structures
-                // too close to avoid overlap with wall
+                // Forbidden and restricted indices are near walls, so don't
+                // spawn structures too close to avoid overlap
+                // with wall
                 let corner_1_weight_range = if restricted_indices.contains(&corner_1_index) {
                     let limit = 0.75;
                     if chieftain_indices.contains(&corner_2_index) {
@@ -218,7 +220,8 @@ impl GnarlingFortification {
                     + corner_2.as_() * corner_2_weight)
                     .as_();
 
-                // Check that structure not in the water or too close to another structure
+                // Check that structure not in the water or too close to another
+                // structure
                 if land
                     .get_chunk_wpos(structure_center + origin)
                     .is_some_and(|c| c.is_underwater())
@@ -536,8 +539,8 @@ impl Structure for GnarlingFortification {
     fn render_inner(&self, _site: &Site, land: &Land, painter: &Painter) {
         // Create outer wall
         for (point, next_point) in self.wall_segments.iter() {
-            // This adds additional points for the wall on the line between two points,
-            // allowing the wall to better handle slopes
+            // This adds additional points for the wall on the line between two
+            // points, allowing the wall to better handle slopes
             const SECTIONS_PER_WALL_SEGMENT: usize = 8;
 
             (0..(SECTIONS_PER_WALL_SEGMENT as i32))
@@ -994,9 +997,12 @@ impl Structure for GnarlingFortification {
                         })
                         .repeat(Vec3::new(17, 17, 0), 2)
                         .repeat(Vec3::new(17, -17, 0), 2);
-                    // let support_inner_2 = support_inner_1.translate(Vec3::new(34, 0, 0));
-                    // let support_inner_3 = support_inner_1.translate(Vec3::new(17, 17, 0));
-                    // let support_inner_4 = support_inner_1.translate(Vec3::new(17, -17, 0));
+                    // let support_inner_2 =
+                    // support_inner_1.translate(Vec3::new(34, 0, 0));
+                    // let support_inner_3 =
+                    // support_inner_1.translate(Vec3::new(17, 17, 0));
+                    // let support_inner_4 =
+                    // support_inner_1.translate(Vec3::new(17, -17, 0));
                     let supports = supports.union(supports_inner);
 
                     painter.fill(supports, darkwood.clone());

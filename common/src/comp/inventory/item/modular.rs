@@ -79,10 +79,11 @@ impl ModularBase {
     }
 
     fn resolve_hands(components: &[Item]) -> Hands {
-        // Checks if weapon has components that restrict hands to two. Restrictions to
-        // one hand or no restrictions default to one-handed weapon.
-        // Note: Hand restriction here will never conflict on components
-        // TODO: Maybe look into adding an assert at some point?
+        // Checks if weapon has components that restrict hands to two.
+        // Restrictions to one hand or no restrictions default to
+        // one-handed weapon. Note: Hand restriction here will never
+        // conflict on components TODO: Maybe look into adding an assert
+        // at some point?
         let hand_restriction = components.iter().find_map(|comp| match &*comp.kind() {
             ItemKind::ModularComponent(mc) => match mc {
                 ModularComponent::ToolPrimaryComponent {
@@ -94,7 +95,8 @@ impl ModularBase {
             },
             _ => None,
         });
-        // In the event of no hand restrictions on the components, default to one handed
+        // In the event of no hand restrictions on the components, default to
+        // one handed
         hand_restriction.unwrap_or(Hands::One)
     }
 
@@ -483,7 +485,8 @@ pub fn random_weapon_primary_component(
 ) -> Result<(Item, Option<Hands>), ModularWeaponCreationError> {
     let result = {
         if let Some(material_id) = material.asset_identifier() {
-            // Loads default ability map and material stat manifest for later use
+            // Loads default ability map and material stat manifest for later
+            // use
             let ability_map = &AbilityMap::load().read();
             let msm = &MaterialStatManifest::load().read();
 

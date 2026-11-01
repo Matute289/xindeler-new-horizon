@@ -394,12 +394,15 @@ impl<const N: u32> VoxelImageDecoding for QuadPngEncoding<N> {
                     1 if N == 4 => {
                         const LANCZOS_A: f64 = 2.0; // See https://www.desmos.com/calculator/xxejcymyua
                         const SAMPLE_RADIUS: i32 = 2i32; // sample_size = SAMPLE_RADIUS * 2 + 1
-                        // rustc currently doesn't support supplying N and SAMPLE_RADIUS, even with
-                        // a few workarounds, so hack around it by using the dynamic check above
+                        // rustc currently doesn't support supplying N and
+                        // SAMPLE_RADIUS, even with
+                        // a few workarounds, so hack around it by using the
+                        // dynamic check above
                         const LANCZOS_LUT: [f64; lanczos_lookup_array_size(4, 2)] =
                             gen_lanczos_lookup::<4, 2>(LANCZOS_A);
 
-                        // As a reminder: x, y are destination pixel coordinates (not downscaled).
+                        // As a reminder: x, y are destination pixel coordinates
+                        // (not downscaled).
                         let mut rgb: Vec3<f64> = Vec3::zero();
                         for dx in -SAMPLE_RADIUS..=SAMPLE_RADIUS {
                             for dy in -SAMPLE_RADIUS..=SAMPLE_RADIUS {
@@ -411,12 +414,16 @@ impl<const N: u32> VoxelImageDecoding for QuadPngEncoding<N> {
                                 if src_x < w && src_y < h {
                                     let pix: Vec3<f64> =
                                         Vec3::<u8>::from(ws.3.get_pixel(src_x, src_y).0).as_();
-                                    // Relative coordinates where 1 unit is the size of one source
-                                    // pixel and 0 is the center of the source pixel:
+                                    // Relative coordinates where 1 unit is the
+                                    // size of one source
+                                    // pixel and 0 is the center of the source
+                                    // pixel:
                                     let x_rel = ((x % N) as f64 - (N - 1) as f64 / 2.0) / N as f64;
                                     let y_rel = ((y % N) as f64 - (N - 1) as f64 / 2.0) / N as f64;
-                                    // Distance from the currently processed target pixel's center
-                                    // to the currently processed source pixel's center:
+                                    // Distance from the currently processed
+                                    // target pixel's center
+                                    // to the currently processed source pixel's
+                                    // center:
                                     rgb += LANCZOS_LUT
                                         .get((dx as f64 - x_rel).abs() as usize)
                                         .unwrap_or(&0.0)
@@ -433,7 +440,8 @@ impl<const N: u32> VoxelImageDecoding for QuadPngEncoding<N> {
                     1 | 2 => {
                         const LANCZOS_A: f64 = 2.0; // See https://www.desmos.com/calculator/xxejcymyua
                         const SAMPLE_RADIUS: i32 = 2i32; // sample_size = SAMPLE_RADIUS * 2 + 1
-                        // As a reminder: x, y are destination pixel coordinates (not downscaled).
+                        // As a reminder: x, y are destination pixel coordinates
+                        // (not downscaled).
                         let mut rgb: Vec3<f64> = Vec3::zero();
                         for dx in -SAMPLE_RADIUS..=SAMPLE_RADIUS {
                             for dy in -SAMPLE_RADIUS..=SAMPLE_RADIUS {
@@ -445,12 +453,16 @@ impl<const N: u32> VoxelImageDecoding for QuadPngEncoding<N> {
                                 if src_x < w && src_y < h {
                                     let pix: Vec3<f64> =
                                         Vec3::<u8>::from(ws.3.get_pixel(src_x, src_y).0).as_();
-                                    // Relative coordinates where 1 unit is the size of one source
-                                    // pixel and 0 is the center of the source pixel:
+                                    // Relative coordinates where 1 unit is the
+                                    // size of one source
+                                    // pixel and 0 is the center of the source
+                                    // pixel:
                                     let x_rel = ((x % N) as f64 - (N - 1) as f64 / 2.0) / N as f64;
                                     let y_rel = ((y % N) as f64 - (N - 1) as f64 / 2.0) / N as f64;
-                                    // Distance from the currently processed target pixel's center
-                                    // to the currently processed source pixel's center:
+                                    // Distance from the currently processed
+                                    // target pixel's center
+                                    // to the currently processed source pixel's
+                                    // center:
                                     rgb += lanczos((dx as f64 - x_rel).abs(), LANCZOS_A)
                                         * lanczos((dy as f64 - y_rel).abs(), LANCZOS_A)
                                         * pix;

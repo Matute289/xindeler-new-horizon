@@ -374,8 +374,8 @@ fn do_idle_tree(bdata: &mut BehaviorData) -> bool { BehaviorTree::idle().run(bda
 /// If target is dead, forget them
 fn untarget_if_dead(bdata: &mut BehaviorData) -> bool {
     if let Some(Target { target, .. }) = bdata.agent.target {
-        // If target is dead or no longer exists, forget them. If the target is an item
-        // we don't expect it to have a health.
+        // If target is dead or no longer exists, forget them. If the target is
+        // an item we don't expect it to have a health.
         if bdata
             .read_data
             .bodies
@@ -1099,7 +1099,8 @@ fn do_combat(bdata: &mut BehaviorData) -> bool {
                     > FLEE_DURATION * flee_dur_mul;
                 let within_normal_flee_dir_dist = dist_sqrd < NORMAL_FLEE_DIR_DIST.powi(2);
 
-                // FIXME: Using action state timer to see if allowed to speak is a hack.
+                // FIXME: Using action state timer to see if allowed to speak is
+                // a hack.
                 if agent.behavior_state.timers
                     [ActionStateBehaviorTreeTimers::TimerBehaviorTree as usize]
                     == 0.0
@@ -1165,10 +1166,12 @@ fn do_combat(bdata: &mut BehaviorData) -> bool {
                 let target_data = TargetData::new(tgt_pos, target, read_data);
 
                 if aggro_on {
-                    // let tgt_name = read_data.stats.get(target).map(|stats| stats.name.clone());
+                    // let tgt_name = read_data.stats.get(target).map(|stats|
+                    // stats.name.clone());
 
                     // TODO: Reimplement in rtsim2
-                    // tgt_name.map(|tgt_name| agent.add_fight_to_memory(&tgt_name,
+                    // tgt_name.map(|tgt_name|
+                    // agent.add_fight_to_memory(&tgt_name,
                     // read_data.time.0));
                     agent_data.attack(agent, controller, &target_data, read_data, rng);
                 } else {
@@ -1187,7 +1190,8 @@ fn do_combat(bdata: &mut BehaviorData) -> bool {
                 }
             }
         }
-        // make sure world bosses and roaming entities stay aware, to continue pursuit
+        // make sure world bosses and roaming entities stay aware, to continue
+        // pursuit
         if !agent.psyche.should_stop_pursuing {
             bdata.agent.awareness.set_maximally_aware();
         }

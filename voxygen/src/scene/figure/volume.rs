@@ -25,8 +25,8 @@ impl anim::Skeleton for VolumeKey {
     #[cfg(feature = "hot-anim")]
     const COMPUTE_FN: &'static [u8] = b"I AM NOT USED\0";
 
-    // Override compute_matrices so that hotloading is not done for this (since it
-    // will fail as this isn't part of the hotloaded anim crate)
+    // Override compute_matrices so that hotloading is not done for this (since
+    // it will fail as this isn't part of the hotloaded anim crate)
     fn compute_matrices(
         &self,
         base_mat: anim::vek::Mat4<f32>,

@@ -324,10 +324,10 @@ impl Inventory {
         mut item: Item,
         slot: Option<InvSlotId>,
     ) -> Result<(), (Item, Option<NonZeroU32>)> {
-        // If the item is stackable, we can increase the amount of other equal items up
-        // to max_amount before inserting a new item if there is still a remaining
-        // amount (caused by overflow or no other equal stackable being present in the
-        // inventory).
+        // If the item is stackable, we can increase the amount of other equal
+        // items up to max_amount before inserting a new item if there
+        // is still a remaining amount (caused by overflow or no other
+        // equal stackable being present in the inventory).
         if item.is_stackable() {
             let total_amount = item.amount();
 
@@ -342,13 +342,15 @@ impl Inventory {
                         "max_amount of two equal items must match"
                     );
 
-                    // NOTE: Invariant that current.amount <= current.max_amount(), so this
+                    // NOTE: Invariant that current.amount <=
+                    // current.max_amount(), so this
                     // subtraction is safe.
                     let new_remaining = remaining
                         .checked_sub(current.max_amount() - current.amount())
                         .filter(|&remaining| remaining > 0);
                     if new_remaining.is_some() {
-                        // Not enough capacity left to hold all the remaining items, so we set this
+                        // Not enough capacity left to hold all the remaining
+                        // items, so we set this
                         // one to max.
                         current
                             .set_amount(current.max_amount())
@@ -445,9 +447,9 @@ impl Inventory {
     pub fn merge_stack_into(&mut self, src: InvSlotId, dst: InvSlotId) -> bool {
         let mut amount = None;
         if let (Some(srcitem), Some(dstitem)) = (self.get(src), self.get(dst)) {
-            // The equality check ensures the items have the same definition, to avoid e.g.
-            // transmuting coins to diamonds, and the stackable check avoids creating a
-            // stack of swords
+            // The equality check ensures the items have the same definition, to
+            // avoid e.g. transmuting coins to diamonds, and the
+            // stackable check avoids creating a stack of swords
             if srcitem == dstitem && srcitem.is_stackable() {
                 amount = Some(srcitem.amount());
             }
@@ -593,8 +595,8 @@ impl Inventory {
     /// item provides (used for UI highlighting of inventory slots when hovering
     /// over a loadout item)
     pub fn get_slot_range_for_equip_slot(&self, equip_slot: EquipSlot) -> Option<Range<usize>> {
-        // The slot range returned from `Loadout` must be offset by the number of slots
-        // that the inventory itself provides.
+        // The slot range returned from `Loadout` must be offset by the number
+        // of slots that the inventory itself provides.
         let offset = self.slots.len();
         self.loadout
             .slot_range_for_equip_slot(equip_slot)
@@ -684,7 +686,8 @@ impl Inventory {
             if item.is_stackable() && item.amount() > amount.get() {
                 let mut return_item = item.duplicate(ability_map, msm);
                 let return_amount = amount.get();
-                // Will never overflow since we know item.amount() > amount.get()
+                // Will never overflow since we know item.amount() >
+                // amount.get()
                 let new_amount = item.amount() - return_amount;
 
                 return_item
@@ -695,8 +698,8 @@ impl Inventory {
 
                 Some(return_item)
             } else {
-                // If return_amount == item.amount or the item's amount is one, we
-                // can just pop it from the inventory
+                // If return_amount == item.amount or the item's amount is one,
+                // we can just pop it from the inventory
                 self.remove(inv_slot_id)
             }
         } else {
@@ -759,8 +762,8 @@ impl Inventory {
         self.slots().any(|i| {
             free_space = free_space.saturating_add(if let Some(item) = i {
                 if item.is_same_item_def(item_def) {
-                    // Invariant amount <= max_amount *should* take care of this, but let's be
-                    // safe
+                    // Invariant amount <= max_amount *should* take care of
+                    // this, but let's be safe
                     item.max_amount().saturating_sub(item.amount())
                 } else {
                     0
@@ -780,8 +783,8 @@ impl Inventory {
         self.slots().any(|i| {
             free_space = free_space.saturating_add(if let Some(inv_item) = i {
                 if inv_item == item {
-                    // Invariant amount <= max_amount *should* take care of this, but let's be
-                    // safe
+                    // Invariant amount <= max_amount *should* take care of
+                    // this, but let's be safe
                     inv_item.max_amount().saturating_sub(inv_item.amount())
                 } else {
                     0
@@ -819,7 +822,8 @@ impl Inventory {
                 {
                     if amount < item.amount() {
                         // Remove just the amount we need to finish off
-                        // Note: Unwrap is fine, we've already checked that amount > 0
+                        // Note: Unwrap is fine, we've already checked that
+                        // amount > 0
                         removed_items.push(item.take_amount(ability_map, msm, amount).unwrap());
                         return Some(removed_items);
                     } else {
@@ -948,8 +952,9 @@ impl Inventory {
                 // Insert it at 0 to prioritize the uneqipped item.
                 unloaded_items.insert(0, item);
             }
-            // Unload any items that were inside the equipped item into the inventory, with
-            // any that don't fit to be to be dropped on the floor by the caller
+            // Unload any items that were inside the equipped item into the
+            // inventory, with any that don't fit to be to be
+            // dropped on the floor by the caller
             match self.push_all(unloaded_items.into_iter()) {
                 Ok(()) => {},
                 Err(Error::Full(items)) => return Ok(Some(items)),
@@ -1008,9 +1013,10 @@ impl Inventory {
             return Err((item, None));
         }
 
-        // Unload any items contained within the item, and push those items and the item
-        // itself into the inventory. We already know that there are enough free slots
-        // so push will never give us an item back.
+        // Unload any items contained within the item, and push those items and
+        // the item itself into the inventory. We already know that
+        // there are enough free slots so push will never give us an
+        // item back.
         item.drain().for_each(|item| {
             self.push(item).unwrap();
         });
@@ -1026,7 +1032,8 @@ impl Inventory {
         equip_slot: EquipSlot,
         time: Time,
     ) -> Result<Option<Vec<Item>>, SlotError> {
-        // Ensure there is enough space in the inventory to place the unequipped item
+        // Ensure there is enough space in the inventory to place the unequipped
+        // item
         if self.free_slots_minus_equipped_item(equip_slot) == 0 {
             return Err(SlotError::InventoryFull);
         }
@@ -1039,8 +1046,9 @@ impl Inventory {
                 self.push(unequipped_item)
                     .expect("Failed to push item to inventory, precondition failed?");
 
-                // Unload any items that were inside the equipped item into the inventory, with
-                // any that don't fit to be to be dropped on the floor by the caller
+                // Unload any items that were inside the equipped item into the
+                // inventory, with any that don't fit to be to
+                // be dropped on the floor by the caller
                 match self.push_all(unloaded_items.into_iter()) {
                     Err(Error::Full(leftovers)) => Some(leftovers),
                     Ok(()) => None,
@@ -1102,8 +1110,8 @@ impl Inventory {
             .get(inv_slot)
             .map_or((0, 0), |item| (1, item.slots().len()));
 
-        // Return the number of inventory slots that will be free once this slot swap is
-        // performed
+        // Return the number of inventory slots that will be free once this slot
+        // swap is performed
         i32::try_from(self.capacity())
             .expect("inventory with more than i32::MAX slots")
             - i32::try_from(slots_from_equipped)
@@ -1139,10 +1147,12 @@ impl Inventory {
                 // Unload any items held inside the previously equipped item
                 let mut items: Vec<Item> = from_equip.drain().collect();
 
-                // Attempt to put the unequipped item in the same slot that the inventory item
-                // was in - if that slot no longer exists (because a large container was
-                // swapped for a smaller one) then we will attempt to push it to the inventory
-                // with the rest of the unloaded items.
+                // Attempt to put the unequipped item in the same slot that the
+                // inventory item was in - if that slot no
+                // longer exists (because a large container was
+                // swapped for a smaller one) then we will attempt to push it to
+                // the inventory with the rest of the unloaded
+                // items.
                 if let Err(returned) = self.insert_at(inv_slot_id, from_equip) {
                     items.insert(0, returned);
                 }
@@ -1151,8 +1161,8 @@ impl Inventory {
             })
             .unwrap_or_default();
 
-        // If 2 1h weapons are equipped, and mainhand weapon removed, move offhand into
-        // mainhand
+        // If 2 1h weapons are equipped, and mainhand weapon removed, move
+        // offhand into mainhand
         match equip_slot {
             EquipSlot::ActiveMainhand => {
                 if self.loadout.equipped(EquipSlot::ActiveMainhand).is_none()
@@ -1182,8 +1192,8 @@ impl Inventory {
         }
 
         // Attempt to put any items unloaded from the unequipped item into empty
-        // inventory slots and return any that don't fit to the caller where they
-        // will be dropped on the ground
+        // inventory slots and return any that don't fit to the caller where
+        // they will be dropped on the ground
         match self.push_all(unloaded_items.into_iter()) {
             Err(Error::Full(leftovers)) => leftovers,
             Ok(()) => Vec::new(),

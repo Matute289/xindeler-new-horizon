@@ -82,9 +82,10 @@ impl Animation for StunnedAnimation {
             next.hand_l.orientation = Quaternion::rotation_x(0.0);
             next.hand_r.orientation = Quaternion::rotation_x(0.0);
 
-            //IMPORTANT: avoid touching any value attached to grip. grip uses the size of
-            // the hand bones to correct any irrgularities beween species. Changing
-            // coefficients to grip will have different effects across species
+            //IMPORTANT: avoid touching any value attached to grip. grip uses
+            // the size of the hand bones to correct any
+            // irrgularities beween species. Changing coefficients
+            // to grip will have different effects across species
 
             match active_tool_kind {
                 Some(ToolKind::Spear) => {

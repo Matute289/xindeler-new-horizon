@@ -924,8 +924,8 @@ impl ParticleMgr {
         )
             .join()
         {
-            // Point particles (like arrows) travelling at high velocity in water create
-            // cavitation bubbles
+            // Point particles (like arrows) travelling at high velocity in
+            // water create cavitation bubbles
             const CAVITATION_SPEED: f32 = 20.0;
             if matches!(collider, comp::Collider::Point)
                 && let speed = vel.0.magnitude()
@@ -1085,8 +1085,8 @@ impl ParticleMgr {
         let mut rng = rand::rng();
         let heartbeats = self.scheduler.heartbeats(Duration::from_millis(8));
 
-        //[Height Modifier, Radius Modifier, Direction of rotation] for each circle of
-        //[Height latitude.
+        //[Height Modifier, Radius Modifier, Direction of rotation] for each
+        //[Height circle of latitude.
         const LATITUDE_MODIFIERS: [(f32, f32, f32); 5] = [
             (-0.85, 0.50, 1.0),
             (-0.50, 0.80, -1.0),
@@ -1103,7 +1103,8 @@ impl ParticleMgr {
             let r = radius * cos_lat * scale;
             let z = center_z + radius * sin_lat * (1.0 - progress);
 
-            //Bigger spheres have more/longer lasting particles so they do not look sparse.
+            //Bigger spheres have more/longer lasting particles so they do not
+            // look sparse.
             let particle_density_hb: usize = (radius * 4.0).floor() as usize;
             let particle_density_lifespan: u64 = (radius * 75.0).floor() as u64;
 
@@ -1765,9 +1766,11 @@ impl ParticleMgr {
                     state.computed_skeleton.hand_l,
                     state.computed_skeleton.hand_r,
                 ] {
-                    // This offset check is a huge hack and probably doesn't work well at very low
-                    // framerates. Unfortunately, there's not really a better way to do this today,
-                    // because animations have no way to emit events.
+                    // This offset check is a huge hack and probably doesn't
+                    // work well at very low framerates.
+                    // Unfortunately, there's not really a better way to do this
+                    // today, because animations have no way
+                    // to emit events.
                     if hand.mul_direction(Vec3::unit_z()).z < 0.0 {
                         let final_amount =
                             usize::from(self.scheduler.heartbeats(Duration::from_millis(90)));
@@ -2239,7 +2242,8 @@ impl ParticleMgr {
                         self.add_particles(scene_data.particles_chance, amount, || {
                             let theta = rng.random::<f32>() * std::f32::consts::TAU;
                             let edge = target + Vec3::new(theta.cos(), theta.sin(), 0.0) * radius;
-                            // TODO(magic-v1 polish): dedicated decal/ParticleMode;
+                            // TODO(magic-v1 polish): dedicated
+                            // decal/ParticleMode;
                             // CultistFlame is a readable placeholder ring.
                             Particle::new_directed(
                                 Duration::from_secs_f32(0.4),
@@ -2570,7 +2574,8 @@ impl ParticleMgr {
                                     self.scheduler.heartbeats(Duration::from_millis(5));
                                 let pos = interpolated.pos + Vec3::unit_z() * 0.9;
 
-                                // Rotation matrix to align the Z-axis cone with back_dir
+                                // Rotation matrix to align the Z-axis cone with
+                                // back_dir
                                 let m = Mat3::<f32>::rotation_from_to_3d(
                                     Vec3::<f32>::unit_z(),
                                     back_dir,
@@ -2819,7 +2824,8 @@ impl ParticleMgr {
                         lights.push(Light::new(beam.bezier.start, Rgb::new(0.8, 1.0, 0.5), 1.0));
                     }
 
-                    // If the beam is one straight line, we can run raycast one time.
+                    // If the beam is one straight line, we can run raycast one
+                    // time.
                     let bezier_end = beam.bezier.start + beam_dir * beam.range;
                     let distance = raycast_distance(beam.bezier.start, bezier_end);
                     for i in 0..beam_tick_count {
@@ -3084,7 +3090,8 @@ impl ParticleMgr {
                                 ..
                             })
                         }) {
-                            // If same entity has both protecting ward and regeneration auras, skip
+                            // If same entity has both protecting ward and
+                            // regeneration auras, skip
                             // particles for regeneration
                             continue;
                         }
@@ -3356,8 +3363,9 @@ impl ParticleMgr {
                     },
                     BuffKind::PotionSickness => {
                         let mut multiplicity = 0;
-                        // Only show particles for potion sickness at the beginning, after the
-                        // drinking animation finishes
+                        // Only show particles for potion sickness at the
+                        // beginning, after the drinking
+                        // animation finishes
                         if buff_keys.0
                             .iter()
                             .filter_map(|key| buffs.buffs.get(*key))
@@ -3418,8 +3426,9 @@ impl ParticleMgr {
                     },
                     BuffKind::Polymorphed => {
                         let mut multiplicity = 0;
-                        // Only show particles for polymorph at the beginning, after the
-                        // drinking animation finishes
+                        // Only show particles for polymorph at the beginning,
+                        // after the drinking animation
+                        // finishes
                         if buff_keys.0
                             .iter()
                             .filter_map(|key| buffs.buffs.get(*key))
@@ -3745,8 +3754,9 @@ impl ParticleMgr {
 
         let ecs = scene_data.state.ecs();
         let mut rng = rand::rng();
-        // Hard cap for performance reasons; Assuming that 25% of a chunk is covered in
-        // lava or 32*32*0.25 = 256 TODO: Make this a setting?
+        // Hard cap for performance reasons; Assuming that 25% of a chunk is
+        // covered in lava or 32*32*0.25 = 256 TODO: Make this a
+        // setting?
         let cap = 512;
         for particles in particles.iter() {
             if !(particles.cond)(scene_data) {
@@ -4014,8 +4024,8 @@ impl ParticleMgr {
             let theta = ori_vec.y.atan2(ori_vec.x) - radians / 2.0;
             let dtheta = radians / distance;
 
-            // Number of particles derived from arc length (for new particles at least, old
-            // can be converted later)
+            // Number of particles derived from arc length (for new particles at
+            // least, old can be converted later)
             let arc_length = distance * radians;
 
             use shockwave::FrontendSpecifier;
@@ -4041,17 +4051,21 @@ impl ParticleMgr {
                             let position = pos
                                 + distance * Vec3::new(arc_position.cos(), arc_position.sin(), 0.0);
 
-                            // Arbitrary number chosen that is large enough to be able to accurately
-                            // place particles most of the time, but also not too big as to make ray
+                            // Arbitrary number chosen that is large enough to
+                            // be able to accurately
+                            // place particles most of the time, but also not
+                            // too big as to make ray
                             // be too large (for performance reasons)
                             let half_ray_length = 10.0;
                             let mut last_air = false;
-                            // TODO: Optimize ray to only be cast at most once per block per tick if
+                            // TODO: Optimize ray to only be cast at most once
+                            // per block per tick if
                             // it becomes an issue.
                             // From imbris:
                             //      each ray is ~2 us
                             //      at 30 FPS, it peaked at 113 rays in a tick
-                            //      total time was 240 us (although potentially half that is
+                            //      total time was 240 us (although potentially
+                            // half that is
                             //          overhead from the profiling of each ray)
                             let _ = terrain
                                 .ray(
@@ -4129,17 +4143,21 @@ impl ParticleMgr {
                             let position = pos
                                 + distance * Vec3::new(arc_position.cos(), arc_position.sin(), 0.0);
 
-                            // Arbitrary number chosen that is large enough to be able to accurately
-                            // place particles most of the time, but also not too big as to make ray
+                            // Arbitrary number chosen that is large enough to
+                            // be able to accurately
+                            // place particles most of the time, but also not
+                            // too big as to make ray
                             // be too large (for performance reasons)
                             let half_ray_length = 10.0;
                             let mut last_air = false;
-                            // TODO: Optimize ray to only be cast at most once per block per tick if
+                            // TODO: Optimize ray to only be cast at most once
+                            // per block per tick if
                             // it becomes an issue.
                             // From imbris:
                             //      each ray is ~2 us
                             //      at 30 FPS, it peaked at 113 rays in a tick
-                            //      total time was 240 us (although potentially half that is
+                            //      total time was 240 us (although potentially
+                            // half that is
                             //          overhead from the profiling of each ray)
                             let _ = terrain
                                 .ray(
@@ -4178,8 +4196,9 @@ impl ParticleMgr {
                     // 1 particle per unit length of arc
                     let particles_per_length = arc_length as usize;
                     let dtheta = radians / particles_per_length as f32;
-                    // Scales number of desired heartbeats from speed - thicker arc = higher speed =
-                    // lower duration = more particles
+                    // Scales number of desired heartbeats from speed - thicker
+                    // arc = higher speed = lower duration =
+                    // more particles
                     let heartbeats = self
                         .scheduler
                         .heartbeats(Duration::from_secs_f32(1.0 / speed));
@@ -4213,8 +4232,9 @@ impl ParticleMgr {
                     // 1 particle per unit length of arc
                     let particles_per_length = arc_length as usize;
                     let dtheta = radians / particles_per_length as f32;
-                    // Scales number of desired heartbeats from speed - thicker arc = higher speed =
-                    // lower duration = more particles
+                    // Scales number of desired heartbeats from speed - thicker
+                    // arc = higher speed = lower duration =
+                    // more particles
                     let heartbeats = self
                         .scheduler
                         .heartbeats(Duration::from_secs_f32(1.0 / speed));
@@ -4248,8 +4268,9 @@ impl ParticleMgr {
                     // 1 particle per unit length of arc
                     let particles_per_length = arc_length as usize;
                     let dtheta = radians / particles_per_length as f32;
-                    // Scales number of desired heartbeats from speed - thicker arc = higher speed =
-                    // lower duration = more particles
+                    // Scales number of desired heartbeats from speed - thicker
+                    // arc = higher speed = lower duration =
+                    // more particles
                     let heartbeats = self
                         .scheduler
                         .heartbeats(Duration::from_secs_f32(1.0 / speed));
@@ -4283,8 +4304,9 @@ impl ParticleMgr {
                     // 1 particle per unit length of arc
                     let particles_per_length = arc_length as usize;
                     let dtheta = radians / particles_per_length as f32;
-                    // Scales number of desired heartbeats from speed - thicker arc = higher speed =
-                    // lower duration = more particles
+                    // Scales number of desired heartbeats from speed - thicker
+                    // arc = higher speed = lower duration =
+                    // more particles
                     let heartbeats = self
                         .scheduler
                         .heartbeats(Duration::from_secs_f32(1.0 / speed));
@@ -4319,8 +4341,9 @@ impl ParticleMgr {
                     // 1 particle per unit length of arc
                     let particles_per_length = arc_length as usize;
                     let dtheta = radians / particles_per_length as f32;
-                    // Scales number of desired heartbeats from speed - thicker arc = higher speed =
-                    // lower duration = more particles
+                    // Scales number of desired heartbeats from speed - thicker
+                    // arc = higher speed = lower duration =
+                    // more particles
                     let heartbeats = self
                         .scheduler
                         .heartbeats(Duration::from_secs_f32(1.0 / speed));
@@ -4357,8 +4380,9 @@ impl ParticleMgr {
                     // 1 particle per unit length of arc
                     let particles_per_length = arc_length as usize;
                     let dtheta = radians / particles_per_length as f32;
-                    // Scales number of desired heartbeats from speed - thicker arc = higher speed =
-                    // lower duration = more particles
+                    // Scales number of desired heartbeats from speed - thicker
+                    // arc = higher speed = lower duration =
+                    // more particles
                     let heartbeats = self
                         .scheduler
                         .heartbeats(Duration::from_secs_f32(1.0 / speed));
@@ -4397,8 +4421,9 @@ impl ParticleMgr {
                     // 1 particle per scaled unit length of arc
                     let particles_per_length = (0.25 * arc_length / scale) as usize;
                     let dtheta = radians / particles_per_length as f32;
-                    // Scales number of desired heartbeats from speed - thicker arc = higher speed =
-                    // lower duration = more particles
+                    // Scales number of desired heartbeats from speed - thicker
+                    // arc = higher speed = lower duration =
+                    // more particles
                     let heartbeats = self
                         .scheduler
                         .heartbeats(Duration::from_secs_f32(3.0 / scaled_speed));
@@ -4421,17 +4446,21 @@ impl ParticleMgr {
                             let mut pos1 = pos + (scaled_distance * direction).floor() * scale;
                             let time = time + dt as f64;
 
-                            // Arbitrary number chosen that is large enough to be able to accurately
-                            // place particles most of the time, but also not too big as to make ray
+                            // Arbitrary number chosen that is large enough to
+                            // be able to accurately
+                            // place particles most of the time, but also not
+                            // too big as to make ray
                             // be too large (for performance reasons)
                             let half_ray_length = 10.0;
                             let mut last_air = false;
-                            // TODO: Optimize ray to only be cast at most once per block per tick if
+                            // TODO: Optimize ray to only be cast at most once
+                            // per block per tick if
                             // it becomes an issue.
                             // From imbris:
                             //      each ray is ~2 us
                             //      at 30 FPS, it peaked at 113 rays in a tick
-                            //      total time was 240 us (although potentially half that is
+                            //      total time was 240 us (although potentially
+                            // half that is
                             //          overhead from the profiling of each ray)
                             let _ = terrain
                                 .ray(
@@ -4646,7 +4675,8 @@ impl ParticleMgr {
                                 },
                             };
 
-                            // Zero wind velocity so the torus holds its shape regardless of wind.
+                            // Zero wind velocity so the torus holds its shape
+                            // regardless of wind.
                             let lifespan: Duration = Duration::from_millis(220);
                             Particle {
                                 alive_until: time + lifespan.as_secs_f64(),

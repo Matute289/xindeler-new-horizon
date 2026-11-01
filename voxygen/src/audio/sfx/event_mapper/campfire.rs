@@ -73,8 +73,8 @@ impl EventMapper for CampfireEventMapper {
                     internal_state.time = Instant::now();
                 }
 
-                // update state to determine the next event. We only record the time (above) if
-                // it was dispatched
+                // update state to determine the next event. We only record the
+                // time (above) if it was dispatched
                 internal_state.event = mapped_event;
             }
         }

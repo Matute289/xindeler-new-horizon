@@ -130,8 +130,8 @@ impl<'a> System<'a> for Sys {
             // Mine blocks broken by the attack
             if let Some((block_pos, tool)) = melee_attack.break_block {
                 // Check distance to block
-                // TODO: Should this use melee attack range instead? Make sure voxygen supports
-                // it!
+                // TODO: Should this use melee attack range instead? Make sure
+                // voxygen supports it!
                 if eye_pos.distance_squared(block_pos.map(|e| e as f32 + 0.5))
                     < MAX_PICKUP_RANGE.powi(2)
                 {
@@ -162,7 +162,8 @@ impl<'a> System<'a> for Sys {
                 .join()
                 .sorted_by_key(|(_, pos_b, _, _, _)| pos_b.0.distance_squared(pos.0) as u32)
             {
-                // Unless the melee attack can hit multiple targets, stop after first hit
+                // Unless the melee attack can hit multiple targets, stop after
+                // first hit
                 if melee_attack.multi_target.is_none()
                     && !melee_attack.sustained
                     && !melee_attack.hit_entities.is_empty()
@@ -284,7 +285,8 @@ impl<'a> System<'a> for Sys {
                         target,
                     );
 
-                    // Note: Don't use ori.look_vec() here, it leads to incorrect results for wide
+                    // Note: Don't use ori.look_vec() here, it leads to
+                    // incorrect results for wide
                     // angle melee attacks
                     let precision_from_flank = combat::precision_mult_from_flank(
                         (pos_b.0 - pos.0)

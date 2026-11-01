@@ -121,8 +121,9 @@ impl State {
                     || !ability_belongs_in_its_numbered_slot(i, mouse_slots)
                 {
                     if matches!(hotbar_slot, Some(SlotContents::Ability(_))) {
-                        // If ability is empty but hotbar shows an ability, clear it.
-                        // Also clears a numbered slot's stale copy of an ability
+                        // If ability is empty but hotbar shows an ability,
+                        // clear it. Also clears a
+                        // numbered slot's stale copy of an ability
                         // the player has since moved to a mouse slot.
                         *hotbar_slot = None;
                     }

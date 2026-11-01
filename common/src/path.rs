@@ -229,7 +229,8 @@ impl Route {
                 return Err(TraverseStop::InvalidPath);
             }
 
-            // If, in any direction, there is a column of open air of several blocks
+            // If, in any direction, there is a column of open air of several
+            // blocks
             let open_space_nearby = DIAGONALS.iter().any(|pos| {
                 (-2..2).all(|z| {
                     vol.get(next0 + Vec3::new(pos.x, pos.y, z))
@@ -245,13 +246,13 @@ impl Route {
                     .unwrap_or(true)
             });
 
-            // Unwalkable obstacles, such as walls or open space or stepping up blocks can
-            // affect path-finding
+            // Unwalkable obstacles, such as walls or open space or stepping up
+            // blocks can affect path-finding
             let be_precise =
                 open_space_nearby || wall_nearby || (pos.z - next0.z as f32).abs() > 1.0;
 
-            // If we're not being precise and the next next target is closer, go towards
-            // that instead.
+            // If we're not being precise and the next next target is closer, go
+            // towards that instead.
             if !be_precise
                 && next0.as_::<f32>().distance_squared(pos)
                     > next1.as_::<f32>().distance_squared(pos)
@@ -266,7 +267,8 @@ impl Route {
                 .map2(pos, |tgt, pos| pos.clamped(tgt.floor(), tgt.ceil()))
                 .xy()
                 .with_z(next_tgt.z);
-            // Determine whether we're close enough to the next to to consider it completed
+            // Determine whether we're close enough to the next to to consider
+            // it completed
             let dist_sqrd = pos.xy().distance_squared(closest_tgt.xy());
             if dist_sqrd
                 < (traversal_cfg.node_tolerance
@@ -373,10 +375,10 @@ impl Route {
             return Err(TraverseStop::InvalidPath);
         }
 
-        // We don't always want to aim for the centre of block since this can create
-        // jerky zig-zag movement. This function attempts to find a position
-        // inside a target block's area that aligned nicely with our velocity.
-        // This has a twofold benefit:
+        // We don't always want to aim for the centre of block since this can
+        // create jerky zig-zag movement. This function attempts to find
+        // a position inside a target block's area that aligned nicely
+        // with our velocity. This has a twofold benefit:
         //
         // 1. Entities can move at any angle when
         // running on a flat surface
@@ -456,10 +458,10 @@ impl Route {
             end: align(next1, 1.0),
         };
 
-        // Use a cubic spline of the next few targets to come up with a sensible target
-        // position. We want to use a position that gives smooth movement but is
-        // also accurate enough to avoid the agent getting stuck under ledges or
-        // falling off walls.
+        // Use a cubic spline of the next few targets to come up with a sensible
+        // target position. We want to use a position that gives smooth
+        // movement but is also accurate enough to avoid the agent
+        // getting stuck under ledges or falling off walls.
         let next_dir = bez
             .evaluate_derivative(0.85)
             .try_normalized()
@@ -751,8 +753,8 @@ impl Chaser {
         if let Some((route, ..)) = &mut self.route {
             let res = route.traverse(vol, pos, vel, &traversal_cfg);
 
-            // None either means we're done, or can't continue, either way we don't care
-            // about that route anymore.
+            // None either means we're done, or can't continue, either way we
+            // don't care about that route anymore.
             if let Err(e) = &res {
                 self.route = None;
                 match e {
@@ -765,8 +767,9 @@ impl Chaser {
                         ));
                     },
                     TraverseStop::InvalidPath => {
-                        // If the path is invalid, blocks along the path have most likely changed,
-                        // so reset the astar.
+                        // If the path is invalid, blocks along the path have
+                        // most likely changed, so reset
+                        // the astar.
                         self.astar = None;
                     },
                     TraverseStop::Done => match self.path_state {
@@ -779,7 +782,8 @@ impl Chaser {
                             ));
                         },
                         PathState::Exhausted => {
-                            // Upgrade path length if path is exhausted and we're at the same
+                            // Upgrade path length if path is exhausted and
+                            // we're at the same
                             // position.
                             if self.astar.as_ref().is_some_and(|(.., start)| {
                                 start.distance_squared(pos) < traversal_cfg.node_tolerance.powi(2)
@@ -1474,17 +1478,19 @@ pub fn point_on_prolate_spheroid(
     let midpoint = 0.5 * (focus1 + focus2);
     // Radius between the start and end of the path
     let radius: f32 = focus1.distance(focus2);
-    // The linear eccentricity of an ellipse is the distance from the origin to a
-    // focus A prolate spheroid is a half-ellipse rotated for a full revolution
-    // which is why ellipse variables are used frequently in this function
+    // The linear eccentricity of an ellipse is the distance from the origin to
+    // a focus A prolate spheroid is a half-ellipse rotated for a full
+    // revolution which is why ellipse variables are used frequently in this
+    // function
     let linear_eccentricity: f32 = 0.5 * radius;
 
     // For an ellipsoid, three variables determine the shape: a, b, and c.
     // These are the distance from the center/origin to the surface on the
     // x, y, and z axes, respectively.
     // For a prolate spheroid a and b are equal.
-    // c is determined by adding the search parameter to the linear eccentricity.
-    // As the search parameter increases the size of the spheroid increases
+    // c is determined by adding the search parameter to the linear
+    // eccentricity. As the search parameter increases the size of the
+    // spheroid increases
     let c: f32 = linear_eccentricity + search_parameter;
     // The width is calculated to prioritize increasing width over length of
     // the ellipsoid
@@ -1518,8 +1524,8 @@ pub fn point_on_prolate_spheroid(
     //let surface_point = Vec3::new(a * rtheta.cos() * lambda.cos(), b *
     // rtheta.cos() * lambda.sin(), c * rtheta.sin()); let magnitude =
     // surface_point.magnitude(); let direction = surface_point.normalized();
-    //// Randomly select a point along the vector to the previously selected surface
-    //// point using the uniform distribution
+    //// Randomly select a point along the vector to the previously selected
+    //// surface point using the uniform distribution
     //let point = magnitude * range.sample(&mut rng) * direction;
 
     // Now that a point has been selected in local space, it must be rotated and
@@ -1540,9 +1546,9 @@ pub fn point_on_prolate_spheroid(
     //} else {
     //    0.5 * PI
     //};
-    // This is unnecessary as rtheta is randomly selected between 0.0 and 2.0 * PI
-    // let rot_z_mat = Mat3::new(phi.cos(), -1.0 * phi.sin(), 0.0, phi.sin(),
-    // phi.cos(), 0.0, 0.0, 0.0, 1.0);
+    // This is unnecessary as rtheta is randomly selected between 0.0 and 2.0 *
+    // PI let rot_z_mat = Mat3::new(phi.cos(), -1.0 * phi.sin(), 0.0,
+    // phi.sin(), phi.cos(), 0.0, 0.0, 0.0, 1.0);
 
     // Rotate about perpendicular vector in the xy plane by theta
     let theta: f32 = if radius > 0.0 {

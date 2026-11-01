@@ -140,9 +140,9 @@ impl VoronoiCell {
 
     fn sample_at(&self, rpos: Vec3<i32>) -> bool {
         let rposf = rpos.as_();
-        // Would theoretically only need to compare with 7 other points rather than 26,
-        // by checking all the points in the cells touching the closest corner of this
-        // point.
+        // Would theoretically only need to compare with 7 other points rather
+        // than 26, by checking all the points in the cells touching the
+        // closest corner of this point.
         rposf.magnitude_squared()
             <= *(0..26)
                 .map(|i| self.points[i].distance_squared(rposf))
@@ -327,7 +327,8 @@ impl RockKind {
         match self {
             RockKind::Rock(VoronoiCell { size, .. })
             | RockKind::Sandstone(VoronoiCell { size, .. }) => {
-                // Need to use full size because rock can bleed over into other cells
+                // Need to use full size because rock can bleed over into other
+                // cells
                 let extent = *size as i32;
                 Aabb {
                     min: Vec3::broadcast(-extent),

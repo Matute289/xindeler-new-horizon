@@ -573,7 +573,8 @@ impl Widget for Tutorial<'_> {
         self.global_state.profile.tutorial.event_tick(self.client);
 
         let mut old = Vec::new();
-        // TODO: Decide on whether viewing achievements is desirable after play-testing
+        // TODO: Decide on whether viewing achievements is desirable after
+        // play-testing
         if tweak!(false) && self.esc_menu {
             old.extend(
                 self.global_state

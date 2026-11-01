@@ -254,8 +254,8 @@ impl QueryServer {
         socket: &UdpSocket,
         metrics: &mut Metrics,
     ) {
-        // TODO: Once more versions are added, send the packet in the same version as
-        // the request here.
+        // TODO: Once more versions are added, send the packet in the same
+        // version as the request here.
         match <RawQueryServerResponse as Parcel>::raw_bytes(&response, &Default::default()) {
             Ok(data) => {
                 if data.len() > MAX_RESPONSE_SIZE {
