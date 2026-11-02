@@ -152,23 +152,25 @@ impl Ori {
 
     #[must_use]
     pub fn to_horizontal(self) -> Self {
-        // We don't use Self::look_dir to avoid the extra normalization step within
-        // Dir's Quaternion Mul impl
+        // We don't use Self::look_dir to avoid the extra normalization step
+        // within Dir's Quaternion Mul impl
         let fw = self.to_quat() * Dir::default().to_vec();
         // Check that dir is not straight up/down
         // Uses a multiple of EPSILON to be safe
         // We can just check z since beyond floating point errors `fw` should be
         // normalized
         if 1.0 - fw.z.abs() > f32::EPSILON * 4.0 {
-            // We know direction lies in the xy plane so we only need to compute a rotation
-            // about the z-axis
+            // We know direction lies in the xy plane so we only need to compute
+            // a rotation about the z-axis
             let Vec2 { x, y } = fw.xy().normalized();
-            // Negate x and swap coords since we want to compute the angle from y+
+            // Negate x and swap coords since we want to compute the angle from
+            // y+
             let quat = rotation_2d(Vec2::new(y, -x), Vec3::unit_z());
 
             Self(quat)
         } else {
-            // if the direction is straight down, pitch up, or if straight up, pitch down
+            // if the direction is straight down, pitch up, or if straight up,
+            // pitch down
             if fw.z < 0.0 {
                 self.pitched_up(FRAC_PI_2)
             } else {
@@ -316,7 +318,8 @@ fn rotation_2d(Vec2 { x, y }: Vec2<f32>, axis: Vec3<f32>) -> Quaternion<f32> {
     //
     // cos(a) = x / |xy| => x (when normalized)
 
-    // Prevent NaNs from negative sqrt (float errors can put this slightly over 1.0)
+    // Prevent NaNs from negative sqrt (float errors can put this slightly over
+    // 1.0)
     let x = x.clamp(-1.0, 1.0);
 
     let scalar = ((1.0 + x) / 2.0).sqrt() * y.signum();
@@ -335,19 +338,21 @@ impl From<Dir> for Ori {
             // rolling):
             let xy_len = dir.xy().magnitude();
             let xy_norm = dir.xy() / xy_len;
-            // Rotation to get to this projected point from the default direction of y+
-            // Negate x and swap coords since we want to compute the angle from y+
+            // Rotation to get to this projected point from the default
+            // direction of y+ Negate x and swap coords since we
+            // want to compute the angle from y+
             let yaw = rotation_2d(Vec2::new(xy_norm.y, -xy_norm.x), Vec3::unit_z());
             // Rotation to then rotate up/down to the match the input direction
-            // In this rotated space the xy_len becomes the distance along the x axis
-            // And since we rotated around the z-axis the z value is unchanged
+            // In this rotated space the xy_len becomes the distance along the x
+            // axis And since we rotated around the z-axis the z
+            // value is unchanged
             let pitch = rotation_2d(Vec2::new(xy_len, dir.z), Vec3::unit_x());
 
             (yaw * pitch).normalized()
         } else {
-            // Nothing in particular can be considered upright if facing up or down
-            // so we just produce a quaternion that will rotate to that direction
-            // (once again rotating from y+)
+            // Nothing in particular can be considered upright if facing up or
+            // down so we just produce a quaternion that will rotate
+            // to that direction (once again rotating from y+)
             let pitch = PI / 2.0 * dir.z.signum();
             Quaternion::rotation_x(pitch)
         };

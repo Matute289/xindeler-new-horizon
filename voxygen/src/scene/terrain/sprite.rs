@@ -160,11 +160,12 @@ impl SpriteSpec {
             wind_sway: config.wind_sway,
         };
 
-        // Note, the returned datastructure can potentially be optimized further from a
-        // HashMap, a phf could be used or if we can rely on the sprite kind
-        // discriminants in each sprite category being packed fairly densely, we
-        // could just have an offset per sprite catagory used to
-        // convert a sprite kind into a flat index.
+        // Note, the returned datastructure can potentially be optimized further
+        // from a HashMap, a phf could be used or if we can rely on the
+        // sprite kind discriminants in each sprite category being
+        // packed fairly densely, we could just have an offset per
+        // sprite catagory used to convert a sprite kind into a flat
+        // index.
         self.0
             .iter()
             .map(|(kind, config)| {
@@ -251,8 +252,9 @@ mod test {
             }
         }
 
-        // Test that there is at least one entry per sprite. An empty variations list in
-        // an entry is used to represent a sprite that doesn't have a model.
+        // Test that there is at least one entry per sprite. An empty variations
+        // list in an entry is used to represent a sprite that doesn't
+        // have a model.
         let mut empty_config = Vec::new();
         for (kind, configs) in &spec.0 {
             if configs.is_empty() {

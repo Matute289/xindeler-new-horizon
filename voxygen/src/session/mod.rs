@@ -212,8 +212,8 @@ impl SessionState {
         client: Rc<RefCell<Client>>,
         persisted_state: Rc<RefCell<PersistedHudState>>,
     ) -> Self {
-        // Create a scene for this session. The scene handles visible elements of the
-        // game world.
+        // Create a scene for this session. The scene handles visible elements
+        // of the game world.
         let mut scene = Scene::new(
             global_state.window.renderer_mut(),
             &mut global_state.lazy_init,
@@ -300,12 +300,13 @@ impl SessionState {
         zoom_lock_behavior: AutoPressBehavior,
     ) {
         if let AutoPressBehavior::Auto = zoom_lock_behavior {
-            // to add Analog detection, update the condition rhs with a check for
-            // MovementX/Y event from the last tick
+            // to add Analog detection, update the condition rhs with a check
+            // for MovementX/Y event from the last tick
             self.zoom_lock = zoom_lock_enabled && self.should_auto_zoom_lock();
         } else {
-            // it's intentional that the HUD notification is not shown in this case:
-            // refresh session from Settings HUD checkbox change
+            // it's intentional that the HUD notification is not shown in this
+            // case: refresh session from Settings HUD checkbox
+            // change
             self.zoom_lock = zoom_lock_enabled;
         }
     }
@@ -357,7 +358,8 @@ impl SessionState {
                 .map_or_else(comp::Ori::default, |o| *o);
             let front = ori.look_dir().to_vec();
             let top = ori.up().to_vec();
-            // converting from veloren z = height axis, to mumble y = height axis
+            // converting from veloren z = height axis, to mumble y = height
+            // axis
             let player_pos = mumble_link::Position {
                 position: [pos.x, pos.z, pos.y],
                 front: [front.x, front.z, front.y],
@@ -666,7 +668,8 @@ impl PlayState for SessionState {
     fn tick(&mut self, global_state: &mut GlobalState, events: Vec<Event>) -> PlayStateResult {
         span!(_guard, "tick", "<Session as PlayState>::tick");
         // TODO: let mut client = self.client.borrow_mut();
-        // TODO: can this be a method on the session or are there borrowcheck issues?
+        // TODO: can this be a method on the session or are there borrowcheck
+        // issues?
         let (client_presence, client_type, client_registered) = {
             let client = self.client.borrow();
             (
@@ -766,7 +769,7 @@ impl PlayState for SessionState {
                 .state()
                 .read_storage::<comp::CanBuild>()
                 .get(player_entity)
-                .map_or_else(|| false, |cb| cb.enabled);
+                .map_or(false, |cb| cb.enabled);
 
             let active_mine_tool: Option<ToolKind> = if client.is_wielding() == Some(true) {
                 client
@@ -823,9 +826,10 @@ impl PlayState for SessionState {
                 },
             }
 
-            // Resolve our own reveal set (`Detected`, synced only to its owner) from
-            // `Uid`s into local entity handles. Rebuilt wholesale each tick, mirroring
-            // how the server rebuilds the component itself.
+            // Resolve our own reveal set (`Detected`, synced only to its owner)
+            // from `Uid`s into local entity handles. Rebuilt
+            // wholesale each tick, mirroring how the server
+            // rebuilds the component itself.
             self.revealed_entities.clear();
             self.identified_entities.clear();
             {
@@ -958,7 +962,8 @@ impl PlayState for SessionState {
                             GameInput::Primary => {
                                 self.walking_speed = false;
                                 let mut client = self.client.borrow_mut();
-                                // Building inputs take precedence... but only if there's an active
+                                // Building inputs take precedence... but only
+                                // if there's an active
                                 // building target.
                                 if let Some(build_target) = build_target.filter(|_| state) {
                                     client.remove_block(build_target.position_int());
@@ -1299,9 +1304,11 @@ impl PlayState for SessionState {
                                         && let Some(target_uid) =
                                             client.state().read_component_copied::<Uid>(target)
                                     {
-                                        // No chat toast here: the pet immediately
+                                        // No chat toast here: the pet
+                                        // immediately
                                         // turning to fight is visible feedback
-                                        // enough. `Guard` below gets one because
+                                        // enough. `Guard` below gets one
+                                        // because
                                         // it's a silent mode change with no
                                         // immediate visual cue.
                                         client.command_pet(
@@ -1400,7 +1407,8 @@ impl PlayState for SessionState {
                                                 interaction,
                                                 ..
                                             } => {
-                                                // NOTE: Keep this match exhaustive.
+                                                // NOTE: Keep this match
+                                                // exhaustive.
                                                 match interaction {
                                                     EntityInteraction::HelpDowned => {
                                                         client.help_downed(*entity)
@@ -1531,10 +1539,13 @@ impl PlayState for SessionState {
                                 );
                             },
                             GameInput::CycleCamera if state => {
-                                // Prevent accessing camera modes which aren't available in
+                                // Prevent accessing camera modes which aren't
+                                // available in
                                 // multiplayer unless you are an
-                                // admin. This is an easily bypassed clientside check.
-                                // The server should do its own filtering of which entities are
+                                // admin. This is an easily bypassed clientside
+                                // check.
+                                // The server should do its own filtering of
+                                // which entities are
                                 // sent to clients to
                                 // prevent abuse.
                                 let camera = self.scene.camera_mut();
@@ -1576,15 +1587,18 @@ impl PlayState for SessionState {
                                     self.viewpoint_piloted = false;
                                     self.scene.camera_mut().set_mode(CameraMode::Freefly);
                                     let mut ori = self.scene.camera().get_orientation();
-                                    // Remove any roll that could have possibly been set to the
+                                    // Remove any roll that could have possibly
+                                    // been set to the
                                     // camera as a result of spectating.
                                     ori.z = 0.0;
                                     self.scene.camera_mut().set_orientation(ori);
                                 } else if let Some(target_entity) = entity_target
                                     && self.scene.camera().get_mode() == CameraMode::Freefly
                                 {
-                                    // Notify the server that we start spectating an entity so
-                                    // we get viewpoint specific component packages.
+                                    // Notify the server that we start
+                                    // spectating an entity so
+                                    // we get viewpoint specific component
+                                    // packages.
                                     client.start_spectate_entity(target_entity.kind.0);
 
                                     self.viewpoint_entity = Some(target_entity.kind.0);
@@ -1667,7 +1681,8 @@ impl PlayState for SessionState {
                     },
 
                     Event::Zoom(delta) if self.zoom_lock => {
-                        // only fire this Hud event when player has "intent" to zoom
+                        // only fire this Hud event when player has "intent" to
+                        // zoom
                         if delta.abs() > ZOOM_LOCK_SCROLL_DELTA_INTENT {
                             self.hud.zoom_lock_reminder();
                         }
@@ -1876,16 +1891,20 @@ impl PlayState for SessionState {
                             && holding_ranged
                             && self.scene.camera().get_mode() == CameraMode::ThirdPerson
                         {
-                            // Shoot ray from camera focus forwards and get the point it hits an
-                            // entity or terrain. The ray starts from the camera focus point
-                            // so that the player won't aim at things behind them, in front of the
+                            // Shoot ray from camera focus forwards and get the
+                            // point it hits an
+                            // entity or terrain. The ray starts from the camera
+                            // focus point
+                            // so that the player won't aim at things behind
+                            // them, in front of the
                             // camera.
                             let ray_start = self.scene.camera().get_focus_pos();
                             let entity_ray_end = ray_start + cam_dir * 1000.0;
                             let terrain_ray_end = ray_start + cam_dir * 1000.0;
 
                             let aim_point = {
-                                // Get the distance to nearest entity and terrain
+                                // Get the distance to nearest entity and
+                                // terrain
                                 let entity_dist =
                                     ray_entities(&client, ray_start, entity_ray_end, 1000.0).0;
                                 let terrain_ray_distance = client
@@ -2001,8 +2020,9 @@ impl PlayState for SessionState {
                     }
                 },
                 CameraMode::Freefly => {
-                    // Move the camera freely in 3d space. Apply acceleration so that
-                    // the movement feels more natural and controlled.
+                    // Move the camera freely in 3d space. Apply acceleration so
+                    // that the movement feels more natural
+                    // and controlled.
                     const FREEFLY_SPEED: f32 = 50.0;
                     const FREEFLY_SPEED_BOOST: f32 = 5.0;
 
@@ -2033,7 +2053,8 @@ impl PlayState for SessionState {
 
             let mut outcomes = Vec::new();
 
-            // Runs if either in a multiplayer server or the singleplayer server is unpaused
+            // Runs if either in a multiplayer server or the singleplayer server
+            // is unpaused
             if !global_state.paused() {
                 // Perform an in-game tick.
                 match self.tick(global_state.clock.game_dt(), global_state, &mut outcomes) {
@@ -2214,8 +2235,8 @@ impl PlayState for SessionState {
                     HudEvent::Logout => {
                         self.client.borrow_mut().logout();
                         // Stop all sounds
-                        // TODO: Abstract this behavior to all instances of PlayStateResult::Pop
-                        // somehow
+                        // TODO: Abstract this behavior to all instances of
+                        // PlayStateResult::Pop somehow
                         global_state.audio.stop_all_ambience();
                         global_state.audio.stop_all_sfx();
                         return PlayStateResult::Pop;
@@ -2275,7 +2296,8 @@ impl PlayState for SessionState {
                                     }
                                 },
                                 Slot::Equip(equip_slot) => {
-                                    // Ensure there is a free slot that is not provided by the
+                                    // Ensure there is a free slot that is not
+                                    // provided by the
                                     // item being unequipped
                                     let free_slots =
                                         inventory.free_slots_minus_equipped_item(equip_slot);
@@ -2443,7 +2465,8 @@ impl PlayState for SessionState {
                         let client = self.client.borrow();
 
                         let server_name = &client.server_info().name;
-                        // If we are changing the hotbar state this CANNOT be None.
+                        // If we are changing the hotbar state this CANNOT be
+                        // None.
                         let character_id = match client.presence().unwrap() {
                             PresenceKind::Character(id) => Some(id),
                             PresenceKind::LoadingCharacter(id) => Some(id),
@@ -2666,7 +2689,8 @@ impl PlayState for SessionState {
                     wind_vel: self.scene.wind_vel,
                 };
 
-                // Runs if either in a multiplayer server or the singleplayer server is unpaused
+                // Runs if either in a multiplayer server or the singleplayer
+                // server is unpaused
                 if !global_state.paused() {
                     self.scene.maintain(
                         global_state.window.renderer_mut(),
@@ -2691,8 +2715,8 @@ impl PlayState for SessionState {
 
             PlayStateResult::Continue
         } else if client_registered && client_presence.is_none() {
-            // If the client cannot enter the game but spectate, pop the play state instead
-            // of going back to character selection.
+            // If the client cannot enter the game but spectate, pop the play
+            // state instead of going back to character selection.
             if client_type.can_spectate() && !client_type.can_enter_character() {
                 // Go back to the main menu state
                 PlayStateResult::Pop

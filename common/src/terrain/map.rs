@@ -143,11 +143,11 @@ pub const MAX_WORLD_BLOCKS_LG: Vec2<u32> = Vec2 { x: 19, y: 19 };
 pub struct MapSizeLg(Vec2<u32>);
 
 impl MapSizeLg {
-    // FIXME: We cannot use is_some() here because it is not currently marked as a
-    // `const fn`.  Since being able to use conditionals in constant expressions has
-    // not technically been stabilized yet, Clippy probably doesn't check for this
-    // case yet.  When it can, or when is_some() is stabilized as a `const fn`,
-    // we should deal with this.
+    // FIXME: We cannot use is_some() here because it is not currently marked as
+    // a `const fn`.  Since being able to use conditionals in constant
+    // expressions has not technically been stabilized yet, Clippy probably
+    // doesn't check for this case yet.  When it can, or when is_some() is
+    // stabilized as a `const fn`, we should deal with this.
     /// Construct a new `MapSizeLg`, returning an error if the needed invariants
     /// do not hold and the vector otherwise.
     ///
@@ -174,7 +174,8 @@ impl MapSizeLg {
                 1i32.checked_shl(map_size_lg.y + TERRAIN_CHUNK_BLOCKS_LG).is_some(); */
                 map_size_lg.x + TERRAIN_CHUNK_BLOCKS_LG < 32 &&
                 map_size_lg.y + TERRAIN_CHUNK_BLOCKS_LG < 32;
-            // Assertion on dimensions: product of dimensions must fit in a usize.
+            // Assertion on dimensions: product of dimensions must fit in a
+            // usize.
             let chunks_product_in_range =
                 1usize.checked_shl(map_size_lg.x + map_size_lg.y).is_some();
             if blocks_in_range && chunks_product_in_range {
@@ -538,9 +539,9 @@ impl MapConfig<'_> {
 
             // Compute connections
             let mut has_river = false;
-            // NOTE: consider replacing neighbors with local_cells, since it is more
-            // accurate (though I'm not sure if it can matter for these
-            // purposes).
+            // NOTE: consider replacing neighbors with local_cells, since it is
+            // more accurate (though I'm not sure if it can matter
+            // for these purposes).
             chunk_idx
                 .into_iter()
                 .flat_map(|chunk_idx| {
@@ -618,8 +619,8 @@ impl MapConfig<'_> {
                     .rotated_z(f32::consts::FRAC_PI_2)
                     .map(|e| e as i32));
             let cross_alt = sample_wpos(cross_pos);
-            // TODO: Fix use of fov to match proper perspective projection, as described in
-            // the doc comment.
+            // TODO: Fix use of fov to match proper perspective projection, as
+            // described in the doc comment.
             // Pointing downhill, forward
             // (index--note that (0,0,1) is backward right-handed)
             let forward_vec = Vec3::new(
@@ -628,15 +629,17 @@ impl MapConfig<'_> {
                 (downhill_wpos.y - wposi.y) as f64,
             );
             // Pointing 90 degrees left (in horizontal xy) of downhill, up
-            // (middle--note that (1,0,0), 90 degrees CCW backward, is right right-handed)
+            // (middle--note that (1,0,0), 90 degrees CCW backward, is right
+            // right-handed)
             let up_vec = Vec3::new(
                 (cross_pos.x - wposi.x) as f64,
                 ((cross_alt - alt) * gain) as f64 * fov,
                 (cross_pos.y - wposi.y) as f64,
             );
-            // let surface_normal = Vec3::new(fov* (f.y * u.z - f.z * u.y), -(f.x * u.z -
-            // f.z * u.x), fov* (f.x * u.y - f.y * u.x)).normalized();
-            // Then cross points "to the right" (upwards) on a right-handed coordinate
+            // let surface_normal = Vec3::new(fov* (f.y * u.z - f.z * u.y),
+            // -(f.x * u.z - f.z * u.x), fov* (f.x * u.y - f.y *
+            // u.x)).normalized(); Then cross points "to the right"
+            // (upwards) on a right-handed coordinate
             // system. (right-handed coordinate system means (0, 0, 1.0) is
             // "forward" into the screen).
             let surface_normal = forward_vec.cross(up_vec).normalized();
@@ -692,8 +695,8 @@ impl MapConfig<'_> {
 
                 // Phong reflection model with shadows:
                 //
-                // I_p = k_a i_a + shadow * Σ {m ∈ lights} (k_d (L_m ⋅ N) i_m,d + k_s (R_m ⋅
-                // V)^α i_m,s)
+                // I_p = k_a i_a + shadow * Σ {m ∈ lights} (k_d (L_m ⋅ N) i_m,d
+                // + k_s (R_m ⋅ V)^α i_m,s)
                 //
                 // where for the whole scene,
                 //  i_a = (RGB) intensity of ambient lighting component
@@ -702,30 +705,36 @@ impl MapConfig<'_> {
                 } else {
                     Rgb::new(0.1, 0.1, 0.1)
                 };
-                //  V = direction pointing towards the viewer (e.g. virtual camera).
+                //  V = direction pointing towards the viewer (e.g. virtual
+                // camera).
                 let v = Vec3::new(0.0, 0.0, -1.0).normalized();
 
                 // for each light m,
-                //  i_m,d = (RGB) intensity of diffuse component of light source m
+                //  i_m,d = (RGB) intensity of diffuse component of light source
+                // m
                 let i_m_d = Rgb::new(1.0, 1.0, 1.0);
-                //  i_m,s = (RGB) intensity of specular component of light source m
+                //  i_m,s = (RGB) intensity of specular component of light
+                // source m
                 let i_m_s = Rgb::new(0.45, 0.45, 0.45);
 
                 // for each light m and point p,
-                //  L_m = (normalized) direction vector from point on surface to light source m
+                //  L_m = (normalized) direction vector from point on surface to
+                // light source m
                 let l_m = light;
                 //  N = (normalized) normal at this point on the surface,
                 let n = surface_normal;
-                //  R_m = (normalized) direction a perfectly reflected ray of light from m would
-                // take from point p      = 2(L_m ⋅ N)N - L_m
+                //  R_m = (normalized) direction a perfectly reflected ray of
+                // light from m would take from point p      =
+                // 2(L_m ⋅ N)N - L_m
                 let r_m = (-l_m).reflected(n); // 2 * (l_m.dot(n)) * n - l_m;
                 //
                 // and for each point p in the scene,
                 //  shadow = computed shadow factor at point p
-                // FIXME: Should really just be shade_frac, but with only ambient light we lose
-                // all local lighting detail... some sort of global illumination (e.g.
-                // radiosity) is of course the "right" solution, but maybe we can find
-                // something cheaper?
+                // FIXME: Should really just be shade_frac, but with only
+                // ambient light we lose all local lighting
+                // detail... some sort of global illumination (e.g.
+                // radiosity) is of course the "right" solution, but maybe we
+                // can find something cheaper?
                 let shadow = 0.2 + 0.8 * shade_frac;
 
                 let lambertian = l_m.dot(n).max(0.0);

@@ -230,7 +230,8 @@ fn architect_tick(ctx: EventCtx<Architect, OnTick>) {
             > data.architect.wanted_population.of_death(&death)
         {
             data.architect.population.on_death(&death);
-            // If we have more than enough of this npc, we skip spawning a new one.
+            // If we have more than enough of this npc, we skip spawning a new
+            // one.
             continue;
         }
 
@@ -557,8 +558,9 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                         .chunks()
                         .map(|s| rng.random_range(0..s as i32));
 
-                    // TODO: If we had access to `ChunkStates` here we could make sure
-                    // these aren't getting respawned in loaded chunks.
+                    // TODO: If we had access to `ChunkStates` here we could
+                    // make sure these aren't getting
+                    // respawned in loaded chunks.
                     if let Some(chunk) = world.sim().get(cpos)
                         && chunk_filter(chunk)
                     {

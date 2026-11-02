@@ -23,8 +23,8 @@ impl Searcher<'_> {
     pub fn search(self, _a: Vec2<i32>, _b: Vec2<i32>) -> Option<Path<i32>> {
         // TODO: implement this function
 
-        //let heuristic = |pos: &Vec2<i32>| (pos - b).map(|e| e as f32).magnitude();
-        // Astar::new(
+        //let heuristic = |pos: &Vec2<i32>| (pos - b).map(|e| e as
+        // f32).magnitude(); Astar::new(
         //     100_000,
         //     a,
         //     heuristc,

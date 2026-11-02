@@ -227,8 +227,8 @@ impl Quest {
     /// that this matches the quest's designated arbiter.
     pub fn resolve(&self, requester: ActorId, res: bool) -> Option<QuestOutcome> {
         if self.arbiter != requester {
-            // Actor that requested quest resolution did not match the designated arbiter,
-            // resolution not permitted!
+            // Actor that requested quest resolution did not match the
+            // designated arbiter, resolution not permitted!
             None
         } else {
             self.res
@@ -293,9 +293,9 @@ impl QuestRes {
 
 impl Clone for QuestRes {
     fn clone(&self) -> Self {
-        // This isn't strictly kosher in a multi-threaded context, but we assume that
-        // clones only happen on the main thread when we don't care about
-        // synchronisation
+        // This isn't strictly kosher in a multi-threaded context, but we assume
+        // that clones only happen on the main thread when we don't care
+        // about synchronisation
         Self(AtomicU8::new(self.0.load(Ordering::Relaxed)))
     }
 }

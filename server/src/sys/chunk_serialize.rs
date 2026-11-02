@@ -82,9 +82,10 @@ impl<'a> System<'a> for Sys {
                 Entry::Occupied(oe) => oe.into_mut(),
             };
 
-            // We decide here, to ONLY send lossy compressed data If all clients want those.
-            // If at least 1 client here does not want lossy we don't compress it twice.
-            // It would just be too expensive for the server
+            // We decide here, to ONLY send lossy compressed data If all clients
+            // want those. If at least 1 client here does not want
+            // lossy we don't compress it twice. It would just be
+            // too expensive for the server
             meta.lossy_compression = meta.lossy_compression
                 && presences
                     .get(queue_entry.entity)

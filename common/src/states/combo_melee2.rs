@@ -168,8 +168,9 @@ impl CharacterBehavior for Data {
                     || self.static_data.auto_progress)
                     && let CharacterState::ComboMelee2(c) = &mut update.character
                 {
-                    // Only have the next strike skip the recover period of this strike if not
-                    // every strike in the combo is complete yet
+                    // Only have the next strike skip the recover period of this
+                    // strike if not every strike in the
+                    // combo is complete yet
                     c.start_next_strike = (c.completed_strikes + 1) < c.static_data.strikes.len();
                 }
                 if self.timer.as_secs_f32()
@@ -203,7 +204,8 @@ impl CharacterBehavior for Data {
                     if let CharacterState::ComboMelee2(c) = &mut update.character {
                         c.timer = tick_attack_or_default(data, self.timer, None);
                     }
-                    // TODO: Remove this, this should never have been added in this way
+                    // TODO: Remove this, this should never have been added in
+                    // this way
                     if self.static_data.specifier == Some(FrontendSpecifier::IronGolemFist) {
                         let damage = AttackDamage::new(
                             Damage {

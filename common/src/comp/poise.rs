@@ -169,8 +169,8 @@ impl Poise {
     /// poise damage again
     pub const POISE_BUFFER_TIME: f64 = 1.0;
     /// Used when comparisons to poise are needed outside this module.
-    // This value is chosen as anything smaller than this is more precise than our
-    // units of poise.
+    // This value is chosen as anything smaller than this is more precise than
+    // our units of poise.
     pub const POISE_EPSILON: f32 = 0.5 / Self::MAX_SCALED_POISE as f32;
     /// The thresholds where poise changes to a different state
     pub const POISE_THRESHOLDS: [f32; 4] = [50.0, 30.0, 15.0, 5.0];

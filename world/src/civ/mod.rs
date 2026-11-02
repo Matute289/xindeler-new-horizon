@@ -581,7 +581,8 @@ impl Civs {
                             *b,
                         );
 
-                        // Update the path connecting to the bridge to line up better.
+                        // Update the path connecting to the bridge to line up
+                        // better.
                         if let Some(bridge) =
                             bridge_site
                                 .plots
@@ -1154,15 +1155,15 @@ impl Civs {
         for (i, peak) in peaks.iter().enumerate() {
             for (k, n_peak) in peaks.iter().enumerate() {
                 // If the difference in position of this peak and another is
-                // below a threshold and this peak's altitude is lower, remove the
-                // peak from the list
+                // below a threshold and this peak's altitude is lower, remove
+                // the peak from the list
                 if i != k
                     && (peak.1).distance_squared(n_peak.1) < POI_THINNING_DIST_SQRD
                     && peak.2 <= n_peak.2
                 {
                     // Remove this peak
-                    // This cannot panic as `removals` is the same length as `peaks`
-                    // i is the index in `peaks`
+                    // This cannot panic as `removals` is the same length as
+                    // `peaks` i is the index in `peaks`
                     removals[i] = true;
                 }
             }
@@ -1231,10 +1232,11 @@ impl Civs {
         }
 
         // Find neighbors
-        // Note, the maximum distance that I have so far observed not hitting the
-        // iteration limit in `find_path` is 364. So I think this is a reasonable
-        // limit (although the relationship between distance and pathfinding iterations
-        // can be a bit variable). Note, I have seen paths reach the iteration limit
+        // Note, the maximum distance that I have so far observed not hitting
+        // the iteration limit in `find_path` is 364. So I think this is
+        // a reasonable limit (although the relationship between
+        // distance and pathfinding iterations can be a bit variable).
+        // Note, I have seen paths reach the iteration limit
         // with distances as small as 137, so this certainly doesn't catch all
         // cases that would fail.
         const MAX_NEIGHBOR_DISTANCE: f32 = 400.0;
@@ -1267,7 +1269,8 @@ impl Civs {
                 prof_span!("for nearby");
                 // Find a route using existing paths
                 //
-                // If the novel path isn't efficient compared to this, don't use it
+                // If the novel path isn't efficient compared to this, don't use
+                // it
                 let max_novel_cost = self
                     .route_between(site, nearby)
                     .map_or(f32::MAX, |(_, route_cost)| route_cost / 3.0);
@@ -1460,12 +1463,12 @@ fn find_path(
     prof_span!("find_path");
     const MAX_PATH_ITERS: usize = 100_000;
     let sim = &ctx.sim;
-    // NOTE: If heuristic overestimates the actual cost, then A* is not guaranteed
-    // to produce the least-cost path (since it will explore partially based on
-    // the heuristic).
-    // TODO: heuristic can be larger than actual cost, since existing bridges cost
-    // 1.0 (after the 1.0 that is added to everthting), but they can cover
-    // multiple chunks.
+    // NOTE: If heuristic overestimates the actual cost, then A* is not
+    // guaranteed to produce the least-cost path (since it will explore
+    // partially based on the heuristic).
+    // TODO: heuristic can be larger than actual cost, since existing bridges
+    // cost 1.0 (after the 1.0 that is added to everthting), but they can
+    // cover multiple chunks.
     let heuristic = move |l: &Vec2<i32>| (l.distance_squared(b) as f32).sqrt();
     let neighbors = |l: &Vec2<i32>| {
         let l = *l;
@@ -1600,8 +1603,8 @@ fn find_site_loc(
                 return Some(test_loc);
             }
 
-            // If the current location is suitable and meets proximity requirements,
-            // try nearby spot downhill.
+            // If the current location is suitable and meets proximity
+            // requirements, try nearby spot downhill.
             loc = ctx.sim.get(test_loc).and_then(|c| c.downhill);
         }
     }
@@ -1657,7 +1660,8 @@ fn town_attributes_of_site(loc: Vec2<i32>, sim: &WorldSim) -> Option<TownSiteAtt
                             land_chunks += 1;
                         }
                     }
-                    // Mining is different since presumably you dig into the hillside
+                    // Mining is different since presumably you dig into the
+                    // hillside
                     if c.rockiness > 0.7 && c.alt - chunk.alt > -10.0 {
                         rock_chunks += 1;
                     }

@@ -74,8 +74,8 @@ pub fn is_mountable(
 }
 
 impl Component for Pet {
-    // Using `DenseVecStorage` has a u64 space overhead per entity and `Pet` just
-    // has an `Arc` pointer which is the same size on 64-bit platforms. So it
-    // isn't worth using `DenseVecStorage` here.
+    // Using `DenseVecStorage` has a u64 space overhead per entity and `Pet`
+    // just has an `Arc` pointer which is the same size on 64-bit platforms.
+    // So it isn't worth using `DenseVecStorage` here.
     type Storage = specs::VecStorage<Self>;
 }

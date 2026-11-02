@@ -185,7 +185,8 @@ impl CharacterBehavior for Data {
                                     0.0,
                                 );
 
-                                // Check for collision on the xy plane, subtract 1 to get point
+                                // Check for collision on the xy plane, subtract
+                                // 1 to get point
                                 // before block
                                 let obstacle_xy = data
                                     .terrain
@@ -210,10 +211,13 @@ impl CharacterBehavior for Data {
                                     .cast()
                                     .0;
 
-                                // If a duration is specified, create a projectile component for
-                                // the npc -- unless `delete_after_expiry` opts into
+                                // If a duration is specified, create a
+                                // projectile component for
+                                // the npc -- unless `delete_after_expiry` opts
+                                // into
                                 // `Object::DeleteAfter` instead (see
-                                // `NpcBuilder::delete_after`'s doc comment for why).
+                                // `NpcBuilder::delete_after`'s doc comment for
+                                // why).
                                 let projectile = (!*delete_after_expiry)
                                     .then(|| {
                                         duration.map(|duration| Projectile {
@@ -282,7 +286,8 @@ impl CharacterBehavior for Data {
                                     .with_chain_summon_cost(chain_summon_cost),
                                 });
 
-                                // Send local event used for frontend shenanigans
+                                // Send local event used for frontend
+                                // shenanigans
                                 output_events.emit_local(LocalEvent::CreateOutcome(
                                     Outcome::SummonedCreature {
                                         pos: data.pos.0,

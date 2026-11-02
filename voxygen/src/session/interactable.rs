@@ -414,7 +414,8 @@ pub(super) fn get_interactables(
             ))
         })
         .filter(|(_, volume_pos, interaction, _)| {
-            // Additional checks for `BlockInteraction::Mount` after filtering by distance.
+            // Additional checks for `BlockInteraction::Mount` after filtering
+            // by distance.
             if let BlockInteraction::Mount = interaction {
                 !is_volume_rider.contains(player_entity)
                     // Only check all entities when mounting terrain block, otherwise we can check
@@ -437,8 +438,8 @@ pub(super) fn get_interactables(
             }
         });
 
-    // Helper to check if an interactable is directly targetted by the player, and
-    // should thus be prioritized over non-directly targetted ones.
+    // Helper to check if an interactable is directly targetted by the player,
+    // and should thus be prioritized over non-directly targetted ones.
     let is_direct_target = |interactable: &Interactable| match interactable {
         Interactable::Block {
             volume_pos,
@@ -614,8 +615,8 @@ impl Interactables {
         );
 
         // Ensure interactions are ordered in a stable way
-        // TODO: Once blocks can have more than one interaction, do the same for blocks
-        // here too
+        // TODO: Once blocks can have more than one interaction, do the same for
+        // blocks here too
         for v in entity_map.values_mut() {
             v.sort_unstable_by_key(|i| i.game_input())
         }

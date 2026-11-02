@@ -43,8 +43,8 @@ pub fn resize_pixel_art(image: &RgbaImage, new_width: u32, new_height: u32) -> R
     let mut new_image = RgbaImage::new(new_width, new_height);
 
     // Ratio of old image dimensions to new dimensions
-    // Also the sampling dimensions within the old image for a single pixel in the
-    // new image
+    // Also the sampling dimensions within the old image for a single pixel in
+    // the new image
     let wratio = width as f32 / new_width as f32;
     let hratio = height as f32 / new_height as f32;
 
@@ -118,9 +118,9 @@ pub fn resize_pixel_art(image: &RgbaImage, new_width: u32, new_height: u32) -> R
                         get_linear_with_frac(image, xmaxp, ymaxp, last_x_frac * last_y_frac);
                 }
             }
-            // Divide summed color by area sample covers and convert back to srgb
-            // I wonder if precalculating the inverse of these divs would have a significant
-            // effect
+            // Divide summed color by area sample covers and convert back to
+            // srgb I wonder if precalculating the inverse of these
+            // divs would have a significant effect
             linear_color = linear_color / wratio / hratio;
             linear_color =
                 Rgba::from_translucent(linear_color.rgb() / linear_color.a, linear_color.a);

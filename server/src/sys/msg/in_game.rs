@@ -238,7 +238,8 @@ impl Sys {
                 }
             },
             ClientGeneral::UnlockSkill(skill) => {
-                // FIXME: How do we want to handle the error?  Probably not by swallowing it.
+                // FIXME: How do we want to handle the error?  Probably not by
+                // swallowing it.
                 let _ = skill_set
                     .as_mut()
                     .map(|skill_set| {
@@ -410,8 +411,8 @@ impl<'a> System<'a> for Sys {
     ) {
         let time_for_vd_changes = Instant::now();
 
-        // NOTE: stdlib mutex is more than good enough on Linux and (probably) Windows,
-        // but not Mac.
+        // NOTE: stdlib mutex is more than good enough on Linux and (probably)
+        // Windows, but not Mac.
         let rare_writes = parking_lot::Mutex::new(RareWrites {
             block_changes: &mut block_changes,
             _terrain_persistence: &mut terrain_persistence,
@@ -641,11 +642,12 @@ impl<'a> System<'a> for Sys {
         let player_physics_settings = &mut *player_physics_settings_;
         // Deferred updates to skillsets and player physics.
         //
-        // NOTE: It is an invariant that there is at most one client entry per player
-        // uuid; since we joined on clients, it follows that there's just one update
-        // per uuid, so the physics update is sound and doesn't depend on evaluation
-        // order, even though we're not updating directly by entity or uid (note that
-        // for a given entity, we process messages serially).
+        // NOTE: It is an invariant that there is at most one client entry per
+        // player uuid; since we joined on clients, it follows that
+        // there's just one update per uuid, so the physics update is
+        // sound and doesn't depend on evaluation order, even though
+        // we're not updating directly by entity or uid (note that for a
+        // given entity, we process messages serially).
         deferred_updates.iter_mut().for_each(
             |(
                 skill_set_update,
@@ -654,12 +656,14 @@ impl<'a> System<'a> for Sys {
                 character_class_update,
             )| {
                 if let Some((entity, new_skill_set)) = skill_set_update {
-                    // We know this exists, because we already iterated over it with the skillset
-                    // lock taken, so we can ignore the error.
+                    // We know this exists, because we already iterated over it
+                    // with the skillset lock taken, so we
+                    // can ignore the error.
                     //
-                    // Note that we replace rather than just updating.  This is in order to avoid
-                    // dropping here; we'll drop later on a background thread, in case skillsets are
-                    // slow to drop.
+                    // Note that we replace rather than just updating.  This is
+                    // in order to avoid dropping here;
+                    // we'll drop later on a background thread, in case
+                    // skillsets are slow to drop.
                     skill_sets
                         .get_mut(*entity)
                         .map(|mut old_skill_set| mem::swap(&mut *old_skill_set, new_skill_set));
@@ -676,14 +680,16 @@ impl<'a> System<'a> for Sys {
                     }
                 }
                 if let &mut Some((uuid, player_physics_setting)) = physics_update {
-                    // We don't necessarily know this exists, but that's fine, because dropping
-                    // player physics is a no op.
+                    // We don't necessarily know this exists, but that's fine,
+                    // because dropping player physics is a
+                    // no op.
                     player_physics_settings
                         .settings
                         .insert(uuid, player_physics_setting);
                 }
                 if let &mut Some((entity, new_character_class)) = character_class_update {
-                    // We know this exists, for the same reason as the skillset case above.
+                    // We know this exists, for the same reason as the skillset
+                    // case above.
                     character_classes
                         .get_mut(entity)
                         .map(|mut cc| *cc = new_character_class);

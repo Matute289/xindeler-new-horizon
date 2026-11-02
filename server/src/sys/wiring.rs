@@ -49,8 +49,8 @@ impl<'a> System<'a> for Sys {
         let mut emitters = events.get_emitters();
 
         // Compute the output for each wiring element by computing
-        // the output for each `OutputFormula` and store each value per output per
-        // entity.
+        // the output for each `OutputFormula` and store each value per output
+        // per entity.
         let computed_outputs: HashMap<Entity, HashMap<String, f32>> = (
             &read_data.entities,
             &wiring_elements,
@@ -82,20 +82,21 @@ impl<'a> System<'a> for Sys {
             })
             .collect();
 
-        // Pass new outputs as inputs for the next tick to the proper elements in the
-        // circuit.
+        // Pass new outputs as inputs for the next tick to the proper elements
+        // in the circuit.
         (read_data.circuits)
             .join()
             .flat_map(|circuit| circuit.wires.iter())
             .for_each(|wire| {
-                // The current output values becomes input values for the next tick
+                // The current output values becomes input values for the next
+                // tick
                 let input_value = computed_outputs
                     .get(&wire.input.entity)
                     .and_then(|e| e.get(&wire.input.name))
                     .unwrap_or(&0.0);
 
-                // Push the current output value into the inputs for the proper element to be
-                // used next tick.
+                // Push the current output value into the inputs for the proper
+                // element to be used next tick.
                 if let Some(wiring_element) = wiring_elements.get_mut(wire.output.entity) {
                     wiring_element
                         .inputs
@@ -118,7 +119,8 @@ impl<'a> System<'a> for Sys {
                         .actions
                         .iter()
                         .filter(|wiring_action| {
-                            // Filter out any wiring actions with a total output less than the
+                            // Filter out any wiring actions with a total output
+                            // less than the
                             // threshold
                             wiring_action.formula.compute_output(
                                 &wiring_element.inputs,

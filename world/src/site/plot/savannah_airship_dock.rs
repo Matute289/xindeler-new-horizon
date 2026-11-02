@@ -42,12 +42,13 @@ impl SavannahAirshipDock {
 
         // dock is 5 tiles = 30 blocks in radius
         // airships are 37 blocks wide = 6 tiles.
-        // distance from the center to the outside edge of the airship when docked is 11
-        // tiles. The area covered by all four airships is a square 22 tiles on
-        // a side.
+        // distance from the center to the outside edge of the airship when
+        // docked is 11 tiles. The area covered by all four airships is
+        // a square 22 tiles on a side.
 
-        // Sample the surface altitude every 4 tiles (= 24 blocks) around the dock
-        // center to find the highest point of terrain surrounding the dock.
+        // Sample the surface altitude every 4 tiles (= 24 blocks) around the
+        // dock center to find the highest point of terrain surrounding
+        // the dock.
         let mut max_surface_alt = i32::MIN;
         // -12 -8 -4 0 +4 +8 +12
         for dx in -3..=3 {

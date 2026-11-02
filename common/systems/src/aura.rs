@@ -326,7 +326,8 @@ fn activate_aura(
         AuraKind::Buff { kind, source, .. } => {
             let conditions_held = match kind {
                 BuffKind::RestingHeal => {
-                    // true if sitting or if owned and owner is sitting + not full health
+                    // true if sitting or if owned and owner is sitting + not
+                    // full health
                     health.current() < health.maximum()
                         && (read_data
                             .char_states

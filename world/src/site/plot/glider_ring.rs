@@ -179,8 +179,9 @@ impl Structure for GliderRing {
         });
         // Sign number
         let numeral_origin = Vec3::new(self.center.x, self.center.y - 2, sign_base + 1);
-        // need to rotate the numeral 180 degrees as the ring direction is the direction
-        // of travel. The "positive" direction is towards the back of the ring
+        // need to rotate the numeral 180 degrees as the ring direction is the
+        // direction of travel. The "positive" direction is towards the
+        // back of the ring
         let numeral = painter
             .numeral(numeral_origin, self.number)
             .rotate_z_90_about(2, rotation_center);

@@ -75,7 +75,8 @@ impl Clock {
         if target_dt != self.target_dt {
             self.target_dt = target_dt;
 
-            // The target dt has changed, throw out the existing stats to avoid problems
+            // The target dt has changed, throw out the existing stats to avoid
+            // problems
             self.average_dt = target_dt.as_secs_f64();
             self.average_busy = target_dt.as_secs_f64();
             self.average_variance = 0.0;
@@ -98,19 +99,20 @@ impl Clock {
         span!(_guard, "tick", "Clock::tick");
         span!(guard, "clock work");
 
-        // Give the tick thread realtime priority to minimise stuttering. Don't do this
-        // all the time to avoid upsetting the scheduler.
+        // Give the tick thread realtime priority to minimise stuttering. Don't
+        // do this all the time to avoid upsetting the scheduler.
         if self.tick == 0
         /* .is_multiple_of(30) */
         {
             use thread_priority::*;
-            // // We choose scheduler parameters based on averages from previous frames
-            // // Try to target a tick period that's consistent with our current FPS (a low
-            // but // consistent framerate is a better outcome than one that's
+            // // We choose scheduler parameters based on averages from previous
+            // frames // Try to target a tick period that's
+            // consistent with our current FPS (a low but // consistent
+            // framerate is a better outcome than one that's
             // faster on paper but // is bouncing around all over the place).
             // let stable_dt = self.average_busy
-            //     // Don't try to schedule for a tick rate that's higher than our target,
-            // even if we     // could achieve it.
+            //     // Don't try to schedule for a tick rate that's higher than
+            // our target, even if we     // could achieve it.
             //     .max(self.target_dt.as_secs_f64());
             // let priority = ThreadPriority::Deadline {
             //     runtime: Duration::from_secs_f64(self.average_busy * 0.5),
@@ -163,10 +165,10 @@ impl Clock {
         // absolute: we can't alter the progression of time. However, we can
         // alter the game clock and nudge it toward real time. The reason we
         // don't want to keep the two *exactly* in time is that a lag spike on a
-        // single tick would cause a corresponding jump in dt on the next tick, which
-        // might produce strange results for any dt-dependent gameplay systems.
-        // Instead, we gradually nudge the game time back toward real time over
-        // several ticks.
+        // single tick would cause a corresponding jump in dt on the next tick,
+        // which might produce strange results for any dt-dependent
+        // gameplay systems. Instead, we gradually nudge the game time
+        // back toward real time over several ticks.
         self.last_real_dt = tick_time;
         self.last_game_dt = (self.average_dt
             + (self.real_time.as_secs_f64() - self.game_time.as_secs_f64()) * NUDGE_RATE)

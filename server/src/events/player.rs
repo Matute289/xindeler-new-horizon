@@ -21,11 +21,11 @@ use specs::{Builder, Entity as EcsEntity, Join, WorldExt};
 use tracing::{Instrument, debug, error, trace, warn};
 
 pub fn handle_character_delete(server: &mut Server, ev: DeleteCharacterEvent) {
-    // Can't process a character delete for a player that has an in-game presence,
-    // so kick them out before processing the delete.
+    // Can't process a character delete for a player that has an in-game
+    // presence, so kick them out before processing the delete.
     // NOTE: This relies on StateExt::handle_initialize_character adding the
-    // Presence component when a character is initialized to detect whether a client
-    // is in-game.
+    // Presence component when a character is initialized to detect whether a
+    // client is in-game.
     let has_presence = {
         let presences = server.state.ecs().read_storage::<Presence>();
         presences.get(ev.entity).is_some()
@@ -83,8 +83,8 @@ pub fn handle_exit_ingame(server: &mut Server, entity: EcsEntity, skip_persisten
     // `entity_manipulation::handle_delete`.
     dismiss_active_chain_summons(state.ecs(), entity);
 
-    // Sync the player's character data to the database. This must be done before
-    // removing any components from the entity
+    // Sync the player's character data to the database. This must be done
+    // before removing any components from the entity
     let entity = if !skip_persistence {
         persist_entity(state, entity)
     } else {
@@ -228,9 +228,9 @@ pub fn handle_client_disconnect(
     let mut emit_logoff_event = true;
     let mut disconnected_event = None;
 
-    // Entity deleted below and persist_entity doesn't require a `Client` component,
-    // so we can just remove the Client component to get ownership of the
-    // participant.
+    // Entity deleted below and persist_entity doesn't require a `Client`
+    // component, so we can just remove the Client component to get
+    // ownership of the participant.
     if let Some(client) = server
         .state()
         .ecs()
@@ -342,8 +342,8 @@ pub fn handle_client_disconnect(
 /// that this function will not be called twice on an entity with the same
 /// character id.
 pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity {
-    // NOTE: `Client` component may already be removed by the caller to close the
-    // connection. Don't depend on it here!
+    // NOTE: `Client` component may already be removed by the caller to close
+    // the connection. Don't depend on it here!
     if let (
         Some(presence),
         Some(skill_set),
@@ -528,8 +528,8 @@ pub fn handle_possess(
         state.ecs().entity_from_uid(possessor_uid),
         state.ecs().entity_from_uid(possessee_uid),
     ) {
-        // In this section we check various invariants and can return early if any of
-        // them are not met.
+        // In this section we check various invariants and can return early if
+        // any of them are not met.
         let new_presence = {
             let ecs = state.ecs();
             // Check that entities still exist
@@ -559,9 +559,10 @@ pub fn handle_possess(
                 return;
             }
 
-            // Limit possessible entities to those in the client's subscribed regions (so
-            // that the entity already exists on the client, this reduces the
-            // amount of syncing edge cases to consider).
+            // Limit possessible entities to those in the client's subscribed
+            // regions (so that the entity already exists on the
+            // client, this reduces the amount of syncing edge cases
+            // to consider).
             let subscriptions = ecs.read_storage::<RegionSubscription>();
             let region_map = ecs.read_resource::<RegionMap>();
             let possessee_in_subscribed_region = subscriptions
@@ -601,15 +602,16 @@ pub fn handle_possess(
             // No early returns allowed after this.
         };
 
-        // Sync the player's character data to the database. This must be done before
-        // moving any components from the entity.
+        // Sync the player's character data to the database. This must be done
+        // before moving any components from the entity.
         //
-        // NOTE: Below we delete old entity (if PresenceKind::Character) as if logging
-        // out. This is to prevent any potential for item duplication (although
-        // it would only be possible if the player could repossess their entity,
-        // hand off some items, and then crash the server in a particular time
-        // window, and only admins should have access to the item with this ability
-        // in the first place (though that isn't foolproof)). We could potentially fix
+        // NOTE: Below we delete old entity (if PresenceKind::Character) as if
+        // logging out. This is to prevent any potential for item
+        // duplication (although it would only be possible if the player
+        // could repossess their entity, hand off some items, and then
+        // crash the server in a particular time window, and only admins
+        // should have access to the item with this ability in the first
+        // place (though that isn't foolproof)). We could potentially fix
         // this but it would require some tweaks to the CharacterUpdater code
         // (to be able to deque the pending persistence request issued here if
         // repossesing the original character), and it seems prudent to be more
@@ -619,14 +621,15 @@ pub fn handle_possess(
 
         let mut clients = ecs.write_storage::<Client>();
 
-        // Transfer client component. Note: we require this component for possession.
+        // Transfer client component. Note: we require this component for
+        // possession.
         let client = clients
             .remove(possessor)
             .expect("Checked client component was present above!");
         client.send_fallible(ServerGeneral::SetPlayerEntity(possessee_uid));
         let emit_player_list_events = client.client_type.emit_login_events();
-        // Note: we check that the `possessor` and `possessee` entities exist above, so
-        // this should never panic.
+        // Note: we check that the `possessor` and `possessee` entities exist
+        // above, so this should never panic.
         clients
             .insert(possessee, client)
             .expect("Checked entity was alive!");
@@ -639,8 +642,8 @@ pub fn handle_possess(
             transform: impl FnOnce(C) -> C,
         ) {
             if let Some(c) = storage.remove(possessor) {
-                // Note: we check that the `possessor` and `possessee` entities exist above, so
-                // this should never panic.
+                // Note: we check that the `possessor` and `possessee` entities
+                // exist above, so this should never panic.
                 storage
                     .insert(possessee, transform(c))
                     .expect("Checked entity was alive!");
@@ -667,11 +670,11 @@ pub fn handle_possess(
         });
 
         let mut presences = ecs.write_storage::<Presence>();
-        // We leave Presence on the old entity for character IDs to be properly removed
-        // from the ID mapping if deleting the previous entity.
+        // We leave Presence on the old entity for character IDs to be properly
+        // removed from the ID mapping if deleting the previous entity.
         //
-        // If the entity is not going to be deleted, we remove it so that the entity
-        // doesn't keep an area loaded.
+        // If the entity is not going to be deleted, we remove it so that the
+        // entity doesn't keep an area loaded.
         if delete_entity.is_none() {
             presences.remove(possessor);
         }
@@ -681,8 +684,8 @@ pub fn handle_possess(
                 .expect("Checked entity was alive!");
         }
 
-        // If a player is possessing, add possessee to playerlist as player and remove
-        // old player.
+        // If a player is possessing, add possessee to playerlist as player and
+        // remove old player.
         // Fetches from possessee entity here since we have transferred over the
         // `Player` component.
         if let Some(player) = players.get(possessee)

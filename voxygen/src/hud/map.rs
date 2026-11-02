@@ -276,20 +276,22 @@ impl Widget for Map<'_> {
             .unwrap_or(KeyMouse::Mouse(MouseButton::Middle));
         let mut events = Vec::new();
 
-        // MENU INPUTS: `Back` closes the map, same as the X button. Up/Down/Left/
-        // Right pans the view (a fixed step scaled by the current zoom, matching
-        // the mouse-drag delta's own `dragged / zoom` scaling below); Apply drops a
-        // location marker at the player's own position — a simple, always-
-        // well-defined action that doesn't depend on knowing where the (emulated)
+        // MENU INPUTS: `Back` closes the map, same as the X button.
+        // Up/Down/Left/ Right pans the view (a fixed step scaled by the
+        // current zoom, matching the mouse-drag delta's own `dragged /
+        // zoom` scaling below); Apply drops a location marker at the
+        // player's own position — a simple, always- well-defined action
+        // that doesn't depend on knowing where the (emulated)
         // cursor is, unlike the mouse click-to-place-marker path.
         //
         // The plan's original mention of driving map pan through
-        // `AnalogMenuInput::ScrollX/Y` doesn't hold up: that event is emitted by
-        // `window.rs`'s gilrs axis handling but nothing downstream
-        // (`session/mod.rs`, `hud/mod.rs`) ever consumes it — verified dead code,
-        // not wired end-to-end anywhere. Reusing the same discrete Left/Right/Up/
-        // Down every other window's dpad nav already relies on avoids adding that
-        // missing plumbing just for this one window.
+        // `AnalogMenuInput::ScrollX/Y` doesn't hold up: that event is emitted
+        // by `window.rs`'s gilrs axis handling but nothing downstream
+        // (`session/mod.rs`, `hud/mod.rs`) ever consumes it — verified dead
+        // code, not wired end-to-end anywhere. Reusing the same
+        // discrete Left/Right/Up/ Down every other window's dpad nav
+        // already relies on avoids adding that missing plumbing just
+        // for this one window.
         const MAP_PAN_STEP: f64 = 40.0;
         let marker_player_pos = self
             .client
@@ -491,7 +493,8 @@ impl Widget for Map<'_> {
                     .left()
                     .map(|drag| Vec2::<f64>::from(drag.delta_xy))
                     .sum();
-                // Drag represents offset of view from the player_pos in chunk coords
+                // Drag represents offset of view from the player_pos in chunk
+                // coords
                 let drag_new = drag + dragged / zoom;
                 if drag_new != drag {
                     events.push(Event::MapDrag(drag_new));
@@ -1026,8 +1029,8 @@ impl Widget for Map<'_> {
                 let rcpos = rwpos.wpos_to_cpos()
                 // Add map dragging
                 + drag.map(|e| e as f32);
-                // Convert to relative pixel coordinates from the center of the map
-                // Accounting for zooming
+                // Convert to relative pixel coordinates from the center of the
+                // map Accounting for zooming
                 let rpos = rcpos.map(|e| e * zoom as f32);
 
                 let dist_to_closest_map_edge =
@@ -1328,8 +1331,9 @@ impl Widget for Map<'_> {
             }
         }
         for (i, poi) in self.client.pois().iter().enumerate() {
-            // TODO: computation of text size to pass to wpos_to_rpos_fade, so it can
-            // determine when it's going past the edge of the map screen
+            // TODO: computation of text size to pass to wpos_to_rpos_fade, so
+            // it can determine when it's going past the edge of the
+            // map screen
             let (rpos, fade) = match wpos_to_rpos_fade(
                 poi.wpos.map(|e| e as f32),
                 Vec2::from(zoom as f32 * 3.0),
@@ -1615,8 +1619,8 @@ impl Widget for Map<'_> {
         }
 
         // Cursor pos relative to playerpos and widget size
-        // Cursor stops moving on an axis as soon as it's position exceeds the maximum
-        // // size of the widget
+        // Cursor stops moving on an axis as soon as it's position exceeds the
+        // maximum // size of the widget
 
         // Don't show if outside or near the edge of the map
         let arrow_sz = {

@@ -85,9 +85,10 @@ impl scrollable::Renderer for IcedRenderer {
                 });
 
                 let style = style_sheet;
-                // Note: for future use if we vary style with the state of the scrollable
-                //let style = if state.is_scroller_grabbed() {
-                //    style_sheet.dragging()
+                // Note: for future use if we vary style with the state of the
+                // scrollable let style = if
+                // state.is_scroller_grabbed() {    style_sheet.
+                // dragging()
                 //} else if is_mouse_over_scrollbar {
                 //    style_sheet.hovered()
                 //} else {
@@ -105,20 +106,23 @@ impl scrollable::Renderer for IcedRenderer {
                             linear_color: srgba_to_linear(color.map(|e| e as f32 / 255.0)),
                         }),
                         Scroller::Image { ends, mid, color } => {
-                            // Calculate sizes of ends pieces based on image aspect ratio
+                            // Calculate sizes of ends pieces based on image
+                            // aspect ratio
                             let (img_w, img_h) = self.image_dims(ends);
                             let end_height = bounds.width * img_h as f32 / img_w as f32;
 
-                            // Calcutate size of middle piece based on available space
-                            // Note: Might want to scale into real pixels for parts of this
-                            let (end_height, middle_height) =
-                                if end_height * 2.0 + 1.0 <= bounds.height {
-                                    (end_height, bounds.height - end_height * 2.0)
-                                } else {
-                                    // Take 1 logical pixel for the middle height
-                                    let remaining_height = bounds.height - 1.0;
-                                    (remaining_height / 2.0, 1.0)
-                                };
+                            // Calcutate size of middle piece based on available
+                            // space Note: Might
+                            // want to scale into real pixels for parts of this
+                            let (end_height, middle_height) = if end_height * 2.0 + 1.0
+                                <= bounds.height
+                            {
+                                (end_height, bounds.height - end_height * 2.0)
+                            } else {
+                                // Take 1 logical pixel for the middle height
+                                let remaining_height = bounds.height - 1.0;
+                                (remaining_height / 2.0, 1.0)
+                            };
 
                             // Top
                             primitives.push(Primitive::Image {

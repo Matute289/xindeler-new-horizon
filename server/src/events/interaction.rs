@@ -162,9 +162,10 @@ impl ServerEvent for DialogueEvent {
                 continue;
             }
 
-            // TODO: We check this because there's currently no way on the client to start
-            // a dialog, but a modified client could technically send a dialog message which
-            // comes with a bunch of issues and possible exploits.
+            // TODO: We check this because there's currently no way on the
+            // client to start a dialog, but a modified client could
+            // technically send a dialog message which comes with a
+            // bunch of issues and possible exploits.
 
             // Both can't be players to perform dialogs.
             if clients.get(sender).is_some() && clients.get(target).is_some() {
@@ -189,9 +190,11 @@ impl ServerEvent for DialogueEvent {
                     DialogueKind::Statement { given_item, .. } => given_item.as_ref(),
                     DialogueKind::Response { response, .. } => response.given_item.as_ref(),
                 };
-                // If the response requires an item to be given, perform exchange (or exit)
+                // If the response requires an item to be given, perform
+                // exchange (or exit)
                 if let Some((item_def, amount)) = given_item {
-                    // Check that the target's inventory has enough space for the item
+                    // Check that the target's inventory has enough space for
+                    // the item
                     if let Some(target_inv) = inventories.get(target)
                         && target_inv.has_space_for(item_def, *amount)
                         // Check that the sender has enough of the item
@@ -490,7 +493,8 @@ impl ServerEvent for MineBlockEvent {
                             required_damage.is_none_or(|required| damage >= required)
                         });
 
-                    // Stage changes happen in damage interval of `mine_drop_intevral`
+                    // Stage changes happen in damage interval of
+                    // `mine_drop_intevral`
                     let stage_changed = damage
                         .and_then(|damage| Some((sprite?.mine_drop_interval(), damage)))
                         .is_some_and(|(interval, damage)| damage % interval == 0);
@@ -558,7 +562,8 @@ impl ServerEvent for MineBlockEvent {
                                 chance_mod * f64::from(skill_level)
                             };
 
-                            // If the resource hasn't been fully broken, only drop certain resources
+                            // If the resource hasn't been fully broken, only
+                            // drop certain resources
                             // with a chance
                             if !is_broken {
                                 items.retain(|item| {
@@ -641,8 +646,8 @@ impl ServerEvent for SoundEvent {
     ) {
         let mut outcome_emitter = outcomes.emitter();
         for SoundEvent { sound } in events {
-            // TODO: Reduce the complexity of this problem by using spatial partitioning
-            // system
+            // TODO: Reduce the complexity of this problem by using spatial
+            // partitioning system
             for (agent, agent_pos) in (&mut agents, &positions).join() {
                 // TODO: Use pathfinding for more dropoff around obstacles
                 let agent_dist_sqrd = agent_pos.0.distance_squared(sound.pos);
@@ -661,7 +666,8 @@ impl ServerEvent for SoundEvent {
                 }
             }
 
-            // Attempt to turn this sound into an outcome to be received by frontends.
+            // Attempt to turn this sound into an outcome to be received by
+            // frontends.
             if let Some(outcome) = match sound.kind {
                 SoundKind::Utterance(kind, body) => Some(Outcome::Utterance {
                     kind,

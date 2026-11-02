@@ -112,12 +112,13 @@ impl<V, S: RectVolSize, M: Clone> Chonk<V, S, M> {
     {
         // First, defragment all subchunks.
         self.sub_chunks.iter_mut().for_each(SubChunk::defragment);
-        // For each homogeneous subchunk (i.e. those where all blocks are the same),
-        // find those which match `below` at the bottom of the cunk, or `above`
-        // at the top, since these subchunks are redundant and can be removed.
-        // Note that we find (and drain) the above chunks first, so that when we
-        // remove the below chunks we have fewer remaining chunks to backshift.
-        // Note that we use `take_while` instead of `rposition` here because `rposition`
+        // For each homogeneous subchunk (i.e. those where all blocks are the
+        // same), find those which match `below` at the bottom of the
+        // cunk, or `above` at the top, since these subchunks are
+        // redundant and can be removed. Note that we find (and drain)
+        // the above chunks first, so that when we remove the below
+        // chunks we have fewer remaining chunks to backshift. Note that
+        // we use `take_while` instead of `rposition` here because `rposition`
         // goes one past the end, which we only want in the forward direction.
         let above_count = self
             .sub_chunks
@@ -126,19 +127,19 @@ impl<V, S: RectVolSize, M: Clone> Chonk<V, S, M> {
             .take_while(|subchunk| subchunk.homogeneous() == Some(&self.above))
             .count();
         // Unfortunately, `TakeWhile` doesn't implement `ExactSizeIterator` or
-        // `DoubleEndedIterator`, so we have to recreate the same state by calling
-        // `nth_back` (note that passing 0 to nth_back goes back 1 time, not 0
-        // times!).
+        // `DoubleEndedIterator`, so we have to recreate the same state by
+        // calling `nth_back` (note that passing 0 to nth_back goes back
+        // 1 time, not 0 times!).
         let mut subchunks = self.sub_chunks.iter();
         if above_count > 0 {
             subchunks.nth_back(above_count - 1);
         }
-        // `above_index` is now the number of remaining elements, since all the elements
-        // we drained were at the end.
+        // `above_index` is now the number of remaining elements, since all the
+        // elements we drained were at the end.
         let above_index = subchunks.len();
-        // `below_len` now needs to be applied to the state after the `above` chunks are
-        // drained, to make sure we don't accidentally have overlap (this is
-        // possible if self.above == self.below).
+        // `below_len` now needs to be applied to the state after the `above`
+        // chunks are drained, to make sure we don't accidentally have
+        // overlap (this is possible if self.above == self.below).
         let below_len = subchunks.position(|subchunk| subchunk.homogeneous() != Some(&self.below));
         let below_len = below_len
             // NOTE: If `below_index` is `None`, then every *remaining* chunk after we drained
@@ -147,9 +148,9 @@ impl<V, S: RectVolSize, M: Clone> Chonk<V, S, M> {
         // Now, actually remove the redundant chunks.
         self.sub_chunks.truncate(above_index);
         self.sub_chunks.drain(..below_len);
-        // Finally, bump the z_offset to account for the removed subchunks at the
-        // bottom. TODO: Add invariants to justify why `below_len` must fit in
-        // i32.
+        // Finally, bump the z_offset to account for the removed subchunks at
+        // the bottom. TODO: Add invariants to justify why `below_len`
+        // must fit in i32.
         self.z_offset += below_len as i32 * SubChunkSize::<S>::SIZE.z as i32;
     }
 }
@@ -207,8 +208,8 @@ impl<V, S: RectVolSize, M: Clone> ReadVol for Chonk<V, S, M> {
         Self::Vox: Copy,
     {
         let idx = self.sub_chunk_idx(aabb.min.z);
-        // Special-case for the AABB being entirely within a single sub-chunk as this is
-        // very common.
+        // Special-case for the AABB being entirely within a single sub-chunk as
+        // this is very common.
         if idx == self.sub_chunk_idx(aabb.max.z) && idx >= 0 && idx < self.sub_chunks.len() as i32 {
             let sub_chunk = &self.sub_chunks[idx as usize];
             let z_off = self.z_offset + idx * SubChunkSize::<S>::SIZE.z as i32;

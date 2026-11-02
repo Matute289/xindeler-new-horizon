@@ -329,9 +329,9 @@ fn poise_resilience_from(inventory: Option<&Inventory>, msm: &MaterialStatManife
 /// `0.1`, and at `0.1` flat with no inventory at all, so the result
 /// never drops below `1.0`.
 fn precision_mult_from(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f32 {
-    // Starts with a value of 0.1 when summing the stats from each armor piece, and
-    // defaults to a value of 0.1 if no inventory is equipped. Precision multiplier
-    // cannot go below 1
+    // Starts with a value of 0.1 when summing the stats from each armor piece,
+    // and defaults to a value of 0.1 if no inventory is equipped. Precision
+    // multiplier cannot go below 1
     1.0 + inventory
         .map_or(0.1, |inv| {
             inv.equipped_items()
@@ -352,8 +352,8 @@ fn precision_mult_from(inventory: Option<&Inventory>, msm: &MaterialStatManifest
 /// The energy-reward modifier from worn armour — an additive sum onto a
 /// multiplicative identity of `1.0`.
 fn energy_reward_mod_from(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f32 {
-    // Starts with a value of 1.0 when summing the stats from each armor piece, and
-    // defaults to a value of 1.0 if no inventory is present
+    // Starts with a value of 1.0 when summing the stats from each armor piece,
+    // and defaults to a value of 1.0 if no inventory is present
     inventory.map_or(1.0, |inv| {
         inv.equipped_items()
             .filter_map(|item| {
@@ -608,8 +608,8 @@ fn combat_rating_from(terms: CombatRatingTerms<'_>) -> f32 {
         / 100.0
         / (1.0 - combat_rating_damage_reduction(protection_unattuned)).max(0.00001);
 
-    // Normalized with a standard max energy of 100 and energy reward multiplier of
-    // x1
+    // Normalized with a standard max energy of 100 and energy reward multiplier
+    // of x1
     let energy_rating = (energy_base_max + max_energy_mod_unattuned) / 100.0 * energy_reward_mod;
 
     // Normalized with a standard max poise of 100
@@ -649,8 +649,9 @@ fn combat_rating_from(terms: CombatRatingTerms<'_>) -> f32 {
             + SKILLS_WEIGHT
             + WEAPON_WEIGHT);
 
-    // Body multiplier meant to account for an enemy being harder than equipment and
-    // skills would account for. It should only not be 1.0 for non-humanoids
+    // Body multiplier meant to account for an enemy being harder than equipment
+    // and skills would account for. It should only not be 1.0 for
+    // non-humanoids
     combined_rating * body.combat_multiplier()
 }
 

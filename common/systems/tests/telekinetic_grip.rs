@@ -87,12 +87,12 @@ mod tests {
         state.ecs_mut().read_resource::<Time>();
         state.ecs_mut().read_resource::<DeltaTime>();
         // `event_emitters!` (see `common/src/event.rs`) fetches these as
-        // `Option<Read<EventBus<_>>>`, so combat code silently no-ops instead of
-        // panicking when they're missing — normally fine, but it means a test
-        // that wants to observe combat events (unlike production, where the
-        // server explicitly registers every event bus — see
-        // `server/src/events/event_types.rs::register_event_busses`) has to
-        // insert them itself.
+        // `Option<Read<EventBus<_>>>`, so combat code silently no-ops instead
+        // of panicking when they're missing — normally fine, but it
+        // means a test that wants to observe combat events (unlike
+        // production, where the server explicitly registers every event
+        // bus — see `server/src/events/event_types.
+        // rs::register_event_busses`) has to insert them itself.
         state
             .ecs_mut()
             .insert(EventBus::<HealthChangeEvent>::default());
@@ -400,11 +400,13 @@ mod tests {
             let (item_entity, item_uid) = create_item(&mut state, Vec3::new(1.0, 0.0, 0.0));
             let (other_leader_entity, other_leader_uid) = create_bare_synced_entity(&mut state);
             {
-                // Both halves of the link need to exist for it to read as a live
-                // tether rather than a stale one — `tether::Sys` self-heals (drops)
-                // a follower whose leader doesn't carry `Is<Leader>` (see
-                // `common/systems/src/tether.rs`), which would otherwise make this
-                // fixture disappear before the caster's own grab attempt even runs.
+                // Both halves of the link need to exist for it to read as a
+                // live tether rather than a stale one —
+                // `tether::Sys` self-heals (drops) a follower
+                // whose leader doesn't carry `Is<Leader>` (see
+                // `common/systems/src/tether.rs`), which would otherwise make
+                // this fixture disappear before the caster's
+                // own grab attempt even runs.
                 let handle = LinkHandle::from_link(Tethered {
                     leader: other_leader_uid,
                     follower: item_uid,
@@ -489,10 +491,11 @@ mod tests {
             let mut healths = state.ecs().write_storage::<Health>();
             healths.get_mut(caster).unwrap().is_dead = true;
         }
-        // One tick for `character_behavior::Sys`'s safety net to *queue* removing
-        // the dead caster's `Is<Leader>` (applied via `LazyUpdate`, so it isn't
-        // visible until this tick's `maintain()`), a second for `tether::Sys` to
-        // observe it's actually gone and self-heal the item's `Is<Follower>`.
+        // One tick for `character_behavior::Sys`'s safety net to *queue*
+        // removing the dead caster's `Is<Leader>` (applied via
+        // `LazyUpdate`, so it isn't visible until this tick's
+        // `maintain()`), a second for `tether::Sys` to observe it's
+        // actually gone and self-heal the item's `Is<Follower>`.
         tick(&mut state, Duration::from_millis(16));
         tick(&mut state, Duration::from_millis(16));
 
@@ -624,7 +627,8 @@ mod tests {
         complete_buildup(&mut state, &ability);
 
         // Hold well past `place_threshold` (and up to `charge_duration`) before
-        // releasing, so this reads as a deliberate throw at (close to) full charge.
+        // releasing, so this reads as a deliberate throw at (close to) full
+        // charge.
         let hold_ticks: u32 = 30;
         let dt = ability.charge_duration / hold_ticks;
         for _ in 0..hold_ticks {
@@ -638,10 +642,10 @@ mod tests {
         let velocities = state.ecs().read_storage::<Vel>();
         let vel = velocities.get(item_entity).expect("item lost its Vel");
         // Check the horizontal (xy) speed rather than the full 3D magnitude:
-        // gravity has had a tick to nudge in a small z-component by the time this
-        // reads, which isn't part of what the throw formula controls, and the
-        // caster's default look direction (used as the throw direction) isn't
-        // pinned to a specific axis here.
+        // gravity has had a tick to nudge in a small z-component by the time
+        // this reads, which isn't part of what the throw formula
+        // controls, and the caster's default look direction (used as
+        // the throw direction) isn't pinned to a specific axis here.
         assert!(
             (vel.0.xy().magnitude() - expected_speed).abs() < 0.5,
             "expected throw speed ~{expected_speed} horizontally, got {:?}",
@@ -701,8 +705,8 @@ mod tests {
             stats.get_mut(caster).unwrap().accuracy = 100.0;
         }
 
-        // Hold well past `place_threshold` so this reads as a throw, not a place
-        // (mirrors `release_as_throw`).
+        // Hold well past `place_threshold` so this reads as a throw, not a
+        // place (mirrors `release_as_throw`).
         let hold_ticks: u32 = 30;
         let dt = ability.charge_duration / hold_ticks;
         for _ in 0..hold_ticks {

@@ -202,8 +202,8 @@ pub fn run_migrations(settings: &DatabaseSettings) {
     diesel_to_rusqlite::migrate_from_diesel(&mut conn)
         .expect("One-time migration from Diesel to Refinery failed");
 
-    // If migrations fail to run, the server cannot start since the database will
-    // not be in the required state.
+    // If migrations fail to run, the server cannot start since the database
+    // will not be in the required state.
     let report: Report = embedded::migrations::runner()
         .set_abort_divergent(false)
         .run(&mut conn.connection)

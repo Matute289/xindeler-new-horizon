@@ -789,7 +789,8 @@ impl Fill {
                 .into_iter()
                 .map(|aabb| {
                     let mat = mat.as_::<f32>();
-                    // - 0.5 because we want the point to be at the minimum of the voxel
+                    // - 0.5 because we want the point to be at the minimum of
+                    //   the voxel
                     let vec = vec - 0.5;
                     let new_aabb = Aabb::<f32> {
                         min: vec + mat * (aabb.min.as_() - vec),
@@ -1688,17 +1689,17 @@ pub trait Structure: core::any::Any {
     /// hot-reloading.
     fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> { None }
 
-    // Function is designed such that it should be 'zero-cost' when dynamic linking
-    // is disabled because both `Self` and `dyn Structure` implement
+    // Function is designed such that it should be 'zero-cost' when dynamic
+    // linking is disabled because both `Self` and `dyn Structure` implement
     // `Structure`.
     fn as_dyn(&self) -> &(impl Structure + ?Sized)
     where
         Self: Sized,
     {
-        // When hot-linking is enabled, and the current structure supports it, look up
-        // the vtable generator function in the guest dynamic library and use it
-        // to generate a dyn pointer to the structure using the *guest's*
-        // vtables.
+        // When hot-linking is enabled, and the current structure supports it,
+        // look up the vtable generator function in the guest dynamic
+        // library and use it to generate a dyn pointer to the structure
+        // using the *guest's* vtables.
         #[cfg(feature = "use-dyn-lib")]
         if let Some((_, fn_name)) = self.as_dyn_outer() {
             let lock = LIB.lock().unwrap();
@@ -1711,7 +1712,8 @@ pub trait Structure: core::any::Any {
             // that exported fn item exactly.
             let f: common_dynlib::Symbol<fn(&Self) -> Option<(&dyn Structure, &'static str)>> =
                 unsafe {
-                    // Overhead of 0.5-5 us (could use hashmap to mitigate if this is an issue)
+                    // Overhead of 0.5-5 us (could use hashmap to mitigate if
+                    // this is an issue)
                     lib.get(fn_name)
                 }
                 .unwrap_or_else(|e| panic!("Trying to use: {fn_name} but had error: {e:?}"));

@@ -25,8 +25,9 @@ impl<'a> System<'a> for Sys {
         _job: &mut Job<Self>,
         (entities, mut loot_owners, id_maps, group_manager): Self::SystemData,
     ) {
-        // Find and remove expired loot ownership. Loot ownership is expired when either
-        // the expiry time has passed, or the owner no longer exists
+        // Find and remove expired loot ownership. Loot ownership is expired
+        // when either the expiry time has passed, or the owner no
+        // longer exists
         let expired = (&entities, &loot_owners)
             .join()
             .filter(|(_, loot_owner)| {
@@ -36,7 +37,8 @@ impl<'a> System<'a> for Sys {
                             .uid_entity(uid)
                             .is_none_or(|entity| !entities.is_alive(entity)),
                         LootOwnerKind::Group(group) => {
-                            // Special alignment groups (NPC and ENEMY) aren't tracked by the group
+                            // Special alignment groups (NPC and ENEMY) aren't
+                            // tracked by the group
                             // manager, check them separately here
                             !group.is_special() && group_manager.group_info(group).is_none()
                         },

@@ -220,18 +220,22 @@ impl<'a> System<'a> for Sys {
                 ),
                 combo,
             ) = comps;
-            // Safety net for `TelekineticGrip`: if the caster leaves that state through any
-            // path that skips its own release logic (an interrupt, disconnect, death, ...),
-            // make sure the `Is<Leader>` half of the tether link doesn't outlive it. The
-            // `tether` system self-heals the follower's `Is<Follower>` once it notices the
-            // leader lost its `Is<Leader>` (see `common/systems/src/tether.rs`), so
-            // dropping just this side here is enough to unwind the whole link.
+            // Safety net for `TelekineticGrip`: if the caster leaves that state
+            // through any path that skips its own release logic (an
+            // interrupt, disconnect, death, ...), make sure the
+            // `Is<Leader>` half of the tether link doesn't outlive it. The
+            // `tether` system self-heals the follower's `Is<Follower>` once it
+            // notices the leader lost its `Is<Leader>` (see
+            // `common/systems/src/tether.rs`), so dropping just
+            // this side here is enough to unwind the whole link.
             //
-            // This must run *before*, and independently of, the death early-return below:
-            // dying doesn't itself change `char_state` away from `TelekineticGrip` (death
-            // is tracked separately via `Health.is_dead`), so a dead caster's state can
-            // still read as `TelekineticGrip` here — without the explicit `is_dead` check
-            // a corpse would keep holding its item tethered to it indefinitely.
+            // This must run *before*, and independently of, the death
+            // early-return below: dying doesn't itself change
+            // `char_state` away from `TelekineticGrip` (death
+            // is tracked separately via `Health.is_dead`), so a dead caster's
+            // state can still read as `TelekineticGrip` here —
+            // without the explicit `is_dead` check a corpse would
+            // keep holding its item tethered to it indefinitely.
             let is_dead = health.is_some_and(|h| h.is_dead);
             if is_dead || !matches!(&*char_state, CharacterState::TelekineticGrip(_)) {
                 read_data.lazy_update.remove::<Is<Leader>>(entity);
@@ -243,7 +247,8 @@ impl<'a> System<'a> for Sys {
                 return;
             }
 
-            // Remove components that entity should not have if not in relevant char state
+            // Remove components that entity should not have if not in relevant
+            // char state
             if !char_state.is_melee_attack() {
                 read_data.lazy_update.remove::<Melee>(entity);
             }
@@ -348,7 +353,8 @@ impl<'a> System<'a> for Sys {
             // Mounted occurs after control actions have been handled
             // If mounted, character state is controlled by mount
             if is_rider.is_some() && !join_struct.char_state.can_perform_mounted() {
-                // TODO: A better way to swap between mount inputs and rider inputs
+                // TODO: A better way to swap between mount inputs and rider
+                // inputs
                 *join_struct.char_state = CharacterState::Idle(idle::Data::default());
                 return;
             }
@@ -481,7 +487,8 @@ impl Sys {
                                 continue;
                             };
                             // Fix the price now, with the token: nothing may
-                            // re-configure the slot mid-cast and have it charged
+                            // re-configure the slot mid-cast and have it
+                            // charged
                             // as a different spell.
                             let circle = ability_pool
                                 .and_then(|pool| pool.spell_gate(slot.ability.pool_index()))
@@ -498,10 +505,12 @@ impl Sys {
                             ));
                         },
                         SlotState::Firing { deadline, .. } => {
-                            // The cast never happened — the caster died, ran out
-                            // of energy, was blocked by an antimagic field, or
-                            // stayed busy too long. Give the slot straight back,
-                            // having spent nothing: a failed cast must never
+                            // The cast never happened — the caster died, ran
+                            // out of energy, was
+                            // blocked by an antimagic field, or
+                            // stayed busy too long. Give the slot straight
+                            // back, having spent
+                            // nothing: a failed cast must never
                             // burn a cooldown measured in hours.
                             if is_dead || now.0 > deadline.0 {
                                 controller.queued_inputs.remove(&input);
@@ -512,8 +521,9 @@ impl Sys {
                             ready_at,
                             ready_at_time,
                         } => {
-                            // Compared against the in-game `Time` projection the
-                            // server computed when the slot fired, never against
+                            // Compared against the in-game `Time` projection
+                            // the server computed
+                            // when the slot fired, never against
                             // a system clock — this runs on the client too, and
                             // a client's clock is attacker-controlled.
                             if now.0 < ready_at_time.0 {
@@ -526,8 +536,9 @@ impl Sys {
                             // stores it), so before actually releasing, the
                             // server confirms against it — and, if the
                             // projection merely ran ahead, rebuilds the
-                            // projection from the real remaining wait instead of
-                            // releasing. `ready_at` is `None` on a client (it is
+                            // projection from the real remaining wait instead
+                            // of releasing.
+                            // `ready_at` is `None` on a client (it is
                             // `#[serde(skip)]`), so a client only ever predicts
                             // from the projection and never reads a clock; and
                             // because a failed confirmation re-projects, the
@@ -627,13 +638,14 @@ impl Sys {
         state_update: StateUpdate,
         output_events: &mut OutputEvents,
     ) {
-        // Here we check for equality with the previous value of these components before
-        // updating them so that the modification detection will not be
-        // triggered unnecessarily. This is important for minimizing updates
-        // sent to the clients (and thus keeping bandwidth usage down).
+        // Here we check for equality with the previous value of these
+        // components before updating them so that the modification
+        // detection will not be triggered unnecessarily. This is
+        // important for minimizing updates sent to the clients (and
+        // thus keeping bandwidth usage down).
         //
-        // TODO: if checking equality is expensive for char_state use optional field in
-        // StateUpdate
+        // TODO: if checking equality is expensive for char_state use optional
+        // field in StateUpdate
         if *join.char_state != state_update.character {
             *join.char_state = state_update.character
         }

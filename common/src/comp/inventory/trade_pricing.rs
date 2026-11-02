@@ -233,9 +233,10 @@ impl FreqEntries {
             self.0.push(new_mat_prob);
         }
 
-        // Add the non-canonical item so that it'll show up in merchant inventories
-        // It will have infinity as its price, but it's fine,
-        // because we determine all prices based on canonical value
+        // Add the non-canonical item so that it'll show up in merchant
+        // inventories It will have infinity as its price, but it's
+        // fine, because we determine all prices based on canonical
+        // value
         if canonical_itemname != item_name && !self.0.iter().any(|elem| elem.name == *item_name) {
             self.0.push(FreqEntry {
                 name: item_name.to_owned(),
@@ -481,7 +482,8 @@ struct EqualitySet {
 
 impl EqualitySet {
     fn canonical<'a>(&'a self, item_name: &'a ItemDefinitionIdOwned) -> &'a ItemDefinitionIdOwned {
-        // TODO: use hashbrown Equivalent trait to avoid needing owned item def here
+        // TODO: use hashbrown Equivalent trait to avoid needing owned item def
+        // here
 
         (self
             .equivalence_class
@@ -890,7 +892,8 @@ impl TradePricing {
         drop(secondaries);
 
         // re-evaluate prices based on crafting tables
-        // (start with cheap ones to avoid changing material prices after evaluation)
+        // (start with cheap ones to avoid changing material prices after
+        // evaluation)
         let ability_map = &AbilityMap::load().read();
         let msm = &MaterialStatManifest::load().read();
         while result.sort_by_price(&mut ordered_recipes) {
@@ -1153,7 +1156,8 @@ impl TradePricing {
             )
             .ok()
             .map(|it| {
-                //let price = mat_use.iter().map(|(amount, _good)| *amount).sum::<f32>();
+                //let price = mat_use.iter().map(|(amount, _good)|
+                // *amount).sum::<f32>();
                 let prob = 1.0 / pricesum;
                 let (info, unit) = more_information(&it, prob);
                 let materials = mat_use

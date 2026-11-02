@@ -224,8 +224,8 @@ fn apply_spec(spec: &TestCharSpec, opt: &Opt, runtime: &Arc<Runtime>) -> Result<
     };
 
     // Find the character by name, or create it (race → species at creation; the
-    // real class is applied by /make_test_char, so we always create a Warrior with
-    // the always-valid sword starter).
+    // real class is applied by /make_test_char, so we always create a Warrior
+    // with the always-valid sword starter).
     let char_id = if let Some(id) = find_id(&client) {
         id
     } else {
@@ -270,7 +270,8 @@ fn apply_spec(spec: &TestCharSpec, opt: &Opt, runtime: &Arc<Runtime>) -> Result<
         }
     }
 
-    // Configure via the admin command, then keep ticking so the server applies it.
+    // Configure via the admin command, then keep ticking so the server applies
+    // it.
     client.send_command("make_test_char".to_owned(), make_test_char_args(spec));
     for _ in 0..FLUSH_TICKS {
         tick(&mut client)?;

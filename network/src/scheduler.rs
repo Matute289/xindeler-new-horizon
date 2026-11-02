@@ -288,8 +288,10 @@ impl Scheduler {
                 |(pid, (timeout_time, return_once_successful_shutdown))| {
                     //Closing Participants is done the following way:
                     // 1. We drop our senders and receivers
-                    // 2. we need to close BParticipant, this will drop its senderns and receivers
-                    // 3. Participant will try to access the BParticipant senders and receivers with
+                    // 2. we need to close BParticipant, this will drop its
+                    //    senderns and receivers
+                    // 3. Participant will try to access the BParticipant
+                    //    senders and receivers with
                     // their next api action, it will fail and be closed then.
                     let participants = Arc::clone(&self.participants);
                     async move {
@@ -298,7 +300,8 @@ impl Scheduler {
                         trace!(?pid, "dropped participants lock");
                         let r = if let Some(mut pi) = pi {
                             let (finished_sender, finished_receiver) = oneshot::channel();
-                            // NOTE: If there's nothing to synchronize on (because the send failed)
+                            // NOTE: If there's nothing to synchronize on
+                            // (because the send failed)
                             // we can assume everything relevant was shut down.
                             let _ = pi
                                 .s2b_shutdown_bparticipant_s
@@ -307,7 +310,8 @@ impl Scheduler {
                                 .send((timeout_time, finished_sender));
                             drop(pi);
                             trace!(?pid, "dropped bparticipant, waiting for finish");
-                            // If await fails, already shut down, so send Ok(()).
+                            // If await fails, already shut down, so send
+                            // Ok(()).
                             let e = finished_receiver.await.unwrap_or(Ok(()));
                             trace!(?pid, "waiting completed");
                             // can fail as api.rs has a timeout
@@ -388,8 +392,8 @@ impl Scheduler {
             }
         }
         debug!("Scheduler shut down gracefully");
-        //removing the possibility to create new participants, needed to close down
-        // some mgr:
+        //removing the possibility to create new participants, needed to close
+        // down some mgr:
         self.participant_channels.lock().await.take();
 
         trace!("Stop scheduler_shutdown_mgr");
@@ -419,7 +423,8 @@ impl Scheduler {
         let local_pid = self.local_pid;
         let local_secret = self.local_secret;
         let output_limit = self.output_limit;
-        // this is necessary for UDP to work at all and to remove code duplication
+        // this is necessary for UDP to work at all and to remove code
+        // duplication
         tokio::spawn(
             async move {
                 trace!(?cid, "Open channel and be ready for Handshake");
@@ -479,19 +484,23 @@ impl Scheduler {
                                     .run(participant_channels.b2s_prio_statistic_s)
                                     .instrument(info_span!("remote", ?p)),
                             );
-                            //create a new channel within BParticipant and wait for it to run
+                            //create a new channel within BParticipant and wait
+                            // for it to run
                             let (b2s_create_channel_done_s, b2s_create_channel_done_r) =
                                 oneshot::channel();
-                            //From now on wire connects directly with bparticipant!
+                            //From now on wire connects directly with
+                            // bparticipant!
                             s2b_create_channel_s
                                 .send((cid, sid, protocol, con_addr, b2s_create_channel_done_s))
                                 .unwrap();
                             b2s_create_channel_done_r.await.unwrap();
                             if let Some(pid_oneshot) = s2a_return_pid_s {
-                                // someone is waiting with `connect`, so give them their PID
+                                // someone is waiting with `connect`, so give
+                                // them their PID
                                 pid_oneshot.send(Ok(participant)).unwrap();
                             } else {
-                                // no one is waiting on this Participant, return in to Network
+                                // no one is waiting on this Participant, return
+                                // in to Network
                                 if participant_channels
                                     .s2a_connected_s
                                     .send(participant)
@@ -516,7 +525,8 @@ impl Scheduler {
                                 error!(?cid, "Just dropping here, TODO handle this correctly!");
                                 //TODO
                                 if let Some(pid_oneshot) = s2a_return_pid_s {
-                                    // someone is waiting with `connect`, so give them their Error
+                                    // someone is waiting with `connect`, so
+                                    // give them their Error
                                     pid_oneshot
                                         .send(Err(NetworkConnectError::InvalidSecret))
                                         .unwrap();
@@ -537,7 +547,8 @@ impl Scheduler {
                         #[cfg(feature = "metrics")]
                         metrics.failed_handshakes_total.inc();
                         if let Some(pid_oneshot) = s2a_return_pid_s {
-                            // someone is waiting with `connect`, so give them their Error
+                            // someone is waiting with `connect`, so give them
+                            // their Error
                             trace!(?cid, "returning the Err to api who requested the connect");
                             pid_oneshot
                                 .send(Err(NetworkConnectError::Handshake(e)))

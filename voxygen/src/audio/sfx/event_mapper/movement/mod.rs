@@ -159,8 +159,8 @@ impl EventMapper for MovementEventMapper {
                     internal_state.steps_taken = 0.0;
                 }
 
-                // update state to determine the next event. We only record the time (above) if
-                // it was dispatched
+                // update state to determine the next event. We only record the
+                // time (above) if it was dispatched
                 internal_state.event = mapped_event;
                 internal_state.on_ground = physics.on_ground.is_some();
                 internal_state.in_water = physics.in_liquid().is_some();

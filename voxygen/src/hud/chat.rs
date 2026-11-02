@@ -201,8 +201,8 @@ impl<'a> Chat<'a> {
     }
 
     pub fn scrolled_to_bottom(state: &State, ui: &UiCell) -> bool {
-        // Might be more efficient to cache result and update it when a scroll event has
-        // occurred instead of every frame.
+        // Might be more efficient to cache result and update it when a scroll
+        // event has occurred instead of every frame.
         if let Some(scroll) = ui
             .widget_graph()
             .widget(state.ids.message_box)
@@ -354,18 +354,20 @@ impl Widget for Chat<'_> {
         // Maintain scrolling
         if !self.new_messages.is_empty() {
             for message in self.new_messages.iter() {
-                // Log the output of commands since the ingame terminal doesn't support copying
-                // the output to the clipboard
+                // Log the output of commands since the ingame terminal doesn't
+                // support copying the output to the clipboard
                 if let ChatType::CommandInfo = &message.chat_type {
                     tracing::info!("Chat command info: {:?}", message.content());
                 }
             }
-            // new messages - update chat w/ them & scroll down if at bottom of chat
+            // new messages - update chat w/ them & scroll down if at bottom of
+            // chat
             state.update(|s| {
                 s.messages
                     .extend(self.new_messages.drain(..).map(|m| (m, Local::now())))
             });
-            // Prevent automatic scroll upon new messages if not already scrolled to bottom
+            // Prevent automatic scroll upon new messages if not already
+            // scrolled to bottom
             if Self::scrolled_to_bottom(state, ui) {
                 ui.scroll_widget(state.ids.message_box, [0.0, f64::MAX]);
             }
@@ -389,16 +391,18 @@ impl Widget for Chat<'_> {
 
         let mut force_cursor = self.force_cursor;
 
-        // Ctrl+Shift+C copies the whole visible chat log to the clipboard as plain
-        // text — the scrollback itself isn't a selectable/copyable widget (only the
-        // input line is, via `TextEdit`'s own Ctrl+C), so this is the only way to
-        // get e.g. a command's error output out to paste elsewhere. Shift
+        // Ctrl+Shift+C copies the whole visible chat log to the clipboard as
+        // plain text — the scrollback itself isn't a
+        // selectable/copyable widget (only the input line is, via
+        // `TextEdit`'s own Ctrl+C), so this is the only way to get e.g.
+        // a command's error output out to paste elsewhere. Shift
         // distinguishes it from `TextEdit`'s native Ctrl+C (copy selection).
-        // Keyboard capture can sit on either the input line (`chat_input`, after the
-        // player has typed something) or the outer chat widget (`id`, e.g. right
-        // after clicking into the scrollback to read history) — mirrors
-        // `input_focused` below. Checking `chat_input` alone silently drops the
-        // shortcut (and its confirmation line) whenever focus is on `id`.
+        // Keyboard capture can sit on either the input line (`chat_input`,
+        // after the player has typed something) or the outer chat
+        // widget (`id`, e.g. right after clicking into the scrollback
+        // to read history) — mirrors `input_focused` below. Checking
+        // `chat_input` alone silently drops the shortcut (and its
+        // confirmation line) whenever focus is on `id`.
         let copy_log_requested = [state.ids.chat_input, id].iter().any(|widget_id| {
             ui.widget_input(*widget_id)
                 .presses()
@@ -421,9 +425,9 @@ impl Widget for Chat<'_> {
                     _ => (n, m, true),
                 },
             );
-        // Non-control character keypress events are currently replaced by text events
-        // (and such keyrelease events are swallowed) for conrod so we need to check
-        // these as well for stopping completion
+        // Non-control character keypress events are currently replaced by text
+        // events (and such keyrelease events are swallowed) for conrod
+        // so we need to check these as well for stopping completion
         let stop_tab_completion = stop_tab_completion
             || ui
                 .widget_input(state.ids.chat_input)
@@ -481,7 +485,8 @@ impl Widget for Chat<'_> {
             false
         };
 
-        // Check if we need to change the chat mode if we have completed a command
+        // Check if we need to change the chat mode if we have completed a
+        // command
         if state.input.message.ends_with(' ') {
             change_chat_mode(
                 state.input.message.clone(),
@@ -542,8 +547,8 @@ impl Widget for Chat<'_> {
                 .top_left_with_margin_on(state.ids.chat_input_bg, 2.0)
                 .set(state.ids.chat_input_icon, ui);
 
-            // Any changes to this TextEdit's width and font size must be reflected in
-            // `cursor_offset_to_index` below.
+            // Any changes to this TextEdit's width and font size must be
+            // reflected in `cursor_offset_to_index` below.
             let mut text_edit = TextEdit::new(&state.input.message)
                 .w(chat_box_input_width)
                 .restrict_to_height(false)
@@ -733,9 +738,10 @@ impl Widget for Chat<'_> {
             if item.i < messages.len() {
                 let (is_moderator, chat_type, text) = &messages[item.i];
                 let (color, icon) = render_chat_line(chat_type, self.imgs);
-                // For each ChatType needing localization get/set matching pre-formatted
-                // localized string. This string will be formatted with the data
-                // provided in ChatType in the client/src/mod.rs
+                // For each ChatType needing localization get/set matching
+                // pre-formatted localized string. This string
+                // will be formatted with the data provided in
+                // ChatType in the client/src/mod.rs
                 // fn format_message called below
 
                 let text = Text::new(text)
@@ -753,7 +759,8 @@ impl Widget for Chat<'_> {
                 };
                 item.set(text.h(y), ui);
 
-                // If the user is a moderator display a moderator icon with their alias.
+                // If the user is a moderator display a moderator icon with
+                // their alias.
                 if *is_moderator {
                     let offset_with_timestamp = show_timestamp
                         .then(|| {
@@ -786,8 +793,8 @@ impl Widget for Chat<'_> {
                     .parent(state.ids.chat_icon_align)
                     .set(icon_id, ui);
             } else {
-                // Spacer at bottom of the last message so that it is not cut off.
-                // Needs to be larger than the space above.
+                // Spacer at bottom of the last message so that it is not cut
+                // off. Needs to be larger than the space above.
                 item.set(
                     Text::new("")
                         .font_size(self.fonts.universal.scale(6))
@@ -957,7 +964,8 @@ impl Widget for Chat<'_> {
             ui.scroll_widget(state.ids.message_box, [0.0, chat_size.y])
         }
 
-        // We've started a new tab completion. Populate tab completion suggestions.
+        // We've started a new tab completion. Populate tab completion
+        // suggestions.
         if request_tab_completions {
             events.push(Event::TabCompletionStart(state.input.message.to_string()));
         // If the chat widget is focused, return a focus event to pass the focus
@@ -975,7 +983,8 @@ impl Widget for Chat<'_> {
                 let has_message = !state.input.message.is_empty();
                 let pressed = matches!(key_press.key, Key::Return | Key::NumPadEnter);
                 if pressed {
-                    // If chat was hidden, scroll to bottom the next time it is opened
+                    // If chat was hidden, scroll to bottom the next time it is
+                    // opened
                     state.update(|s| s.scroll_next |= force_chat);
                     events.push(Event::DisableForceChat);
                 }
@@ -986,7 +995,8 @@ impl Widget for Chat<'_> {
             state.update(|s| {
                 s.input.message.clear();
                 // Update the history
-                // Don't add if this is identical to the last message in the history
+                // Don't add if this is identical to the last message in the
+                // history
                 s.history_pos = 0;
                 if s.history.front() != Some(&msg) {
                     s.history.push_front(msg.clone());
@@ -1214,8 +1224,9 @@ mod tests {
             Ok(("say", vec!["Hello World".to_string()]));
         assert_eq!(parse_cmd(r#"say "Hello World""#), expected);
 
-        // Note: \n in the expected gets expanded by rust to a newline character, that's
-        // why we must not use a raw string in the expected
+        // Note: \n in the expected gets expanded by rust to a newline
+        // character, that's why we must not use a raw string in the
+        // expected
         let expected: Result<(&str, Vec<String>), String> =
             Ok(("say", vec!["Hello\nWorld".to_string()]));
         assert_eq!(parse_cmd(r#"say "Hello\nWorld""#), expected);

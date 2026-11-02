@@ -49,19 +49,21 @@ impl<'a> System<'a> for Sys {
         ): Self::SystemData,
     ) {
         // Self-heal links whose two sides have gone out of sync (entity death,
-        // disconnect, an ability interrupt that skipped its own release logic, two
-        // casters racing to grab the same follower in the same tick, ...), rather
-        // than leaving either side permanently referencing a partner that no
-        // longer agrees the link exists. Two passes are needed because a stale
-        // side can go undetected from only one direction: a *follower* whose
-        // leader moved on is caught by walking followers and checking their
+        // disconnect, an ability interrupt that skipped its own release logic,
+        // two casters racing to grab the same follower in the same
+        // tick, ...), rather than leaving either side permanently
+        // referencing a partner that no longer agrees the link exists.
+        // Two passes are needed because a stale side can go undetected
+        // from only one direction: a *follower* whose leader moved on
+        // is caught by walking followers and checking their
         // leader below, but a *leader* whose claimed follower was actually won
-        // by a different leader (e.g. the loser of a same-tick grab race) has no
-        // follower pointing back at it at all, so it's invisible to that first
-        // pass — the second pass below walks leaders and checks their follower
-        // to catch exactly that case. Both collect stale entities up front and
-        // remove them after their join, since removing from a storage while it's
-        // being joined over is not safe.
+        // by a different leader (e.g. the loser of a same-tick grab race) has
+        // no follower pointing back at it at all, so it's invisible to
+        // that first pass — the second pass below walks leaders and
+        // checks their follower to catch exactly that case. Both
+        // collect stale entities up front and remove them after their
+        // join, since removing from a storage while it's being joined
+        // over is not safe.
         let mut stale_followers = Vec::new();
         let mut stale_leaders = Vec::new();
 
@@ -73,9 +75,10 @@ impl<'a> System<'a> for Sys {
                 continue;
             };
 
-            // Presence of `Is<Leader>` alone isn't enough: the leader entity could
-            // have picked up an unrelated link since. Compare the `follower` field
-            // both sides' `Tethered` payload agree on, not just presence.
+            // Presence of `Is<Leader>` alone isn't enough: the leader entity
+            // could have picked up an unrelated link since. Compare
+            // the `follower` field both sides' `Tethered` payload
+            // agree on, not just presence.
             if !is_leaders
                 .get(leader)
                 .is_some_and(|is_leader| is_leader.follower == is_follower.follower)

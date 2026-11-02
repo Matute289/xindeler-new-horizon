@@ -80,10 +80,10 @@ pub fn trader_loadout(
         .and_modify(|e| *e = e.max(10_000.0))
         .or_insert(10_000.0);
 
-    // TODO: currently econsim spends all its food on population, resulting in none
-    // for the players to buy; the `.max` is temporary to ensure that there's some
-    // food for sale at every site, to be used until we have some solution like NPC
-    // houses as a limit on econsim population growth
+    // TODO: currently econsim spends all its food on population, resulting in
+    // none for the players to buy; the `.max` is temporary to ensure that
+    // there's some food for sale at every site, to be used until we have
+    // some solution like NPC houses as a limit on econsim population growth
     stockmap
         .entry(Good::Food)
         .and_modify(|e| *e = e.max(10_000.0))
@@ -98,7 +98,8 @@ pub fn trader_loadout(
         .entry(Good::Coin)
         .and_modify(|e| *e = e.min(rng.random_range(coin_range)));
 
-    // assume roughly 10 merchants sharing a town's stock (other logic for coins)
+    // assume roughly 10 merchants sharing a town's stock (other logic for
+    // coins)
     stockmap
         .iter_mut()
         .filter(|(good, _amount)| **good != Good::Coin)
@@ -654,8 +655,8 @@ impl<'a> System<'a> for Sys {
         for (actor_id, actor) in data.actors.actors.iter_mut() {
             let chunk = actor.wpos.xy().as_::<i32>().wpos_to_cpos();
 
-            // Load the NPC into the world if it's in a loaded chunk and is not already
-            // loaded
+            // Load the NPC into the world if it's in a loaded chunk and is not
+            // already loaded
             if matches!(actor.mode, SimulationMode::Simulated)
                 && chunk_states.0.get(chunk).is_some_and(|c| c.is_some())
                 // Riding npcs will be spawned by the vehicle.
@@ -667,7 +668,8 @@ impl<'a> System<'a> for Sys {
                 && actor.presence.is_some()
             {
                 actor.mode = SimulationMode::Loaded;
-                // Don't 'spawn in' players, their entities are managed by the server
+                // Don't 'spawn in' players, their entities are managed by the
+                // server
                 if actor.character().is_none() {
                     create_event(actor_id, actor, None);
                 }
@@ -689,7 +691,8 @@ impl<'a> System<'a> for Sys {
                 actor.wpos = pos.0;
                 actor.body = *body;
 
-                // For players, let rtsim know that the character is present in the world
+                // For players, let rtsim know that the character is present in
+                // the world
                 if let Some(character) = actor.character_mut() {
                     character.last_present_at = Some(data.tick);
                     actor.presence.get_or_insert(Presence {
@@ -719,7 +722,8 @@ impl<'a> System<'a> for Sys {
                         }
                     },
                     SimulationMode::Simulated => {
-                        // Never try to 'dissolve' players back into the rtsim matrix
+                        // Never try to 'dissolve' players back into the rtsim
+                        // matrix
                         if actor.character().is_none() {
                             delete_emitter.emit(DeleteEvent(entity));
                         }

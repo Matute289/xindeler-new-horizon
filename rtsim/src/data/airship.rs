@@ -117,15 +117,17 @@ impl AirshipSim {
     /// "traffic control" of airships.
     pub fn configure_route_pilots(&mut self, airships: &Airships, actors: &Actors) {
         debug_airships!(4, "Airship Assigned Routes: {:?}", self.assigned_routes);
-        // for each route index and leg index, find all pilots that are assigned to
-        // the route index and leg index. Sort them by their distance to the starting
-        // position of the leg. Repeat for all legs of the route, then add the resulting
-        // list to the route_pilots hash map.
+        // for each route index and leg index, find all pilots that are assigned
+        // to the route index and leg index. Sort them by their distance
+        // to the starting position of the leg. Repeat for all legs of
+        // the route, then add the resulting list to the route_pilots
+        // hash map.
 
         for route_index in 0..airships.route_count() {
             let mut pilots_on_route = Vec::new();
             for leg_index in 0..airships.docking_site_count_for_route(route_index) {
-                // Find all pilots that are spawned on the same route_index and leg_index.
+                // Find all pilots that are spawned on the same route_index and
+                // leg_index.
                 let mut pilots_on_leg: Vec<_> = self
                     .assigned_routes
                     .iter()
@@ -134,7 +136,8 @@ impl AirshipSim {
                     .collect();
 
                 if !pilots_on_leg.is_empty() {
-                    // Sort pilots by their distance to the starting position of the leg.
+                    // Sort pilots by their distance to the starting position of
+                    // the leg.
                     let start_pos = airships.route_leg_departure_location(route_index, leg_index);
                     pilots_on_leg.sort_by(|&pilot1, &pilot2| {
                         let pilot1_pos = actors
@@ -203,7 +206,8 @@ impl AirshipSim {
     pub fn next_pilot(&self, route_index: usize, pilot_id: ActorId) -> Option<ActorId> {
         if let Some(pilots) = self.route_pilots.get(&route_index) {
             if pilots.len() < 2 {
-                // If there is only one pilot on the route, return the pilot itself.
+                // If there is only one pilot on the route, return the pilot
+                // itself.
                 tracing::warn!(
                     "Route {} has only one pilot, 'next_pilot' doesn't make sense.",
                     route_index,
@@ -212,7 +216,8 @@ impl AirshipSim {
             }
             if let Some(pilot_index) = pilots.iter().position(|&p_id| p_id == pilot_id) {
                 if pilot_index == pilots.len() - 1 {
-                    // If the pilot is the last one in the list, return the first one.
+                    // If the pilot is the last one in the list, return the
+                    // first one.
                     return Some(pilots[0]);
                 } else {
                     // Otherwise, return the next pilot in the list.

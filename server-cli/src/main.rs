@@ -229,9 +229,10 @@ fn main() -> io::Result<()> {
         path
     };
 
-    // We don't need that many threads in the async pool, at least 2 but generally
-    // 25% of all available will do
-    // TODO: evaluate std::thread::available_concurrency as a num_cpus replacement
+    // We don't need that many threads in the async pool, at least 2 but
+    // generally 25% of all available will do
+    // TODO: evaluate std::thread::available_concurrency as a num_cpus
+    // replacement
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -287,11 +288,14 @@ fn main() -> io::Result<()> {
 
                 return match command {
                     Admin::Add { username, role } => {
-                        // FIXME: Currently the UUID can get returned even if the file didn't
-                        // change, so this can't be relied on as an error
+                        // FIXME: Currently the UUID can get returned even if
+                        // the file didn't change, so
+                        // this can't be relied on as an error
                         // code; moreover, we do nothing with the UUID
-                        // returned in the success case.  Fix the underlying function to return
-                        // enough information that we can reliably return an error code.
+                        // returned in the success case.  Fix the underlying
+                        // function to return
+                        // enough information that we can reliably return an
+                        // error code.
                         let _ = server::add_admin(
                             &username,
                             role,
@@ -302,11 +306,14 @@ fn main() -> io::Result<()> {
                         Ok(())
                     },
                     Admin::Remove { username } => {
-                        // FIXME: Currently the UUID can get returned even if the file didn't
-                        // change, so this can't be relied on as an error
+                        // FIXME: Currently the UUID can get returned even if
+                        // the file didn't change, so
+                        // this can't be relied on as an error
                         // code; moreover, we do nothing with the UUID
-                        // returned in the success case.  Fix the underlying function to return
-                        // enough information that we can reliably return an error code.
+                        // returned in the success case.  Fix the underlying
+                        // function to return
+                        // enough information that we can reliably return an
+                        // error code.
                         let _ = server::remove_admin(
                             &username,
                             &login_provider,
@@ -319,7 +326,8 @@ fn main() -> io::Result<()> {
             },
             ArgvCommand::Bench(params) => {
                 bench = Some(params);
-                // If we are trying to benchmark, don't limit the server view distance.
+                // If we are trying to benchmark, don't limit the server view
+                // distance.
                 server_settings.max_view_distance = None;
                 // TODO: add setting to adjust wildlife spawn density, note I
                 // tried but Index setup makes it a bit
@@ -329,8 +337,8 @@ fn main() -> io::Result<()> {
         };
     }
 
-    // Panic hook to ensure that console mode is set back correctly if in non-basic
-    // mode
+    // Panic hook to ensure that console mode is set back correctly if in
+    // non-basic mode
     if !basic {
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
@@ -365,8 +373,8 @@ fn main() -> io::Result<()> {
     let metrics_shutdown_clone = Arc::clone(&metrics_shutdown);
     let web_chat_secret = settings.web_chat_secret.clone();
     let ui_api_secret = settings.ui_api_secret.clone().unwrap_or_else(|| {
-        // when no secret is provided we generate one that we distribute via the /ui
-        // endpoint
+        // when no secret is provided we generate one that we distribute via the
+        // /ui endpoint
         use rand::distr::Alphanumeric;
         Alphanumeric.sample_string(&mut rand::rng(), 32)
     });
@@ -461,7 +469,8 @@ fn server_loop(
         };
 
         tick_no += 1;
-        // Terminate the server if instructed to do so by the shutdown coordinator
+        // Terminate the server if instructed to do so by the shutdown
+        // coordinator
         if shutdown_coordinator.check(&mut server, &settings) {
             break;
         }

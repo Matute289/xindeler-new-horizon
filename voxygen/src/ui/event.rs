@@ -147,9 +147,10 @@ fn conrod_convert_event(
         },
         WindowEvent::Focused(focused) => Input::Focus(*focused),
         WindowEvent::KeyboardInput { event, .. } => {
-            // `conrod` expects different events for text input and pressed keys.
-            // We work around that by sending the key as text but only if no modifier is
-            // pressed, so shortcuts still work.
+            // `conrod` expects different events for text input and pressed
+            // keys. We work around that by sending the key as text
+            // but only if no modifier is pressed, so shortcuts
+            // still work.
             if let Some(text) = &event.text
                 && let Some(c) = text.chars().next()
                 && !c.is_control()

@@ -430,7 +430,8 @@ pub enum ItemResource {
 impl ItemResource {
     /// Attempt to translate this resource into an equivalent [`ItemDef`].
     // TODO: Return (Arc<ItemDef>, f32) to allow for an exchange rate
-    // TODO: Have this function take an `impl RngExt` so that it can be stochastic
+    // TODO: Have this function take an `impl RngExt` so that it can be
+    // stochastic
     pub fn to_equivalent_item_def(&self) -> Arc<ItemDef> {
         match self {
             Self::Coin => Arc::<ItemDef>::load_cloned("common.items.utility.coins").unwrap(),

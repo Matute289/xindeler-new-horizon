@@ -82,7 +82,8 @@ pub fn surface_entrances<'a>(
         .flat_map(move |x| (0..sz_cells.y + 1).map(move |y| Vec2::new(x, y)))
         .filter_map(move |cell| {
             let tunnel = tunnel_below_from_cell(cell, 0, land)?;
-            // If there is water here there most likely isn't an accessible entrance.
+            // If there is water here there most likely isn't an accessible
+            // entrance.
             if land
                 .column_sample(tunnel.a.wpos, index)
                 .is_some_and(|c| c.water_dist.is_none_or(|d| d > 5.0))
@@ -199,8 +200,8 @@ impl Tunnel {
         let depth = (col.alt - wpos.z as f32) / (AVG_LEVEL_DEPTH as f32 * LAYERS as f32);
         let underground = ((col.alt - wpos.z as f32) / 80.0 - 1.0).clamped(0.0, 1.0);
 
-        // TODO think about making rate of change of humidity and temp noise higher to
-        // effectively increase biome size
+        // TODO think about making rate of change of humidity and temp noise
+        // higher to effectively increase biome size
         let humidity = Lerp::lerp_unclamped(
             col.humidity,
             FastNoise2d::new(41)
@@ -245,8 +246,8 @@ impl Tunnel {
         ] = {
             // Default biome, no other conditions apply
             let barren = 0.01;
-            // Mushrooms grow underground and thrive in a humid environment with moderate
-            // temperatures
+            // Mushrooms grow underground and thrive in a humid environment with
+            // moderate temperatures
             let mushroom = underground
                 * close(humidity, 1.0, 0.7, 4)
                 * close(temp, 2.0, 1.8, 4)
@@ -272,8 +273,9 @@ impl Tunnel {
                 * close(humidity, 1.0, 0.85, 4);
             // Rocky cold cave that appear near the surface
             let snowy = close(temp, -1.8, 1.3, 4) * close(depth, 0.0, 0.6, 4);
-            // Crystals grow deep underground in areas rich with minerals. They are present
-            // in areas with colder temperatures and low humidity
+            // Crystals grow deep underground in areas rich with minerals. They
+            // are present in areas with colder temperatures and low
+            // humidity
             let crystal = underground
                 * close(humidity, 0.0, 0.6, 4)
                 * close(temp, -1.6, 1.3, 4)
@@ -488,8 +490,8 @@ pub fn apply_caves_to(canvas: &mut Canvas, rng: &mut impl Rng) {
                 .collect_vec();
 
             // Compute structure samples only once for each column.
-            // TODO Use iter function in StructureGen2d to compute samples for the whole
-            // chunk once
+            // TODO Use iter function in StructureGen2d to compute samples for
+            // the whole chunk once
             let structure_seeds = StructureGen2d::new(34537, 24, 8).get(wpos2d);
             for (level, z_range, horizontal, vertical, dist, tunnel) in tunnel_bounds {
                 write_column(
@@ -596,9 +598,9 @@ fn write_column<R: Rng>(
     let (cave_width, max_height, dist_cave_center) = dimensions;
     let biome = tunnel.biome_at(wpos2d.with_z(z_range.start), &info);
 
-    // Get the range, if there is any, where the current cave overlaps with other
-    // caves. Right now this is only used to prevent ceiling cover from being
-    // place
+    // Get the range, if there is any, where the current cave overlaps with
+    // other caves. Right now this is only used to prevent ceiling cover
+    // from being place
     let overlap = z_ranges.iter().find_map(|other_z_range| {
         if *other_z_range == z_range {
             return None;
@@ -631,7 +633,8 @@ fn write_column<R: Rng>(
         || biome.fire > 0.4
         || biome.crystal > 0.75
     {
-        // 1.0 because at some point we maybe want to use some noise value here instead
+        // 1.0 because at some point we maybe want to use some noise value here
+        // instead
         1.0.mul(((col.alt - z_range.end as f32) / 32.0).clamped(0.0, 1.0))
             .mul(max_height * (dist_cave_center / cave_width).powf(3.33))
             .max(1.0)
@@ -1569,8 +1572,8 @@ fn write_column<R: Rng>(
                     } else if rand.chance(wpos2d.with_z(7), 0.007) {
                         let shallow = close(biome.depth, 0.0, 0.4, 3);
                         let middle = close(biome.depth, 0.5, 0.4, 3);
-                        //let deep = close(biome.depth, 1.0, 0.4); // TODO: Use this for deep only
-                        // things
+                        //let deep = close(biome.depth, 1.0, 0.4); // TODO: Use
+                        // this for deep only things
                         [
                             (Some(SpriteKind::Stones), 1.5),
                             (Some(SpriteKind::Copper), shallow),

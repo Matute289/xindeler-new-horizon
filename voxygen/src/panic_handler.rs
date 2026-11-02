@@ -26,8 +26,8 @@ pub fn set_panic_hook(log_filename: String, logs_dir: PathBuf) {
         );
 
         if let Some(potential_cause) = potential_cause {
-            // The error is a known error, so don't show the full bug report instructions
-            // and instead show a potential fix.
+            // The error is a known error, so don't show the full bug report
+            // instructions and instead show a potential fix.
             dialog_message.push_str(format!("Potential causes: {}\n\n", potential_cause).as_str())
         } else {
             dialog_message.push_str(
@@ -85,7 +85,8 @@ pub fn set_panic_hook(log_filename: String, logs_dir: PathBuf) {
                     .unwrap()
             };
 
-            // On windows we need to spawn a thread as the msg doesn't work otherwise
+            // On windows we need to spawn a thread as the msg doesn't work
+            // otherwise
             #[cfg(target_os = "windows")]
             {
                 let builder = std::thread::Builder::new().name("shutdown".into());
@@ -116,9 +117,10 @@ fn potential_cause(panic_info: &PanicHookInfo) -> Option<String> {
         .map_or("".to_string(), |x| x.file().to_string())
         .to_lowercase();
 
-    // Use some basic heuristics to determine the likely cause of the panic. This is
-    // deliberately overly simplistic as the vast majority of graphics errors
-    // for example are caused by an incompatible GPU rather than a bug.
+    // Use some basic heuristics to determine the likely cause of the panic.
+    // This is deliberately overly simplistic as the vast majority of
+    // graphics errors for example are caused by an incompatible GPU rather
+    // than a bug.
     let potential_cause = if location.contains("gfx") || location.contains("wgpu") {
         Some(PotentialPanicCause::GraphicsCardIncompatibleWithRenderingBackend)
     } else {

@@ -993,8 +993,8 @@ pub fn delete_character(
     drop(stmt);
 
     if result != 1 {
-        // The character does not exist, or does not belong to the requesting player so
-        // silently drop the request.
+        // The character does not exist, or does not belong to the requesting
+        // player so silently drop the request.
         return Ok(());
     }
 
@@ -1039,12 +1039,13 @@ pub fn delete_character(
     super::portrait::delete_portrait(char_id, transaction)?;
 
     // Lift any suspension before the character row goes. Unlike the portrait
-    // table this one is not merely tidy-up: `character_suspensions.character_id`
-    // is `NOT NULL PRIMARY KEY REFERENCES "character"(character_id)` (V87) and
-    // every connection runs `PRAGMA foreign_keys = ON`, so leaving the row in
-    // place makes the `DELETE FROM character` below fail outright. That error
-    // does not stay local -- `queue_character_deletion` batches this delete into
-    // the same transaction as every other online player's pending logout-save
+    // table this one is not merely tidy-up:
+    // `character_suspensions.character_id` is `NOT NULL PRIMARY KEY
+    // REFERENCES "character"(character_id)` (V87) and every connection runs
+    // `PRAGMA foreign_keys = ON`, so leaving the row in place makes the
+    // `DELETE FROM character` below fail outright. That error does not stay
+    // local -- `queue_character_deletion` batches this delete into the same
+    // transaction as every other online player's pending logout-save
     // for the tick, so a failure here rolls back their saves too and trips
     // `disconnect_all_clients_requested`, kicking the whole server.
     //
@@ -3099,7 +3100,8 @@ mod character_suspension_persistence_tests {
         .expect("suspend");
         transaction.commit().expect("commit");
 
-        // Enforced: visible via the direct lookup and via the startup-load path.
+        // Enforced: visible via the direct lookup and via the startup-load
+        // path.
         let conn = db.connection();
         let record = get_character_suspension(id, &conn)
             .expect("query")

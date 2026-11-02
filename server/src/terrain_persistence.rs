@@ -104,8 +104,8 @@ impl TerrainPersistence {
     fn load_chunk(&mut self, key: Vec2<i32>) -> &mut LoadedChunk {
         let path = self.path_for(key);
         self.chunks.entry(key).or_insert_with(|| {
-            // If the chunk has been recently unloaded and is still cached, dont read it
-            // from disk
+            // If the chunk has been recently unloaded and is still cached, dont
+            // read it from disk
             if let Some(chunk) = self.cached_chunks.remove(&key) {
                 return LoadedChunk {
                     chunk,

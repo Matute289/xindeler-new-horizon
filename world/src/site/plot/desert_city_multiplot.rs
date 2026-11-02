@@ -1191,11 +1191,13 @@ impl Structure for DesertCityMultiPlot {
                                         }
                                     }
                                 } else {
-                                    // kitchen, bath, living room in buildings with 2-3 storeys
+                                    // kitchen, bath, living room in buildings
+                                    // with 2-3 storeys
                                     match floor {
                                         0 => {
                                             // kitchen
-                                            // cupboards / ovens / cushions / jugs
+                                            // cupboards / ovens / cushions /
+                                            // jugs
                                             for d in 0..2 {
                                                 let a_pos = Vec2::new(
                                                     subplot_center.x + 3 - (d * 6),
@@ -1229,7 +1231,8 @@ impl Structure for DesertCityMultiPlot {
                                                     },
                                                     0,
                                                 );
-                                                // wall tables with varying items
+                                                // wall tables with varying
+                                                // items
                                                 let c_pos = Vec2::new(
                                                     subplot_center.x - room_length
                                                         + 1
@@ -1319,7 +1322,8 @@ impl Structure for DesertCityMultiPlot {
                                             // bath
                                             // wall tables with varying items
                                             for d in 0..2 {
-                                                // wall tables with varying items
+                                                // wall tables with varying
+                                                // items
                                                 let a_pos = Vec2::new(
                                                     subplot_center.x - room_length
                                                         + 1

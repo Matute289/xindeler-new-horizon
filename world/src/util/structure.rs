@@ -93,11 +93,11 @@ impl StructureGen2d {
         let ylen = (max_index.y - min_index.y) as u32;
         // NOTE: Cannot fail, since every product of u32s fits in a u64.
         let len = ylen as u64 * xlen as u64;
-        // NOTE: since iteration is *exclusive* for the initial range, it's fine that we
-        // don't go up to the maximum value.
-        // NOTE: we convert to usize first, and then iterate, because we want to make
-        // sure we get a properly indexed parallel iterator that can deal with
-        // the whole range at once.
+        // NOTE: since iteration is *exclusive* for the initial range, it's fine
+        // that we don't go up to the maximum value.
+        // NOTE: we convert to usize first, and then iterate, because we want to
+        // make sure we get a properly indexed parallel iterator that
+        // can deal with the whole range at once.
         let x_field = self.x_field;
         let y_field = self.y_field;
         let seed_field = self.seed_field;

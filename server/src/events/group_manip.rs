@@ -52,8 +52,8 @@ pub fn can_invite(
         .get(inviter)
         .copied()
         .and_then(|group| {
-            // If entity is currently the leader of a full group then they can't invite
-            // anyone else
+            // If entity is currently the leader of a full group then they can't
+            // invite anyone else
             group_manager
                 .group_info(group)
                 .filter(|i| i.leader == inviter)
@@ -324,7 +324,8 @@ impl ServerEvent for GroupManipEvent {
                                     Content::Plain("You are the group leader now.".to_string()),
                                 ));
                             }
-                            // Tell the old leader that the transfer was succesful
+                            // Tell the old leader that the transfer was
+                            // succesful
                             if let Some(client) = clients.get(entity) {
                                 client.send_fallible(ServerGeneral::server_msg(
                                     ChatType::Meta,
@@ -348,7 +349,8 @@ impl ServerEvent for GroupManipEvent {
                             }
                         },
                         None => {
-                            // Inform transferer that the target is not in a group
+                            // Inform transferer that the target is not in a
+                            // group
                             if let Some(client) = clients.get(entity) {
                                 client.send_fallible(ServerGeneral::server_msg(
                                     ChatType::Meta,

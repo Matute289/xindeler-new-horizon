@@ -375,7 +375,8 @@ where
                         },
                         ITFrame::CloseStream { sid } => {
                             //FIXME: defer close!
-                            //let _ = self.reliable_buffers.delete(sid); // if it was reliable
+                            //let _ = self.reliable_buffers.delete(sid); // if
+                            // it was reliable
                             break 'outer Ok(ProtocolEvent::CloseStream { sid });
                         },
                         _ => break 'outer Err(ProtocolError::Violated),
@@ -449,7 +450,8 @@ where
                                                 );
                                                 break 'outer Err(ProtocolError::Violated);
                                             } else {
-                                                //TODO: cleanup old messages from time to time
+                                                //TODO: cleanup old messages
+                                                // from time to time
                                                 continue;
                                             }
                                         },
@@ -934,8 +936,8 @@ mod tests {
     async fn unrealiable_test() {
         const MIN_CHECK: usize = 10;
         const COUNT: usize = 10_000;
-        //We send COUNT msg with 50% of be send each. we check that >= MIN_CHECK && !=
-        // COUNT reach their target
+        //We send COUNT msg with 50% of be send each. we check that >=
+        // MIN_CHECK && != COUNT reach their target
 
         let [mut p1, mut p2] = quic_bound(
             COUNT * 2 - 1, /* 2 times as it is HEADER + DATA but -1 as we want to see not all

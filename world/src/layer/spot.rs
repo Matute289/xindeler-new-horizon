@@ -169,8 +169,8 @@ impl SpotGenerate for Spot {
             },
             false,
         );
-        // Random World Objects -> Themed to their Biome and the NPCs that regularly
-        // spawn there
+        // Random World Objects -> Themed to their Biome and the NPCs that
+        // regularly spawn there
         Self::generate_spots(
             Spot::LionRock,
             world,

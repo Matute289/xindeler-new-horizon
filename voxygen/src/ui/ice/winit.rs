@@ -97,8 +97,8 @@ pub fn window_event(
             let modifiers = self::modifiers(modifiers);
 
             // `iced` expects different events for text input and pressed keys.
-            // We work around that by sending the key as text but only if no modifier is
-            // pressed, so shortcuts still work.
+            // We work around that by sending the key as text but only if no
+            // modifier is pressed, so shortcuts still work.
             if let Some(text) = &event.text
                 && let Some(c) = text.chars().next()
                 && !c.is_control()

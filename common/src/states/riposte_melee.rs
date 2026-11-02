@@ -61,8 +61,10 @@ impl CharacterBehavior for Data {
                         // Build up
                         c.timer = tick_attack_or_default(data, self.timer, None);
                     } else {
-                        // If duration finishes with no parry occurring transition to recover
-                        // Transition to action happens in parry hook server event
+                        // If duration finishes with no parry occurring
+                        // transition to recover
+                        // Transition to action happens in parry hook server
+                        // event
                         c.timer = Duration::default();
                         c.stage_section = StageSection::Recover;
                     }

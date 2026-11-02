@@ -69,7 +69,8 @@ impl Used {
             },
             LootSpec::LootTable(loot_table) => {
                 if self.loot_tables.insert(loot_table.as_ref().to_string()) {
-                    // Only need to recurse again if it hasn't already been added
+                    // Only need to recurse again if it hasn't already been
+                    // added
                     let handle = Lottery::<LootSpec<String>>::load_expect(loot_table.as_ref());
                     self.use_loot_table(&handle.read());
                 }

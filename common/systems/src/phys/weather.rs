@@ -93,12 +93,13 @@ pub(super) fn simulated_wind_vel(
         1.0
     };
 
-    // The first 15 blocks are weaker. Starting from the ground should be difficult.
+    // The first 15 blocks are weaker. Starting from the ground should be
+    // difficult.
     lift *= (above_ground / 15.).min(1.);
     lift *= (220. - above_ground / 20.).clamp(0.0, 1.0);
 
-    // TODO: Smooth this, and increase height some more (500 isnt that much higher
-    // than the spires)
+    // TODO: Smooth this, and increase height some more (500 isnt that much
+    // higher than the spires)
     if interp_alt > 500.0 {
         lift *= 0.8;
     }
@@ -149,7 +150,8 @@ pub(super) fn simulated_wind_vel(
     // Clamp magnitude, we never want to throw players around way too fast.
     let magn = wind_vel.magnitude_squared().max(0.0001);
 
-    // 600 here is compared to squared ~ 25. this limits the magnitude of the wind.
+    // 600 here is compared to squared ~ 25. this limits the magnitude of the
+    // wind.
     wind_vel *= magn.min(600.) / magn;
 
     Ok(wind_vel)

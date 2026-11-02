@@ -239,8 +239,9 @@ impl NetSync for Health {
         use common::resources::Time;
         use specs::WorldExt;
 
-        // Time isn't synced between client and server so replace the Time from the
-        // server with the Client's local Time to enable accurate comparison.
+        // Time isn't synced between client and server so replace the Time from
+        // the server with the Client's local Time to enable accurate
+        // comparison.
         self.last_change.time = *world.read_resource::<Time>();
     }
 
@@ -248,8 +249,9 @@ impl NetSync for Health {
         use common::resources::Time;
         use specs::WorldExt;
 
-        // Time isn't synced between client and server so replace the Time from the
-        // server with the Client's local Time to enable accurate comparison.
+        // Time isn't synced between client and server so replace the Time from
+        // the server with the Client's local Time to enable accurate
+        // comparison.
         self.last_change.time = *world.read_resource::<Time>();
     }
 }

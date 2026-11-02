@@ -983,11 +983,12 @@ impl Attack {
         // dodge/jump `target_dodging` below) but before damage, a hostile
         // **single-target** attack may whiff entirely based on attacker
         // `accuracy` vs target `evasion`:
-        //   hit% = clamp(base + (acc − eva)·k, floor, ceil)   (floor 0.05/ceil 1.0)
-        // A miss skips all damage and harmful effects (same gate as a dodge), so
-        // damage stays full on the blows that land. Rolled once per `apply_attack`
-        // (per blow/impact for melee/projectiles). **AoE never rolls** (Beam /
-        // Shockwave / Explosion / Arc / Pool) — by design it auto-hits the radius
+        //   hit% = clamp(base + (acc − eva)·k, floor, ceil)   (floor 0.05/ceil
+        // 1.0) A miss skips all damage and harmful effects (same gate
+        // as a dodge), so damage stays full on the blows that land.
+        // Rolled once per `apply_attack` (per blow/impact for
+        // melee/projectiles). **AoE never rolls** (Beam / Shockwave /
+        // Explosion / Arc / Pool) — by design it auto-hits the radius
         // and is mitigated passively by resistances (P3), keeping the hot
         // multi-target path RNG-free for raid/AvA scale. A beneficial in-group
         // effect (e.g. an ally heal routed through an attack) is exempt below —
@@ -1018,17 +1019,18 @@ impl Attack {
         }
         // A magic ability (one carrying an `AbilityMeta` `source`, the
         // same signal the BL-36 antimagic gate uses) rolls the caster's *magic*
-        // accuracy against the target's *magic* evasion; physical attacks use the
-        // physical pair. A missed single-target spell fizzles — the same no-op as
-        // a physical miss (no damage, no harmful effects; in-group beneficial
-        // effects like ally heals stay exempt in `avoid_effect` below).
+        // accuracy against the target's *magic* evasion; physical attacks use
+        // the physical pair. A missed single-target spell fizzles — the
+        // same no-op as a physical miss (no damage, no harmful effects;
+        // in-group beneficial effects like ally heals stay exempt in
+        // `avoid_effect` below).
         let is_magic = self
             .ability_info
             .is_some_and(|ai| ai.ability_meta.source.is_some());
-        // A weapon outside the wielder's proficiency set (see `ClassProficiencies`)
-        // deals reduced physical output. Resolved once here and folded into
-        // damage, poise, knockback and crit chance below; never applied to
-        // `is_magic` attacks.
+        // A weapon outside the wielder's proficiency set (see
+        // `ClassProficiencies`) deals reduced physical output. Resolved
+        // once here and folded into damage, poise, knockback and crit
+        // chance below; never applied to `is_magic` attacks.
         let proficiency_mult = Self::proficiency_multiplier(
             attacker.and_then(|a| a.stats),
             self.ability_info,
@@ -1092,9 +1094,10 @@ impl Attack {
                 || (!permit_pvp && matches!(attack_damage.target, Some(GroupTarget::OutOfGroup)))
         };
         let avoid_effect = |attack_effect: &AttackEffect| {
-            // A miss whiffs harmful effects but never an in-group beneficial one
-            // (ally heal/buff). `All`/`None`-targeted beneficial effects are not
-            // yet exempted — the full allied-100% rule lands in P3 (CR3.2).
+            // A miss whiffs harmful effects but never an in-group beneficial
+            // one (ally heal/buff). `All`/`None`-targeted
+            // beneficial effects are not yet exempted — the full
+            // allied-100% rule lands in P3 (CR3.2).
             (attack_missed && !matches!(attack_effect.target, Some(GroupTarget::InGroup)))
                 || target_dodging
                 || (!permit_pvp && matches!(attack_effect.target, Some(GroupTarget::OutOfGroup)))
@@ -1203,9 +1206,9 @@ impl Attack {
         let mut accumulated_damage = 0.0;
         // BL-06 (Q2/Q3): `spell_power` is a dedicated magic-damage channel that
         // multiplies outgoing damage ONLY for magic-source attacks (the same
-        // `is_magic` signal used for the to-hit roll), so caster damage passives
-        // never leak onto physical weapon swings. Physical attacks use the global
-        // `attack_damage_modifier` alone.
+        // `is_magic` signal used for the to-hit roll), so caster damage
+        // passives never leak onto physical weapon swings. Physical
+        // attacks use the global `attack_damage_modifier` alone.
         let damage_modifier = attacker.and_then(|a| a.stats).map_or(1.0, |s| {
             if is_magic {
                 s.attack_damage_modifier * s.spell_power_for(self.magic_source())
@@ -1230,10 +1233,11 @@ impl Attack {
                         .and_then(|a| a.stats)
                         .map_or(0.0, |s| s.bonus_damage_vs[kind as usize])
                 });
-        // BL-06 (Q2): the heal *source's* `heal_power` scales `CombatEffect::Heal`
-        // output (the target is usually an ally). Buff/aura regen (a separate path
-        // in common-systems) is deliberately NOT scaled yet — a follow-up if a
-        // HoT-healer passive ever wants it.
+        // BL-06 (Q2): the heal *source's* `heal_power` scales
+        // `CombatEffect::Heal` output (the target is usually an ally).
+        // Buff/aura regen (a separate path in common-systems) is
+        // deliberately NOT scaled yet — a follow-up if a HoT-healer
+        // passive ever wants it.
         let heal_power = attacker.and_then(|a| a.stats).map_or(1.0, |s| s.heal_power);
         for damage in self
             .damages
@@ -1252,20 +1256,23 @@ impl Attack {
                 Attack::compute_damage_reduction(attacker.as_ref(), target, damage.damage);
 
             // BL-52 P3: AoE damage is mitigated passively by the target's typed
-            // elemental resistance — the AoE counterpart to single-target evasion
-            // (AoE never rolls to-hit, so this is its only stat mitigation, on top
-            // of armor DR). Physical kinds return 0 here and rely on the existing
-            // `damage_reduction` only (no double-count). Single-target damage is
-            // gated by the to-hit roll instead, so it is NOT resistance-mitigated.
-            // Resistance composes with armor DR as independent layers, soft-capped
-            // so stacking can't reach immunity.
+            // elemental resistance — the AoE counterpart to single-target
+            // evasion (AoE never rolls to-hit, so this is its only
+            // stat mitigation, on top of armor DR). Physical kinds
+            // return 0 here and rely on the existing
+            // `damage_reduction` only (no double-count). Single-target damage
+            // is gated by the to-hit roll instead, so it is NOT
+            // resistance-mitigated. Resistance composes with armor
+            // DR as independent layers, soft-capped so stacking
+            // can't reach immunity.
             let damage_reduction = if is_single_target {
                 damage_reduction
             } else {
                 // Floor at 0 so a (currently nonexistent) negative resistance
-                // can't silently *amplify* AoE damage — element vulnerability, if
-                // ever wanted, should be its own deliberate mechanic, not a
-                // side effect of subtraction. Cap so stacking can't reach immunity.
+                // can't silently *amplify* AoE damage — element vulnerability,
+                // if ever wanted, should be its own deliberate
+                // mechanic, not a side effect of subtraction.
+                // Cap so stacking can't reach immunity.
                 let resist = target
                     .stats
                     .map_or(0.0, |s| s.aoe_resistance(damage.damage.kind))
@@ -1302,8 +1309,9 @@ impl Attack {
                 DamageSource::from(attack_source),
             );
             // `calculate_health_change` is a method on `Damage`, which does not
-            // carry the ability that caused it, so the source is attributed here
-            // instead of threading a new parameter through that function.
+            // carry the ability that caused it, so the source is attributed
+            // here instead of threading a new parameter through
+            // that function.
             change.magic_source = self.magic_source();
             let applied_damage = -change.amount;
             accumulated_damage += applied_damage;
@@ -1315,9 +1323,11 @@ impl Attack {
                 });
                 match damage.damage.kind {
                     DamageKind::Slashing => {
-                        // For slashing damage, reduce target energy by some fraction of applied
-                        // damage. When target would lose more energy than they have, deal an
-                        // equivalent amount of damage
+                        // For slashing damage, reduce target energy by some
+                        // fraction of applied
+                        // damage. When target would lose more energy than they
+                        // have, deal an equivalent
+                        // amount of damage
                         if let Some(target_energy) = target.energy {
                             let energy_change = applied_damage * SLASHING_ENERGY_FRACTION;
                             if energy_change > target_energy.current() {
@@ -1345,10 +1355,13 @@ impl Attack {
                         }
                     },
                     DamageKind::Crushing => {
-                        // For crushing damage, reduce target poise by some fraction of the amount
+                        // For crushing damage, reduce target poise by some
+                        // fraction of the amount
                         // of damage that was reduced by target's protection
-                        // Damage reduction should never equal 1 here as otherwise the check above
-                        // that health change amount is greater than 0 would fail.
+                        // Damage reduction should never equal 1 here as
+                        // otherwise the check above
+                        // that health change amount is greater than 0 would
+                        // fail.
                         let reduced_damage =
                             applied_damage * damage_reduction / (1.0 - damage_reduction);
                         let poise = reduced_damage
@@ -1371,7 +1384,8 @@ impl Attack {
                             time,
                         };
                         if change.abs() > Poise::POISE_EPSILON {
-                            // If target is in a stunned state, apply extra poise damage as health
+                            // If target is in a stunned state, apply extra
+                            // poise damage as health
                             // damage instead
                             if let Some(CharacterState::Stunned(data)) = target.char_state {
                                 let health_change =
@@ -1951,24 +1965,26 @@ impl Attack {
         //
         // 🔴 THREE INVARIANTS. Do not "improve" any of them away.
         //
-        // 1. NEVER route this back through `Attack`/`apply_attack`. It emits a raw
-        //    `HealthChangeEvent`, exactly as Lifesteal does, so it can trigger no
-        //    on-hit effect and — critically — no reflect of its own. Two entities that
-        //    both reflect and hit each other would otherwise recurse without bound. The
-        //    termination proof is structural: a raw `HealthChangeEvent` has no path
-        //    back into this function.
-        // 2. The per-hit `cap` is mandatory, not a balance nicety. Applied last, after
-        //    every other term, so it is a true hard ceiling: an uncapped fraction of a
-        //    very large hit kills whoever swung it regardless of the defender's own
-        //    level. The cap is per SOURCE, not summed across `damage_reflect` -- with
-        //    today's only source (the Talisman boon's ward) that is the same thing,
-        //    since a bearer can only ever carry one. Revisit if a second stacking
-        //    reflect source ever ships (N27-W).
-        // 3. It must clear the same PvP / friendly-fire gate the incoming blow already
-        //    cleared. `permit_pvp` / `allow_friendly_fire` are the flags resolved for
-        //    THIS pair before the attack landed — reusing them, rather than judging
-        //    afresh, is what stops a ward from becoming a way to damage group-mates or
-        //    safezone bystanders who merely bumped into its bearer.
+        // 1. NEVER route this back through `Attack`/`apply_attack`. It emits a
+        //    raw `HealthChangeEvent`, exactly as Lifesteal does, so it can
+        //    trigger no on-hit effect and — critically — no reflect of its own.
+        //    Two entities that both reflect and hit each other would otherwise
+        //    recurse without bound. The termination proof is structural: a raw
+        //    `HealthChangeEvent` has no path back into this function.
+        // 2. The per-hit `cap` is mandatory, not a balance nicety. Applied
+        //    last, after every other term, so it is a true hard ceiling: an
+        //    uncapped fraction of a very large hit kills whoever swung it
+        //    regardless of the defender's own level. The cap is per SOURCE, not
+        //    summed across `damage_reflect` -- with today's only source (the
+        //    Talisman boon's ward) that is the same thing, since a bearer can
+        //    only ever carry one. Revisit if a second stacking reflect source
+        //    ever ships (N27-W).
+        // 3. It must clear the same PvP / friendly-fire gate the incoming blow
+        //    already cleared. `permit_pvp` / `allow_friendly_fire` are the
+        //    flags resolved for THIS pair before the attack landed — reusing
+        //    them, rather than judging afresh, is what stops a ward from
+        //    becoming a way to damage group-mates or safezone bystanders who
+        //    merely bumped into its bearer.
         //
         // Deliberately unmitigated by the attacker's armor: the return is a
         // fraction of damage that was ALREADY mitigated on the way in, and the
@@ -2020,8 +2036,9 @@ impl Attack {
                 }
             }
         }
-        // Emits event to handle things that should happen for any successful attack,
-        // regardless of if the attack had any damages or effects in it
+        // Emits event to handle things that should happen for any successful
+        // attack, regardless of if the attack had any damages or
+        // effects in it
         if is_applied {
             emitters.emit(EntityAttackedHookEvent {
                 entity: target.entity,
@@ -2094,7 +2111,8 @@ pub fn permit_pvp(
     let attacker_owner = owner_if_pet(attacker);
     let target_owner = owner_if_pet(target);
 
-    // If both players are in the same ForcePvP aura, allow them to harm eachother
+    // If both players are in the same ForcePvP aura, allow them to harm
+    // eachother
     if let (Some(attacker_auras), Some(target_auras)) = (
         entered_auras.get(attacker_owner),
         entered_auras.get(target_owner),
@@ -3171,8 +3189,9 @@ impl Damage {
         damage_source: DamageSource,
     ) -> HealthChange {
         let mut damage = self.value * damage_modifier;
-        // `.max(0.0)`: a crit is always bonus damage — never let an unusually low
-        // `precision_power` (e.g. a future <0.5 precision debuff) make it subtract.
+        // `.max(0.0)`: a crit is always bonus damage — never let an unusually
+        // low `precision_power` (e.g. a future <0.5 precision debuff)
+        // make it subtract.
         let precise_damage = (damage
             * precision_mult.unwrap_or(0.0)
             * ((crit_damage_mult - 1.0) + (precision_power - 1.0)))
@@ -3260,8 +3279,8 @@ impl Knockback {
                 .is_some_and(|a| a.capabilities.contains(Capability::KNOCKBACK_RESISTANT));
             if resistant { 0.5 } else { 1.0 }
         };
-        // TEMP: 50.0 multiplication kept until source knockback values have been
-        // updated
+        // TEMP: 50.0 multiplication kept until source knockback values have
+        // been updated
         50.0 * self.strength
             * from_char
             * attacker_stats.map_or(1.0, |s| s.knockback_mult)
@@ -4091,8 +4110,9 @@ mod power_word_kill_threshold_tests {
     #[test]
     fn effective_caster_level_uses_the_eligible_secondary_not_an_ineligible_primary() {
         let curve = power_word_kill_curve();
-        // Warrior (not eligible for Power Word Kill) primary, Warlock (eligible)
-        // secondary at 20 of the 60 total -- the roll must use 20, not 60 or 40.
+        // Warrior (not eligible for Power Word Kill) primary, Warlock
+        // (eligible) secondary at 20 of the 60 total -- the roll must
+        // use 20, not 60 or 40.
         let character_class = CharacterClass {
             primary: ClassKind::Warrior,
             secondary: Some(ClassKind::Warlock),
@@ -4621,8 +4641,8 @@ mod health_tier_requirement_tests {
 mod damage_kind_taxonomy_tests {
     use super::DamageKind;
 
-    // ENG-A2: the full 13-kind content damage taxonomy (Matias 2026-06-20) parses
-    // from RON.
+    // ENG-A2: the full 13-kind content damage taxonomy (Matias 2026-06-20)
+    // parses from RON.
     #[test]
     fn all_content_kinds_parse() {
         for s in [
@@ -4645,8 +4665,9 @@ mod damage_kind_taxonomy_tests {
         }
     }
 
-    // `Bludgeoning` is the content-facing name for the engine's `Crushing` (kept
-    // for its poise behaviour); a serde alias avoids renaming churn across code
+    // `Bludgeoning` is the content-facing name for the engine's `Crushing`
+    // (kept for its poise behaviour); a serde alias avoids renaming churn
+    // across code
     // + existing RON.
     #[test]
     fn bludgeoning_aliases_crushing() {
@@ -4656,8 +4677,8 @@ mod damage_kind_taxonomy_tests {
         );
     }
 
-    // Back-compat: existing RON using the legacy generic `Energy` still loads (no
-    // data migration).
+    // Back-compat: existing RON using the legacy generic `Energy` still loads
+    // (no data migration).
     #[test]
     fn legacy_energy_still_parses() {
         assert_eq!(
@@ -4757,7 +4778,8 @@ mod combat_resolution_tests {
     #[test]
     fn crit_damage_floor_and_scaling() {
         let t = CombatTuning::default();
-        // bonus fraction = precision_mult * ((crit_damage_mult - 1) + (precision_power
+        // bonus fraction = precision_mult * ((crit_damage_mult - 1) +
+        // (precision_power
         // - 1))
         let bonus = |precision_mult: f32, precision_power: f32| {
             precision_mult * ((t.crit_damage_mult - 1.0) + (precision_power - 1.0))
@@ -4766,7 +4788,8 @@ mod combat_resolution_tests {
         assert!((bonus(1.0, 1.0) - 0.5).abs() < 1e-6);
         // Endgame precision gear (precision_power 1.5) → +100% (×2.0).
         assert!((bonus(1.0, 1.5) - 1.0).abs() < 1e-6);
-        // Positional gradation preserved: a side flank (0.25) at base < full crit.
+        // Positional gradation preserved: a side flank (0.25) at base < full
+        // crit.
         assert!(bonus(0.25, 1.0) < bonus(1.0, 1.0));
         assert!((bonus(0.25, 1.0) - 0.125).abs() < 1e-6);
     }
@@ -5167,7 +5190,8 @@ mod saving_throw_tests {
         let t = CombatTuning::default();
         // A rabbit-tier creature contributes almost nothing.
         assert!((effective_magic_evasion(&creature(1.0, MagicResistTier::None), &t) - 2.0) < EPS);
-        // A boss-tier one contributes more evasion than any caster has accuracy.
+        // A boss-tier one contributes more evasion than any caster has
+        // accuracy.
         assert!(effective_magic_evasion(&creature(36.0, MagicResistTier::None), &t) > 70.0);
         // A player's class evasion is used as-is, added to (here zero) rating.
         assert!((effective_magic_evasion(&player(30.0, 0.0), &t) - 30.0).abs() < EPS);

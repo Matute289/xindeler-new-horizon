@@ -148,7 +148,8 @@ impl TrailMgr {
                         vertices[a] * TRAIL_SHRINKAGE + vertices[b] * (1.0 - TRAIL_SHRINKAGE)
                     };
                     if i != last_offset {
-                        // Avoid shrinking edge of most recent quad so that edges of quads align
+                        // Avoid shrinking edge of most recent quad so that
+                        // edges of quads align
                         vertices[d] =
                             vertices[d] * TRAIL_SHRINKAGE + vertices[c] * (1.0 - TRAIL_SHRINKAGE);
                     }
@@ -163,10 +164,10 @@ impl TrailMgr {
             self.entity_meshes
                 .retain(|_, (_mesh, last_updated)| *last_updated != self.offset);
 
-            // TODO: as an optimization we can keep this big mesh around between frames and
-            // write directly to it for each entity.
-            // Create big mesh from currently existing meshes that is used to update dynamic
-            // model
+            // TODO: as an optimization we can keep this big mesh around between
+            // frames and write directly to it for each entity.
+            // Create big mesh from currently existing meshes that is used to
+            // update dynamic model
             let mut big_mesh = Mesh::new();
             self.entity_meshes
                 .values()
@@ -180,8 +181,8 @@ impl TrailMgr {
                 big_mesh.push_quad(Quad::new(zero, zero, zero, zero));
             }
 
-            // If dynamic model too small, resize, with room for 10 additional entities to
-            // avoid needing to resize frequently
+            // If dynamic model too small, resize, with room for 10 additional
+            // entities to avoid needing to resize frequently
             if self.dynamic_model.as_ref().map_or(0, |model| model.len()) < big_mesh.len() {
                 self.dynamic_model = Some(
                     renderer

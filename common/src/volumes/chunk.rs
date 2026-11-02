@@ -86,10 +86,10 @@ impl<V, S: VolSize, M> Chunk<V, S, M> {
         //
         // Rationales:
         //
-        // 1. We have code in the implementation that assumes it. In particular, code
-        //    using `.count_ones()`.
-        // 2. The maximum group size is `256x256x256`, because there's code that stores
-        //    group relative indices as `u8`.
+        // 1. We have code in the implementation that assumes it. In particular,
+        //    code using `.count_ones()`.
+        // 2. The maximum group size is `256x256x256`, because there's code that
+        //    stores group relative indices as `u8`.
         // 3. There's code that stores group indices as `u8`.
         debug_assert!(S::SIZE.x.is_power_of_two());
         debug_assert!(S::SIZE.y.is_power_of_two());
@@ -121,8 +121,8 @@ impl<V, S: VolSize, M> Chunk<V, S, M> {
     where
         V: Clone + Eq + Hash,
     {
-        // First, construct a HashMap with max capacity equal to GROUP_COUNT (since each
-        // filled group can have at most one slot).
+        // First, construct a HashMap with max capacity equal to GROUP_COUNT
+        // (since each filled group can have at most one slot).
         let mut map: HashMap<_, Vec<_>> = HashMap::with_capacity(Self::GROUP_COUNT_TOTAL as usize);
         let vox = &self.vox;
         let default = &self.default;
@@ -137,8 +137,9 @@ impl<V, S: VolSize, M> Chunk<V, S, M> {
                     let mut group = group.iter();
                     let first = group.next().expect("GROUP_VOLUME ≥ 1");
                     if group.all(|block| block == first) {
-                        // All blocks in the group were the same, so add our position to this entry
-                        // in the HashMap.
+                        // All blocks in the group were the same, so add our
+                        // position to this entry in the
+                        // HashMap.
                         map.entry(first).or_default().push(grp_idx);
                     }
                 } else {
@@ -146,8 +147,8 @@ impl<V, S: VolSize, M> Chunk<V, S, M> {
                     map.entry(default).or_default().push(grp_idx);
                 }
             });
-        // Now, find the block with max frequency in the HashMap and make that our new
-        // default.
+        // Now, find the block with max frequency in the HashMap and make that
+        // our new default.
         let (new_default, default_groups) = if let Some((new_default, default_groups)) = map
             .into_iter()
             .max_by_key(|(_, default_groups)| default_groups.len())
@@ -171,16 +172,19 @@ impl<V, S: VolSize, M> Chunk<V, S, M> {
                     // Default groups become 255
                     *base = 255;
                 } else {
-                    // Other groups are allocated in increasing order by group index.
-                    // NOTE: Cannot overflow since the current implicit group index can't be at the
-                    // end of the vector until at the earliest after the 256th iteration.
+                    // Other groups are allocated in increasing order by group
+                    // index. NOTE: Cannot overflow since
+                    // the current implicit group index can't be at the
+                    // end of the vector until at the earliest after the 256th
+                    // iteration.
                     let old_base = usize::from(mem::replace(
                         base,
                         (new_vox.len() / Self::GROUP_VOLUME as usize) as u8,
                     ));
                     if old_base >= num_groups {
-                        // Old default, which (since we reached this branch) is not equal to the new
-                        // default, so we have to write out the old default.
+                        // Old default, which (since we reached this branch) is
+                        // not equal to the new default,
+                        // so we have to write out the old default.
                         new_vox
                             .resize(new_vox.len() + Self::GROUP_VOLUME as usize, default.clone());
                     } else {
@@ -355,7 +359,8 @@ pub struct ChunkPosIter<V, S: VolSize, M> {
 
 impl<V, S: VolSize, M> ChunkPosIter<V, S, M> {
     fn new(lower_bound: Vec3<i32>, upper_bound: Vec3<i32>) -> Self {
-        // If the range is empty, then we have the special case `ub = lower_bound`.
+        // If the range is empty, then we have the special case `ub =
+        // lower_bound`.
         let ub = if lower_bound.map2(upper_bound, |l, u| l < u).reduce_and() {
             upper_bound
         } else {

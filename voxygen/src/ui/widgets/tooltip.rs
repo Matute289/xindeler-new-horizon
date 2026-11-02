@@ -106,8 +106,8 @@ impl TooltipManager {
         let mp_h = MOUSE_PAD_Y / self.logical_scale_factor;
 
         let tooltip = |transparency, mouse_pos: [f64; 2], ui: &mut UiCell| {
-            // Fill in text and the potential image beforehand to get an accurate size for
-            // spacing
+            // Fill in text and the potential image beforehand to get an
+            // accurate size for spacing
             let tooltip = tooltip
                 .clone()
                 .title(title_text)
@@ -314,13 +314,13 @@ impl<'a> Tooltip<'a> {
     //     self.justify(text::Justify::Left)
     // }
 
-    // /// Align the text to the middle of its bounding **Rect**'s *x* axis range.
-    // pub fn center_justify(self) -> Self {
+    // /// Align the text to the middle of its bounding **Rect**'s *x* axis
+    // range. pub fn center_justify(self) -> Self {
     //     self.justify(text::Justify::Center)
     // }
 
-    // /// Align the text to the right of its bounding **Rect**'s *x* axis range.
-    // pub fn right_justify(self) -> Self {
+    // /// Align the text to the right of its bounding **Rect**'s *x* axis
+    // range. pub fn right_justify(self) -> Self {
     //     self.justify(text::Justify::Right)
     // }
 

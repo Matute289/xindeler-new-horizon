@@ -143,8 +143,8 @@ impl Widget for Group<'_> {
     fn style(&self) -> Self::Style {}
 
     //TODO: Disband groups when there's only one member in them
-    //TODO: Always send health, energy, level and position of group members to the
-    // client
+    //TODO: Always send health, energy, level and position of group members to
+    // the client
     fn update(self, args: widget::UpdateArgs<Self>) -> Self::Event {
         common_base::prof_span!("Group::update");
         let widget::UpdateArgs { state, ui, .. } = args;
@@ -223,9 +223,9 @@ impl Widget for Group<'_> {
         );
         let my_uid = self.client.uid();
 
-        // TODO show something to the player when they click on the group button while
-        // they are not in a group so that it doesn't look like the button is
-        // broken
+        // TODO show something to the player when they click on the group button
+        // while they are not in a group so that it doesn't look like
+        // the button is broken
         if self.show.group_menu || open_invite.is_some() {
             // Frame
             Rectangle::fill_with([220.0, 140.0], Color::Rgba(0.0, 0.0, 0.0, 0.8))
@@ -375,7 +375,8 @@ impl Widget for Group<'_> {
             let stances = client_state.ecs().read_storage::<common::comp::Stance>();
             let hardcore = client_state.ecs().read_storage::<common::comp::Hardcore>();
 
-            // Keep track of the total number of widget ids we are using for buffs
+            // Keep track of the total number of widget ids we are using for
+            // buffs
             let mut total_buff_count = 0;
             for (i, &uid) in group_members.iter().copied().enumerate() {
                 self.show.group = true;
@@ -726,8 +727,8 @@ impl Widget for Group<'_> {
                         });
                     };
                 }
-                // Group Members, only character names, cut long names when they exceed the
-                // button size
+                // Group Members, only character names, cut long names when they
+                // exceed the button size
                 let group_size = group_members.len();
                 if state.ids.members.len() < group_size {
                     state.update(|s| {

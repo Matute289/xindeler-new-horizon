@@ -153,8 +153,8 @@ impl AmbienceMgr {
             if let Some(inner) = audio.inner.as_mut()
                 && let Some(channel) = inner.channels.get_ambience_channel(tag)
             {
-                // Maintain: get the correct volume of whatever the tag of the current
-                // channel is
+                // Maintain: get the correct volume of whatever the tag of the
+                // current channel is
                 let target_volume = if !audio_settings.rain_ambience_enabled
                     && tag == AmbienceChannelTag::Rain
                 {
@@ -162,8 +162,9 @@ impl AmbienceMgr {
                 } else {
                     let volume = self.get_tag_volume(tag, client, audio_settings);
 
-                    // Is the camera underneath the terrain? Fade out the lower it goes beneath.
-                    // Unless, of course, the player is in a cave.
+                    // Is the camera underneath the terrain? Fade out the lower
+                    // it goes beneath. Unless, of course,
+                    // the player is in a cave.
                     if tag != AmbienceChannelTag::Cave {
                         (volume
                             * ((self.cam_pos.z - self.terrain_alt) / 50.0 + 1.0).clamped(0.0, 1.0))
@@ -204,10 +205,10 @@ impl AmbienceMgr {
                     + ((self.cam_pos.z - self.terrain_alt).abs() / 150.0).powi(2))
                 .min(1.0);
 
-                // Lastly, we of course have to take into account actual wind speed from
-                // weathersim
-                // Client wind speed is a float approx. -30.0 to 30.0 (polarity depending on
-                // direction)
+                // Lastly, we of course have to take into account actual wind
+                // speed from weathersim
+                // Client wind speed is a float approx. -30.0 to 30.0 (polarity
+                // depending on direction)
                 let wind_speed_factor = (client.weather_at_player().wind.magnitude_squared()
                     / 15.0_f32.powi(2))
                 .min(1.33);
@@ -271,7 +272,8 @@ impl AmbienceMgr {
                 }
             },
             AmbienceChannelTag::Cave => {
-                // When the camera is roughly above ground, don't play cave sounds
+                // When the camera is roughly above ground, don't play cave
+                // sounds
                 let camera_factor = (-(self.cam_pos.z - self.terrain_alt) / 100.0).max(0.0);
 
                 if client.current_site() == SiteKindMeta::Cave {
@@ -284,7 +286,8 @@ impl AmbienceMgr {
                 if let Some(distance) = self.distance_to_closest_river_block {
                     let hearing_distance = (TerrainChunk::RECT_SIZE.x * 2) as f32;
                     let listener_factor = (hearing_distance - distance) / hearing_distance;
-                    // A linear upward slope starting at 0.1 and ending with a volume of 1.2.
+                    // A linear upward slope starting at 0.1 and ending with a
+                    // volume of 1.2.
                     listener_factor.max(0.0) * (self.river_strength - 0.1) * 1.1
                 } else {
                     0.0
@@ -295,11 +298,13 @@ impl AmbienceMgr {
                     let hearing_distance = (TerrainChunk::RECT_SIZE.x * 2) as f32;
                     let listener_factor = (hearing_distance - distance) / hearing_distance;
                     if self.river_strength < 0.3 {
-                        // A parabolic swing starting fast at approx. 0 and easing to 1 at 0.3.
+                        // A parabolic swing starting fast at approx. 0 and
+                        // easing to 1 at 0.3.
                         listener_factor.max(0.0)
                             * (-11.0 * (self.river_strength - 0.3).powi(2) + 1.0)
                     } else {
-                        // A linear slide starting with 1 at 0.3 and hitting 0 at 0.9.
+                        // A linear slide starting with 1 at 0.3 and hitting 0
+                        // at 0.9.
                         listener_factor.max(0.0) * ((-self.river_strength + 0.9) / 0.6)
                     }
                 } else {
@@ -341,9 +346,10 @@ impl AmbienceMgr {
                 }
             }
         }
-        // Calculate the average velocity, counting chunks not containing the river (but
-        // still containing water) as zero velocity. This makes the system more
-        // resilient to sudden chunk-to-chunk changes in river velocity.
+        // Calculate the average velocity, counting chunks not containing the
+        // river (but still containing water) as zero velocity. This
+        // makes the system more resilient to sudden chunk-to-chunk
+        // changes in river velocity.
         let avg_river_velocity = if river_velocities.is_empty() {
             Vec3::<f32>::zero()
         } else {

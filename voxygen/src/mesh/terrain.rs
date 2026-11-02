@@ -207,8 +207,8 @@ pub fn calc_light<
             }
         }
 
-        // Minimise light map to reduce duplication. We can now discard light info
-        // for blocks outside of the chunk borders.
+        // Minimise light map to reduce duplication. We can now discard light
+        // info for blocks outside of the chunk borders.
         let mut light_map2 = vec![UNKNOWN; min_bounds.size().product() as usize];
         for z in 0..min_bounds.size().d {
             for x in 0..min_bounds.size().w {
@@ -307,8 +307,8 @@ pub fn generate_mesh<'a>(
         let flat = {
             let mut volume = vol.cached();
             const AIR: Block = Block::empty();
-            // TODO: Once we can manage it sensibly, consider using something like
-            // Option<Block> instead of just assuming air.
+            // TODO: Once we can manage it sensibly, consider using something
+            // like Option<Block> instead of just assuming air.
             let mut flat = vec![AIR; (w * h * d) as usize];
             let mut i = 0;
             for x in 0..range.size().w {
@@ -376,7 +376,8 @@ pub fn generate_mesh<'a>(
     let max_size = max_texture_size;
     assert!(z_end >= z_start);
     let greedy_size = Vec3::new(range.size().w - 2, range.size().h - 2, z_end - z_start + 1);
-    // NOTE: Terrain sizes are limited to 32 x 32 x 16384 (to fit in 24 bits: 5 + 5
+    // NOTE: Terrain sizes are limited to 32 x 32 x 16384 (to fit in 24 bits: 5
+    // + 5
     // + 14). FIXME: Make this function fallible, since the terrain
     // information might be dynamically generated which would make this hard
     // to enforce.
@@ -408,19 +409,21 @@ pub fn generate_mesh<'a>(
     let should_draw = |_: &mut (), pos: Vec3<i32>, delta: Vec3<i32>, _uv| {
         should_draw_greedy(pos, delta, &flat_get)
     };
-    // NOTE: Conversion to f32 is fine since this i32 is actually in bounds for u16.
+    // NOTE: Conversion to f32 is fine since this i32 is actually in bounds for
+    // u16.
     let mesh_delta = Vec3::new(0.0, 0.0, (z_start + range.min.z) as f32);
     let create_opaque =
         |atlas_pos, pos, norm, meta| TerrainVertex::new(atlas_pos, pos + mesh_delta, norm, meta);
     let create_transparent = |_atlas_pos, pos: Vec3<f32>, norm| {
-        // TODO: It *should* be possible to pull most of this code out of this function
-        // and compute it per-chunk. For some reason, this doesn't work! If you,
-        // dear reader, feel like giving it a go then feel free. For now
-        // it's been kept as-is because I'm lazy and water vertices aren't nearly common
-        // enough for this to matter much. If you want to test whether your
-        // change works, look carefully at how waves interact between water
-        // polygons in different chunks. If the join is smooth, you've solved the
-        // problem!
+        // TODO: It *should* be possible to pull most of this code out of this
+        // function and compute it per-chunk. For some reason, this
+        // doesn't work! If you, dear reader, feel like giving it a go
+        // then feel free. For now it's been kept as-is because I'm lazy
+        // and water vertices aren't nearly common enough for this to
+        // matter much. If you want to test whether your change works,
+        // look carefully at how waves interact between water
+        // polygons in different chunks. If the join is smooth, you've solved
+        // the problem!
         let key = vol.pos_key(range.min + pos.as_());
         let v00 = vol
             .get_key(key + Vec2::new(0, 0))
@@ -575,14 +578,16 @@ pub fn should_draw_greedy(
         if from_liquid == to.is_liquid() || from.is_filled() || to.is_filled() {
             None
         } else {
-            // While liquid is not culled, we still try to keep a consistent orientation as
-            // we do for land; if going from liquid to non-liquid,
-            // forwards-facing; otherwise, backwards-facing.
+            // While liquid is not culled, we still try to keep a consistent
+            // orientation as we do for land; if going from liquid
+            // to non-liquid, forwards-facing; otherwise,
+            // backwards-facing.
             Some((from_liquid, FaceKind::Fluid))
         }
     } else {
         // If going from unfilled to filled, backward facing; otherwise, forward
-        // facing.  Also, if either from or to is fluid, set the meta accordingly.
+        // facing.  Also, if either from or to is fluid, set the meta
+        // accordingly.
         Some((
             from_filled,
             FaceKind::Opaque(if from_filled {

@@ -25,13 +25,14 @@ impl TuiLog<'_> {
 
 impl Write for TuiLog<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // TODO: this processing can probably occur in the consumer of the log lines
-        // (and instead of having a TuiLog::resize the consumer can take
-        // ownership of the lines and manage them itself).
+        // TODO: this processing can probably occur in the consumer of the log
+        // lines (and instead of having a TuiLog::resize the consumer
+        // can take ownership of the lines and manage them itself).
 
-        // Not super confident this is the ideal parser but it works for now and doesn't
-        // depend on an old version of nom. Alternatives to consider may include
-        // `vte`, `anstyle-parse`, `vt100`, or others.
+        // Not super confident this is the ideal parser but it works for now and
+        // doesn't depend on an old version of nom. Alternatives to
+        // consider may include `vte`, `anstyle-parse`, `vt100`, or
+        // others.
         use cansi::v3::categorise_text;
 
         let line =
@@ -42,8 +43,9 @@ impl Write for TuiLog<'_> {
 
         for out in categorise_text(line) {
             let mut style = Style::default();
-            // NOTE: There are other values returned from cansi that we don't bother to use
-            // for now including background color, italics, blinking, etc.
+            // NOTE: There are other values returned from cansi that we don't
+            // bother to use for now including background color,
+            // italics, blinking, etc.
             style.fg = match out.fg {
                 Some(cansi::Color::Black) => Some(Color::Black),
                 Some(cansi::Color::Red) => Some(Color::Red),

@@ -83,7 +83,8 @@ pub struct Environment {
 
 impl Environment {
     pub fn new() -> Result<Self, std::io::Error> {
-        // let mut context = vergleich::ProgramRun::new("economy_compare.sqlite")
+        // let mut context =
+        // vergleich::ProgramRun::new("economy_compare.sqlite")
         //     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other,
         // e.to_string()))?; context.set_epsilon(0.1);
         let csv_file = Economy::csv_open();
@@ -397,8 +398,9 @@ mod tests {
                         x: i.position.0,
                         y: i.position.1,
                     };
-                    // this should be a moderate compromise between regenerating the full world and
-                    // loading on demand using the public API. There is no way to set
+                    // this should be a moderate compromise between regenerating
+                    // the full world and loading on demand
+                    // using the public API. There is no way to set
                     // the name, do we care?
                     let mut settlement = match i.kind {
                         SiteKindMeta::Castle => {
@@ -434,8 +436,9 @@ mod tests {
                     let id = index.sites.insert(settlement);
                     names.as_mut().map(|map| map.insert(id, i.name.clone()));
                 }
-                // we can't add these in the first loop as neighbors will refer to later sites
-                // (which aren't valid in the first loop)
+                // we can't add these in the first loop as neighbors will refer
+                // to later sites (which aren't valid in the
+                // first loop)
                 for (id, econ) in econ_testinput.iter().enumerate() {
                     if let Some(id) = index.sites.recreate_id(id as u64) {
                         for nid in econ.neighbors.iter() {

@@ -74,7 +74,8 @@ impl Vertex {
         ao: bool,
     ) -> [u8; 4] {
         //[col.r, col.g, col.b, light]
-        // It would be nice for this to be cleaner, but we want to squeeze 5 fields into
+        // It would be nice for this to be cleaner, but we want to squeeze 5
+        // fields into
         // 4. We can do this because both `light` and `glow` go from 0 to 31,
         // meaning that they can both fit into 5 bits. If we steal a bit from
         // red and blue each (not green, human eyes are more sensitive to
@@ -87,12 +88,13 @@ impl Vertex {
         // if we're twiddling bits? The answer is to very carefully manipulate
         // the bit pattern such that the fields we want to filter (`light` and
         // `glow`) always sit as the higher bits of the fields. Then, we can do
-        // some modulation magic to extract them from the filtering unharmed and use
-        // unfiltered texture access (i.e: `texelFetch`) to access the colours, plus a
-        // little bit-fiddling.
+        // some modulation magic to extract them from the filtering unharmed and
+        // use unfiltered texture access (i.e: `texelFetch`) to access
+        // the colours, plus a little bit-fiddling.
         //
-        // TODO: This isn't currently working (no idea why). See `srgb.glsl` for current
-        // impl that intead does manual bit-twiddling and filtering.
+        // TODO: This isn't currently working (no idea why). See `srgb.glsl` for
+        // current impl that intead does manual bit-twiddling and
+        // filtering.
         [
             (light.min(31) << 3) | ((col.r >> 1) & 0b111),
             (glow.min(31) << 3) | ((col.b >> 1) & 0b111),

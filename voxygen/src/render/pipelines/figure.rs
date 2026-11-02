@@ -95,10 +95,10 @@ pub struct FigureModel {
 impl FigureModel {
     /// Start a greedy mesh designed for figure bones.
     pub fn make_greedy<'a>() -> GreedyMesh<'a, FigureSpriteAtlasData> {
-        // NOTE: Required because we steal two bits from the normal in the shadow uint
-        // in order to store the bone index.  The two bits are instead taken out
-        // of the atlas coordinates, which is why we "only" allow 1 << 15 per
-        // coordinate instead of 1 << 16.
+        // NOTE: Required because we steal two bits from the normal in the
+        // shadow uint in order to store the bone index.  The two bits
+        // are instead taken out of the atlas coordinates, which is why
+        // we "only" allow 1 << 15 per coordinate instead of 1 << 16.
         let max_size = Vec2::new((1 << 15) - 1, (1 << 15) - 1);
         GreedyMesh::new(max_size, crate::mesh::greedy::general_config())
     }

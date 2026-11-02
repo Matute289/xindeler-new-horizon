@@ -49,7 +49,8 @@ impl IcedUi {
 
         let scaled_resolution = scale.scaled_resolution().map(|e| e as f32);
 
-        // TODO: examine how much mem fonts take up and reduce clones if significant
+        // TODO: examine how much mem fonts take up and reduce clones if
+        // significant
         Ok(Self {
             renderer: IcedRenderer::new(
                 renderer,
@@ -107,9 +108,10 @@ impl IcedUi {
                 let scale = self.scale.scale_factor_logical() as f32;
                 let x = position.x / scale;
                 let y = position.y / scale;
-                // TODO: determine why iced moved cursor position out of the `Cache` and if we
-                // may need to handle this in a different way to address
-                // whatever issue iced was trying to address
+                // TODO: determine why iced moved cursor position out of the
+                // `Cache` and if we may need to handle this in
+                // a different way to address whatever issue
+                // iced was trying to address
                 self.cursor_position = Vec2::new(x, y);
                 self.events.push(Event::Mouse(mouse::Event::CursorMoved {
                     position: iced::Point::new(x, y),
@@ -133,8 +135,8 @@ impl IcedUi {
     }
 
     // TODO: produce root internally???
-    // TODO: closure/trait for sending messages back? (take a look at higher level
-    // iced libs)
+    // TODO: closure/trait for sending messages back? (take a look at higher
+    // level iced libs)
     pub fn maintain<'a, M, E: Into<Element<'a, M>>>(
         &mut self,
         root: E,
@@ -143,8 +145,8 @@ impl IcedUi {
         clipboard: &mut Clipboard,
     ) -> (Vec<M>, mouse::Interaction) {
         span!(_guard, "maintain", "IcedUi::maintain");
-        // There could have been a series of resizes that put us back at the original
-        // resolution.
+        // There could have been a series of resizes that put us back at the
+        // original resolution.
         // Avoid resetting cache if window size didn't actually change.
         let resolution_changed = self.scale.surface_resized(renderer.resolution());
 
@@ -159,8 +161,8 @@ impl IcedUi {
                     height: scaled_resolution.y as u32,
                 }));
             // Avoid panic in graphic cache when minimizing.
-            // Somewhat inefficient for elements that won't change size after a window
-            // resize
+            // Somewhat inefficient for elements that won't change size after a
+            // window resize
             let physical_resolution = renderer.resolution();
             if physical_resolution.map(|e| e > 0).reduce_and() {
                 self.renderer

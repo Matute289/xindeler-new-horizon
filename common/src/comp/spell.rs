@@ -635,7 +635,8 @@ mod tests {
         assert!(book.allows("spells.transmutation.plant_growth", druid.as_ref()));
         assert!(!book.allows("spells.transmutation.plant_growth", warrior.as_ref()));
 
-        // Direct weapon/implement-ability path: ability_id is the RON specifier.
+        // Direct weapon/implement-ability path: ability_id is the RON
+        // specifier.
         assert!(book.allows(
             "common.abilities.spells.transmutation.plant_growth",
             druid.as_ref()

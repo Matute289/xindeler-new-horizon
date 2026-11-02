@@ -420,8 +420,8 @@ impl SfxChannel {
             track.set_position(self.pos, tween);
         }
 
-        // A multiplier between 0.0 and 1.0, with 0.0 being the furthest away from and
-        // 1.0 being closest to the player.
+        // A multiplier between 0.0 and 1.0, with 0.0 being the furthest away
+        // from and 1.0 being closest to the player.
         let ratio = calculate_player_attenuation(player_pos, self.pos);
         self.set_source_volume(self.source_initial_volume * 5.0 * ratio);
     }

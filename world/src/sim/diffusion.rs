@@ -299,10 +299,10 @@ pub fn diffusion(
             f[0] = zint[aij(i, 0)];
         } else {
             // reflective boundary
-            // TODO: Check whether this j was actually supposed to be a 0 in the original
-            // (probably).
-            // factxp = (kdint[aij(i+1, 0)] + kdint[aij(i, j)]) / 2.0 * (dt / 2.0) / (dx *
-            // dx);
+            // TODO: Check whether this j was actually supposed to be a 0 in the
+            // original (probably).
+            // factxp = (kdint[aij(i+1, 0)] + kdint[aij(i, j)]) / 2.0 * (dt /
+            // 2.0) / (dx * dx);
             factxp = (kdint[aij(i + 1, 0)] + kdint[aij(i, 0)]) / 2.0 * (dt / 2.0) / (dx * dx);
             factxm = (kdint[aij(i - 1, 0)] + kdint[aij(i, 0)]) / 2.0 * (dt / 2.0) / (dx * dx);
             factyp = (kdint[aij(i, 1)] + kdint[aij(i, 0)]) / 2.0 * (dt / 2.0) / (dy * dy);

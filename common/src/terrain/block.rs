@@ -620,8 +620,9 @@ impl Block {
     /// if the [`Collectable`][`sprite::Collectable`] sprite attr is `false`.
     #[inline]
     pub fn is_directly_collectible(&self) -> bool {
-        // NOTE: This doesn't require `SpriteCfg` because `SpriteCfg::loot_table` is
-        // only expected to be set for `collectible_info.is_some()` sprites!
+        // NOTE: This doesn't require `SpriteCfg` because
+        // `SpriteCfg::loot_table` is only expected to be set for
+        // `collectible_info.is_some()` sprites!
         self.get_sprite()
             .is_some_and(|s| s.collectible_info() == Some(None))
             && matches!(self.get_attr(), Ok(sprite::Collectable(true)) | Err(_))
@@ -775,8 +776,9 @@ impl Block {
         if self.is_fluid() {
             Block::unfilled(self.kind(), SpriteKind::Empty)
         } else {
-            // FIXME: Figure out if there's some sensible way to determine what medium to
-            // replace a filled block with if it's removed.
+            // FIXME: Figure out if there's some sensible way to determine what
+            // medium to replace a filled block with if it's
+            // removed.
             Block::air(SpriteKind::Empty)
         }
     }

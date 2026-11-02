@@ -541,8 +541,9 @@ impl Widget for Overhead<'_> {
                         .collect(),
                 };
 
-                // Create two strings for inputs and actions. Actions should be left aligned
-                // with each other, and should not be influenced by multi-input input strings
+                // Create two strings for inputs and actions. Actions should be
+                // left aligned with each other, and should not
+                // be influenced by multi-input input strings
 
                 // Icons string
                 let mut temp_list: Vec<String> = Vec::new();

@@ -66,10 +66,11 @@ fn integrate_forces(
     // Aerodynamic/hydrodynamic forces
     if !rel_flow.0.is_approx_zero() {
         debug_assert!(!rel_flow.0.map(|a| a.is_nan()).reduce_or());
-        // HACK: We should really use the latter logic (i.e: `aerodynamic_forces`) for
-        // liquids, but it results in pretty serious dt-dependent problems that
-        // are extremely difficult to resolve. This is a compromise: for liquids
-        // only, we calculate drag using an incorrect (but still visually plausible)
+        // HACK: We should really use the latter logic (i.e:
+        // `aerodynamic_forces`) for liquids, but it results in pretty
+        // serious dt-dependent problems that are extremely difficult to
+        // resolve. This is a compromise: for liquids only, we calculate
+        // drag using an incorrect (but still visually plausible)
         // model that is much more resistant to differences in dt. Because it's
         // physically incorrect anyway, there are magic coefficients that
         // exist simply to get us closer to what water 'should' feel like.
@@ -81,7 +82,8 @@ fn integrate_forces(
 
             let fvel = fluid.flow_vel();
 
-            // Drag is relative to fluid velocity, so compensate before applying drag
+            // Drag is relative to fluid velocity, so compensate before applying
+            // drag
             vel.0 = (vel.0 - fvel.0) * (1.0 / (1.0 + fric)).powf(dt.0 * 10.0) + fvel.0;
         } else {
             let impulse = dt.0
@@ -94,14 +96,18 @@ fn integrate_forces(
             debug_assert!(!impulse.map(|a| a.is_nan()).reduce_or());
             if !impulse.is_approx_zero() {
                 let new_v = vel.0 + impulse / mass.0;
-                // If the new velocity is in the opposite direction, it's because the forces
-                // involved are too high for the current tick to handle. We deal with this by
-                // removing the component of our velocity vector along the direction of force.
-                // This way we can only ever lose velocity and will never experience a reverse
-                // in direction from events such as falling into water at high velocities.
+                // If the new velocity is in the opposite direction, it's
+                // because the forces involved are too high for
+                // the current tick to handle. We deal with this by
+                // removing the component of our velocity vector along the
+                // direction of force. This way we can only ever
+                // lose velocity and will never experience a reverse
+                // in direction from events such as falling into water at high
+                // velocities.
                 if new_v.dot(vel.0) < 0.0 {
                     // Multiply by a factor to prevent full stop,
-                    // as this can cause things to get stuck in high-density medium
+                    // as this can cause things to get stuck in high-density
+                    // medium
                     vel.0 -= vel.0.projected(&impulse) * 0.9;
                 } else {
                     vel.0 = new_v;
@@ -112,7 +118,8 @@ fn integrate_forces(
     };
 
     // Hydrostatic/aerostatic forces
-    // modify gravity to account for the effective density as a result of buoyancy
+    // modify gravity to account for the effective density as a result of
+    // buoyancy
     let down_force = dt.0 * gravity * (density.0 - fluid_density.0) / density.0;
     vel.0.z -= down_force;
 
@@ -284,8 +291,9 @@ impl PhysicsData<'_> {
                 Collider::CapsulePrism(CapsulePrism { p0, p1, .. }) => {
                     let a = p1 - p0;
                     let len = a.magnitude();
-                    // If origins are close enough, our capsule prism is cylinder
-                    // with one origin which we don't even need to rotate.
+                    // If origins are close enough, our capsule prism is
+                    // cylinder with one origin which we
+                    // don't even need to rotate.
                     //
                     // Other advantage of early-return is that we don't
                     // later divide by zero and return NaN
@@ -328,15 +336,15 @@ impl PhysicsData<'_> {
             ref write,
         } = self;
         // NOTE: i32 places certain constraints on how far out collision works
-        // NOTE: uses the radius of the entity and their current position rather than
-        // the radius of their bounding sphere for the current frame of movement
-        // because the nonmoving entity is what is collided against in the inner
-        // loop of the pushback collision code
-        // TODO: maintain frame to frame? (requires handling deletion)
-        // TODO: if not maintaining frame to frame consider counting entities to
-        // preallocate?
-        // TODO: assess parallelizing (overhead might dominate here? would need to merge
-        // the vecs in each hashmap)
+        // NOTE: uses the radius of the entity and their current position rather
+        // than the radius of their bounding sphere for the current
+        // frame of movement because the nonmoving entity is what is
+        // collided against in the inner loop of the pushback collision
+        // code TODO: maintain frame to frame? (requires handling
+        // deletion) TODO: if not maintaining frame to frame consider
+        // counting entities to preallocate?
+        // TODO: assess parallelizing (overhead might dominate here? would need
+        // to merge the vecs in each hashmap)
         let lg2_cell_size = 5;
         let lg2_large_cell_size = 6;
         let radius_cutoff = 8;
@@ -503,7 +511,8 @@ impl PhysicsData<'_> {
 
                                 for i in 0..increments {
                                     let factor = i as f32 * step_delta;
-                                    // We are not interested if collision succeed
+                                    // We are not interested if collision
+                                    // succeed
                                     // or no as of now.
                                     // Collision reaction is done inside.
                                     let _ = collision::resolve_e2e_collision(
@@ -577,11 +586,12 @@ impl PhysicsData<'_> {
         let voxel_colliders_manifest = VOXEL_COLLIDER_MANIFEST.read();
 
         // NOTE: i32 places certain constraints on how far out collision works
-        // NOTE: uses the radius of the entity and their current position rather than
-        // the radius of their bounding sphere for the current frame of movement
-        // because the nonmoving entity is what is collided against in the inner
-        // loop of the pushback collision code
-        // TODO: optimize these parameters (especially radius cutoff)
+        // NOTE: uses the radius of the entity and their current position rather
+        // than the radius of their bounding sphere for the current
+        // frame of movement because the nonmoving entity is what is
+        // collided against in the inner loop of the pushback collision
+        // code TODO: optimize these parameters (especially radius
+        // cutoff)
         let lg2_cell_size = 7; // 128
         let lg2_large_cell_size = 8; // 256
         let radius_cutoff = 64;
@@ -705,9 +715,10 @@ impl PhysicsData<'_> {
         span!(guard, "Apply movement");
         let (positions, velocities) = (&write.positions, &mut write.velocities);
 
-        // First pass: update velocity using air resistance and gravity for each entity.
-        // We do this in a first pass because it helps keep things more stable for
-        // entities that are anchored to other entities (such as airships).
+        // First pass: update velocity using air resistance and gravity for each
+        // entity. We do this in a first pass because it helps keep
+        // things more stable for entities that are anchored to other
+        // entities (such as airships).
         (
             positions,
             velocities,
@@ -800,17 +811,18 @@ impl PhysicsData<'_> {
         drop(guard);
         job.cpu_stats.measure(ParMode::Single);
 
-        // Second pass: resolve collisions for terrain-like entities, this is required
-        // in order to update their positions before resolving collisions for
-        // non-terrain-like entities, since otherwise, collision is resolved
-        // based on where the terrain-like entity was in the previous frame.
+        // Second pass: resolve collisions for terrain-like entities, this is
+        // required in order to update their positions before resolving
+        // collisions for non-terrain-like entities, since otherwise,
+        // collision is resolved based on where the terrain-like entity
+        // was in the previous frame.
         Self::resolve_et_collision(job, read, write, voxel_collider_spatial_grid, true);
 
         // Third pass: resolve collisions for non-terrain-like entities
         Self::resolve_et_collision(job, read, write, voxel_collider_spatial_grid, false);
 
-        // Update cached 'old' physics values to the current values ready for the next
-        // tick
+        // Update cached 'old' physics values to the current values ready for
+        // the next tick
         prof_span!(guard, "record ori into phys_cache");
         for (pos, ori, previous_phys_cache) in (
             &write.positions,
@@ -819,8 +831,9 @@ impl PhysicsData<'_> {
         )
             .join()
         {
-            // Note: updating ori with the rest of the cache values above was attempted but
-            // it did not work (investigate root cause?)
+            // Note: updating ori with the rest of the cache values above was
+            // attempted but it did not work (investigate root
+            // cause?)
             previous_phys_cache.pos = Some(*pos);
             previous_phys_cache.ori = ori.to_quat();
         }
@@ -1455,17 +1468,18 @@ impl<'a> System<'a> for Sys {
 
         // Apply pushback
         //
-        // Note: We now do this first because we project velocity ahead. This is slighty
-        // imperfect and implies that we might get edge-cases where entities
-        // standing right next to the edge of a wall may get hit by projectiles
-        // fired into the wall very close to them. However, this sort of thing is
-        // already possible with poorly-defined hitboxes anyway so it's not too
+        // Note: We now do this first because we project velocity ahead. This is
+        // slighty imperfect and implies that we might get edge-cases
+        // where entities standing right next to the edge of a wall may
+        // get hit by projectiles fired into the wall very close to
+        // them. However, this sort of thing is already possible with
+        // poorly-defined hitboxes anyway so it's not too
         // much of a concern.
         //
-        // If this situation becomes a problem, this code should be integrated with the
-        // terrain collision code below, although that's not trivial to do since
-        // it means the step needs to take into account the speeds of both
-        // entities.
+        // If this situation becomes a problem, this code should be integrated
+        // with the terrain collision code below, although that's not
+        // trivial to do since it means the step needs to take into
+        // account the speeds of both entities.
         physics_data.maintain_pushback_cache();
 
         let spatial_grid = physics_data.construct_spatial_grid();

@@ -1127,7 +1127,8 @@ impl FigureMgr {
             }
             if animated {
                 let flicker = (rand::random::<f32>() - 0.5) * flicker / dt.sqrt();
-                // Close gap between current and target strength by 95% per second
+                // Close gap between current and target strength by 95% per
+                // second
                 let delta = 0.05_f32.powf(dt);
                 light_anim.strength =
                     light_anim.strength * delta + (target_strength + flicker) * (1.0 - delta);
@@ -1140,10 +1141,11 @@ impl FigureMgr {
                 light_anim.strength = target_strength;
                 light_anim.col = target_col;
             }
-            // NOTE: We add `LIGHT_EPSILON` because if we wait for numbers to become
-            // equal to target (or even within a subnormal), it will take a minimum
-            // of 30 seconds for a light to fully turn off (for initial
-            // strength ≥ 1), which prevents optimizations (particularly those that
+            // NOTE: We add `LIGHT_EPSILON` because if we wait for numbers to
+            // become equal to target (or even within a subnormal),
+            // it will take a minimum of 30 seconds for a light to
+            // fully turn off (for initial strength ≥ 1), which
+            // prevents optimizations (particularly those that
             // can kick in with zero lights).
             const LIGHT_EPSILON: f32 = 0.0001;
             if (light_anim.strength - target_strength).abs() < LIGHT_EPSILON {
@@ -1176,12 +1178,12 @@ impl FigureMgr {
         let dt_lerp = (15.0 * dt).min(1.0);
         let frustum = camera.frustum();
 
-        // Sun shadows--find the bounding box of the shadow map plane (i.e. the bounds
-        // of the image rendered from the light).  If the position projected
-        // with the ray_mat matrix is valid, and shadows are otherwise enabled,
-        // we mark can_shadow.
-        // Rain occlusion is very similar to sun shadows, but using a different ray_mat,
-        // and only if it's raining.
+        // Sun shadows--find the bounding box of the shadow map plane (i.e. the
+        // bounds of the image rendered from the light).  If the
+        // position projected with the ray_mat matrix is valid, and
+        // shadows are otherwise enabled, we mark can_shadow.
+        // Rain occlusion is very similar to sun shadows, but using a different
+        // ray_mat, and only if it's raining.
         let (can_shadow_sun, can_occlude_rain) = {
             let Dependents {
                 proj_mat: _,
@@ -1228,8 +1230,8 @@ impl FigureMgr {
                         min: center - radius,
                         max: center + radius,
                     };
-                    // Quick intersection test for membership in the PSC (potential shader caster)
-                    // list.
+                    // Quick intersection test for membership in the PSC
+                    // (potential shader caster) list.
                     collides_with_aabr(figure_box, visible_bounds)
                 }
             };
@@ -1327,13 +1329,14 @@ impl FigureMgr {
                 .interpolated
                 .map_or(entity_data.pos.0, |i| i.pos);
 
-            // Maintaining figure data and sending new figure data to the GPU turns out to
-            // be a very expensive operation. We want to avoid doing it as much
-            // as possible, so we make the assumption that players don't care so
-            // much about the update *rate* for far away things. As the entity
-            // goes further and further away, we start to 'skip' update ticks.
-            // TODO: Investigate passing the velocity into the shader so we can at least
-            // interpolate motion
+            // Maintaining figure data and sending new figure data to the GPU
+            // turns out to be a very expensive operation. We want
+            // to avoid doing it as much as possible, so we make the
+            // assumption that players don't care so much about the
+            // update *rate* for far away things. As the entity goes
+            // further and further away, we start to 'skip' update ticks.
+            // TODO: Investigate passing the velocity into the shader so we can
+            // at least interpolate motion
             const MIN_PERFECT_RATE_DIST: f32 = 100.0;
 
             if !matches!(&entity_data.body, Body::Ship(_))
@@ -1466,19 +1469,20 @@ impl FigureMgr {
         } else if vd_frac > 1.0 {
             state.as_mut().map(|state| state.visible = false);
             // Keep processing if this might be a shadow caster.
-            // NOTE: Not worth to do for rain_occlusion, since that only happens in closeby
-            // chunks.
+            // NOTE: Not worth to do for rain_occlusion, since that only happens
+            // in closeby chunks.
             if !can_shadow_prev {
                 return;
             }
         }
 
-        // Don't display figures outside the frustum spectrum (this is important to do
-        // for any figure that potentially casts a shadow, since we use this
-        // to estimate bounds for shadow maps).  Currently, we don't do this before the
-        // update cull, so it's possible that faraway figures will not
-        // shadow correctly until their next update.  For now, we treat this
-        // as an acceptable tradeoff.
+        // Don't display figures outside the frustum spectrum (this is important
+        // to do for any figure that potentially casts a shadow, since
+        // we use this to estimate bounds for shadow maps).  Currently,
+        // we don't do this before the update cull, so it's possible
+        // that faraway figures will not shadow correctly until their
+        // next update.  For now, we treat this as an acceptable
+        // tradeoff.
         let radius = scale.unwrap_or(&Scale(1.0)).0 * 2.0;
         let (in_frustum, _lpindex) = if let Some(ref mut meta) = state {
             let (in_frustum, lpindex) = BoundingSphere::new(pos.0.into_array(), radius)
@@ -1510,10 +1514,11 @@ impl FigureMgr {
             return;
         }
 
-        // The same "is this figure currently revealed to me by an active magical
-        // sense" condition `reveal_tint` uses to pick `col`'s multiplier below,
-        // reused as-is to drive the emissive rim highlight (`Locals.flags` bit 1)
-        // rather than inventing a second reveal check.
+        // The same "is this figure currently revealed to me by an active
+        // magical sense" condition `reveal_tint` uses to pick `col`'s
+        // multiplier below, reused as-is to drive the emissive rim
+        // highlight (`Locals.flags` bit 1) rather than inventing a
+        // second reveal check.
         let revealing_sense = data.scene_data.revealed_entities.get(&entity).copied();
         let is_revealed = revealing_sense.is_some();
 
@@ -1574,7 +1579,8 @@ impl FigureMgr {
             anim::vek::Vec2::unit_y().rotated_z(theta)
         };
 
-        // If a mount exists, get its animated mounting transform and its position
+        // If a mount exists, get its animated mounting transform and its
+        // position
         let mount_transform_pos = (|| -> Option<_> {
             if let Some(is_rider) = is_rider {
                 let mount = is_rider.mount;
@@ -6948,8 +6954,9 @@ impl FigureMgr {
                         &terrain.sprite_render_state,
                     )
                 } else {
-                    // No way to determine model (this is okay, we might just not have received
-                    // the `Collider` for the entity yet. Wait until the
+                    // No way to determine model (this is okay, we might just
+                    // not have received the `Collider` for
+                    // the entity yet. Wait until the
                     // next tick.
                     return;
                 };
@@ -8518,10 +8525,11 @@ impl FigureAtlas {
             large_size_threshold: 256,
             ..guillotiere::AllocatorOptions::default()
         });
-        // TODO: Consider using a single texture atlas to store all figures, much like
-        // we do for terrain chunks.  We previously avoided this due to
-        // perceived performance degradation for the figure use case, but with a
-        // smaller atlas size this may be less likely.
+        // TODO: Consider using a single texture atlas to store all figures,
+        // much like we do for terrain chunks.  We previously avoided
+        // this due to perceived performance degradation for the figure
+        // use case, but with a smaller atlas size this may be less
+        // likely.
         /* let texture = renderer.create_texture_raw(
             gfx::texture::Kind::D2(
                 max_texture_size,
@@ -8727,15 +8735,17 @@ impl<S: Skeleton, D: FigureData> FigureState<S, D> {
 
         self.meta.squash = Lerp::lerp(*squash, self.meta.squash, 0.5f32.powf(*dt * 50.0));
 
-        // NOTE: As long as update() always gets called after get_or_create_model(), and
-        // visibility is not set again until after the model is rendered, we
-        // know we don't pair the character model with invalid model state.
+        // NOTE: As long as update() always gets called after
+        // get_or_create_model(), and visibility is not set again until
+        // after the model is rendered, we know we don't pair the
+        // character model with invalid model state.
         //
-        // Currently, the only exception to this during normal gameplay is in the very
-        // first tick after a model is created (so there's no `last_character`
-        // state).  So in theory, we could have incorrect model data during this
-        // tick.  It is possible to resolve this in a few ways, but since
-        // currently we don't actually use the model state for anything, we
+        // Currently, the only exception to this during normal gameplay is in
+        // the very first tick after a model is created (so there's no
+        // `last_character` state).  So in theory, we could have
+        // incorrect model data during this tick.  It is possible to
+        // resolve this in a few ways, but since currently we don't
+        // actually use the model state for anything, we
         // currently ignore this potential issue.
         //
         // FIXME: Address the above at some point.
@@ -8747,9 +8757,9 @@ impl<S: Skeleton, D: FigureData> FigureState<S, D> {
         };
 
         // Approximate as a sphere with radius equal to the
-        // largest dimension (if we were exact, it should just be half the largest
-        // dimension, but we're not, so we double it and use size() instead of
-        // half_size()).
+        // largest dimension (if we were exact, it should just be half the
+        // largest dimension, but we're not, so we double it and use
+        // size() instead of half_size()).
         /* let radius = vek::Extent3::<f32>::from(model.bounds.half_size()).reduce_partial_max();
         let _bounds = BoundingSphere::new(pos.into_array(), scale * 0.8 * radius); */
 
@@ -8760,8 +8770,9 @@ impl<S: Skeleton, D: FigureData> FigureState<S, D> {
         let mat = {
             let scale_mat = anim::vek::Mat4::scaling_3d(anim::vek::Vec3::from(*scale));
             if let Some((transform, _)) = *mount_transform_pos {
-                // Note: if we had a way to compute a "default" transform of the bones then in
-                // the animations we could make use of the mount_offset from common by
+                // Note: if we had a way to compute a "default" transform of the
+                // bones then in the animations we could make
+                // use of the mount_offset from common by
                 // computing what the offset of the rider is from the mounted
                 // bone in its default position when the rider has the mount
                 // offset in common applied to it. Since we don't have this
@@ -8773,9 +8784,10 @@ impl<S: Skeleton, D: FigureData> FigureState<S, D> {
                     body.map_or_else(Vec3::zero, |b| b.rider_offset()),
                 );
 
-                // NOTE: It is kind of a hack to use this entity's ori here if it is
-                // mounted on another but this happens to match the ori of the
-                // mount so it works, change this if it causes jankiness in the future.
+                // NOTE: It is kind of a hack to use this entity's ori here if
+                // it is mounted on another but this happens to
+                // match the ori of the mount so it works,
+                // change this if it causes jankiness in the future.
                 let transform = anim::vek::Transform {
                     orientation: *ori * transform.orientation,
                     ..transform
@@ -8796,8 +8808,9 @@ impl<S: Skeleton, D: FigureData> FigureState<S, D> {
                     "light_glow",
                     "FigureState::update (fetch light/glow)"
                 );
-                // Sample the location a little above to avoid clipping into terrain
-                // TODO: Try to make this faster? It might be fine though
+                // Sample the location a little above to avoid clipping into
+                // terrain TODO: Try to make this faster? It
+                // might be fine though
                 let wpos = Vec3::from(pos.into_array()) + Vec3::unit_z();
 
                 let wposi = wpos.map(|e: f32| e.floor() as i32);
@@ -8830,8 +8843,8 @@ impl<S: Skeleton, D: FigureData> FigureState<S, D> {
             })
             .unwrap_or((1.0, (Vec3::zero(), 0.0)));
         // Fade between light and glow levels
-        // TODO: Making this temporal rather than spatial is a bit dumb but it's a very
-        // subtle difference
+        // TODO: Making this temporal rather than spatial is a bit dumb but it's
+        // a very subtle difference
         self.last_light = Lerp::lerp(self.last_light, light, 16.0 * dt);
         self.last_glow.0 = Lerp::lerp(self.last_glow.0, glow.0, 16.0 * dt);
         self.last_glow.1 = Lerp::lerp(self.last_glow.1, glow.1, 16.0 * dt);

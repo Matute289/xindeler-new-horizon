@@ -213,9 +213,10 @@ mod v1 {
         /// guaranteed to produce a valid settings file as long as it is
         /// called with a valid settings file from the previous version.
         pub(super) fn migrate(prev: prev::Admins) -> Self {
-            // The role assignment date for migrations from legacy is the current one; we
-            // could record that they actually have an unknown start date, but
-            // this would just complicate the format.
+            // The role assignment date for migrations from legacy is the
+            // current one; we could record that they actually have
+            // an unknown start date, but this would just complicate
+            // the format.
             let date = Utc::now();
             Admins(
                 prev.0

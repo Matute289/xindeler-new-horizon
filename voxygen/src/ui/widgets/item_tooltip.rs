@@ -133,8 +133,8 @@ impl ItemTooltipManager {
             for item in items {
                 let tooltip_id =
                     id_walker.next(&mut self.tooltip_ids, &mut ui.widget_id_generator());
-                // Fill in text and the potential image beforehand to get an accurate size for
-                // spacing
+                // Fill in text and the potential image beforehand to get an
+                // accurate size for spacing
                 let tooltip = tooltip
                     .clone()
                     .item(item.borrow())
@@ -407,13 +407,13 @@ impl<'a> ItemTooltip<'a> {
     //     self.justify(text::Justify::Left)
     // }
 
-    // // Align the text to the middle of its bounding **Rect**'s *x* axis range.
-    // pub fn center_justify(self) -> Self {
+    // // Align the text to the middle of its bounding **Rect**'s *x* axis
+    // range. pub fn center_justify(self) -> Self {
     //     self.justify(text::Justify::Center)
     // }
 
-    // /// Align the text to the right of its bounding **Rect**'s *x* axis range.
-    // pub fn right_justify(self) -> Self {
+    // /// Align the text to the right of its bounding **Rect**'s *x* axis
+    // range. pub fn right_justify(self) -> Self {
     //     self.justify(text::Justify::Right)
     // }
 
@@ -1157,8 +1157,8 @@ impl Widget for ItemTooltip<'_> {
                         .set(state.ids.stats[1], ui);
 
                     // Effect Power
-                    // TODO: Allow effect power to have different terminology based on what it is
-                    // affecting.
+                    // TODO: Allow effect power to have different terminology
+                    // based on what it is affecting.
                     let effect_power_text = if is_primary {
                         format!(
                             "{} : {:+.0}%",
@@ -1319,8 +1319,9 @@ impl Widget for ItemTooltip<'_> {
                 .set(state.ids.requirements_unmet, ui);
         }
 
-        // Attunement notice — magic items only grant their effects while attuned
-        // (ENG-D2). Informational, not a met/unmet gate; shown in arcane blue.
+        // Attunement notice — magic items only grant their effects while
+        // attuned (ENG-D2). Informational, not a met/unmet gate; shown
+        // in arcane blue.
         let requires_attunement = item.requires_attunement();
         if requires_attunement {
             let anchor = if !req_unmet.is_empty() {

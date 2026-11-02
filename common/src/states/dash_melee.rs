@@ -115,22 +115,26 @@ impl CharacterBehavior for Data {
                         ),
                     );
 
-                    // Determines if charge ends by continually refreshing melee component until it
-                    // detects a hit, at which point the charge ends
+                    // Determines if charge ends by continually refreshing melee
+                    // component until it detects a hit, at
+                    // which point the charge ends
                     if let Some(melee) = data.melee_attack {
                         if melee.sustained || !melee.applied {
-                            // If melee attack has not applied, or is sustained, just tick duration
+                            // If melee attack has not applied, or is sustained,
+                            // just tick duration
                             if let CharacterState::DashMelee(c) = &mut update.character {
                                 c.timer = tick_attack_or_default(data, self.timer, None);
                             }
                         } else if melee.hit_entities.is_empty() {
-                            // If melee attack has applied, but not hit anything, reset melee attack
+                            // If melee attack has applied, but not hit
+                            // anything, reset melee attack
                             data.updater.insert(data.entity, create_melee(charge_frac));
                             if let CharacterState::DashMelee(c) = &mut update.character {
                                 c.timer = tick_attack_or_default(data, self.timer, None);
                             }
                         } else {
-                            // Stop charging now and go to swing stage section; unless sustained
+                            // Stop charging now and go to swing stage section;
+                            // unless sustained
                             if let CharacterState::DashMelee(c) = &mut update.character {
                                 c.timer = Duration::default();
                                 c.stage_section = StageSection::Action;
@@ -145,7 +149,8 @@ impl CharacterBehavior for Data {
                         }
                     }
 
-                    // Consumes energy if there's enough left and charge has not stopped
+                    // Consumes energy if there's enough left and charge has not
+                    // stopped
                     update
                         .energy
                         .change_by(-self.static_data.energy_drain * data.dt.0);

@@ -204,8 +204,8 @@ where
             messages,
         );
 
-        // If mouse press check if over the overlay widget before sending to under
-        // widget
+        // If mouse press check if over the overlay widget before sending to
+        // under widget
         if !matches!(&event, Event::Mouse(mouse::Event::ButtonPressed(_)))
             || !over_layout.bounds().contains(cursor_position)
         {

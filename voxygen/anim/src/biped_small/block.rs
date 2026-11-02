@@ -44,8 +44,8 @@ impl Animation for BlockAnimation {
                 let _move2 = move2 * pullback;
 
                 next.detach_right = true;
-                // For some reason there's a discontinuity when using detach_right, two offsets
-                // below seem to help
+                // For some reason there's a discontinuity when using
+                // detach_right, two offsets below seem to help
                 next.control_r.position += next.control.position
                     + Vec3::new(0.0, -2.0, 1.0)
                     + Vec3::new(2.0 * move3, -1.0 * move3, 2.0 * move3);

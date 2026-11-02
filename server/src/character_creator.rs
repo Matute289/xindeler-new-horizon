@@ -175,7 +175,8 @@ pub fn create_character(
         return Err(CreationError::InvalidClass);
     }
     // [None, None] (no weapons) bypasses the class whitelist on purpose — stock
-    // clients may create without weapons (zesterer); guard structure preserves it.
+    // clients may create without weapons (zesterer); guard structure preserves
+    // it.
     if !(character_mainhand.is_none() && character_offhand.is_none())
         && !valid_starter_items(character_class)
             .contains(&[character_mainhand.as_deref(), character_offhand.as_deref()])

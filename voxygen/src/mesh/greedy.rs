@@ -106,8 +106,8 @@ fn guillotiere_size<T: Into<i32>>(size: Vec2<T>) -> guillotiere::Size {
 
 /// Currently used by terrain/particles/figures
 pub fn general_config() -> guillotiere::AllocatorOptions {
-    // TODO: Collect information to see if we can choose a good value here. These
-    // current values were optimized for sprites, but we are using a
+    // TODO: Collect information to see if we can choose a good value here.
+    // These current values were optimized for sprites, but we are using a
     // different allocator for them so different values might be better
     // here.
     let large_size_threshold = 8; //256.min(min_max_dim / 2 + 1);
@@ -121,9 +121,9 @@ pub fn general_config() -> guillotiere::AllocatorOptions {
 }
 
 pub fn sprite_config() -> guillotiere::AllocatorOptions {
-    // TODO: Collect information to see if we can choose a better value here (these
-    // values were picked before switching to this tiled implementation). I
-    // suspect these are still near optimal though.
+    // TODO: Collect information to see if we can choose a better value here
+    // (these values were picked before switching to this tiled
+    // implementation). I suspect these are still near optimal though.
     let large_size_threshold = 8;
     let small_size_threshold = 3;
 
@@ -149,8 +149,8 @@ impl AtlasAllocator for guillotiere::SimpleAtlasAllocator {
 
     /// Retrieves the current size of the atlas being allocated from.
     fn size(&self) -> Vec2<u16> {
-        // NOTE: with_max_size / grow take a u16 so the size will never be larger than
-        // u16::MAX
+        // NOTE: with_max_size / grow take a u16 so the size will never be
+        // larger than u16::MAX
         Vec2::<i32>::from(self.size().to_array()).map(|e| e as u16)
     }
 
@@ -243,15 +243,17 @@ impl AtlasAllocator for GuillotiereTiled {
         while let Some(current) = self.current {
             match self.allocator.allocate(size) {
                 Some(r) => {
-                    // NOTE: The offset will always be smaller or equal to the `u16`s passed into
-                    // `with_max_size`/`grow` so this won't overflow.
+                    // NOTE: The offset will always be smaller or equal to the
+                    // `u16`s passed into `with_max_size`/
+                    // `grow` so this won't overflow.
                     let offset = guillotiere_size(current.map(|e| e as u16 * Self::TILE_SIZE));
 
                     let offset_rect = guillotiere::Rectangle {
                         min: r.min.add_size(&offset),
                         max: r.max.add_size(&offset),
                     };
-                    // NOTE: `i32` -> `u32` conversion is fine since these will always be positive.
+                    // NOTE: `i32` -> `u32` conversion is fine since these will
+                    // always be positive.
                     self.used_in_current_tile += size.width as u32 * size.height as u32;
 
                     return Some(offset_rect);
@@ -265,8 +267,8 @@ impl AtlasAllocator for GuillotiereTiled {
 
     /// Retrieves the current size of the atlas being allocated from.
     fn size(&self) -> Vec2<u16> {
-        // NOTE: The size will always be smaller or equal to the `u16`s passed into
-        // `with_max_size`/`grow` so this won't overflow.
+        // NOTE: The size will always be smaller or equal to the `u16`s passed
+        // into `with_max_size`/`grow` so this won't overflow.
         self.size.map(|e| e as u16 * Self::TILE_SIZE)
     }
 
@@ -287,9 +289,9 @@ impl AtlasAllocator for GuillotiereTiled {
         }
 
         let diff = new_size.map2(self.size(), |n, s| n.saturating_sub(s));
-        // NOTE: Growing only occurs in increments of TILE_SIZE so any remaining size is
-        // ignored. Max size is not known here so this must truncate instead of rounding
-        // up.
+        // NOTE: Growing only occurs in increments of TILE_SIZE so any remaining
+        // size is ignored. Max size is not known here so this must
+        // truncate instead of rounding up.
         let diff_tiles = diff.map(|e| usize::from(e) / usize::from(Self::TILE_SIZE));
         let old_size = self.size;
         self.size += diff_tiles;
@@ -607,8 +609,8 @@ fn greedy_mesh_cross_section<M: PartialEq>(
     mut push_quads: impl FnMut(Vec3<usize>, Vec2<usize>, &M),
 ) {
     span!(_guard, "greedy_mesh_cross_section");
-    // mask represents which faces are either set while the other is unset, or unset
-    // while the other is set.
+    // mask represents which faces are either set while the other is unset, or
+    // unset while the other is set.
     let mut mask = (0..dims.y * dims.x).map(|_| None).collect::<Vec<_>>();
     (0..dims.z + 1).for_each(|d| {
         // Compute mask
@@ -622,16 +624,17 @@ fn greedy_mesh_cross_section<M: PartialEq>(
         (0..dims.y).for_each(|j| {
             let mut i = 0;
             while i < dims.x {
-                // Compute width (number of set x bits for this row and layer, starting at the
-                // current minimum column).
+                // Compute width (number of set x bits for this row and layer,
+                // starting at the current minimum column).
                 if let Some(ori) = &mask[j * dims.x + i] {
                     let width = 1 + mask[j * dims.x + i + 1..j * dims.x + dims.x]
                         .iter()
                         .take_while(move |&mask| mask.as_ref() == Some(ori))
                         .count();
                     let max_x = i + width;
-                    // Compute height (number of rows having w set x bits for this layer, starting
-                    // at the current minimum column and row).
+                    // Compute height (number of rows having w set x bits for
+                    // this layer, starting at the current
+                    // minimum column and row).
                     let height = 1
                         + (j + 1..dims.y)
                             .take_while(|h| {
@@ -643,7 +646,8 @@ fn greedy_mesh_cross_section<M: PartialEq>(
                     let max_y = j + height;
                     // Add quad.
                     push_quads(Vec3::new(i, j, d), Vec2::new(width, height), ori);
-                    // Unset mask bits in drawn region, so we don't try to re-draw them.
+                    // Unset mask bits in drawn region, so we don't try to
+                    // re-draw them.
                     (j..max_y).for_each(|l| {
                         mask[l * dims.x + i..l * dims.x + max_x]
                             .iter_mut()
@@ -674,9 +678,10 @@ fn add_to_atlas<Allocator: AtlasAllocator>(
 ) -> guillotiere::Rectangle {
     // TODO: Check this conversion.
     let atlas_rect = loop {
-        // NOTE: Conversion to u16 is safe because he x, y, and z dimensions for any
-        // chunk index must fit in at least an i16 (lower for x and y, probably
-        // lower for z) and at least x and y are not negative.
+        // NOTE: Conversion to u16 is safe because he x, y, and z dimensions for
+        // any chunk index must fit in at least an i16 (lower for x and
+        // y, probably lower for z) and at least x and y are not
+        // negative.
         let res = atlas.allocate(Vec2::new(dim.x as u16 + 1, dim.y as u16 + 1));
         if let Some(atlas_rect) = res {
             break atlas_rect;
@@ -684,15 +689,17 @@ fn add_to_atlas<Allocator: AtlasAllocator>(
         // Allocation failure.
         let current_size = atlas.size();
         if current_size == max_size {
-            // NOTE: Currently, if we fail to allocate a terrain chunk in the atlas and we
-            // have already reached the maximum texture size, we choose to just skip the
-            // geometry and log a warning, rather than panicking or trying to use a fallback
+            // NOTE: Currently, if we fail to allocate a terrain chunk in the
+            // atlas and we have already reached the maximum texture
+            // size, we choose to just skip the geometry and log a
+            // warning, rather than panicking or trying to use a fallback
             // technique (e.g. a texture array).
             //
-            // FIXME: Either make more robust, or explicitly document that limits on texture
-            // size need to be respected for terrain data (the OpenGL minimum requirement is
-            // 1024 × 1024, but in practice almost all computers support 4096 × 4096 or
-            // higher; see
+            // FIXME: Either make more robust, or explicitly document that
+            // limits on texture size need to be respected for
+            // terrain data (the OpenGL minimum requirement is
+            // 1024 × 1024, but in practice almost all computers support 4096 ×
+            // 4096 or higher; see
             // https://feedback.wildfiregames.com/report/opengl/feature/GL_MAX_TEXTURE_SIZE).
             panic!(
                 "Could not add texture to atlas using simple allocator (pos={:?}, dim={:?});we \
@@ -701,24 +708,24 @@ fn add_to_atlas<Allocator: AtlasAllocator>(
                 pos, dim, max_size
             );
         }
-        // Otherwise, we haven't reached max size yet, so double the size (or reach the
-        // max texture size) and try again.
+        // Otherwise, we haven't reached max size yet, so double the size (or
+        // reach the max texture size) and try again.
         let new_size = max_size.map2(current_size, |max, current| {
             max.min(current.saturating_mul(2))
         });
         atlas.grow(new_size);
     };
-    // NOTE: Conversion is correct because our initial max size for the atlas was a
-    // u16 and we never grew the atlas past the max size, meaning all valid
-    // coordinates within the atlas also fit into a u16.
+    // NOTE: Conversion is correct because our initial max size for the atlas
+    // was a u16 and we never grew the atlas past the max size, meaning all
+    // valid coordinates within the atlas also fit into a u16.
     *cur_size = Vec2::new(
         cur_size.x.max(atlas_rect.max.x as u16),
         cur_size.y.max(atlas_rect.max.y as u16),
     );
 
-    // NOTE: pos can be converted safely from usize to i32 because all legal block
-    // coordinates in this chunk must fit in an i32 (actually we have the much
-    // stronger property that this holds across the whole map).
+    // NOTE: pos can be converted safely from usize to i32 because all legal
+    // block coordinates in this chunk must fit in an i32 (actually we have
+    // the much stronger property that this holds across the whole map).
     let norm = norm.map(i32::from);
     todo_rects.push((
         pos.map(|e| e as i32) + if faces_forward { -norm } else { Vec3::zero() },
@@ -757,8 +764,9 @@ fn draw_texels<D, A: AtlasData>(
 ) {
     todo_rects.into_iter().for_each(|(pos, uv, rect, delta)| {
         // NOTE: Conversions are safe because width, height, and offset must be
-        // non-negative, and because every allocated coordinate in the atlas must be in
-        // bounds for the original size, max_texture_size, which fit into a u16.
+        // non-negative, and because every allocated coordinate in the atlas
+        // must be in bounds for the original size, max_texture_size,
+        // which fit into a u16.
         let width = (rect.max.x - rect.min.x) as u16;
         let height = (rect.max.y - rect.min.y) as u16;
         let left = rect.min.x as u16;
@@ -771,16 +779,20 @@ fn draw_texels<D, A: AtlasData>(
                 .zip(atlas_texture_data.slice_mut(start..start + usize::from(width)))
                 .for_each(|(u, texel)| {
                     let pos = pos + uv.x * i32::from(u) + uv.y * i32::from(v);
-                    // TODO: Consider optimizing to take advantage of the fact that this whole
-                    // face should be facing nothing but air (this is not currently true, but
+                    // TODO: Consider optimizing to take advantage of the fact
+                    // that this whole face should be facing
+                    // nothing but air (this is not currently true, but
                     // could be if we used the right AO strategy).
-                    // Each indirect light needs to come in through the direct light.
-                    // Thus, we assign each light a score based on opacity (currently just 0 or
-                    // 1, but it could support translucent lights in the future).
-                    // Thus, indirect_u_opacity and indirect_v_opacity are multiplied by
+                    // Each indirect light needs to come in through the direct
+                    // light. Thus, we assign each light a
+                    // score based on opacity (currently just 0 or
+                    // 1, but it could support translucent lights in the
+                    // future). Thus, indirect_u_opacity and
+                    // indirect_v_opacity are multiplied by
                     // direct_opacity, and indirect_uv_opacity is multiplied by
-                    // the maximum of both of u and v's indirect opacities (since there are
-                    // two choices for how to get to the direct surface).
+                    // the maximum of both of u and v's indirect opacities
+                    // (since there are two choices for how
+                    // to get to the direct surface).
                     let pos = pos
                         + if u + 1 == width { -uv.x } else { Vec3::zero() }
                         + if v + 1 == height { -uv.y } else { Vec3::zero() };
@@ -791,20 +803,23 @@ fn draw_texels<D, A: AtlasData>(
 
                     let light_pos = pos + delta;
 
-                    // Currently, we assume that direct_opacity is 1 (if it's 0, you can't see
-                    // the face anyway, since it's blocked by the block directly in front of it).
+                    // Currently, we assume that direct_opacity is 1 (if it's 0,
+                    // you can't see the face anyway, since
+                    // it's blocked by the block directly in front of it).
                     // TODO: If we add non-0/1 opacities, fix this.
                     // bottom-left block
                     let direct_u_opacity = get_opacity(data, light_pos - uv.x);
                     // top-right block
                     let direct_v_opacity = get_opacity(data, light_pos - uv.y);
 
-                    // NOTE: Since we only support 0/1 opacities currently, we assume
-                    // direct_opacity is  1, and the light value will be zero anyway for objects
-                    // with opacity 0, we only "multiply" by indirect_uv_opacity for now (since
-                    // it's the only one that could be 0 even if its light value is not).
-                    // However, "spiritually" these light values are all being multiplied by
-                    // their opacities.
+                    // NOTE: Since we only support 0/1 opacities currently, we
+                    // assume direct_opacity is  1, and the
+                    // light value will be zero anyway for objects
+                    // with opacity 0, we only "multiply" by indirect_uv_opacity
+                    // for now (since it's the only one that
+                    // could be 0 even if its light value is not).
+                    // However, "spiritually" these light values are all being
+                    // multiplied by their opacities.
                     let darkness = (
                         // Light from the bottom-right-front block to this vertex always
                         // appears on this face, since it's the block this face is facing (so

@@ -506,8 +506,9 @@ impl Network {
                     trace!(?remote_pid, "Participants will be closed");
                     let (finished_sender, finished_receiver) = oneshot::channel();
                     finished_receiver_list.push((remote_pid, finished_receiver));
-                    // If the channel was already dropped, we can assume that the other side
-                    // already released its resources.
+                    // If the channel was already dropped, we can assume that
+                    // the other side already released its
+                    // resources.
                     let _ = a2s_disconnect_s
                         .send((remote_pid, (Duration::from_secs(10), finished_sender)));
                 },
@@ -744,8 +745,8 @@ impl Participant {
                 // Participant is connecting to Scheduler here, not as usual
                 // Participant<->BParticipant
 
-                // If this is already dropped, we can assume the other side already freed its
-                // resources.
+                // If this is already dropped, we can assume the other side
+                // already freed its resources.
                 let _ = a2s_disconnect_s
                     .send((self.remote_pid, (Duration::from_secs(120), finished_sender)));
                 match finished_receiver.await {
@@ -759,7 +760,8 @@ impl Participant {
                         res
                     },
                     Err(e) => {
-                        //this is a bug. but as i am Participant i can't destroy the network
+                        //this is a bug. but as i am Participant i can't
+                        // destroy the network
                         error!(
                             ?e,
                             "Failed to get a message back from the scheduler, seems like the \
@@ -1158,8 +1160,8 @@ impl Stream {
 
 impl PartialEq for Participant {
     fn eq(&self, other: &Self) -> bool {
-        //don't check local_pid, 2 Participant from different network should match if
-        // they are the "same"
+        //don't check local_pid, 2 Participant from different network should
+        // match if they are the "same"
         self.remote_pid == other.remote_pid
     }
 }
@@ -1172,8 +1174,9 @@ where
     const CHANNEL_ERR: &str = "Something is wrong in internal scheduler/participant coding";
 
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        // When in Async Context WE MUST NOT SYNC BLOCK (as a deadlock might occur as
-        // other is queued behind). And we CANNOT join our Future_Handle
+        // When in Async Context WE MUST NOT SYNC BLOCK (as a deadlock might
+        // occur as other is queued behind). And we CANNOT join our
+        // Future_Handle
         trace!("async context detected, defer shutdown");
         handle.spawn(async move {
             match finished_receiver.await {

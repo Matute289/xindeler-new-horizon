@@ -185,7 +185,8 @@ impl ShaderModules {
         let point_glow = shaders.get("include.point_glow").unwrap();
         let fxaa = shaders.get("include.fxaa").unwrap();
 
-        // We dynamically add extra configuration settings to the constants file.
+        // We dynamically add extra configuration settings to the constants
+        // file.
         let mut constants = format!(
             r#"
 {}
@@ -979,8 +980,8 @@ pub(super) fn initial_create_pipelines(
     };
 
     // Create interface pipelines while blocking the main thread
-    // Note: we use a throwaway Progress tracker here since we don't need to track
-    // the progress
+    // Note: we use a throwaway Progress tracker here since we don't need to
+    // track the progress
     let interface_pipelines = {
         let dummy_progress = Progress::new();
         let mut tasks = ParallelTasks::new(&dummy_progress);

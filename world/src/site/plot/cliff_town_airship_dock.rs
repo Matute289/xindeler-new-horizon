@@ -47,12 +47,13 @@ impl CliffTownAirshipDock {
 
         // dock is 5 tiles = 30 blocks in radius
         // airships are 37 blocks wide = 6 tiles.
-        // distance from the center to the outside edge of the airship when docked is 11
-        // tiles. The area covered by all four airships is a square 22 tiles on
-        // a side.
+        // distance from the center to the outside edge of the airship when
+        // docked is 11 tiles. The area covered by all four airships is
+        // a square 22 tiles on a side.
 
-        // Sample the surface altitude every 4 tiles (= 24 blocks) around the dock
-        // center to find the highest point of terrain surrounding the dock.
+        // Sample the surface altitude every 4 tiles (= 24 blocks) around the
+        // dock center to find the highest point of terrain surrounding
+        // the dock.
         let mut max_surface_alt = i32::MIN;
         // -12 -8 -4 0 +4 +8 +12
         for dx in -3..=3 {
@@ -66,7 +67,8 @@ impl CliffTownAirshipDock {
         }
 
         // Sample the surface altitude over the foundation area to get the
-        // minimum foundation alt. The foundation will be 10 tiles (60 blocks) square.
+        // minimum foundation alt. The foundation will be 10 tiles (60 blocks)
+        // square.
         let mut min_foundation_alt = i32::MAX;
         for dx in -2..=2 {
             for dy in -2..=2 {
@@ -83,14 +85,14 @@ impl CliffTownAirshipDock {
         let platform_length = 2 * variant;
         let mut docking_positions = vec![];
         let platform_height = 18 + variant / 2 - 1;
-        // Try to place the dock so that the base of the tower is at min_foundation_alt.
-        // If that results in the docking platforms being below max_surface_alt,
-        // increase the base altitude.
+        // Try to place the dock so that the base of the tower is at
+        // min_foundation_alt. If that results in the docking platforms
+        // being below max_surface_alt, increase the base altitude.
         let mut base_alt = min_foundation_alt;
-        // The docking platforms are at the floor level of the penultimate storey.
-        // The storeys are stacked with decreasing height (by 1).
-        // The tower base is sunk one floor below the foundation altitude in the
-        // rendering function below.
+        // The docking platforms are at the floor level of the penultimate
+        // storey. The storeys are stacked with decreasing height (by
+        // 1). The tower base is sunk one floor below the foundation
+        // altitude in the rendering function below.
         let mut platform_level = base_alt - platform_height + (storeys - 1) * platform_height
             - (storeys - 2) * (storeys - 1) / 2;
         let clearance = platform_level - (max_surface_alt + 6);

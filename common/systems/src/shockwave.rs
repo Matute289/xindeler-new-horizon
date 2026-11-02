@@ -130,8 +130,9 @@ impl<'a> System<'a> for Sys {
                 });
             }
 
-            // If shockwave is out of time emit destroy event but still continue since it
-            // may have traveled and produced effects a bit before reaching it's end point
+            // If shockwave is out of time emit destroy event but still continue
+            // since it may have traveled and produced effects a bit
+            // before reaching it's end point
             if time > end_time {
                 emitters.emit(DeleteEvent(entity));
                 continue;
@@ -144,8 +145,8 @@ impl<'a> System<'a> for Sys {
             let pos2 = Vec2::from(pos.0);
             let look_dir = ori.look_dir();
 
-            // From one frame to the next a shockwave travels over a strip of an arc
-            // This is used for collision detection
+            // From one frame to the next a shockwave travels over a strip of an
+            // arc This is used for collision detection
             let arc_strip = ArcStrip {
                 origin: pos2,
                 // TODO: make sure this is not Vec2::new(0.0, 0.0)
@@ -156,7 +157,8 @@ impl<'a> System<'a> for Sys {
             };
 
             // Group to ignore collisions with
-            // Might make this more nuanced if shockwaves are used for non damage effects
+            // Might make this more nuanced if shockwaves are used for non
+            // damage effects
             let group = shockwave_owner.and_then(|e| read_data.groups.get(e));
 
             // Go through all other effectable entities
@@ -200,11 +202,12 @@ impl<'a> System<'a> for Sys {
 
                 // Check if it is a hit
                 //
-                // TODO: Should the owner entity really be filtered out here? Unlike other
-                // attacks, explosions and shockwaves are rather "imprecise"
+                // TODO: Should the owner entity really be filtered out here?
+                // Unlike other attacks, explosions and
+                // shockwaves are rather "imprecise"
                 // attacks with which one shoud be easily able to hit oneself.
-                // Once we make shockwaves start out a little way out from the center, this can
-                // be removed.
+                // Once we make shockwaves start out a little way out from the
+                // center, this can be removed.
                 let hit = entity != target
                     && (shockwave_owner != Some(target))
                     && !health_b.is_dead
@@ -279,7 +282,8 @@ impl<'a> System<'a> for Sys {
                         shockwave_owner,
                         target,
                     );
-                    // Shockwaves aren't precise, and thus cannot be a precise strike
+                    // Shockwaves aren't precise, and thus cannot be a precise
+                    // strike
                     let precision_mult = None;
                     let attack_options = AttackOptions {
                         target_dodging,
@@ -309,7 +313,8 @@ impl<'a> System<'a> for Sys {
         }
 
         // Set start time on new shockwaves
-        // This change doesn't need to be recorded as it is not sent to the client
+        // This change doesn't need to be recorded as it is not sent to the
+        // client
         shockwaves.set_event_emission(false);
         (&mut shockwaves).lend_join().for_each(|mut shockwave| {
             if shockwave.creation.is_none() {
@@ -394,7 +399,8 @@ impl ArcStrip {
                 )
         } else if d.radius > dist {
             // Circle center inside ring
-            // but center of ring is inside the circle so we can't calculate the angle
+            // but center of ring is inside the circle so we can't calculate the
+            // angle
             inner_corner_in_circle()
         } else {
             // Circle center inside ring

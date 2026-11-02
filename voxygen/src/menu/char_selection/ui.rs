@@ -687,8 +687,8 @@ impl Mode {
     }
 
     pub fn create(name: String) -> Self {
-        // TODO: Load these from the server (presumably from a .ron) to allow for easier
-        // modification of custom starting weapons
+        // TODO: Load these from the server (presumably from a .ron) to allow
+        // for easier modification of custom starting weapons
         let mainhand = Some(STARTER_SWORD);
         let offhand = None;
 
@@ -920,8 +920,8 @@ impl Controls {
         error: &Option<String>,
         i18n: &'a Localization,
     ) -> Element<'a, Message> {
-        // TODO: use font scale thing for text size (use on button size for buttons with
-        // text)
+        // TODO: use font scale thing for text size (use on button size for
+        // buttons with text)
 
         // Maintain tooltip manager
         self.tooltip_manager.maintain();
@@ -1003,7 +1003,8 @@ impl Controls {
             } => {
                 match self.selected {
                     Some(character_id) => {
-                        // If the selected character no longer exists, deselect it.
+                        // If the selected character no longer exists, deselect
+                        // it.
                         if !client
                             .character_list()
                             .characters
@@ -1015,7 +1016,8 @@ impl Controls {
                     },
                     None => {
                         // If no character is selected then select the first one
-                        // Note: we don't need to persist this because it is the default
+                        // Note: we don't need to persist this because it is the
+                        // default
                         self.selected = client
                             .character_list()
                             .characters
@@ -1034,8 +1036,9 @@ impl Controls {
                 });
 
                 if let Some(error) = error {
-                    // TODO: use more user friendly errors with suggestions on potential solutions
-                    // instead of directly showing error message here
+                    // TODO: use more user friendly errors with suggestions on
+                    // potential solutions instead of
+                    // directly showing error message here
                     *info_content = Some(InfoContent::CharacterError(format!(
                         "{}: {}",
                         i18n.get_msg("common-error"),
@@ -1190,10 +1193,14 @@ impl Controls {
                                             ))
                                             .into(),
                                         ];
-                                        // A suspended character shows its real reason rather
-                                        // than a generic placeholder, and cannot be selected --
-                                        // enforcement is server-side either way, this just keeps
-                                        // the client from sending a request the server will
+                                        // A suspended character shows its real
+                                        // reason rather
+                                        // than a generic placeholder, and
+                                        // cannot be selected --
+                                        // enforcement is server-side either
+                                        // way, this just keeps
+                                        // the client from sending a request the
+                                        // server will
                                         // reject.
                                         if let Some(suspension) = &character.suspended {
                                             lines.push(
@@ -1297,8 +1304,8 @@ impl Controls {
                     characters
                 };
 
-                // TODO: could replace column with scrollable completely if it had a with
-                // children method
+                // TODO: could replace column with scrollable completely if it
+                // had a with children method
                 let characters = Column::with_children(vec![
                     Container::new(
                         Scrollable::new(characters_scroll)
@@ -1866,7 +1873,8 @@ impl Controls {
                     .spacing(2);
 
                     // Tool buttons gated by the current class's whitelist.
-                    // A button with no on_press is visually present but non-interactive.
+                    // A button with no on_press is visually present but
+                    // non-interactive.
                     let icon_button_opt = |button, selected, msg: Option<Message>, img| {
                         let btn = Button::<_, IcedRenderer>::new(
                             button,
@@ -1894,9 +1902,10 @@ impl Controls {
                             )
                         };
 
-                    // Weapon picker for step 3: render ONLY the weapons valid for
-                    // the currently selected class. Every button gets a real
-                    // `on_press` (no disabled/placeholder buttons).
+                    // Weapon picker for step 3: render ONLY the weapons valid
+                    // for the currently selected class.
+                    // Every button gets a real `on_press`
+                    // (no disabled/placeholder buttons).
                     let [
                         sword_button,
                         swords_button,
@@ -2278,9 +2287,10 @@ impl Controls {
 
                 // BL-33: starting moral-alignment picker (its own wizard step).
                 // Two rows — Good/Neutral/Evil and Lawful/Neutral/Chaotic. Each
-                // button uses a FIXED-size centred label (not FillText) so every
-                // word renders at the same size, wrapped in the shared button
-                // image (uniform width, no distortion). Selection = gold text.
+                // button uses a FIXED-size centred label (not FillText) so
+                // every word renders at the same size, wrapped
+                // in the shared button image (uniform width, no
+                // distortion). Selection = gold text.
                 // The pick is only a starting point; deeds drift it in-game.
                 let [moral_good_btn, moral_neutral_btn, moral_evil_btn] = ethos_moral_buttons;
                 let [order_lawful_btn, order_neutral_btn, order_chaotic_btn] = ethos_order_buttons;
@@ -2606,7 +2616,8 @@ impl Controls {
                     ]
                 } else {
                     // Creation mode: the wizard renders one step at a time. The
-                    // title for the current step replaces the per-section titles.
+                    // title for the current step replaces the per-section
+                    // titles.
                     let step_title_key = match step {
                         CreationStep::Body => "char_selection-step_body",
                         CreationStep::Appearance => "char_selection-step_appearance",
@@ -2669,8 +2680,8 @@ impl Controls {
                         color: Color::WHITE,
                         width: 1.0,
                     }) */
-                    //TODO: Add text-outline here whenever we updated iced to a version supporting
-                    // this
+                    //TODO: Add text-outline here whenever we updated iced to a
+                    // version supporting this
 
                     let map = if let Some(info) = self
                         .possible_starting_sites
@@ -2752,8 +2763,8 @@ impl Controls {
                         .max_height(60)
                         .padding(15)
                         .into();
-                        // Todo: use this to change the site icon if we use different starting site
-                        // types
+                        // Todo: use this to change the site icon if we use
+                        // different starting site types
                         /* let site_kind = Text::new(i18n
                             .get_msg_ctx("char_selection-starting_site_kind", &i18n::fluent_args! {
                                 "kind" => match self.possible_starting_sites[*start_site_idx].kind {
@@ -2772,7 +2783,8 @@ impl Controls {
                 } else if show_background_detail {
                     background_detail_panel(background.0, i18n, fonts)
                 } else {
-                    // If we're editing an existing character, don't display the world column
+                    // If we're editing an existing character, don't display the
+                    // world column
                     Vec::new()
                 };
 
@@ -3000,8 +3012,8 @@ impl Controls {
                 };
 
                 // In creation mode the Crear button only appears on the final
-                // step; otherwise the wizard's "Next" advances the step. In edit
-                // mode the Confirm button is always shown.
+                // step; otherwise the wizard's "Next" advances the step. In
+                // edit mode the Confirm button is always shown.
                 let show_create = character_id.is_some() || step == CreationStep::Finish;
                 let create_cell: Element<Message> = if show_create {
                     Container::new(create)
@@ -3049,8 +3061,9 @@ impl Controls {
                     .size(fonts.cyri.scale(20))
                     .horizontal_alignment(HorizontalAlignment::Center)
                     .into();
-                    // The "Next" slot becomes empty on the final step (the Crear
-                    // button takes over in the bottom row).
+                    // The "Next" slot becomes empty on the final step (the
+                    // Crear button takes over in the bottom
+                    // row).
                     let next_cell: Element<Message> = if step == CreationStep::Finish {
                         Space::new(Length::Fill, Length::Shrink).into()
                     } else {

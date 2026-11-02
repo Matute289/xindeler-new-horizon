@@ -142,14 +142,15 @@ impl Data {
         // Get the spawning locations for airships.
         let spawning_locations = world.civs().airships.airship_spawning_locations();
 
-        // When generating rtsim data from scratch, put an airship (and captain) at each
-        // available spawning location. Note this is just to get the initial
-        // airship NPCs created. Since the airship route data is not persisted,
-        // but the NPCs themselves are, the rtsim data contains airships and captains,
-        // but not the routes, and the information about routes and route
-        // assignments is generated each time the server is started. This process
-        // of resolving the rtsim data to the world data is done in the `migrate`
-        // module.
+        // When generating rtsim data from scratch, put an airship (and captain)
+        // at each available spawning location. Note this is just to get
+        // the initial airship NPCs created. Since the airship route
+        // data is not persisted, but the NPCs themselves are, the rtsim
+        // data contains airships and captains, but not the routes, and
+        // the information about routes and route assignments is
+        // generated each time the server is started. This process
+        // of resolving the rtsim data to the world data is done in the
+        // `migrate` module.
         let mut airship_rng = ChaChaRng::from_seed(seed_expan::rng_state(index.index.seed));
         for spawning_location in spawning_locations.iter() {
             this.spawn_airship(spawning_location, &mut airship_rng);

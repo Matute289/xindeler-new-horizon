@@ -970,8 +970,8 @@ fn complete_command(part: &str, prefix: &str) -> Vec<String> {
 /// It determines what kind of completion is needed based on the input and
 /// delegates to the appropriate completion function.
 pub fn complete(line: &str, client: &Client, i18n: &Localization, cmd_prefix: &str) -> Vec<String> {
-    // Get the last word in the input line, which is what we're trying to complete
-    // If the line ends with whitespace, we're starting a new word
+    // Get the last word in the input line, which is what we're trying to
+    // complete If the line ends with whitespace, we're starting a new word
     let word = if line.chars().last().is_none_or(char::is_whitespace) {
         ""
     } else {
@@ -992,8 +992,8 @@ pub fn complete(line: &str, client: &Client, i18n: &Localization, cmd_prefix: &s
 
         // If we're at position 0, we're completing the command name itself
         if argument_position == 0 {
-            // Completing chat command name. This is the start of the line so the prefix
-            // will be part of it
+            // Completing chat command name. This is the start of the line so
+            // the prefix will be part of it
             let word = word.strip_prefix(cmd_prefix).unwrap_or(word);
             return complete_command(word, cmd_prefix);
         }
@@ -1010,9 +1010,11 @@ pub fn complete(line: &str, client: &Client, i18n: &Localization, cmd_prefix: &s
         };
 
         if let Some(args) = args {
-            // If we're completing an argument that's defined in the command's spec
+            // If we're completing an argument that's defined in the command's
+            // spec
             if let Some(arg) = args.get(argument_position - 1) {
-                // Complete the current argument using its type-specific completion
+                // Complete the current argument using its type-specific
+                // completion
                 arg.complete(word, client, i18n)
             } else {
                 // We're past the defined arguments, handle special cases

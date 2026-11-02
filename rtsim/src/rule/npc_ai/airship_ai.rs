@@ -173,12 +173,14 @@ impl StuckAirshipTracker {
         target_pos: &Vec2<f32>,
     ) -> bool {
         self.add_position(*current_pos);
-        // The position history must be full to determine if the airship is stuck.
+        // The position history must be full to determine if the airship is
+        // stuck.
         if self.pos_history.len() == StuckAirshipTracker::MAX_POS_HISTORY_SIZE
             && self.backout_route.is_empty()
             && let Some(last_pos) = self.pos_history.last()
         {
-            // If all the positions in the history are within 10 of the last position,
+            // If all the positions in the history are within 10 of the last
+            // position,
             if self
                 .pos_history
                 .iter()
@@ -186,8 +188,9 @@ impl StuckAirshipTracker {
             {
                 // Airship is stuck on some obstacle.
 
-                // The direction to backout is opposite to the direction from the airship
-                // to where it was going before it got stuck.
+                // The direction to backout is opposite to the direction from
+                // the airship to where it was going before it
+                // got stuck.
                 if let Some(backout_dir) = (ctx.actor.wpos.xy() - target_pos)
                     .with_z(0.0)
                     .try_normalized()
@@ -196,11 +199,12 @@ impl StuckAirshipTracker {
                         .world
                         .sim()
                         .get_surface_alt_approx(last_pos.xy().map(|e| e as i32));
-                    // The position to backout to is the current position + a distance in the
-                    // backout direction.
+                    // The position to backout to is the current position + a
+                    // distance in the backout direction.
                     let mut backout_pos =
                         ctx.actor.wpos + backout_dir * StuckAirshipTracker::BACKOUT_DIST;
-                    // Add a z offset to the backout pos if the airship is near the ground.
+                    // Add a z offset to the backout pos if the airship is near
+                    // the ground.
                     if (ctx.actor.wpos.z - ground).abs() < StuckAirshipTracker::NEAR_GROUND_HEIGHT {
                         backout_pos.z += 50.0;
                     }
@@ -338,8 +342,8 @@ fn fly_airship(
             // previous leg.
             let leg_start_route_time =
                 airship_context.leg_ctx_time_begin - airship_context.route_time_zero;
-            // Adjust the leg duration according to actual route start time vs expected
-            // route start time.
+            // Adjust the leg duration according to actual route start time vs
+            // expected route start time.
             let expected_leg_route_start_time =
                 leg_segment.route_time - leg_segment.duration as f64;
             let route_time_err = (leg_start_route_time - expected_leg_route_start_time) as f32;
@@ -501,8 +505,9 @@ fn fly_airship(
                 .boxed()
             },
             AirshipFlightPhase::Transition => {
-                // let phase_duration = get_phase_duration(ctx, airship_context, route_leg, 2,
-                // phase); let context_end_time = ctx.time.0 + phase_duration;
+                // let phase_duration = get_phase_duration(ctx, airship_context,
+                // route_leg, 2, phase); let context_end_time =
+                // ctx.time.0 + phase_duration;
                 airship_context.route_timer = Duration::from_secs_f32(1.0);
                 // v = d/t
                 // speed factor = v/nominal_speed = (d/t)/nominal_speed
@@ -683,7 +688,8 @@ fn fly_airship(
                                 times.push(mid_time);
                             }
                         } else {
-                            // use first, then fill forward with random 10..16s intervals
+                            // use first, then fill forward with random 10..16s
+                            // intervals
                             times.push(first_time);
                             let mut last_time = first_time;
                             let mut t = first_time + ctx.rng.random_range(10.0..16.0);
@@ -693,7 +699,8 @@ fn fly_airship(
                                 t += ctx.rng.random_range(10.0..16.0);
                             }
                             if last_time < fly_duration - 22.0 {
-                                // add one last announcement before the final 10s
+                                // add one last announcement before the final
+                                // 10s
                                 times.push(last_time + 12.0);
                             }
                             times.sort_by(|a, b| {
@@ -729,7 +736,8 @@ fn fly_airship(
                     )
                     .then(just(
                         |ctx, airship_context: &mut AirshipRouteContext| {
-                            // Now consume the announcement time. If there was one, announce the
+                            // Now consume the announcement time. If there was
+                            // one, announce the
                             // next site. If not, we're at the end and
                             // will be exiting this repeat loop.
                             if airship_context.announcements.pop_front().is_some() {
@@ -946,8 +954,8 @@ fn fly_airship_inner(
                 );
             }
 
-            // If in cruise phase, check if the airship is stuck and reset the cruise
-            // direction.
+            // If in cruise phase, check if the airship is stuck and reset the
+            // cruise direction.
             if matches!(
                 phase,
                 AirshipFlightPhase::DepartureCruise | AirshipFlightPhase::ApproachCruise
@@ -991,11 +999,13 @@ fn fly_airship_inner(
             } else {
                 None
             };
-            // In the long cruise phases, the airship should face the target position.
-            // When the airship is loaded, the movement vector can change dramatically from
-            // velocity differences due to climbing or descending (terrain following), and
-            // due to wind effects. Use a fixed cruise direction that is updated
-            // periodically instead of relying on the action_nodes code that
+            // In the long cruise phases, the airship should face the target
+            // position. When the airship is loaded, the movement
+            // vector can change dramatically from
+            // velocity differences due to climbing or descending (terrain
+            // following), and due to wind effects. Use a fixed
+            // cruise direction that is updated periodically instead
+            // of relying on the action_nodes code that
             // tries to align the airship direction with the instantaneous
             // movement vector.
             let dir_opt = if direction_override.is_some() {
@@ -1042,7 +1052,8 @@ fn fly_airship_inner(
             },
             _ => {
                 if flight_mode == FlightMode::FlyThrough {
-                    // we only care about the xy distance (just get close to the target position)
+                    // we only care about the xy distance (just get close to the
+                    // target position)
                     ctx.actor
                         .wpos
                         .xy()
@@ -1050,7 +1061,8 @@ fn fly_airship_inner(
                         .distance_squared(to.xy().as_())
                         < (goal_dist as f64).powi(2)
                 } else {
-                    // Braking mode means the PID controller will be controlling all three axes
+                    // Braking mode means the PID controller will be controlling
+                    // all three axes
                     ctx.actor.wpos.as_::<f64>().distance_squared(to.as_())
                         < (goal_dist as f64).powi(2)
                 }
@@ -1086,8 +1098,8 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
         if let Some((route_index, start_leg_index)) =
             ctx.data.airship_sim.assigned_routes.get(&ctx.actor_id)
         {
-            // If airship_context.route_index is the default value (usize::MAX) it means the
-            // server has just started.
+            // If airship_context.route_index is the default value (usize::MAX)
+            // it means the server has just started.
             let is_initial_startup = airship_context.route_index == usize::MAX;
             if is_initial_startup {
                 setup_airship_route_context(ctx, airship_context, route_index, start_leg_index);
@@ -1099,8 +1111,8 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
                     .airships
                     .increment_route_leg(airship_context.route_index, airship_context.current_leg);
                 if airship_context.current_leg == 0 {
-                    // We have wrapped around to the start of the route, add the route duration
-                    // to route_time_zero.
+                    // We have wrapped around to the start of the route, add the
+                    // route duration to route_time_zero.
                     airship_context.route_time_zero +=
                         ctx.world.civs().airships.routes[airship_context.route_index].total_time;
                     debug_airships!(
@@ -1145,7 +1157,8 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
             }
 
             // Get the next leg index.
-            // The destination of the next leg is needed for announcements while docked.
+            // The destination of the next leg is needed for announcements while
+            // docked.
             let next_leg_index = ctx
                 .world
                 .civs()
@@ -1166,7 +1179,8 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
                 );
             }
 
-            // The initial flight sequence is used when the server first starts up.
+            // The initial flight sequence is used when the server first starts
+            // up.
             if is_initial_startup {
                 // Figure out what flight phase to start with.
                 // Search the route's spawning locations for the one that is
@@ -1188,9 +1202,11 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
                     dist_a.partial_cmp(&dist_b).unwrap_or(Ordering::Equal)
                 }) {
                     // The airship starts somewhere along the route.
-                    // Adjust the route_zero_time according to the route time in the spawn location
+                    // Adjust the route_zero_time according to the route time in
+                    // the spawn location
                     // data. At initialization, the airship is at the spawn
-                    // location and the route time is whatever is in the spawn location data.
+                    // location and the route time is whatever is in the spawn
+                    // location data.
                     airship_context.route_time_zero = ctx.time.0 - my_spawn_loc.spawn_route_time;
                     airship_context.leg_ctx_time_begin = ctx.time.0;
                     airship_context.first_leg = true;
@@ -1225,8 +1241,8 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
             }
         } else {
             //  There are no routes assigned.
-            //  This is unexpected and never happens in testing, just do nothing so the
-            // compiler doesn't complain.
+            //  This is unexpected and never happens in testing, just do nothing
+            // so the compiler doesn't complain.
             finish().map(|_, _| ()).boxed()
         }
     })

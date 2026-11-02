@@ -201,12 +201,18 @@ pub fn general<S: State>(tgt: ActorId, session: DialogueSession) -> impl Action<
                                     session
                                         .say_statement(dialogue_response)
                                         .then(now(move |ctx, _| {
-                                            // attempt to provide a map marker that points to
-                                            // the nearest spot. Any spot is sufficient, it
-                                            // doesn't need to be the original one that was given at
-                                            // quest start. In fact, it's more convenient if
-                                            // you get to your location first and the courier
-                                            // recipient also has the ability to point out
+                                            // attempt to provide a map marker
+                                            // that points to
+                                            // the nearest spot. Any spot is
+                                            // sufficient, it
+                                            // doesn't need to be the original
+                                            // one that was given at
+                                            // quest start. In fact, it's more
+                                            // convenient if
+                                            // you get to your location first
+                                            // and the courier
+                                            // recipient also has the ability to
+                                            // point out
                                             // where the nearest spot might be.
                                             let tgt_npc_name = tgt_npc_name.as_str();
                                             get_nearest_spot(
@@ -224,7 +230,8 @@ pub fn general<S: State>(tgt: ActorId, session: DialogueSession) -> impl Action<
                                                 )
                                             })
                                             .unwrap_or_else(|| {
-                                                // provide a map marker that points to the
+                                                // provide a map marker that
+                                                // points to the
                                                 // courier target as a fallback
                                                 session.give_marker(
                                                     quest.get_quest_actor_target_marker(
