@@ -3,10 +3,10 @@ use crate::{
     comp::{Body, TERRAIN_CYLINDER_MAX_HEIGHT},
     resources::Time,
     terrain::Block,
+    util::fx_hash::FxBuildHasher,
     vol::{BaseVol, ReadVol},
 };
 use common_base::span;
-use fxhash::FxBuildHasher;
 #[cfg(feature = "rrt_pathfinding")]
 use hashbrown::HashMap;
 #[cfg(feature = "rrt_pathfinding")]

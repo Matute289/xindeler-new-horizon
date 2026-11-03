@@ -31,11 +31,10 @@ use crate::{
     states::{behavior::JoinData, utils::CharacterState::Idle, *},
     terrain::{Block, TerrainGrid, UnlockKind},
     uid::Uid,
-    util::Dir,
+    util::{Dir, fx_hash::FxHasher64},
     vol::ReadVol,
 };
 use core::hash::BuildHasherDefault;
-use fxhash::FxHasher64;
 use itertools::Either;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};

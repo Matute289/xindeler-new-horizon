@@ -15,13 +15,12 @@ hashbrown = { workspace = true }
 enum-map = { workspace = true, features = ["serde"] }
 vek = { workspace = true }
 rmp-serde = "1.1.0"
-anymap2 = "0.13"
+anymap3 = "1"
 tracing = { workspace = true }
 atomic_refcell = { workspace = true }
 slotmap = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
-fxhash = { workspace = true }
 itertools = { workspace = true }
 rayon = { workspace = true }
 specs = { workspace = true, features = ["shred-derive"] }

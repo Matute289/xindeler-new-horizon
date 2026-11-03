@@ -717,7 +717,7 @@ impl Server {
                     cert_file_path,
                     key_file_path,
                 } => {
-                    use rustls_pemfile::Item;
+                    use rustls::pki_types::pem::PemObject;
                     use std::fs;
 
                     match || -> Result<_, Box<dyn std::error::Error>> {
@@ -726,28 +726,17 @@ impl Server {
                             PrivateKeyDer::try_from(key).map_err(|_| "No valid pem key in file")?
                         } else {
                             debug!("convert pem key to der");
-                            rustls_pemfile::read_all(&mut key.as_slice())
-                                .find_map(|item| match item {
-                                    Ok(Item::Pkcs1Key(v)) => Some(PrivateKeyDer::Pkcs1(v)),
-                                    Ok(Item::Pkcs8Key(v)) => Some(PrivateKeyDer::Pkcs8(v)),
-                                    Ok(Item::Sec1Key(v)) => Some(PrivateKeyDer::Sec1(v)),
-                                    Ok(Item::Crl(_)) => None,
-                                    Ok(Item::Csr(_)) => None,
-                                    Ok(Item::X509Certificate(_)) => None,
-                                    Ok(_) => None,
-                                    Err(e) => {
-                                        tracing::warn!(?e, "error while reading key_file");
-                                        None
-                                    },
-                                })
-                                .ok_or("No valid pem key in file")?
+                            PrivateKeyDer::from_pem_slice(&key).map_err(|e| {
+                                tracing::warn!(?e, "error while reading key_file");
+                                "No valid pem key in file"
+                            })?
                         };
                         let cert_chain = fs::read(cert_file_path)?;
                         let cert_chain = if cert_file_path.extension().is_some_and(|x| x == "der") {
                             vec![CertificateDer::from(cert_chain)]
                         } else {
                             debug!("convert pem cert to der");
-                            rustls_pemfile::certs(&mut cert_chain.as_slice())
+                            CertificateDer::pem_slice_iter(&cert_chain)
                                 .filter_map(|item| match item {
                                     Ok(cert) => Some(cert),
                                     Err(e) => {

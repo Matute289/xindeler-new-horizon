@@ -21,11 +21,11 @@ use common::{
     spiral::Spiral2d,
     store::{Id, Store},
     terrain::{BiomeKind, CoordinateConversions, MapSizeLg, TerrainChunkSize, uniform_idx_as_vec2},
+    util::fx_hash::FxHasher64,
     vol::RectVolSize,
 };
 use common_base::prof_span;
 use core::{fmt, hash::BuildHasherDefault, ops::Range};
-use fxhash::FxHasher64;
 use rand::{SeedableRng, prelude::*};
 use rand_chacha::ChaChaRng;
 use tracing::{debug, info, warn};

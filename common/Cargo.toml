@@ -61,7 +61,6 @@ uuid = { version = "1.4.1", default-features = false, features = [
     "v4",
 ] }
 rand = { workspace = true }
-fxhash = { workspace = true }
 thread-priority = { workspace = true }
 
 # Assets
