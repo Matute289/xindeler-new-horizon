@@ -157,10 +157,14 @@ pub struct OAuthLogin {
     pub cancelled: Box<dyn Fn() -> bool + Send + Sync + 'static>,
     /// Called once the system browser has actually been handed the authorize
     /// URL, so the frontend can switch to its "finish in your browser" state.
-    pub on_browser_opened: Box<dyn FnMut() + Send + 'static>,
+    pub on_browser_opened: Box<dyn FnMut() + Send + Sync + 'static>,
     /// Given the server's suggested username, returns the player's choice, or
     /// `None` if the prompt was cancelled.
-    pub pick_username: Box<dyn FnMut(String) -> Option<String> + Send + 'static>,
+    ///
+    /// The callbacks are `Sync` so `Credentials::OAuth` (and thus any
+    /// `CredentialProvider` holding credentials) can be shared across the
+    /// threads an async login future may move between.
+    pub pick_username: Box<dyn FnMut(String) -> Option<String> + Send + Sync + 'static>,
 }
 
 pub enum OAuthOutcome {
