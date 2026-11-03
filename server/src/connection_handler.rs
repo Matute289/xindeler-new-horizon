@@ -68,8 +68,9 @@ impl ConnectionHandler {
         // mutability.
         let mut network_sender = Some(network_sender);
         let mut network = drop_guard::guard(network, move |network| {
-            // If the network receiver was already dropped, we just drop the network here,
-            // just like Arc, so we don't care about the result.
+            // If the network receiver was already dropped, we just drop the
+            // network here, just like Arc, so we don't care about
+            // the result.
             let _ = network_sender
                 .take()
                 .expect("Only used once in drop")

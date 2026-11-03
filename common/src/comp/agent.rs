@@ -453,8 +453,9 @@ impl<'a> From<&'a Body> for Psyche {
                     biped_large::Species::Gigasfrost | biped_large::Species::Gigasfire
                 ),
                 Body::BirdMedium(bird_medium) => {
-                    // Skip stop_pursuing, as that function breaks when the health fraction is 0.0
-                    // (to keep aggro after death transform)
+                    // Skip stop_pursuing, as that function breaks when the
+                    // health fraction is 0.0 (to keep aggro
+                    // after death transform)
                     !matches!(bird_medium.species, bird_medium::Species::BloodmoonBat)
                 },
                 _ => true,
@@ -684,6 +685,7 @@ pub struct Agent {
     /// the same precision over a long-running server.
     pub disguise_suspicion_last_roll: f64,
     pub multi_pid_controllers: Option<PidControllers<16>>,
+    pub mark: Option<Mark>,
     /// Position from which to flee. Intended to be the agent's position plus a
     /// random position offset, to be used when a random flee direction is
     /// required and reset each time the flee timer is reset.
@@ -811,6 +813,7 @@ impl Agent {
             close_inspected_disguises: Vec::new(),
             disguise_suspicion_last_roll: 0.0,
             multi_pid_controllers: None,
+            mark: None,
             flee_from_pos: None,
             stay_pos: None,
             pet_command: PetCommand::default(),
@@ -887,65 +890,6 @@ impl Agent {
 
 impl Component for Agent {
     type Storage = specs::DenseVecStorage<Self>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Agent, Behavior, BehaviorCapability, BehaviorState, Body, humanoid};
-
-    /// Test to verify that Behavior is working correctly at its most basic
-    /// usages
-    #[test]
-    pub fn behavior_basic() {
-        let mut b = Behavior::default();
-        // test capabilities
-        assert!(!b.can(BehaviorCapability::SPEAK));
-        b.allow(BehaviorCapability::SPEAK);
-        assert!(b.can(BehaviorCapability::SPEAK));
-        b.deny(BehaviorCapability::SPEAK);
-        assert!(!b.can(BehaviorCapability::SPEAK));
-        // test states
-        assert!(!b.is(BehaviorState::TRADING));
-        b.set(BehaviorState::TRADING);
-        assert!(b.is(BehaviorState::TRADING));
-        b.unset(BehaviorState::TRADING);
-        assert!(!b.is(BehaviorState::TRADING));
-        // test `from`
-        let b = Behavior::from(BehaviorCapability::SPEAK);
-        assert!(b.can(BehaviorCapability::SPEAK));
-    }
-
-    /// Makes agent flee
-    #[test]
-    pub fn enable_flee() {
-        let body = Body::Humanoid(humanoid::Body::random());
-        let mut agent = Agent::from_body(&body);
-
-        agent.psyche.flee_health = 1.0;
-        agent = agent.with_no_flee_if(false);
-        assert_eq!(agent.psyche.flee_health, 1.0);
-    }
-
-    /// Makes agent not flee
-    #[test]
-    pub fn set_no_flee() {
-        let body = Body::Humanoid(humanoid::Body::random());
-        let mut agent = Agent::from_body(&body);
-
-        agent.psyche.flee_health = 1.0;
-        agent.set_no_flee();
-        assert_eq!(agent.psyche.flee_health, 0.0);
-    }
-
-    #[test]
-    pub fn with_aggro_no_warn() {
-        let body = Body::Humanoid(humanoid::Body::random());
-        let mut agent = Agent::from_body(&body);
-
-        agent.psyche.aggro_dist = Some(1.0);
-        agent = agent.with_aggro_no_warn();
-        assert_eq!(agent.psyche.aggro_dist, None);
-    }
 }
 
 /// PID controllers (Proportional–integral–derivative controllers) are used for
@@ -1291,5 +1235,64 @@ pub fn pid_coefficients_for_mode(mode: FlightMode, z_axis: bool) -> (f32, f32, f
             BrakingMode::Normal => (1.0, 0.3, 0.4),
             BrakingMode::Precise => (0.9, 0.3, 1.0),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Agent, Behavior, BehaviorCapability, BehaviorState, Body, humanoid};
+
+    /// Test to verify that Behavior is working correctly at its most basic
+    /// usages
+    #[test]
+    pub fn behavior_basic() {
+        let mut b = Behavior::default();
+        // test capabilities
+        assert!(!b.can(BehaviorCapability::SPEAK));
+        b.allow(BehaviorCapability::SPEAK);
+        assert!(b.can(BehaviorCapability::SPEAK));
+        b.deny(BehaviorCapability::SPEAK);
+        assert!(!b.can(BehaviorCapability::SPEAK));
+        // test states
+        assert!(!b.is(BehaviorState::TRADING));
+        b.set(BehaviorState::TRADING);
+        assert!(b.is(BehaviorState::TRADING));
+        b.unset(BehaviorState::TRADING);
+        assert!(!b.is(BehaviorState::TRADING));
+        // test `from`
+        let b = Behavior::from(BehaviorCapability::SPEAK);
+        assert!(b.can(BehaviorCapability::SPEAK));
+    }
+
+    /// Makes agent flee
+    #[test]
+    pub fn enable_flee() {
+        let body = Body::Humanoid(humanoid::Body::random());
+        let mut agent = Agent::from_body(&body);
+
+        agent.psyche.flee_health = 1.0;
+        agent = agent.with_no_flee_if(false);
+        assert_eq!(agent.psyche.flee_health, 1.0);
+    }
+
+    /// Makes agent not flee
+    #[test]
+    pub fn set_no_flee() {
+        let body = Body::Humanoid(humanoid::Body::random());
+        let mut agent = Agent::from_body(&body);
+
+        agent.psyche.flee_health = 1.0;
+        agent.set_no_flee();
+        assert_eq!(agent.psyche.flee_health, 0.0);
+    }
+
+    #[test]
+    pub fn with_aggro_no_warn() {
+        let body = Body::Humanoid(humanoid::Body::random());
+        let mut agent = Agent::from_body(&body);
+
+        agent.psyche.aggro_dist = Some(1.0);
+        agent = agent.with_aggro_no_warn();
+        assert_eq!(agent.psyche.aggro_dist, None);
     }
 }

@@ -61,8 +61,10 @@ impl CharacterBehavior for Data {
                         // Build up
                         c.timer = tick_attack_or_default(data, self.timer, None);
                     } else {
-                        // If duration finishes with no parry occurring transition to recover
-                        // Transition to action happens in parry hook server event
+                        // If duration finishes with no parry occurring
+                        // transition to recover
+                        // Transition to action happens in parry hook server
+                        // event
                         c.timer = Duration::default();
                         c.stage_section = StageSection::Recover;
                     }
@@ -77,15 +79,13 @@ impl CharacterBehavior for Data {
                     let precision_mult = data
                         .derived
                         .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
-                    let tool_stats = get_tool_stats(data, self.static_data.ability_info);
 
                     data.updater.insert(
                         data.entity,
-                        self.static_data.melee_constructor.clone().create_melee(
-                            precision_mult,
-                            tool_stats,
-                            self.static_data.ability_info,
-                        ),
+                        self.static_data
+                            .melee_constructor
+                            .clone()
+                            .create_melee(precision_mult, self.static_data.ability_info),
                     );
                 } else if self.timer < self.static_data.swing_duration {
                     // Swings

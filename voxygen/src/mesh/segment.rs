@@ -33,10 +33,10 @@ where
 {
     assert!(bone_idx <= 15, "Bone index for figures must be in [0, 15]");
     let max_size = greedy.max_size();
-    // NOTE: Required because we steal two bits from the normal in the shadow uint
-    // in order to store the bone index.  The two bits are instead taken out
-    // of the atlas coordinates, which is why we "only" allow 1 << 15 per
-    // coordinate instead of 1 << 16.
+    // NOTE: Required because we steal two bits from the normal in the shadow
+    // uint in order to store the bone index.  The two bits are instead
+    // taken out of the atlas coordinates, which is why we "only" allow 1 <<
+    // 15 per coordinate instead of 1 << 16.
     assert!(max_size.reduce_max() < 1 << 15);
 
     let lower_bound = vol.lower_bound();
@@ -49,8 +49,8 @@ where
     // NOTE: Figure sizes should be no more than 512 along each axis.
     let greedy_size = upper_bound - lower_bound + 1;
     assert!(greedy_size.x <= 512 && greedy_size.y <= 512 && greedy_size.z <= 512);
-    // NOTE: Cast to usize is safe because of previous check, since all values fit
-    // into u16 which is safe to cast to usize.
+    // NOTE: Cast to usize is safe because of previous check, since all values
+    // fit into u16 which is safe to cast to usize.
     let greedy_size = greedy_size.as_::<usize>();
     let greedy_size_cross = greedy_size;
     let draw_delta = lower_bound;
@@ -130,10 +130,10 @@ where
 {
     assert!(bone_idx <= 15, "Bone index for figures must be in [0, 15]");
     let max_size = greedy.max_size();
-    // NOTE: Required because we steal two bits from the normal in the shadow uint
-    // in order to store the bone index.  The two bits are instead taken out
-    // of the atlas coordinates, which is why we "only" allow 1 << 15 per
-    // coordinate instead of 1 << 16.
+    // NOTE: Required because we steal two bits from the normal in the shadow
+    // uint in order to store the bone index.  The two bits are instead
+    // taken out of the atlas coordinates, which is why we "only" allow 1 <<
+    // 15 per coordinate instead of 1 << 16.
     assert!(max_size.reduce_max() < 1 << 15);
 
     let lower_bound = vol.lower_bound();
@@ -146,8 +146,8 @@ where
     // NOTE: Figure sizes should be no more than 512 along each axis.
     let greedy_size = upper_bound - lower_bound + 1;
     assert!(greedy_size.x <= 512 && greedy_size.y <= 512 && greedy_size.z <= 512);
-    // NOTE: Cast to usize is safe because of previous check, since all values fit
-    // into u16 which is safe to cast to usize.
+    // NOTE: Cast to usize is safe because of previous check, since all values
+    // fit into u16 which is safe to cast to usize.
     let greedy_size = greedy_size.as_::<usize>();
     let greedy_size_cross = greedy_size;
     let draw_delta = lower_bound;
@@ -234,10 +234,10 @@ where
     V: BaseVol<Vox = Cell> + ReadVol + SizedVol + 'a,
 {
     let max_size = greedy.max_size();
-    // NOTE: Required because we steal two bits from the normal in the shadow uint
-    // in order to store the bone index.  The two bits are instead taken out
-    // of the atlas coordinates, which is why we "only" allow 1 << 15 per
-    // coordinate instead of 1 << 16.
+    // NOTE: Required because we steal two bits from the normal in the shadow
+    // uint in order to store the bone index.  The two bits are instead
+    // taken out of the atlas coordinates, which is why we "only" allow 1 <<
+    // 15 per coordinate instead of 1 << 16.
     assert!(u32::from(max_size.reduce_max()) < 1 << 16);
 
     let lower_bound = vol.lower_bound();
@@ -292,8 +292,8 @@ where
         (flat, flat_get)
     };
 
-    // NOTE: Cast to usize is safe because of previous check, since all values fit
-    // into u16 which is safe to cast to usize.
+    // NOTE: Cast to usize is safe because of previous check, since all values
+    // fit into u16 which is safe to cast to usize.
     let greedy_size = greedy_size.as_::<usize>();
 
     let greedy_size_cross = greedy_size;
@@ -309,8 +309,8 @@ where
     let should_draw = move |flat: &mut _, pos: Vec3<i32>, delta: Vec3<i32>, uv| {
         should_draw_greedy_ao(vertical_stripes, pos, delta, uv, |vox| flat_get(flat, vox))
     };
-    // NOTE: Fits in i16 (much lower actually) so f32 is no problem (and the final
-    // position, pos + mesh_delta, is guaranteed to fit in an f32).
+    // NOTE: Fits in i16 (much lower actually) so f32 is no problem (and the
+    // final position, pos + mesh_delta, is guaranteed to fit in an f32).
     let mesh_delta = lower_bound.as_::<f32>();
     let create_opaque = |atlas_pos, pos: Vec3<f32>, norm, _meta| {
         SpriteVertex::new(atlas_pos, pos + offset + mesh_delta, norm)
@@ -355,10 +355,10 @@ where
     V: BaseVol<Vox = Cell> + ReadVol + SizedVol + 'a,
 {
     let max_size = greedy.max_size();
-    // NOTE: Required because we steal two bits from the normal in the shadow uint
-    // in order to store the bone index.  The two bits are instead taken out
-    // of the atlas coordinates, which is why we "only" allow 1 << 15 per
-    // coordinate instead of 1 << 16.
+    // NOTE: Required because we steal two bits from the normal in the shadow
+    // uint in order to store the bone index.  The two bits are instead
+    // taken out of the atlas coordinates, which is why we "only" allow 1 <<
+    // 15 per coordinate instead of 1 << 16.
     assert!(u32::from(max_size.reduce_max()) < 1 << 16);
 
     let lower_bound = vol.lower_bound();
@@ -374,8 +374,8 @@ where
         "Particle size out of bounds: {:?} ≤ (15, 15, 63)",
         greedy_size - 1
     );
-    // NOTE: Cast to usize is safe because of previous check, since all values fit
-    // into u16 which is safe to cast to usize.
+    // NOTE: Cast to usize is safe because of previous check, since all values
+    // fit into u16 which is safe to cast to usize.
     let greedy_size = greedy_size.as_::<usize>();
 
     let greedy_size_cross = greedy_size;
@@ -446,8 +446,8 @@ fn should_draw_greedy(
     if from_opaque == to.is_filled() {
         None
     } else {
-        // If going from transparent to opaque, backward facing; otherwise, forward
-        // facing.
+        // If going from transparent to opaque, backward facing; otherwise,
+        // forward facing.
         Some((from_opaque, ()))
     }
 }
@@ -467,8 +467,8 @@ fn should_draw_greedy_ao(
     } else {
         let faces_forward = from_opaque;
         let ao = !vertical_stripes || (pos.z & 1) != 0;
-        // If going from transparent to opaque, backward facing; otherwise, forward
-        // facing.
+        // If going from transparent to opaque, backward facing; otherwise,
+        // forward facing.
         Some((faces_forward, ao))
     }
 }

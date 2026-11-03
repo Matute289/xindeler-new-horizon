@@ -213,11 +213,11 @@ impl Renderer {
         let (mut pipeline_modes, mut other_modes) = mode.split();
         pipeline_modes.remove_unsupported();
 
-        // Enable seamless cubemaps globally, where available--they are essentially a
-        // strict improvement on regular cube maps.
+        // Enable seamless cubemaps globally, where available--they are
+        // essentially a strict improvement on regular cube maps.
         //
-        // Note that since we only have to enable this once globally, there is no point
-        // in doing this on rerender.
+        // Note that since we only have to enable this once globally, there is
+        // no point in doing this on rerender.
         // Self::enable_seamless_cube_maps(&mut device);
         let backends = std::env::var("WGPU_BACKEND")
             .ok()
@@ -308,7 +308,8 @@ impl Renderer {
         #[cfg(any())] // Add this back when tracing is added back to `wgpu`
         let trace = if let Some(v) = std::env::var_os("WGPU_TRACE_DIR") {
             let path = std::path::Path::new(&v);
-            // We don't want to continue if we can't actually collect the api trace
+            // We don't want to continue if we can't actually collect the api
+            // trace
             assert!(
                 path.exists(),
                 "WGPU_TRACE_DIR is set to the path \"{}\" which doesn't exist",
@@ -355,8 +356,8 @@ impl Renderer {
             }))?;
 
         // Set error handler for wgpu errors
-        // This is better for use than their default because it includes the error in
-        // the panic message
+        // This is better for use than their default because it includes the
+        // error in the panic message
         device.on_uncaptured_error(Arc::new(move |error| {
             error!("{}", &error);
             panic!(
@@ -731,9 +732,9 @@ impl Renderer {
             self.on_resize(self.resolution);
         }
 
-        // We can't cancel the pending recreation even if the new settings are equal
-        // to the current ones becuase the recreation could be triggered by something
-        // else like shader hotloading
+        // We can't cancel the pending recreation even if the new settings are
+        // equal to the current ones becuase the recreation could be
+        // triggered by something else like shader hotloading
         if self.pipeline_modes != pipeline_modes
             || self
                 .recreation_pending
@@ -996,13 +997,14 @@ impl Renderer {
             .is_on()
             .then(|| bloom_sizes.map(|size| color_view(size.x, size.y, format)));
 
-        // .max(1) to ensure we don't create zero sized textures, same guard as the
-        // bloom sizes above.
+        // .max(1) to ensure we don't create zero sized textures, same guard as
+        // the bloom sizes above.
         let ao_size = Vec2::new(width, height).map(|e| (e >> 1).max(1));
-        // Always single-sampled: this is a half-resolution derived target, not a
-        // multisampled render target, and every other screen-space pass already
-        // hard-codes `multisampled: false` in its bind group layout regardless of
-        // `sample_count` (see the SSAO bind group layouts).
+        // Always single-sampled: this is a half-resolution derived target, not
+        // a multisampled render target, and every other screen-space
+        // pass already hard-codes `multisampled: false` in its bind
+        // group layout regardless of `sample_count` (see the SSAO bind
+        // group layouts).
         let ao_view = |width, height| {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
@@ -1162,9 +1164,9 @@ impl Renderer {
         // Handle polling background pipeline creation/recreation
         // Temporarily set to nothing and then replace in the statement below
         let state = core::mem::replace(&mut self.state, State::Nothing);
-        // Indicator for if pipeline recreation finished and we need to recreate bind
-        // groups / render targets (handling defered so that State will be valid
-        // when calling Self::on_resize)
+        // Indicator for if pipeline recreation finished and we need to recreate
+        // bind groups / render targets (handling defered so that State
+        // will be valid when calling Self::on_resize)
         let mut trigger_on_resize = false;
         // If still creating initial pipelines, check if complete
         self.state = if let State::Interface {
@@ -1282,8 +1284,9 @@ impl Renderer {
                     self.pipeline_modes = new_pipeline_modes;
                     self.layouts.clouds = clouds_layout;
                     self.layouts.postprocess = postprocess_layout;
-                    // TODO: we have the potential to skip recreating bindings / render targets on
-                    // pipeline recreation trigged by shader reloading (would need to ensure new
+                    // TODO: we have the potential to skip recreating bindings /
+                    // render targets on pipeline recreation
+                    // trigged by shader reloading (would need to ensure new
                     // postprocess_layout is not created...)
                     trigger_on_resize = true;
 
@@ -1312,9 +1315,9 @@ impl Renderer {
             state
         };
 
-        // Call on_resize to recreate render targets and their bind groups if the
-        // pipelines were recreated with a new postprocess layout and or changes in the
-        // render modes
+        // Call on_resize to recreate render targets and their bind groups if
+        // the pipelines were recreated with a new postprocess layout
+        // and or changes in the render modes
         if trigger_on_resize {
             self.on_resize(self.resolution);
         }
@@ -1352,8 +1355,9 @@ impl Renderer {
             },
             Err(wgpu::SurfaceError::Timeout) => {
                 // This will probably be resolved on the next frame
-                // NOTE: we don't log this because it happens very frequently with
-                // PresentMode::Fifo and unlimited FPS on certain machines
+                // NOTE: we don't log this because it happens very frequently
+                // with PresentMode::Fifo and unlimited FPS on
+                // certain machines
                 return Ok(None);
             },
             Err(err @ wgpu::SurfaceError::Outdated) => {
@@ -1378,8 +1382,8 @@ impl Renderer {
     fn recreate_pipelines(&mut self, pipeline_modes: PipelineModes) {
         match &mut self.state {
             State::Complete { recreating, .. } if recreating.is_some() => {
-                // Defer recreation so that we are not building multiple sets of pipelines in
-                // the background at once
+                // Defer recreation so that we are not building multiple sets of
+                // pipelines in the background at once
                 self.recreation_pending = Some(pipeline_modes);
             },
             State::Complete {
@@ -1404,8 +1408,8 @@ impl Renderer {
                 ));
             },
             State::Interface { .. } => {
-                // Defer recreation so that we are not building multiple sets of pipelines in
-                // the background at once
+                // Defer recreation so that we are not building multiple sets of
+                // pipelines in the background at once
                 self.recreation_pending = Some(pipeline_modes);
             },
             State::Nothing => {},
@@ -1663,11 +1667,12 @@ impl Renderer {
     //     _bones: &Consts<figure::BoneData>,
     //     _lod: &lod_terrain::LodData,
     //     _locals: &Consts<shadow::Locals>,
-    // ) { // FIXME: Consider reenabling at some point. /* let (point_shadow_maps,
-    //   directed_shadow_maps) = if let Some(shadow_map) = &mut self.shadow_map { (
-    //   ( shadow_map.point_res.clone(), shadow_map.point_sampler.clone(), ), (
-    //   shadow_map.directed_res.clone(), shadow_map.directed_sampler.clone(), ), )
-    //   } else { ( (self.noise_tex.srv.clone(), self.noise_tex.sampler.clone()),
+    // ) { // FIXME: Consider reenabling at some point. /* let
+    // (point_shadow_maps,   directed_shadow_maps) = if let Some(shadow_map)
+    // = &mut self.shadow_map { (   ( shadow_map.point_res.clone(),
+    // shadow_map.point_sampler.clone(), ), (   shadow_map.directed_res.
+    // clone(), shadow_map.directed_sampler.clone(), ), )   } else { (
+    // (self.noise_tex.srv.clone(), self.noise_tex.sampler.clone()),
     //   (self.noise_tex.srv.clone(), self.noise_tex.sampler.clone()), ) }; let
     //   model = &model.opaque;
 
@@ -1682,8 +1687,8 @@ impl Renderer {
     //         &self.player_shadow_pipeline.pso,
     //         &figure::pipe::Data {
     //             vbuf: model.vbuf.clone(),
-    //             col_lights: (col_lights.srv.clone(), col_lights.sampler.clone()),
-    //             locals: locals.buf.clone(),
+    //             col_lights: (col_lights.srv.clone(),
+    // col_lights.sampler.clone()),             locals: locals.buf.clone(),
     //             globals: global.globals.buf.clone(),
     //             bones: bones.buf.clone(),
     //             lights: global.lights.buf.clone(),

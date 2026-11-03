@@ -137,8 +137,8 @@ impl World {
         report_stage: &(dyn Fn(WorldGenerateStage) + Send + Sync),
     ) -> (Self, IndexOwned) {
         prof_span!("World::generate");
-        // NOTE: Generating index first in order to quickly fail if the color manifest
-        // is broken.
+        // NOTE: Generating index first in order to quickly fail if the color
+        // manifest is broken.
         threadpool.install(|| {
             let mut index = Index::new(seed);
             let calendar = opts.calendar.clone();
@@ -216,7 +216,8 @@ impl World {
                         .iter()
                         .filter_map(|(_, civ_site)| Some((civ_site, civ_site.site_tmp?)))
                         .map(|(civ_site, site_id)| {
-                            // Score the site according to how suitable it is to be a starting site
+                            // Score the site according to how suitable it is to
+                            // be a starting site
 
                             let site = &index.sites[site_id];
                             let mut score = match site.kind {
@@ -251,7 +252,8 @@ impl World {
 
                             score *= size_score;
 
-                            // Prefer sites that are close to the centre of the world
+                            // Prefer sites that are close to the centre of the
+                            // world
                             let pos_score = (10.0
                                 / (1.0
                                     + (civ_site
@@ -278,7 +280,8 @@ impl World {
                                 let weight = 1.0 / (distance * std::f32::consts::TAU + 1.0);
                                 let chunk_difficulty = 20.0
                                     / (20.0 + chunk.get_biome().difficulty().pow(4) as f32 / 5.0);
-                                // let chunk_difficulty = 1.0 / chunk.get_biome().difficulty() as
+                                // let chunk_difficulty = 1.0 /
+                                // chunk.get_biome().difficulty() as
                                 // f32;
 
                                 chunk_scores *= 1.0 - weight + chunk_difficulty * weight;
@@ -326,8 +329,8 @@ impl World {
     ) -> Vec3<f32> {
         let chunk_pos = TerrainGrid::chunk_key(spawn_wpos);
 
-        // Unwrapping because generate_chunk only returns err when should_continue evals
-        // to true
+        // Unwrapping because generate_chunk only returns err when
+        // should_continue evals to true
         let (tc, _cs) = self
             .generate_chunk(index, chunk_pos, None, || false, None)
             .unwrap();
@@ -379,8 +382,8 @@ impl World {
             Some(base_z) => (base_z as i32, self.sim.get(chunk_pos).unwrap()),
             // Some((base_z, sim_chunk)) => (base_z as i32, sim_chunk),
             None => {
-                // NOTE: This is necessary in order to generate a handful of chunks at the edges
-                // of the map.
+                // NOTE: This is necessary in order to generate a handful of
+                // chunks at the edges of the map.
                 return Ok((self.sim().generate_oob_chunk(), ChunkSupplement::default()));
             },
         };
@@ -571,19 +574,21 @@ impl World {
         // Finally, defragment to minimize space consumption.
         chunk.defragment();
 
-        // Before we finish, we check candidate rtsim resource blocks, deduplicating
-        // positions and only keeping those that actually do have resources.
-        // Although this looks potentially very expensive, only blocks that are rtsim
-        // resources (i.e: a relatively small number of sprites) are processed here.
+        // Before we finish, we check candidate rtsim resource blocks,
+        // deduplicating positions and only keeping those that actually
+        // do have resources. Although this looks potentially very
+        // expensive, only blocks that are rtsim resources (i.e: a
+        // relatively small number of sprites) are processed here.
         if let Some(rtsim_resources) = rtsim_resources {
             rtsim_resource_blocks.sort_unstable_by_key(|pos| pos.into_array());
             rtsim_resource_blocks.dedup();
             for wpos in rtsim_resource_blocks {
                 let _ = chunk.map(wpos - chunk_wpos2d.with_z(0), |block| {
                     if let Some(res) = block.get_rtsim_resource() {
-                        // Note: this represents the upper limit, not the actual number spanwed, so
-                        // we increment this before deciding whether we're going to spawn the
-                        // resource.
+                        // Note: this represents the upper limit, not the actual
+                        // number spanwed, so
+                        // we increment this before deciding whether we're going
+                        // to spawn the resource.
                         supplement.rtsim_max_resources[res] += 1;
 
                         debug_assert!(
@@ -596,8 +601,10 @@ impl World {
                             block.get_attr::<common::terrain::sprite::Damage>().ok(),
                         );
 
-                        // Throw a dice to determine whether this resource should actually spawn
-                        // TODO: Don't throw a dice, try to generate the *exact* correct number
+                        // Throw a dice to determine whether this resource
+                        // should actually spawn
+                        // TODO: Don't throw a dice, try to generate the *exact*
+                        // correct number
                         if dynamic_rng.random_bool(rtsim_resources[res].clamp(0.0, 1.0) as f64) {
                             block
                         } else {

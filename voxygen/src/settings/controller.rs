@@ -170,8 +170,8 @@ impl ControllerSettings {
     pub fn apply_axis_deadzone(&self, k: &Axis, input: f32) -> f32 {
         let threshold = *self.axis_deadzones.get(k).unwrap_or(&0.2);
 
-        // This could be one comparison per handled event faster if threshold was
-        // guaranteed to fall into <0, 1) range
+        // This could be one comparison per handled event faster if threshold
+        // was guaranteed to fall into <0, 1) range
         let input_abs = input.abs();
         if input_abs <= threshold || threshold >= 1.0 {
             0.0
@@ -185,8 +185,8 @@ impl ControllerSettings {
     pub fn apply_button_deadzone(&self, k: &AnalogButton, input: f32) -> f32 {
         let threshold = *self.button_deadzones.get(k).unwrap_or(&0.2);
 
-        // This could be one comparison per handled event faster if threshold was
-        // guaranteed to fall into <0, 1) range
+        // This could be one comparison per handled event faster if threshold
+        // was guaranteed to fall into <0, 1) range
         if input <= threshold || threshold >= 1.0 {
             0.0
         } else if threshold <= 0.0 {
@@ -310,8 +310,8 @@ impl ControllerSettings {
     }
 
     pub fn modify_button_binding(&mut self, game_input: GameInput, button: Button) {
-        // for the Button->GameInput hashmap, we first need to remove the GameInput from
-        // the old binding
+        // for the Button->GameInput hashmap, we first need to remove the
+        // GameInput from the old binding
         if let Some(old_binding) = self.get_game_button_binding(game_input) {
             self.inverse_game_button_map
                 .entry(old_binding)
@@ -328,8 +328,8 @@ impl ControllerSettings {
     }
 
     pub fn modify_layer_binding(&mut self, game_input: GameInput, layers: LayerEntry) {
-        // for the LayerEntry->GameInput hashmap, we first need to remove the GameInput
-        // from the old binding
+        // for the LayerEntry->GameInput hashmap, we first need to remove the
+        // GameInput from the old binding
         if let Some(old_binding) = self.get_layer_button_binding(game_input) {
             self.inverse_layer_button_map
                 .entry(old_binding)
@@ -346,8 +346,8 @@ impl ControllerSettings {
     }
 
     pub fn modify_menu_binding(&mut self, menu_input: MenuInput, button: Button) {
-        // for the Button->GameInput hashmap, we first need to remove the GameInput from
-        // the old binding
+        // for the Button->GameInput hashmap, we first need to remove the
+        // GameInput from the old binding
         if let Some(old_binding) = self.get_menu_button_binding(menu_input) {
             self.inverse_menu_button_map
                 .entry(old_binding)

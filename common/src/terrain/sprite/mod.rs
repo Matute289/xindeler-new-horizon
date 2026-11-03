@@ -54,11 +54,7 @@ use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use num_derive::FromPrimitive;
 use serde::{Deserialize, Serialize};
-use std::{
-    borrow::Cow,
-    convert::{Infallible, TryFrom},
-    fmt,
-};
+use std::{borrow::Cow, convert::Infallible, fmt, str::FromStr};
 use strum::EnumIter;
 use vek::*;
 
@@ -658,8 +654,8 @@ impl SpriteKind {
     #[inline]
     //#[tweak_fn]
     pub fn solid_height(&self) -> Option<f32> {
-        // Beware: the height *must* be <= `MAX_HEIGHT` or the collision system will not
-        // properly detect it!
+        // Beware: the height *must* be <= `MAX_HEIGHT` or the collision system
+        // will not properly detect it!
         Some(match self {
             SpriteKind::Bedroll => 0.3,
             SpriteKind::BedrollSnow => 0.4,
@@ -1305,10 +1301,11 @@ impl SpriteKind {
     }
 
     /// Requires this item in the inventory to harvest, uses item_definition_id
-    // TODO: Do we want to consolidate this with mine_tool at all? Main differences
-    // are that mine tool requires item to be an equippable tool, be equipped, and
-    // does not consume item while required_item requires that the item be in the
-    // inventory and will consume the item on collecting the sprite.
+    // TODO: Do we want to consolidate this with mine_tool at all? Main
+    // differences are that mine tool requires item to be an equippable
+    // tool, be equipped, and does not consume item while required_item
+    // requires that the item be in the inventory and will consume the item
+    // on collecting the sprite.
     pub fn unlock_condition(self, cfg: Option<&SpriteCfg>) -> Option<Cow<'_, UnlockKind>> {
         let kind = if let Some(unlock) = cfg.and_then(|cfg| cfg.unlock.as_ref()) {
             Cow::Borrowed(unlock)
@@ -1371,7 +1368,8 @@ impl SpriteKind {
         cfg.and_then(|cfg| cfg.content)
     }
 
-    // TODO: phase out use of this method in favour of `sprite.has_attr::<Ori>()`
+    // TODO: phase out use of this method in favour of
+    // `sprite.has_attr::<Ori>()`
     #[inline]
     pub fn has_ori(&self) -> bool { self.category().has_attr::<Ori>() }
 }
@@ -1387,11 +1385,11 @@ lazy_static! {
         SpriteKind::iter().map(|sk| (sk.to_string(), sk)).collect();
 }
 
-impl<'a> TryFrom<&'a str> for SpriteKind {
-    type Error = ();
+impl FromStr for SpriteKind {
+    type Err = ();
 
     #[inline]
-    fn try_from(s: &'a str) -> Result<Self, Self::Error> { SPRITE_KINDS.get(s).copied().ok_or(()) }
+    fn from_str(s: &str) -> Result<Self, Self::Err> { SPRITE_KINDS.get(s).copied().ok_or(()) }
 }
 
 // TODO: Free and Requires are currently unused.

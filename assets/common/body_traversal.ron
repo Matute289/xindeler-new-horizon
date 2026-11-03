@@ -1,0 +1,343 @@
+// How each creature is built, as morphology rather than as permissions.
+//
+// Nothing here says what a creature may do. `TraversalMorphology::derive` in
+// `common/src/comp/body/traversal.rs` turns these three fields, plus the body's
+// own mass and height, into its traversal capabilities -- climbing, posture,
+// squeezing, jumping. Review a row against the creature, not against the
+// outcome: the question this file answers is "does a crocodile have claws?",
+// never "should a crocodile climb?". Disagreements about the second belong in
+// the rule, where they are argued once instead of 224 times.
+//
+// Why not booleans: a `climb: true` column records the conclusion and discards
+// the reason, so every creature added later needs somebody to notice its row
+// and decide again. Describing the build means new content inherits the answer.
+//
+//   grip    what the limbs meet a surface with, and therefore how much body
+//           they can hold against a wall:
+//             None | Fins | Hooves | Pads  -- no purchase on a vertical face
+//             Hands                        -- up to 1500 kg
+//             Claws                        -- up to 5000 kg
+//             Talons | Hooks               -- penetrating or adhesive, no limit
+//   frame   what the long axis can do:
+//             Rigid       does not fold; never climbs and never takes a posture
+//             Flexible    the ordinary vertebrate case
+//             Serpentine  long, limbless, laterally compressible; squeezes
+//             Amorphous   no fixed shape; squeezes
+//   limbs   weight-bearing limbs. Zero for a serpent or a fish.
+//
+// Every species is required: this file is deserialised into a struct with one
+// field per species, so omitting one fails the load at start-up, by name.
+// `Body::Humanoid` is not here -- it is a single body plan with a continuous
+// scaler rather than a roster, and lives in `HUMANOID_MORPHOLOGY`.
+//
+// The `tuning` block below is the rule's own numbers -- the knobs a balance
+// pass reaches for, kept beside the roster so a row and the rule that judges it
+// cannot drift into different files.
+//
+// Edits hot-reload, but capabilities are read per entity rather than cached,
+// so a change reaches creatures already alive.
+(
+    tuning: (
+        // A humanoid hauls its own weight up a wall; a siege construct does not.
+        hands_mass_ceiling: 1500.0,
+        // A bear climbs a tree at half a tonne, and the drakes are not much
+        // more, so claws have to carry well past what hands can.
+        claws_mass_ceiling: 5000.0,
+        // Wallrunning carries momentum sideways across a face, which stops
+        // working long before a hang does.
+        wallrun_mass_limit: 200.0,
+        // Below these, folding buys nothing: the body is already shorter than
+        // the gap the posture would open.
+        min_crouch_height: 1.0,
+        min_prone_height: 0.8,
+    ),
+    arthropod: (
+        tarantula:      (grip: Hooks, frame: Flexible, limbs: 8),
+        black_widow:    (grip: Hooks, frame: Flexible, limbs: 8),
+        antlion:        (grip: Hooks, frame: Flexible, limbs: 6),
+        horn_beetle:    (grip: Hooks, frame: Flexible, limbs: 6),
+        leaf_beetle:    (grip: Hooks, frame: Flexible, limbs: 6),
+        stag_beetle:    (grip: Hooks, frame: Flexible, limbs: 6),
+        weevil:         (grip: Hooks, frame: Flexible, limbs: 6),
+        cave_spider:    (grip: Hooks, frame: Flexible, limbs: 8),
+        // the lore subtype calls these worms, but the shipped model is many-legged and a physical capability follows the body, not the bestiary entry
+        crawler_molten: (grip: Hooks, frame: Flexible, limbs: 8),
+        crawler_moss:   (grip: Hooks, frame: Flexible, limbs: 8),
+        crawler_sand:   (grip: Hooks, frame: Flexible, limbs: 8),
+        dagonite:       (grip: Hooks, frame: Flexible, limbs: 6),
+        emberfly:       (grip: Hooks, frame: Flexible, limbs: 6),
+    ),
+    biped_large: (
+        // lumbering; the bulky bipeds are rigid and the agile ones are not, which is the whole split here
+        ogre:                  (grip: Hands, frame: Rigid, limbs: 2),
+        cyclops:               (grip: Hands, frame: Rigid, limbs: 2),
+        wendigo:               (grip: Claws, frame: Flexible, limbs: 2),
+        troll_cave:            (grip: Hands, frame: Rigid, limbs: 2),
+        troll_mountain:        (grip: Hands, frame: Rigid, limbs: 2),
+        troll_swamp:           (grip: Hands, frame: Rigid, limbs: 2),
+        // animated plate; nothing inside it bends
+        dullahan:              (grip: Hands, frame: Rigid, limbs: 2),
+        werewolf:              (grip: Claws, frame: Flexible, limbs: 2),
+        saurok_occult:         (grip: Claws, frame: Flexible, limbs: 2),
+        saurok_mighty:         (grip: Claws, frame: Flexible, limbs: 2),
+        saurok_sly:            (grip: Claws, frame: Flexible, limbs: 2),
+        mindflayer:            (grip: Hands, frame: Flexible, limbs: 2),
+        minotaur:              (grip: Hands, frame: Flexible, limbs: 2),
+        tidalwarrior:          (grip: Claws, frame: Flexible, limbs: 2),
+        yeti:                  (grip: Claws, frame: Flexible, limbs: 2),
+        harvester:             (grip: Hands, frame: Flexible, limbs: 2),
+        oni_blue:              (grip: Hands, frame: Flexible, limbs: 2),
+        oni_red:               (grip: Hands, frame: Flexible, limbs: 2),
+        cultist_warlord:       (grip: Hands, frame: Flexible, limbs: 2),
+        cultist_warlock:       (grip: Hands, frame: Flexible, limbs: 2),
+        husk_brute:            (grip: Hands, frame: Rigid, limbs: 2),
+        // bear-built but far too heavy in the shoulders to fold
+        tursus:                (grip: Claws, frame: Rigid, limbs: 2),
+        gigas_frost:           (grip: Hands, frame: Rigid, limbs: 2),
+        adlet_elder:           (grip: Claws, frame: Flexible, limbs: 2),
+        sea_bishop:            (grip: Hands, frame: Flexible, limbs: 2),
+        haniwa_general:        (grip: Hands, frame: Rigid, limbs: 2),
+        terracotta_besieger:   (grip: Hands, frame: Rigid, limbs: 2),
+        terracotta_demolisher: (grip: Hands, frame: Rigid, limbs: 2),
+        terracotta_punisher:   (grip: Hands, frame: Rigid, limbs: 2),
+        terracotta_pursuer:    (grip: Hands, frame: Rigid, limbs: 2),
+        cursekeeper:           (grip: Hands, frame: Rigid, limbs: 2),
+        // 1600 kg, so barred by mass as well as by frame
+        forgemaster:           (grip: Hands, frame: Rigid, limbs: 2),
+        strigoi:               (grip: Claws, frame: Flexible, limbs: 2),
+        executioner:           (grip: Hands, frame: Flexible, limbs: 2),
+        gigas_fire:            (grip: Hands, frame: Rigid, limbs: 2),
+    ),
+    biped_small: (
+        gnome:              (grip: Hands, frame: Flexible, limbs: 2),
+        sahagin:            (grip: Claws, frame: Flexible, limbs: 2),
+        adlet:              (grip: Claws, frame: Flexible, limbs: 2),
+        gnarling:           (grip: Hands, frame: Flexible, limbs: 2),
+        // root-bodied; the walking plants are woody, not jointed
+        mandragora:         (grip: Pads, frame: Rigid, limbs: 2),
+        kappa:              (grip: Claws, frame: Flexible, limbs: 2),
+        cactid:             (grip: Pads, frame: Rigid, limbs: 2),
+        gnoll:              (grip: Claws, frame: Flexible, limbs: 2),
+        haniwa:             (grip: Hands, frame: Rigid, limbs: 2),
+        myrmidon:           (grip: Hands, frame: Rigid, limbs: 2),
+        husk:               (grip: Hands, frame: Flexible, limbs: 2),
+        // ice construct
+        boreal:             (grip: Hands, frame: Rigid, limbs: 2),
+        // the rest of the walking plants, same reasoning as mandragora:
+        // woody bodies with no joints to fold
+        bushly:             (grip: Pads, frame: Rigid, limbs: 2),
+        irrwurz:            (grip: Pads, frame: Rigid, limbs: 2),
+        iron_dwarf:         (grip: Hands, frame: Rigid, limbs: 2),
+        flamekeeper:        (grip: Hands, frame: Rigid, limbs: 2),
+        shamanic_spirit:    (grip: Hands, frame: Flexible, limbs: 2),
+        // the hopping corpse is stiff by construction
+        jiangshi:           (grip: Hands, frame: Rigid, limbs: 2),
+        treasure_egg:       (grip: Pads, frame: Rigid, limbs: 2),
+        gnarling_chieftain: (grip: Hands, frame: Flexible, limbs: 2),
+        bloodmoon_heiress:  (grip: Claws, frame: Flexible, limbs: 2),
+        bloodservant:       (grip: Claws, frame: Flexible, limbs: 2),
+        harlequin:          (grip: Hands, frame: Flexible, limbs: 2),
+        goblin_thug:        (grip: Hands, frame: Flexible, limbs: 2),
+        goblin_chucker:     (grip: Hands, frame: Flexible, limbs: 2),
+        goblin_ruffian:     (grip: Hands, frame: Flexible, limbs: 2),
+        // the five legooms are vegetable-folk, on the same reasoning
+        green_legoom:       (grip: Pads, frame: Rigid, limbs: 2),
+        ochre_legoom:       (grip: Pads, frame: Rigid, limbs: 2),
+        purple_legoom:      (grip: Pads, frame: Rigid, limbs: 2),
+        red_legoom:         (grip: Pads, frame: Rigid, limbs: 2),
+        ashen:              (grip: Hands, frame: Rigid, limbs: 2),
+        umber_legoom:       (grip: Pads, frame: Rigid, limbs: 2),
+    ),
+    bird_large: (
+        phoenix:      (grip: Talons, frame: Flexible, limbs: 2),
+        cockatrice:   (grip: Talons, frame: Flexible, limbs: 2),
+        roc:          (grip: Talons, frame: Flexible, limbs: 2),
+        wyvern_flame: (grip: Talons, frame: Flexible, limbs: 2),
+        wyvern_cloud: (grip: Talons, frame: Flexible, limbs: 2),
+        wyvern_frost: (grip: Talons, frame: Flexible, limbs: 2),
+        wyvern_sea:   (grip: Talons, frame: Flexible, limbs: 2),
+        wyvern_weald: (grip: Talons, frame: Flexible, limbs: 2),
+    ),
+    bird_medium: (
+        snowy_owl:     (grip: Talons, frame: Flexible, limbs: 2),
+        horned_owl:    (grip: Talons, frame: Flexible, limbs: 2),
+        // webbed; waterfowl feet grip nothing
+        duck:          (grip: Pads, frame: Flexible, limbs: 2),
+        cockatiel:     (grip: Talons, frame: Flexible, limbs: 2),
+        chicken:       (grip: Talons, frame: Flexible, limbs: 2),
+        // the feet are hooks for hanging, which is the one thing a bat's legs are for
+        bat:           (grip: Claws, frame: Flexible, limbs: 2),
+        penguin:       (grip: Pads, frame: Flexible, limbs: 2),
+        goose:         (grip: Pads, frame: Flexible, limbs: 2),
+        peacock:       (grip: Talons, frame: Flexible, limbs: 2),
+        eagle:         (grip: Talons, frame: Flexible, limbs: 2),
+        parrot:        (grip: Talons, frame: Flexible, limbs: 2),
+        crow:          (grip: Talons, frame: Flexible, limbs: 2),
+        dodo:          (grip: Pads, frame: Flexible, limbs: 2),
+        parakeet:      (grip: Talons, frame: Flexible, limbs: 2),
+        puffin:        (grip: Pads, frame: Flexible, limbs: 2),
+        toucan:        (grip: Talons, frame: Flexible, limbs: 2),
+        bloodmoon_bat: (grip: Claws, frame: Flexible, limbs: 2),
+        vampire_bat:   (grip: Claws, frame: Flexible, limbs: 2),
+    ),
+    crustacean: (
+        // eight walking legs; the claws are weapons, not feet
+        crab:         (grip: Hooks, frame: Flexible, limbs: 8),
+        soldier_crab: (grip: Hooks, frame: Flexible, limbs: 8),
+        karkatha:     (grip: Hooks, frame: Flexible, limbs: 8),
+    ),
+    dragon: (
+        reddragon: (grip: Talons, frame: Flexible, limbs: 4),
+    ),
+    fish_medium: (
+        marlin:  (grip: Fins, frame: Flexible, limbs: 0),
+        icepike: (grip: Fins, frame: Flexible, limbs: 0),
+    ),
+    fish_small: (
+        clownfish: (grip: Fins, frame: Flexible, limbs: 0),
+        piranha:   (grip: Fins, frame: Flexible, limbs: 0),
+    ),
+    golem: (
+        stonegolem:    (grip: Hands, frame: Rigid, limbs: 2),
+        treant:        (grip: Hands, frame: Rigid, limbs: 2),
+        claygolem:     (grip: Hands, frame: Rigid, limbs: 2),
+        woodgolem:     (grip: Hands, frame: Rigid, limbs: 2),
+        coralgolem:    (grip: Hands, frame: Rigid, limbs: 2),
+        gravewarden:   (grip: Hands, frame: Rigid, limbs: 2),
+        ancienteffigy: (grip: Hands, frame: Rigid, limbs: 2),
+        // a small fiend that borrows the golem skeleton rather than a
+        // construct: it bends where its blockmates do not. Still off walls,
+        // but on the 10 t mass every golem-bodied creature currently shares
+        mogwai:        (grip: Claws, frame: Flexible, limbs: 2),
+        irongolem:     (grip: Hands, frame: Rigid, limbs: 2),
+    ),
+    quadruped_low: (
+        // real crocodilians climb, and well enough that it is documented; the rule is allowed to surprise a player as long as it does not surprise a zoologist
+        crocodile:     (grip: Claws, frame: Flexible, limbs: 4),
+        sea_crocodile: (grip: Claws, frame: Flexible, limbs: 4),
+        alligator:     (grip: Claws, frame: Flexible, limbs: 4),
+        salamander:    (grip: Claws, frame: Flexible, limbs: 4),
+        elbst:         (grip: Fins, frame: Flexible, limbs: 4),
+        monitor:       (grip: Claws, frame: Flexible, limbs: 4),
+        asp:           (grip: None, frame: Serpentine, limbs: 0),
+        // the shell is the frame
+        tortoise:      (grip: Claws, frame: Rigid, limbs: 4),
+        rocksnapper:   (grip: Claws, frame: Rigid, limbs: 4),
+        rootsnapper:   (grip: Claws, frame: Rigid, limbs: 4),
+        reefsnapper:   (grip: Claws, frame: Rigid, limbs: 4),
+        // armoured but genuinely arboreal, unlike the snappers
+        pangolin:      (grip: Claws, frame: Flexible, limbs: 4),
+        // a rooted plant with a mouth
+        maneater:      (grip: None, frame: Rigid, limbs: 0),
+        sandshark:     (grip: Fins, frame: Serpentine, limbs: 0),
+        hakulaq:       (grip: Fins, frame: Flexible, limbs: 4),
+        dagon:         (grip: Claws, frame: Flexible, limbs: 4),
+        lavadrake:     (grip: Claws, frame: Flexible, limbs: 4),
+        basilisk:      (grip: Claws, frame: Flexible, limbs: 4),
+        deadwood:      (grip: None, frame: Rigid, limbs: 0),
+        icedrake:      (grip: Claws, frame: Flexible, limbs: 4),
+        mossdrake:     (grip: Claws, frame: Flexible, limbs: 4),
+        driggle:       (grip: Claws, frame: Flexible, limbs: 4),
+        snaretongue:   (grip: Claws, frame: Flexible, limbs: 4),
+        // clawed at the front and serpentine through the body, and the body is what decides
+        hydra:         (grip: Claws, frame: Serpentine, limbs: 4),
+    ),
+    quadruped_medium: (
+        grolgar:     (grip: Claws, frame: Flexible, limbs: 4),
+        saber:       (grip: Claws, frame: Flexible, limbs: 4),
+        tiger:       (grip: Claws, frame: Flexible, limbs: 4),
+        tuskram:     (grip: Hooves, frame: Flexible, limbs: 4),
+        lion:        (grip: Claws, frame: Flexible, limbs: 4),
+        // carapaced
+        tarasque:    (grip: Claws, frame: Rigid, limbs: 4),
+        // canid pads: excellent for running down prey, useless on a wall
+        wolf:        (grip: Pads, frame: Flexible, limbs: 4),
+        frostfang:   (grip: Pads, frame: Flexible, limbs: 4),
+        mouflon:     (grip: Hooves, frame: Flexible, limbs: 4),
+        catoblepas:  (grip: Hooves, frame: Flexible, limbs: 4),
+        bonerattler: (grip: Claws, frame: Flexible, limbs: 4),
+        deer:        (grip: Hooves, frame: Flexible, limbs: 4),
+        hirdrasil:   (grip: Hooves, frame: Flexible, limbs: 4),
+        roshwalr:    (grip: Pads, frame: Flexible, limbs: 4),
+        donkey:      (grip: Hooves, frame: Flexible, limbs: 4),
+        camel:       (grip: Pads, frame: Flexible, limbs: 4),
+        zebra:       (grip: Hooves, frame: Flexible, limbs: 4),
+        antelope:    (grip: Hooves, frame: Flexible, limbs: 4),
+        kelpie:      (grip: Hooves, frame: Flexible, limbs: 4),
+        horse:       (grip: Hooves, frame: Flexible, limbs: 4),
+        barghest:    (grip: Claws, frame: Flexible, limbs: 4),
+        cattle:      (grip: Hooves, frame: Flexible, limbs: 4),
+        darkhound:   (grip: Pads, frame: Flexible, limbs: 4),
+        highland:    (grip: Hooves, frame: Flexible, limbs: 4),
+        yak:         (grip: Hooves, frame: Flexible, limbs: 4),
+        panda:       (grip: Claws, frame: Flexible, limbs: 4),
+        // bears climb trees at half a tonne, which is what sets the claw ceiling
+        bear:        (grip: Claws, frame: Flexible, limbs: 4),
+        dreadhorn:   (grip: Hooves, frame: Flexible, limbs: 4),
+        moose:       (grip: Hooves, frame: Flexible, limbs: 4),
+        snowleopard: (grip: Claws, frame: Flexible, limbs: 4),
+        // the megafauna are rigid for what the flag actually means: not
+        // "cannot lie down" -- an elephant plainly can -- but "cannot hold a
+        // lowered posture while moving", which is the only thing a posture
+        // buys here. A prone mammoth crawling through a gap is not a
+        // capability anybody wants
+        mammoth:     (grip: Pads, frame: Rigid, limbs: 4),
+        elephant:    (grip: Pads, frame: Rigid, limbs: 4),
+        ngoubou:     (grip: Hooves, frame: Rigid, limbs: 4),
+        llama:       (grip: Pads, frame: Flexible, limbs: 4),
+        alpaca:      (grip: Pads, frame: Flexible, limbs: 4),
+        akhlut:      (grip: Pads, frame: Flexible, limbs: 4),
+        bristleback: (grip: Hooves, frame: Flexible, limbs: 4),
+        // a clay construct wearing a horse's shape
+        claysteed:   (grip: Hooves, frame: Rigid, limbs: 4),
+    ),
+    quadruped_small: (
+        pig:            (grip: Hooves, frame: Flexible, limbs: 4),
+        fox:            (grip: Pads, frame: Flexible, limbs: 4),
+        sheep:          (grip: Hooves, frame: Flexible, limbs: 4),
+        boar:           (grip: Hooves, frame: Flexible, limbs: 4),
+        jackalope:      (grip: Pads, frame: Flexible, limbs: 4),
+        skunk:          (grip: Claws, frame: Flexible, limbs: 4),
+        cat:            (grip: Claws, frame: Flexible, limbs: 4),
+        batfox:         (grip: Pads, frame: Flexible, limbs: 4),
+        raccoon:        (grip: Claws, frame: Flexible, limbs: 4),
+        quokka:         (grip: Pads, frame: Flexible, limbs: 4),
+        holladon:       (grip: Claws, frame: Flexible, limbs: 4),
+        hyena:          (grip: Pads, frame: Flexible, limbs: 4),
+        rabbit:         (grip: Pads, frame: Flexible, limbs: 4),
+        truffler:       (grip: Hooves, frame: Flexible, limbs: 4),
+        frog:           (grip: Pads, frame: Flexible, limbs: 4),
+        rat:            (grip: Claws, frame: Flexible, limbs: 4),
+        axolotl:        (grip: Fins, frame: Flexible, limbs: 4),
+        // setae, which is the one non-arthropod case of a true adhesive foot
+        gecko:          (grip: Hooks, frame: Flexible, limbs: 4),
+        turtle:         (grip: Claws, frame: Rigid, limbs: 4),
+        squirrel:       (grip: Claws, frame: Flexible, limbs: 4),
+        fungome:        (grip: Pads, frame: Rigid, limbs: 2),
+        porcupine:      (grip: Claws, frame: Flexible, limbs: 4),
+        beaver:         (grip: Claws, frame: Flexible, limbs: 4),
+        hare:           (grip: Pads, frame: Flexible, limbs: 4),
+        dog:            (grip: Pads, frame: Flexible, limbs: 4),
+        // mountain goats famously scale cliffs, but they do it by balancing on ledges, not by holding a vertical face
+        goat:           (grip: Hooves, frame: Flexible, limbs: 4),
+        seal:           (grip: Fins, frame: Flexible, limbs: 4),
+        treant_sapling: (grip: Hands, frame: Rigid, limbs: 2),
+        // a real snail climbs by adhesion; this one squeezes instead, because giving a gastropod the climb state would read worse than the capability is worth
+        mossy_snail:    (grip: None, frame: Amorphous, limbs: 0),
+    ),
+    theropod: (
+        // eight tonnes of bipedal dinosaur: talons that could hold it, on a frame that cannot fold to use them
+        archaeos:    (grip: Talons, frame: Rigid, limbs: 2),
+        odonto:      (grip: Talons, frame: Rigid, limbs: 2),
+        raptor_sand: (grip: Talons, frame: Flexible, limbs: 2),
+        raptor_snow: (grip: Talons, frame: Flexible, limbs: 2),
+        raptor_wood: (grip: Talons, frame: Flexible, limbs: 2),
+        sunlizard:   (grip: Talons, frame: Flexible, limbs: 2),
+        yale:        (grip: Claws, frame: Flexible, limbs: 4),
+        dodarock:    (grip: Claws, frame: Rigid, limbs: 2),
+        // quadrupedal and blunt-footed despite the theropod skeleton;
+        // talons are a raptor's tool and this is not a raptor
+        ntouka:      (grip: Hooves, frame: Rigid, limbs: 4),
+        axebeak:     (grip: Talons, frame: Flexible, limbs: 2),
+    ),
+)

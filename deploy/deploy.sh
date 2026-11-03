@@ -211,5 +211,20 @@ if [ -n "$pid" ]; then
     log "running as pid $pid${threads:+ with $threads threads}"
 fi
 
+# --- retention (best effort) -------------------------------------------------
+#
+# Policy: keep only the deployed version + the previous one. Prune the old
+# server tarballs now that the new build is proven healthy. Runs strictly AFTER
+# the health check passed, and can never fail the deploy (`|| true`).
+# `--incoming` tells the pruner that build-release.sh will pack $REF's tarball
+# right after this script returns, so old ones are trimmed to leave exactly
+# new + previous. See deploy/README-retention.md.
+PRUNE="$SRC/deploy/prune-old-builds.sh"
+if [ -x "$PRUNE" ]; then
+    incoming=()
+    case "$REF" in v[0-9]*.[0-9]*.[0-9]*) incoming=(--incoming "$REF") ;; esac
+    "$PRUNE" --apply --only releases --from-deploy "${incoming[@]}" || log "retention prune failed (ignored)"
+fi
+
 log "deployed $new_commit successfully"
 log "rollback if needed: cp $PREVIOUS $BIN && pkill -9 -f 'xindeler-server-cli\$'"

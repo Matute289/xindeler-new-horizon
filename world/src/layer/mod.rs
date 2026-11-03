@@ -219,8 +219,8 @@ pub struct PathLocals {
 
 impl PathLocals {
     pub fn new(info: &CanvasInfo, col: &ColumnSample, path_nearest: Vec2<f32>) -> PathLocals {
-        // Try to use the column at the centre of the path for sampling to make them
-        // flatter
+        // Try to use the column at the centre of the path for sampling to make
+        // them flatter
         let col_pos = -info.wpos().map(|e| e as f32) + path_nearest;
         let col00 = info.col(info.wpos() + col_pos.map(|e| e.floor() as i32) + Vec2::new(0, 0));
         let col10 = info.col(info.wpos() + col_pos.map(|e| e.floor() as i32) + Vec2::new(1, 0));
@@ -287,8 +287,9 @@ pub fn apply_paths_to(canvas: &mut Canvas) {
                     let PathLocals {
                         riverless_alt, alt, ..
                     } = PathLocals::new(&canvas.info(), col, path_nearest);
-                    // Upstream fix: clamp to the lower of riverless/actual alt so
-                    // non-authored paths never float above terrain.
+                    // Upstream fix: clamp to the lower of riverless/actual alt
+                    // so non-authored paths never float
+                    // above terrain.
                     riverless_alt.min(alt)
                 },
             };

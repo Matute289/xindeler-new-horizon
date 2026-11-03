@@ -670,7 +670,8 @@ pub struct Consider<'a, S, R> {
 
 impl<'a, S: State, R: 'static> Consider<'a, S, R> {
     pub fn action(&mut self, priority: u32, action: impl Action<S, R>) {
-        // Replace the current action, unless the current action has a >= priority
+        // Replace the current action, unless the current action has a >=
+        // priority
         if !matches!(&mut self.current, Some((_, base_priority, override_priority)) if (*base_priority).max(*override_priority) >= priority)
             && let Some((old, _, _)) = self.current.replace((Box::new(action), priority, 0))
         {

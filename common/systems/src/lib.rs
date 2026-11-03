@@ -80,6 +80,13 @@ pub fn add_local_systems(dispatch_builder: &mut DispatcherBuilder) {
         &controller::Sys::sys_name(),
         &mount::Sys::sys_name(),
         &stats::Sys::sys_name(),
+        // Declared rather than incidental: `phys` reads `CharacterState` to
+        // decide an entity's posture, and therefore how tall it is to terrain.
+        // The two systems conflict on that storage so specs already serialises
+        // them, but without this edge the *order* was only whatever insertion
+        // order happened to give — and a reordering would silently start
+        // colliding bodies at last tick's posture, with nothing to catch it.
+        &character_behavior::Sys::sys_name(),
     ]);
     dispatch::<phys_events::Sys>(dispatch_builder, &[&phys::Sys::sys_name()]);
     dispatch::<projectile::Sys>(dispatch_builder, &[&phys::Sys::sys_name()]);

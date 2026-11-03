@@ -235,8 +235,8 @@ where
             .and_then(|x| slot_ids.iter().position(|slot_id| *slot_id == x))
             .map(|x| slots[x]);
 
-        // If dragging and mouse is released check if there is a slot widget under the
-        // mouse
+        // If dragging and mouse is released check if there is a slot widget
+        // under the mouse
         if let ManagerState::Dragging(_, slot, content_img, drag_amount) = &self.state {
             let content_img = *content_img;
             let drag_amount = *drag_amount;
@@ -355,7 +355,8 @@ where
             _ => (),
         }
 
-        // If this is the selected/dragged widget make sure the slot value is up to date
+        // If this is the selected/dragged widget make sure the slot value is up
+        // to date
         match &mut self.state {
             ManagerState::Selected(id, stored_slot)
             | ManagerState::Dragging(id, stored_slot, _, _)
@@ -478,8 +479,8 @@ where
 
     /// Selects a specified slot
     pub fn select(&mut self, widget: widget::Id, slot: S) {
-        // Sets the slot to selected; if it has no content, it will be deselected on the
-        // next fn update call
+        // Sets the slot to selected; if it has no content, it will be
+        // deselected on the next fn update call
         self.state = ManagerState::Selected(widget, slot);
     }
 
@@ -767,8 +768,8 @@ where
             .map_or(false, |sm| sm.mouse_over_slot == Some(slot_key.into()))
             && self.global_state.window.last_input() == LastInput::Mouse;
 
-        // Determine if menu highligh should be shown (for keyboard and controller
-        // inputs)
+        // Determine if menu highligh should be shown (for keyboard and
+        // controller inputs)
         let is_highlighted_menu = self.menu_hover
             && (self.global_state.window.last_input_type_menu())
             && (self.global_state.window.last_input() == LastInput::Controller

@@ -14,7 +14,8 @@ impl text_input::Renderer for IcedRenderer {
 
     fn measure_value(&self, value: &str, size: u16, font: Self::Font) -> f32 {
         // Using the physical scale might make this cached info usable below?
-        // Although we also have a position of the screen there so this could be useless
+        // Although we also have a position of the screen there so this could be
+        // useless
         let p_scale = self.p_scale;
 
         let section = glyph_brush::Section {
@@ -30,7 +31,8 @@ impl text_input::Renderer for IcedRenderer {
         };
 
         let mut glyph_calculator = self.cache.glyph_calculator();
-        // Note: keeping comments below for now in case this needs to be debugged again
+        // Note: keeping comments below for now in case this needs to be
+        // debugged again
         /* let width = */
         glyph_calculator
             .glyph_bounds(section)
@@ -126,8 +128,8 @@ impl text_input::Renderer for IcedRenderer {
     ) -> Self::Output {
         let is_mouse_over = bounds.contains(cursor_position);
 
-        // Note: will be useful in the future if we vary the style with the state of the
-        // text input
+        // Note: will be useful in the future if we vary the style with the
+        // state of the text input
         /*
         let style = if state.is_focused() {
             style.focused()

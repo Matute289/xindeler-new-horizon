@@ -36,6 +36,7 @@ mod location;
 pub mod loot_owner;
 pub mod melee;
 pub mod misc;
+pub mod narrative;
 pub mod ori;
 pub mod pact;
 pub mod pet;
@@ -82,6 +83,7 @@ pub use self::{
         AllBodies, Body, BodyData, Gender, arthropod, biped_large, biped_small, bird_large,
         bird_medium, crustacean, dragon, fish_medium, fish_small, golem, humanoid, object, plugin,
         quadruped_low, quadruped_medium, quadruped_small, ship, theropod,
+        traversal::{Frame, Grip, TraversalCapabilities, TraversalMorphology},
     },
     buff::{
         Buff, BuffCategory, BuffChange, BuffData, BuffEffect, BuffKey, BuffKind, BuffSource, Buffs,
@@ -133,13 +135,20 @@ pub use self::{
     loot_owner::LootOwner,
     melee::{Melee, MeleeConstructor, MeleeConstructorKind},
     misc::Object,
+    narrative::{
+        DerivedRule, DerivedValue, EffectOutcome, EffectRefusal, MAX_NARRATIVE_VARS,
+        NarrativeCondition, NarrativeEffect, NarrativeManifest, NarrativeScope, NarrativeState,
+        NarrativeVarDef, NarrativeVarId, NarrativeVarKind, NarrativeVisibility, SentimentTarget,
+        StandingTier, SumTerm, ThresholdBand, narrative_manifest,
+    },
     ori::Ori,
     pact::{Pact, PactBoon, PactStanding, PatronId, Summons},
     pet::Pet,
     phantom_illusion::PhantomIllusion,
     phys::{
         CapsulePrism, Collider, Density, ForceUpdate, Immovable, Mass, PhysicsState, Pos,
-        PosVelOriDefer, PreviousPhysCache, Scale, Sticky, Vel,
+        PosVelOriDefer, Posture, PreviousPhysCache, Scale, Sticky, TERRAIN_CYLINDER_MAX_HEIGHT,
+        TERRAIN_CYLINDER_MAX_RADIUS, TERRAIN_CYLINDER_MIN_HEIGHT, Vel,
     },
     player::{AliasError, DisconnectReason, MAX_ALIAS_LEN, Player},
     poise::{Poise, PoiseChange, PoiseState},

@@ -19,7 +19,8 @@ impl overlay::Renderer for IcedRenderer {
         let (over, over_mouse_interaction) =
             over.draw(self, defaults, over_layout, cursor_position, viewport);
 
-        // TODO: this isn't perfect but should be obselete when iced gets layer support
+        // TODO: this isn't perfect but should be obselete when iced gets layer
+        // support
         let mouse_interaction = if over_mouse_interaction == Interaction::Idle {
             under_mouse_interaction
         } else {

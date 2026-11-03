@@ -1,7 +1,7 @@
 /// EventMapper::Campfire maps sfx to campfires
 use crate::{
     AudioFrontend,
-    audio::sfx::{SFX_DIST_LIMIT_SQR, SfxEvent, SfxTriggerItem, SfxTriggers},
+    audio::sfx::{SFX_DIST_LIMIT_SQR, SfxEvent, SfxTag, SfxTriggerItem, SfxTriggers},
     scene::{Camera, FigureMgr, Terrain},
 };
 
@@ -69,12 +69,17 @@ impl EventMapper for CampfireEventMapper {
                 if Self::should_emit(internal_state, triggers.0.get_key_value(&mapped_event)) {
                     let sfx_trigger_item = triggers.0.get_key_value(&mapped_event);
                     const CAMPFIRE_VOLUME: f32 = 0.8;
-                    audio.emit_sfx(sfx_trigger_item, pos.0, Some(CAMPFIRE_VOLUME));
+                    audio.emit_sfx(
+                        sfx_trigger_item,
+                        pos.0,
+                        Some(CAMPFIRE_VOLUME),
+                        SfxTag::Looping,
+                    );
                     internal_state.time = Instant::now();
                 }
 
-                // update state to determine the next event. We only record the time (above) if
-                // it was dispatched
+                // update state to determine the next event. We only record the
+                // time (above) if it was dispatched
                 internal_state.event = mapped_event;
             }
         }

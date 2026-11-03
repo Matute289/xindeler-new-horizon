@@ -349,6 +349,7 @@ pub struct UpdateCharacterDataEvent {
         comp::Pact,
         comp::TriggerSlots,
         comp::SpellMastery,
+        comp::NarrativeState,
     ),
     pub metadata: UpdateCharacterMetadata,
 }

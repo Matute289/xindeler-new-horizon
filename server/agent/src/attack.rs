@@ -49,8 +49,8 @@ fn rng_from_span(rng: &mut impl RngExt, span: [f32; 2]) -> f32 {
 }
 
 impl AgentData<'_> {
-    // Intended for any agent that has one attack, that attack is a melee attack,
-    // and the agent is able to freely walk around
+    // Intended for any agent that has one attack, that attack is a melee
+    // attack, and the agent is able to freely walk around
     pub fn handle_simple_melee(
         &self,
         agent: &mut Agent,
@@ -81,8 +81,8 @@ impl AgentData<'_> {
         }
     }
 
-    // Intended for any agent that has one attack, that attack is a melee attack,
-    // and the agent is able to freely fly around
+    // Intended for any agent that has one attack, that attack is a melee
+    // attack, and the agent is able to freely fly around
     pub fn handle_simple_flying_melee(
         &self,
         _agent: &mut Agent,
@@ -301,8 +301,8 @@ impl AgentData<'_> {
                 read_data,
             )
         };
-        // Sets counter at start of combat, using `condition` to keep track of whether
-        // it was already initialized
+        // Sets counter at start of combat, using `condition` to keep track of
+        // whether it was already initialized
         if !agent.combat_state.conditions[ActionStateConditions::ConditionCounterInit as usize] {
             agent.combat_state.counters[ActionStateFCounters::FCounterHealthThreshold as usize] =
                 1.0 - SUMMON_THRESHOLD;
@@ -387,9 +387,9 @@ impl AgentData<'_> {
         }
     }
 
-    // Intended for any agent that has one attack, that attack is a melee attack,
-    // the agent is able to freely walk around, and the agent is trying to attack
-    // from behind its target
+    // Intended for any agent that has one attack, that attack is a melee
+    // attack, the agent is able to freely walk around, and the agent is
+    // trying to attack from behind its target
     pub fn handle_simple_backstab(
         &self,
         agent: &mut Agent,
@@ -420,8 +420,8 @@ impl AgentData<'_> {
         }
 
         if attack_data.dist_sqrd < STRAFE_DIST.powi(2) {
-            // If in front of the target, circle to try and get behind, else just make a
-            // beeline for the back of the agent
+            // If in front of the target, circle to try and get behind, else
+            // just make a beeline for the back of the agent
             let vec_to_target = (tgt_data.pos.0 - self.pos.0).xy();
             if in_front_of_target {
                 let theta = (PI / 2. - dist * 0.1).max(0.0);
@@ -445,8 +445,8 @@ impl AgentData<'_> {
                         STRAFE_SPEED_MULT * (*move_dir - STRAFE_SPIRAL_MULT * target_ori.xy());
                 }
             } else {
-                // Aim for a point a given distance behind the target to prevent sideways
-                // movement
+                // Aim for a point a given distance behind the target to prevent
+                // sideways movement
                 let move_target = tgt_data.pos.0.xy() - dist / 2. * target_ori.xy();
                 controller.inputs.move_dir = ((move_target - self.pos.0) * BACKSTAB_SPEED_MULT)
                     .try_normalized()
@@ -529,7 +529,8 @@ impl AgentData<'_> {
                 }
             }
         } else if attack_data.dist_sqrd < PREF_DIST.powi(2) {
-            // Attempt to move away from target if too close, while still attacking
+            // Attempt to move away from target if too close, while still
+            // attacking
             if let Some((bearing, _, stuck)) = agent.chaser.chase(
                 &*read_data.terrain,
                 self.pos.0,
@@ -681,7 +682,8 @@ impl AgentData<'_> {
                     set_ability(controller, 2, rng.random_range(3..6));
                 },
                 HammerTactics::AttackAdvanced => {
-                    // Scornful swipe, tremor, vigorous bash, retaliate, spine cracker, or breach
+                    // Scornful swipe, tremor, vigorous bash, retaliate, spine
+                    // cracker, or breach
                     let mut options = vec![0, 1, 2, 3, 4, 5];
                     set_random(controller, 0, &mut options);
                     set_random(controller, 1, &mut options);
@@ -689,8 +691,9 @@ impl AgentData<'_> {
                     set_ability(controller, 3, rng.random_range(6..8));
                 },
                 HammerTactics::AttackExpert => {
-                    // Scornful swipe, tremor, vigorous bash, retaliate, spine cracker, breach, iron
-                    // tempest, or upheaval
+                    // Scornful swipe, tremor, vigorous bash, retaliate, spine
+                    // cracker, breach, iron tempest, or
+                    // upheaval
                     let mut options = vec![0, 1, 2, 3, 4, 5, 6, 7];
                     set_random(controller, 0, &mut options);
                     set_random(controller, 1, &mut options);
@@ -713,8 +716,8 @@ impl AgentData<'_> {
                     set_ability(controller, 2, rng.random_range(12..15));
                 },
                 HammerTactics::SupportAdvanced => {
-                    // Scornful swipe, heavy whorl, intercept, pile driver, lung pummel, or helm
-                    // crusher
+                    // Scornful swipe, heavy whorl, intercept, pile driver, lung
+                    // pummel, or helm crusher
                     let mut options = vec![0, 10, 11, 12, 13, 14];
                     set_random(controller, 0, &mut options);
                     set_random(controller, 1, &mut options);
@@ -722,8 +725,9 @@ impl AgentData<'_> {
                     set_ability(controller, 3, rng.random_range(15..17));
                 },
                 HammerTactics::SupportExpert => {
-                    // Scornful swipe, heavy whorl, intercept, pile driver, lung pummel, helm
-                    // crusher, rampart, or tenacity
+                    // Scornful swipe, heavy whorl, intercept, pile driver, lung
+                    // pummel, helm crusher, rampart, or
+                    // tenacity
                     let mut options = vec![0, 10, 11, 12, 13, 14, 15, 16];
                     set_random(controller, 0, &mut options);
                     set_random(controller, 1, &mut options);
@@ -2187,7 +2191,8 @@ impl AgentData<'_> {
                     set_random(controller, 3, &mut options);
                 },
                 BowTactics::HunterAdvanced => {
-                    // ardent hunt, storm chaser, eagle eye, heartseeker, or hawkstrike
+                    // ardent hunt, storm chaser, eagle eye, heartseeker, or
+                    // hawkstrike
                     let mut options = vec![2, 3, 4, 5, 6];
                     set_random(controller, 1, &mut options);
                     set_random(controller, 2, &mut options);
@@ -2214,7 +2219,8 @@ impl AgentData<'_> {
                     set_random(controller, 3, &mut options);
                 },
                 BowTactics::TricksterAdvanced => {
-                    // septic shot, ignite arrow, drench arrow, freeze arrow, jolt arrow
+                    // septic shot, ignite arrow, drench arrow, freeze arrow,
+                    // jolt arrow
                     let mut options = vec![7, 8, 9, 10, 11];
                     set_random(controller, 1, &mut options);
                     set_random(controller, 2, &mut options);
@@ -2241,7 +2247,8 @@ impl AgentData<'_> {
                     set_random(controller, 3, &mut options);
                 },
                 BowTactics::ArtilleryAdvanced => {
-                    // barrage, piercing gale, thorn stake, fusillade, death volley
+                    // barrage, piercing gale, thorn stake, fusillade, death
+                    // volley
                     let mut options = vec![12, 13, 14, 15, 16];
                     set_random(controller, 1, &mut options);
                     set_random(controller, 2, &mut options);
@@ -2277,9 +2284,9 @@ impl AgentData<'_> {
             GuardedCycle = 0,
         }
 
-        // TODO: Abstract this with `handle_attack_aggression` later (probably with
-        // staff rework?) once the effectiveness of this strategy has been evaluated
-        // more
+        // TODO: Abstract this with `handle_attack_aggression` later (probably
+        // with staff rework?) once the effectiveness of this strategy
+        // has been evaluated more
         let attempt_attack = {
             if let Some(health) = self.health {
                 agent.combat_state.int_counters[IntCounters::ActionMode as usize] =
@@ -2702,8 +2709,8 @@ impl AgentData<'_> {
                 > CharacterAbility::default_roll(Some(self.char_state)).energy_cost()
             && !matches!(self.char_state, CharacterState::Shockwave(_))
         {
-            // if a humanoid, have enough stamina, not in shockwave, and in melee range,
-            // emergency roll
+            // if a humanoid, have enough stamina, not in shockwave, and in
+            // melee range, emergency roll
             controller.push_basic_input(InputKind::Roll);
         } else if matches!(self.char_state, CharacterState::Shockwave(_)) {
             agent.combat_state.conditions
@@ -2728,7 +2735,8 @@ impl AgentData<'_> {
                 && target_approaching_speed > 12.0
                 && self.energy.current() > shockwave_cost
             {
-                // if enemy is closing distance quickly, use shockwave to knock back
+                // if enemy is closing distance quickly, use shockwave to knock
+                // back
                 if matches!(self.char_state, CharacterState::Wielding(_)) {
                     controller.push_basic_input(InputKind::Ability(0));
                 } else {
@@ -2745,8 +2753,8 @@ impl AgentData<'_> {
                 controller.push_basic_input(InputKind::Primary);
             }
         }
-        // Logic to move. Intentionally kept separate from ability logic so duplicated
-        // work is less necessary.
+        // Logic to move. Intentionally kept separate from ability logic so
+        // duplicated work is less necessary.
         if attack_data.dist_sqrd < (2.0 * attack_data.min_attack_dist).powi(2) {
             // Attempt to move away from target if too close
             if let Some((bearing, speed, stuck)) = agent.chaser.chase(
@@ -2851,8 +2859,8 @@ impl AgentData<'_> {
         if attack_data.dist_sqrd > attack_data.min_attack_dist.powi(2)
             && line_of_sight_with_target()
         {
-            // If far enough away, and can see target, check which skill is appropriate to
-            // use
+            // If far enough away, and can see target, check which skill is
+            // appropriate to use
             if self.energy.current() > DESIRED_ENERGY_LEVEL
                 && read_data
                     .combos
@@ -2878,12 +2886,13 @@ impl AgentData<'_> {
                         .is_some()
                 })
             {
-                // Use ward if target is far enough away, self is not buffed, and have
-                // sufficient energy
+                // Use ward if target is far enough away, self is not buffed,
+                // and have sufficient energy
                 controller.push_basic_input(InputKind::Ability(0));
             } else {
                 // If low on energy, use primary to attempt to regen energy
-                // Or if at desired energy level but not able/willing to ward, just attack
+                // Or if at desired energy level but not able/willing to ward,
+                // just attack
                 controller.push_basic_input(InputKind::Primary);
             }
         } else if attack_data.dist_sqrd < (2.0 * attack_data.min_attack_dist).powi(2) {
@@ -2892,15 +2901,15 @@ impl AgentData<'_> {
                     > CharacterAbility::default_roll(Some(self.char_state)).energy_cost()
                 && !matches!(self.char_state, CharacterState::BasicAura(c) if !matches!(c.stage_section, StageSection::Recover))
             {
-                // Else roll away if can roll and have enough energy, and not using aura or in
-                // recover
+                // Else roll away if can roll and have enough energy, and not
+                // using aura or in recover
                 controller.push_basic_input(InputKind::Roll);
             } else if attack_data.angle < 15.0 {
                 controller.push_basic_input(InputKind::Primary);
             }
         }
-        // Logic to move. Intentionally kept separate from ability logic where possible
-        // so duplicated work is less necessary.
+        // Logic to move. Intentionally kept separate from ability logic where
+        // possible so duplicated work is less necessary.
         if attack_data.dist_sqrd < (2.0 * attack_data.min_attack_dist).powi(2) {
             // Attempt to move away from target if too close
             if let Some((bearing, speed, stuck)) = agent.chaser.chase(
@@ -3109,7 +3118,8 @@ impl AgentData<'_> {
             [ActionStateCountersF::CounterFHandleCircleChargeAttack as usize]
             >= circle_time as f32
         {
-            // if circle charge is in progress and time hasn't expired, continue charging
+            // if circle charge is in progress and time hasn't expired, continue
+            // charging
             controller.push_basic_input(InputKind::Secondary);
         }
         if attack_data.in_min_range() {
@@ -3187,7 +3197,8 @@ impl AgentData<'_> {
                         circle_time as f32;
                 }
                 controller.inputs.move_dir = move_dir;
-                // use counter as timer since timer may be modified in other parts of the code
+                // use counter as timer since timer may be modified in other
+                // parts of the code
                 agent.combat_state.counters
                     [ActionStateCountersF::CounterFHandleCircleChargeAttack as usize] +=
                     read_data.dt.0;
@@ -3863,8 +3874,8 @@ impl AgentData<'_> {
             )
         };
         if !agent.combat_state.initialized {
-            // Sets counter at start of combat, using `condition` to keep track of whether
-            // it was already initialized
+            // Sets counter at start of combat, using `condition` to keep track
+            // of whether it was already initialized
             agent.combat_state.counters[FCounters::SummonThreshold as usize] =
                 1.0 - SUMMON_THRESHOLD;
             agent.combat_state.initialized = true;
@@ -3959,8 +3970,8 @@ impl AgentData<'_> {
         };
         let home = agent.patrol_origin.unwrap_or(self.pos.0);
         let health_fraction = self.health.map_or(0.5, |h| h.fraction());
-        // Teleport back to home position if we're too far from our home position but in
-        // range of the blink ability
+        // Teleport back to home position if we're too far from our home
+        // position but in range of the blink ability
         if (5f32.powi(2)..100f32.powi(2)).contains(&home.distance_squared(self.pos.0)) {
             controller.push_action(ControlAction::StartInput {
                 input: InputKind::Ability(5),
@@ -3968,8 +3979,8 @@ impl AgentData<'_> {
                 select_pos: Some(home),
             });
         } else if !agent.combat_state.initialized {
-            // Sets counter at start of combat, using `condition` to keep track of whether
-            // it was already initialized
+            // Sets counter at start of combat, using `condition` to keep track
+            // of whether it was already initialized
             agent.combat_state.counters[FCounters::SummonThreshold as usize] =
                 1.0 - SUMMON_THRESHOLD;
             agent.combat_state.initialized = true;
@@ -4057,8 +4068,8 @@ impl AgentData<'_> {
             )
         };
         let health_fraction = self.health.map_or(0.5, |h| h.fraction());
-        // Sets counter at start of combat, using `condition` to keep track of whether
-        // it was already initialized
+        // Sets counter at start of combat, using `condition` to keep track of
+        // whether it was already initialized
         if !agent.combat_state.initialized {
             agent.combat_state.counters[FCounters::SummonThreshold as usize] =
                 1.0 - SUMMON_THRESHOLD;
@@ -4989,8 +5000,8 @@ impl AgentData<'_> {
         }
 
         let health_fraction = self.health.map_or(0.5, |h| h.fraction());
-        // Sets counter at start of combat, using `condition` to keep track of whether
-        // it was already initialized
+        // Sets counter at start of combat, using `condition` to keep track of
+        // whether it was already initialized
         if !agent.combat_state.initialized {
             agent.combat_state.counters[FCounters::ShockwaveThreshold as usize] =
                 1.0 - SHOCKWAVE_THRESHOLD;
@@ -5067,8 +5078,8 @@ impl AgentData<'_> {
         }
 
         let health_fraction = self.health.map_or(0.5, |h| h.fraction());
-        // Sets counter at start of combat, using `condition` to keep track of whether
-        // it was already initialized
+        // Sets counter at start of combat, using `condition` to keep track of
+        // whether it was already initialized
         if !agent.combat_state.initialized {
             agent.combat_state.counters[FCounters::HealthThreshold as usize] = 1.0 - HP_THRESHOLD;
             agent.combat_state.initialized = true;
@@ -5086,7 +5097,8 @@ impl AgentData<'_> {
             }
         } else if matches!(self.char_state, CharacterState::DashMelee(c) if !matches!(c.stage_section, StageSection::Recover))
         {
-            // If already InputKind, keep InputKind if not in recover (Default is Shockwave)
+            // If already InputKind, keep InputKind if not in recover (Default
+            // is Shockwave)
             controller.push_basic_input(InputKind::Ability(0));
         } else if attack_data.dist_sqrd > LONG_RANGE.powi(2) {
             // InputKind after target if they attempt to "flee" (>LONG)
@@ -5099,7 +5111,8 @@ impl AgentData<'_> {
                 // InputKind target if close enough and within angle (<MELEE)
                 controller.push_basic_input(InputKind::Primary);
             } else if attack_data.angle > 60.0 {
-                // InputKind if target exceeds angle but is close enough (FLANK/STRAFE)
+                // InputKind if target exceeds angle but is close enough
+                // (FLANK/STRAFE)
                 controller.push_basic_input(InputKind::Ability(0));
             }
         }
@@ -5137,7 +5150,8 @@ impl AgentData<'_> {
         // Fraction of health, used for activation of shockwave
         // If golem don't have health for some reason, assume it's full
         let health_fraction = self.health.map_or(1.0, |h| h.fraction());
-        // Magnitude squared of cross product of target velocity with golem orientation
+        // Magnitude squared of cross product of target velocity with golem
+        // orientation
         let target_speed_cross_sqd = agent
             .target
             .as_ref()
@@ -5179,8 +5193,9 @@ impl AgentData<'_> {
                     && line_of_sight_with_target()
                     && attack_data.angle < 45.0
             {
-                // If target in range threshold and haven't been lasering for more than 5
-                // seconds already or if target is moving slow-ish, laser them
+                // If target in range threshold and haven't been lasering for
+                // more than 5 seconds already or if target is
+                // moving slow-ish, laser them
                 controller.push_basic_input(InputKind::Secondary);
             } else if health_fraction < 0.7 {
                 // Else target moving too fast for laser, shockwave time.
@@ -5244,8 +5259,8 @@ impl AgentData<'_> {
             )
         };
         let home = agent.patrol_origin.unwrap_or(self.pos.0.round());
-        // Sets counter at start of combat, using `condition` to keep track of whether
-        // it was already initialized
+        // Sets counter at start of combat, using `condition` to keep track of
+        // whether it was already initialized
         if !agent.combat_state.conditions
             [ActionStateConditions::ConditionCounterInitialized as usize]
         {
@@ -5276,20 +5291,21 @@ impl AgentData<'_> {
             } else if attack_data.dist_sqrd < BUBBLE_RANGE.powi(2) {
                 if matches!(self.char_state, CharacterState::BasicBeam(c) if !matches!(c.stage_section, StageSection::Recover) && c.timer < Duration::from_secs(10))
                 {
-                    // Keep shooting bubbles at them if already in basic beam and not in recover and
-                    // have not been bubbling too long
+                    // Keep shooting bubbles at them if already in basic beam
+                    // and not in recover and have not been
+                    // bubbling too long
                     controller.push_basic_input(InputKind::Ability(0));
                 } else if attack_data.in_min_range() && attack_data.angle < 60.0 {
                     // Pincer them if they're in range and angle
                     controller.push_basic_input(InputKind::Primary);
                 } else if attack_data.angle < 30.0 && line_of_sight_with_target() {
-                    // Start bubbling them if not close enough to do something else and in angle and
-                    // can see target
+                    // Start bubbling them if not close enough to do something
+                    // else and in angle and can see target
                     controller.push_basic_input(InputKind::Ability(0));
                 }
             } else if attack_data.angle < 90.0 && line_of_sight_with_target() {
-                // Start scuttling if not close enough to do something else and in angle and can
-                // see target
+                // Start scuttling if not close enough to do something else and
+                // in angle and can see target
                 controller.push_basic_input(InputKind::Secondary);
             }
         }
@@ -5298,8 +5314,8 @@ impl AgentData<'_> {
         } else {
             tgt_data.pos.0
         };
-        // attempt to path towards target, move away from exiit  if target is cheesing
-        // from below
+        // attempt to path towards target, move away from exiit  if target is
+        // cheesing from below
         self.path_toward_target(agent, controller, path, read_data, Path::AtTarget, None);
     }
 
@@ -5875,8 +5891,8 @@ impl AgentData<'_> {
         };
 
         let health_fraction = self.health.map_or(0.5, |h| h.fraction());
-        // Sets counter at start of combat, using `condition` to keep track of whether
-        // it was already initialized
+        // Sets counter at start of combat, using `condition` to keep track of
+        // whether it was already initialized
         if !agent.combat_state.initialized {
             agent.combat_state.counters
                 [ActionStateFCounters::FCounterMinionSummonThreshold as usize] =
@@ -6343,7 +6359,8 @@ impl AgentData<'_> {
             [ActionStateConditions::VerticalStrikeCombo as usize]
             && attack_data.dist_sqrd > 5f32.powi(2)
             && (tgt_data.pos.0 - self.pos.0).normalized().map(f32::abs).z > 0.6;
-        // Being in water also triggers this as there are a lot of exploits with water
+        // Being in water also triggers this as there are a lot of exploits with
+        // water
         let cheesed_in_water = matches!(self.physics_state.in_fluid, Some(Fluid::Liquid { kind: LiquidKind::Water, depth, .. }) if depth >= 2.0);
         let cheesed = cheesed_from_above || cheesed_in_water;
         let tgt_airborne = tgt_data
@@ -6406,7 +6423,8 @@ impl AgentData<'_> {
             } else if agent.combat_state.conditions
                 [ActionStateConditions::VerticalStrikeCombo as usize]
             {
-                // If landed vertical strike combo target while they are airborne
+                // If landed vertical strike combo target while they are
+                // airborne
                 if tgt_airborne {
                     controller.push_basic_input(FAST_THRUST);
                 }
@@ -6421,7 +6439,8 @@ impl AgentData<'_> {
             } else if agent.combat_state.timers[ActionStateTimers::OutOfMeleeRange as usize]
                 > FORCE_GAP_CLOSER_TIMEOUT
             {
-                // Use a gap closer if the target has been out of melee distance for a while
+                // Use a gap closer if the target has been out of melee distance
+                // for a while
                 controller.push_basic_input(LAVA_LEAP);
             } else if attack_data.dist_sqrd < MELEE_RANGE.powi(2) {
                 if tgt_missed_parry {
@@ -6447,7 +6466,8 @@ impl AgentData<'_> {
                     agent.combat_state.timers[ActionStateTimers::Special as usize] =
                         rng.random_range(0.0..3.0 + 5.0 * damage_fraction);
                 } else if attack_data.angle > 90.0 {
-                    // Cast an aoe ability to hit the target if they are behind the entity
+                    // Cast an aoe ability to hit the target if they are behind
+                    // the entity
                     let rand_aoe = rand_aoe(rng);
                     match rand_aoe {
                         WHIRLWIND if rng.random_bool(0.2) => {
@@ -6471,7 +6491,8 @@ impl AgentData<'_> {
                 // Use a gap closer if the target is even further away
                 controller.push_basic_input(LAVA_LEAP);
             } else if rng.random_bool(0.1) {
-                // Use a targeted fire pillar if the target is out of range of everything else
+                // Use a targeted fire pillar if the target is out of range of
+                // everything else
                 cast_targeted_fire_pillar(controller);
             }
         }
@@ -6748,8 +6769,8 @@ impl AgentData<'_> {
         }
 
         let health_fraction = self.health.map_or(0.5, |h| h.fraction());
-        // Sets counter at start of combat, using `condition` to keep track of whether
-        // it was already intitialized
+        // Sets counter at start of combat, using `condition` to keep track of
+        // whether it was already intitialized
         if !agent.combat_state.conditions
             [ActionStateConditions::ConditionCounterInitialized as usize]
         {
@@ -6784,8 +6805,8 @@ impl AgentData<'_> {
                 read_data,
             )
         {
-            // If far enough away, and can see target, check which skill is appropriate to
-            // use
+            // If far enough away, and can see target, check which skill is
+            // appropriate to use
             if self.energy.current() > DESIRED_ENERGY_LEVEL
                 && read_data
                     .combos
@@ -6811,12 +6832,13 @@ impl AgentData<'_> {
                         .is_some()
                 })
             {
-                // Use steam beam if target is far enough away, self is not buffed, and have
-                // sufficient energy
+                // Use steam beam if target is far enough away, self is not
+                // buffed, and have sufficient energy
                 controller.push_basic_input(InputKind::Ability(0));
             } else {
                 // If low on energy, use primary to attempt to regen energy
-                // Or if at desired energy level but not able/willing to ward, just attack
+                // Or if at desired energy level but not able/willing to ward,
+                // just attack
                 controller.push_basic_input(InputKind::Primary);
             }
         } else if attack_data.dist_sqrd < (2.0 * attack_data.min_attack_dist).powi(2) {
@@ -6831,8 +6853,8 @@ impl AgentData<'_> {
                 controller.push_basic_input(InputKind::Primary);
             }
         }
-        // Logic to move. Intentionally kept separate from ability logic where possible
-        // so duplicated work is less necessary.
+        // Logic to move. Intentionally kept separate from ability logic where
+        // possible so duplicated work is less necessary.
         if attack_data.dist_sqrd < (2.0 * attack_data.min_attack_dist).powi(2) {
             // Attempt to move away from target if too close
             if let Some((bearing, speed, stuck)) = agent.chaser.chase(
@@ -6945,8 +6967,8 @@ impl AgentData<'_> {
         {
             controller.push_basic_input(InputKind::Primary);
         }
-        // Logic to move. Intentionally kept separate from ability logic where possible
-        // so duplicated work is less necessary.
+        // Logic to move. Intentionally kept separate from ability logic where
+        // possible so duplicated work is less necessary.
         if attack_data.dist_sqrd < (2.0 * attack_data.min_attack_dist).powi(2) {
             // Attempt to move away from target if too close
             if let Some((bearing, speed, stuck)) = agent.chaser.chase(
@@ -7320,7 +7342,8 @@ impl AgentData<'_> {
     ) {
         const BEAM_RANGE: f32 = 20.0;
         const BEAM_TIME: Duration = Duration::from_secs(3);
-        // combat_state.condition controls whether or not deadwood should beam or dash
+        // combat_state.condition controls whether or not deadwood should beam
+        // or dash
         if matches!(self.char_state, CharacterState::DashMelee(s) if s.stage_section != StageSection::Recover)
         {
             // If already dashing, keep dashing and have move_dir set to forward
@@ -7331,14 +7354,16 @@ impl AgentData<'_> {
             controller.push_basic_input(InputKind::Secondary);
         } else if matches!(self.char_state, CharacterState::BasicBeam(s) if s.stage_section != StageSection::Recover && s.timer < BEAM_TIME)
         {
-            // If already beaming, keep beaming if not beaming for over 5 seconds
+            // If already beaming, keep beaming if not beaming for over 5
+            // seconds
             controller.push_basic_input(InputKind::Primary);
         } else if attack_data.dist_sqrd < BEAM_RANGE.powi(2) {
             // Else if in beam range, beam them
             if attack_data.angle_xy < 5.0 {
                 controller.push_basic_input(InputKind::Primary);
             } else {
-                // If not in angle, apply slight movement so deadwood orients itself correctly
+                // If not in angle, apply slight movement so deadwood orients
+                // itself correctly
                 controller.inputs.move_dir = (tgt_data.pos.0 - self.pos.0)
                     .xy()
                     .try_normalized()
@@ -7383,8 +7408,9 @@ impl AgentData<'_> {
         }
 
         if !agent.combat_state.conditions[ActionStateConditions::ConditionHasScreamed as usize] {
-            // If mandragora is still "sleeping" and hasn't screamed yet, do nothing until
-            // target in range or until it's taken damage
+            // If mandragora is still "sleeping" and hasn't screamed yet, do
+            // nothing until target in range or until it's taken
+            // damage
             if self.health.is_some_and(|h| {
                 h.current()
                     < agent.combat_state.counters

@@ -1,7 +1,8 @@
 use crate::{
     combat::AttackSource,
     comp::{
-        ControlAction, Density, Energy, InputAttr, InputKind, Ori, Pos, Vel, ability::Capability,
+        Body, ControlAction, Density, Energy, InputAttr, InputKind, Ori, Pos, Posture, Vel,
+        ability::Capability, body::traversal::TraversalCapabilities,
         inventory::item::armor::Friction, item::ConsumableKind,
     },
     event::{self, EmitExt, LocalEvent},
@@ -405,6 +406,37 @@ impl CharacterState {
             self,
             CharacterState::Glide { .. } | CharacterState::GlideWield { .. }
         )
+    }
+
+    /// How upright this state holds the body, for a body that is *able* to
+    /// hold itself that way.
+    ///
+    /// The capability gate is not a formality: a body without `CROUCH` that
+    /// somehow ends up in a sneaking state keeps its standing cylinder, which
+    /// is exactly today's behaviour and therefore the safe answer. Rigid
+    /// creatures — constructs, armoured shells — never fold, so they never
+    /// shrink.
+    pub fn posture(&self, body: &Body) -> Posture {
+        // Decide from the state first. This runs per entity per tick in the
+        // physics terrain arm, and almost every entity on almost every tick is
+        // neither crouching nor prone — so the overwhelmingly common case must
+        // not pay for the capability lookup behind it, which reads an asset.
+        let wanted = if matches!(self, CharacterState::Crawl) {
+            (Posture::Prone, TraversalCapabilities::PRONE)
+        } else if self.is_stealthy() {
+            (Posture::Crouch, TraversalCapabilities::CROUCH)
+        } else {
+            return Posture::Stand;
+        };
+
+        // Only now: can this body actually hold itself that way? A rigid
+        // construct keeps its standing cylinder, which is both correct and the
+        // historical behaviour.
+        if body.traversal_capabilities().contains(wanted.1) {
+            wanted.0
+        } else {
+            Posture::Stand
+        }
     }
 
     pub fn is_stealthy(&self) -> bool {
@@ -1551,4 +1583,67 @@ pub struct CharacterActivity {
 
 impl Component for CharacterActivity {
     type Storage = DerefFlaggedStorage<Self, specs::VecStorage<Self>>;
+}
+
+#[cfg(test)]
+mod posture_tests {
+    use super::*;
+    use crate::comp::{Posture, body::golem, humanoid};
+
+    fn player() -> Body {
+        Body::Humanoid(humanoid::Body::random_with(
+            &mut rand::rng(),
+            &humanoid::Species::Human,
+        ))
+    }
+
+    fn stone_golem() -> Body {
+        Body::Golem(golem::Body {
+            species: golem::Species::StoneGolem,
+            body_type: golem::BodyType::Male,
+        })
+    }
+
+    fn sneaking() -> CharacterState {
+        CharacterState::Idle(states::idle::Data {
+            is_sneaking: true,
+            ..Default::default()
+        })
+    }
+
+    /// The three rungs, for a body able to use all of them.
+    #[test]
+    fn a_flexible_body_gets_all_three_postures() {
+        let body = player();
+        assert_eq!(
+            CharacterState::Idle(Default::default()).posture(&body),
+            Posture::Stand,
+        );
+        assert_eq!(sneaking().posture(&body), Posture::Crouch);
+        assert_eq!(CharacterState::Crawl.posture(&body), Posture::Prone);
+    }
+
+    /// 🔴 A body that cannot fold keeps its standing cylinder in every state.
+    /// This is what stops a construct from shrinking because something put it
+    /// in a state it has no business being in — and it is the safe fallback,
+    /// since standing is the historical behaviour for everything.
+    #[test]
+    fn a_rigid_body_never_leaves_standing() {
+        let body = stone_golem();
+        for state in [
+            CharacterState::Idle(Default::default()),
+            sneaking(),
+            CharacterState::Crawl,
+        ] {
+            assert_eq!(state.posture(&body), Posture::Stand);
+        }
+    }
+
+    /// Being knocked into `Crawl` while downed shrinks a player exactly as
+    /// voluntarily lying down does — posture is a fact about the body's shape,
+    /// not a reward for choosing it.
+    #[test]
+    fn the_downed_state_uses_the_same_posture() {
+        assert_eq!(CharacterState::Crawl.posture(&player()), Posture::Prone);
+    }
 }

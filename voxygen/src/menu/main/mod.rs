@@ -136,7 +136,8 @@ impl PlayState for MainMenuState {
 
                 match singleplayer.receiver.try_recv() {
                     Ok(Ok(())) => {
-                        // Attempt login after the server is finished initializing
+                        // Attempt login after the server is finished
+                        // initializing
                         attempt_login(
                             &mut global_state.info_message,
                             "singleplayer".to_owned(),
@@ -257,8 +258,8 @@ impl PlayState for MainMenuState {
                 self.init = InitState::None;
                 error!(?e, "Client Init failed raw error");
                 let e = get_client_init_msg_error(e, &global_state.i18n);
-                // Log error for possible additional use later or in case that the error
-                // displayed is cut of.
+                // Log error for possible additional use later or in case that
+                // the error displayed is cut of.
                 error!(?e, "Client Init failed");
                 global_state.info_message = Some(
                     localized_strings
@@ -278,7 +279,8 @@ impl PlayState for MainMenuState {
                     // Can't fail since we just polled it, it must be Some
                     self.init.client().unwrap().auth_trust(auth_server, true);
                 } else {
-                    // Show warning that auth server is not trusted and prompt for approval
+                    // Show warning that auth server is not trusted and prompt
+                    // for approval
                     self.main_menu_ui.auth_trust_prompt(auth_server);
                 }
             },
@@ -302,7 +304,8 @@ impl PlayState for MainMenuState {
             None => {},
         }
 
-        // Tick the client to keep the connection alive if we are waiting on pipelines
+        // Tick the client to keep the connection alive if we are waiting on
+        // pipelines
         if let InitState::Pipeline(client, _) = &mut self.init {
             match client.tick(
                 comp::ControllerInputs::default(),
@@ -351,7 +354,8 @@ impl PlayState for MainMenuState {
                                         match hash {
                                             Ok(hash) => {
                                                 if client.plugin_received(hash) == 0 {
-                                                    // now load characters (plugins might contain
+                                                    // now load characters
+                                                    // (plugins might contain
                                                     // items)
                                                     client.load_character_list();
                                                 }
@@ -389,8 +393,9 @@ impl PlayState for MainMenuState {
                 {
                     self.main_menu_ui.connected();
 
-                    // If the client cannot enter the game but spectate, skip from the character
-                    // menu directly to spectating.
+                    // If the client cannot enter the game but spectate, skip
+                    // from the character menu directly to
+                    // spectating.
                     if client.client_type().can_spectate()
                         && !client.client_type().can_enter_character()
                     {
@@ -491,8 +496,9 @@ impl PlayState for MainMenuState {
                     );
                 },
                 MainMenuEvent::CancelLoginAttempt => {
-                    // init contains InitState::Client(ClientInit), which spawns a thread which
-                    // contains a TcpStream::connect() call This call is
+                    // init contains InitState::Client(ClientInit), which spawns
+                    // a thread which contains a
+                    // TcpStream::connect() call This call is
                     // blocking TODO fix when the network rework happens
                     #[cfg(feature = "singleplayer")]
                     {
@@ -660,9 +666,9 @@ pub(crate) fn get_client_msg_error(
     mismatched_server_info: Option<ServerInfo>,
     localization: &LocalizationGuard,
 ) -> String {
-    // When a network error is received and there is a mismatch between the client
-    // and server version it is almost definitely due to this mismatch rather than
-    // a true networking error.
+    // When a network error is received and there is a mismatch between the
+    // client and server version it is almost definitely due to this
+    // mismatch rather than a true networking error.
     let net_error = |error: String, mismatched_server_info: Option<ServerInfo>| -> String {
         if let Some(server_info) = mismatched_server_info.filter(|info| {
             info.git_hash != *common::util::GIT_HASH

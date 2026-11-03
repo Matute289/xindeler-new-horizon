@@ -46,8 +46,8 @@ impl Rule for Migrate {
                 }
             });
 
-            // Generate rtsim sites for world sites that don't have a corresponding rtsim
-            // site yet
+            // Generate rtsim sites for world sites that don't have a
+            // corresponding rtsim site yet
             for (world_site_id, _) in ctx.index.sites.iter() {
                 if !data.sites.values().any(|site| {
                     site.world_site
@@ -70,10 +70,10 @@ impl Rule for Migrate {
                 }
             }
 
-            // Reassign NPCs to sites if their old one was deleted. If they were already
-            // homeless, no need to do anything.
-            // Keep track of airship captains separately, as they need to be handled
-            // differently.
+            // Reassign NPCs to sites if their old one was deleted. If they were
+            // already homeless, no need to do anything.
+            // Keep track of airship captains separately, as they need to be
+            // handled differently.
             let mut airship_captains = Vec::new();
             for (key, npc) in data.actors.iter_mut() {
                 // For airships, just collect the captains for now
@@ -82,7 +82,8 @@ impl Rule for Migrate {
                 } else if let Some(home) = npc.home
                     && !data.sites.contains_key(home)
                 {
-                    // Choose the closest habitable site as the new home for the NPC
+                    // Choose the closest habitable site as the new home for the
+                    // NPC
                     npc.home = data
                         .sites
                         .sites
@@ -146,8 +147,8 @@ impl Rule for Migrate {
             // get all the places to spawn an airship
             let mut spawning_locations = data.airship_spawning_locations(ctx.world);
 
-            // The captains can't be registered inline with this code because it requires
-            // mutable access to data.
+            // The captains can't be registered inline with this code because it
+            // requires mutable access to data.
             let mut captains_to_register = Vec::new();
             for captain_id in airship_captains.iter() {
                 if let Some(mount_link) = data.actors.mounts.get_mount_link(*captain_id) {
@@ -162,16 +163,16 @@ impl Rule for Migrate {
                     }
                 }
             }
-            // All spawning points must be filled, so spawn new airships for any remaining
-            // points.
+            // All spawning points must be filled, so spawn new airships for any
+            // remaining points.
             while let Some(spawning_location) = spawning_locations.pop() {
                 let (captain_id, airship_id) = data.spawn_airship(&spawning_location, &mut rng);
                 captains_to_register.push((captain_id, airship_id, spawning_location));
             }
 
-            // Register all of the airship captains with airship operations. This can't be
-            // done inside the previous loop because this requires mutable
-            // access to this (data).
+            // Register all of the airship captains with airship operations.
+            // This can't be done inside the previous loop because
+            // this requires mutable access to this (data).
             for (captain_id, airship_id, spawning_location) in captains_to_register.iter() {
                 data.airship_sim.register_airship_captain(
                     spawning_location,
@@ -191,7 +192,7 @@ impl Rule for Migrate {
 
             data.architect.population = Population::default();
 
-            for npc in data.actors.values() {
+            for npc in data.actors.values().filter(|actor| actor.npc().is_some()) {
                 let pop = TrackedPopulation::from_body_and_role(&npc.body, &npc.role);
                 data.architect.population.add(pop, 1);
             }

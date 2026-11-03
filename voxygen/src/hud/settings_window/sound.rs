@@ -616,8 +616,8 @@ impl Widget for Sound<'_> {
         // Combat music toggle
         // let audio = &self.global_state.audio;
 
-        // Text::new(&self.localized_strings.get_msg("hud-settings-combat_music"))
-        //     .font_size(self.fonts.cyri.scale(14))
+        // Text::new(&self.localized_strings.get_msg("hud-settings-combat_music"
+        // ))     .font_size(self.fonts.cyri.scale(14))
         //     .font_id(self.fonts.cyri.conrod_id)
         //     .down_from(state.ids.music_spacing_slider, 10.0)
         //     .x_align_to(state.ids.music_spacing_text, Align::Start)
@@ -641,8 +641,8 @@ impl Widget for Sound<'_> {
         // --------------------------------------------
         // let device = &self.global_state.audio.current_device;
         // let device_list = self.global_state.audio.get_device_list();
-        // Text::new(&self.localized_strings.get_msg("hud.settings.audio_device"))
-        //     .down_from(state.ids.music_spacing_number, 10.0)
+        // Text::new(&self.localized_strings.get_msg("hud.settings.audio_device"
+        // ))     .down_from(state.ids.music_spacing_number, 10.0)
         //     .font_size(self.fonts.cyri.scale(14))
         //     .font_id(self.fonts.cyri.conrod_id)
         //     .color(TEXT_COLOR)

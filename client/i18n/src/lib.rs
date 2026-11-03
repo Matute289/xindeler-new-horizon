@@ -285,7 +285,8 @@ impl LocalizationGuard {
         // NOTE: we clone the key if translation was missing
         // We could use borrowed version, but it would mean that
         // `key`, `self`, and result should have the same lifetime.
-        // Which would make it way more awkward to use with runtime generated keys.
+        // Which would make it way more awkward to use with runtime generated
+        // keys.
         self.try_msg(key)
             .unwrap_or_else(|| Cow::Owned(key.to_owned()))
     }
@@ -378,8 +379,9 @@ impl LocalizationGuard {
     // Returns Ok(localized_text) if found no errors.
     // Returns Err(broken_text) on failure.
     //
-    // broken_text will have i18n keys in it, just i18n key if it was instant miss
-    // or text with missed keys inlined if it was missed down the chain.
+    // broken_text will have i18n keys in it, just i18n key if it was instant
+    // miss or text with missed keys inlined if it was missed down the
+    // chain.
     fn get_content_for_lang(lang: &Language, content: &Content) -> Result<String, String> {
         match content {
             Content::Plain(text) => Ok(text.clone()),

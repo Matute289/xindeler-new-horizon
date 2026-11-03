@@ -118,10 +118,10 @@ impl Structure for Haniwa {
         let mut rng = rand::rng();
         let rock = Fill::Brick(BlockKind::Rock, Rgb::new(96, 123, 131), 24);
         let key_door = Fill::Block(Block::air(SpriteKind::HaniwaKeyDoor));
-        // Progression-gated: the Haniwa dungeon's whole point is requiring the physical
-        // `haniwa_key` to pass this door, so its keyhole opts out of ranged/keyless
-        // unlocking (e.g. the `knock` spell) via `no_knock`. Melee key-item
-        // unlocking is unaffected.
+        // Progression-gated: the Haniwa dungeon's whole point is requiring the
+        // physical `haniwa_key` to pass this door, so its keyhole opts
+        // out of ranged/keyless unlocking (e.g. the `knock` spell) via
+        // `no_knock`. Melee key-item unlocking is unaffected.
         let key_hole = Fill::sprite_ori_cfg(SpriteKind::HaniwaKeyhole, 0, SpriteCfg {
             no_knock: true,
             ..Default::default()
@@ -718,8 +718,12 @@ impl Structure for Haniwa {
             }
         }
         // center room stairs
-        for f in 0..(self.center_room_positions.len() - 1) {
-            let floor = self.center_room_positions[f].z + (room_size / 4) + 1;
+        for room_position in self
+            .center_room_positions
+            .iter()
+            .take(self.center_room_positions.len() - 1)
+        {
+            let floor = room_position.z + (room_size / 4) + 1;
             let stairs_floor = floor - 5;
             let stairs_start =
                 Vec2::new(center.x - (diameter / 6) + 2, center.y - (diameter / 6) + 7);

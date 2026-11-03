@@ -138,8 +138,9 @@ impl<'a> System<'a> for Sys {
             }
             // ...find the rider...
             let Some(inputs_and_actions) = controllers.get_mut(rider_entity).map(|c| {
-                // Only take inputs and actions from the rider if the mount is not
-                // intelligent (TODO: expand the definition of 'intelligent').
+                // Only take inputs and actions from the rider if the mount is
+                // not intelligent (TODO: expand the definition
+                // of 'intelligent').
                 if body.is_some_and(|b| !b.has_free_will()) {
                     let actions = c
                         .actions
@@ -200,8 +201,8 @@ impl<'a> System<'a> for Sys {
         }
 
         // Since physics state isn't updated while riding we set it to default.
-        // TODO: Could this be done only once when the link is first created? Has to
-        // happen on both server and client.
+        // TODO: Could this be done only once when the link is first created?
+        // Has to happen on both server and client.
         for (physics_state, _) in (
             &mut physics_states,
             is_riders.mask() | is_volume_riders.mask(),
@@ -241,11 +242,11 @@ impl<'a> System<'a> for Sys {
                 vel.0 = v;
             }
 
-            // Check if the volume has buffs if they do apply them to the rider via a
-            // BuffEvent
+            // Check if the volume has buffs if they do apply them to the rider
+            // via a BuffEvent
 
-            // TODO: This is code copy of the mounting effects. We can probably consolidate
-            // at some point.
+            // TODO: This is code copy of the mounting effects. We can probably
+            // consolidate at some point.
             if let Some(target_buffs) = buffs.get(entity)
                 && let Some(block_buffs) = is_volume_rider.block.mount_buffs()
             {

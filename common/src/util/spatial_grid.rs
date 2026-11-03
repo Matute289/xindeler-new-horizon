@@ -79,9 +79,9 @@ impl SpatialGrid {
     /// axis aligned bounding region that contains the provided circle
     /// NOTE: for best optimization of the iterator use `for_each` rather than a
     /// for loop
-    // TODO: using the circle directly would be tighter (how efficient would it be
-    // to query the cells intersecting a circle?) (note: if doing this rename
-    // the function)
+    // TODO: using the circle directly would be tighter (how efficient would it
+    // be to query the cells intersecting a circle?) (note: if doing this
+    // rename the function)
     pub fn in_circle_aabr(
         &self,
         center: Vec2<f32>,

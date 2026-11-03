@@ -222,13 +222,13 @@ impl FileOpts {
         };
 
         // NOTE: Change 1.0 to 4.0 for a 4x
-        // improvement in world detail.  We also use this to automatically adjust
-        // grid_scale (multiplying by 4.0) and multiply mins_per_sec by
-        // 1.0 / (4.0 * 4.0) in ./erosion.rs, in order to get a similar rate of river
-        // formation.
+        // improvement in world detail.  We also use this to automatically
+        // adjust grid_scale (multiplying by 4.0) and multiply
+        // mins_per_sec by 1.0 / (4.0 * 4.0) in ./erosion.rs, in order
+        // to get a similar rate of river formation.
         //
-        // FIXME: This is a hack!  At some point we will have a more principled way of
-        // dealing with this.
+        // FIXME: This is a hack!  At some point we will have a more principled
+        // way of dealing with this.
         if let Some(map) = &parsed_world_file {
             gen_opts.scale = map.continent_scale_hack;
         };
@@ -357,13 +357,15 @@ impl FileOpts {
                 };
 
                 // FIXME:
-                // We check if we need to generate new map by comparing gen opts.
-                // But we also have another generation paramater that currently
-                // passed outside and used for both worldsim and worldgen.
+                // We check if we need to generate new map by comparing gen
+                // opts. But we also have another generation
+                // paramater that currently passed outside and
+                // used for both worldsim and worldgen.
                 //
                 // Ideally, we need to figure out how we want to use seed, i. e.
-                // moving worldgen seed to gen opts and use different sim seed from
-                // server config or grab sim seed from world file.
+                // moving worldgen seed to gen opts and use different sim seed
+                // from server config or grab sim seed from
+                // world file.
                 //
                 // NOTE: we intentionally use pattern-matching here to get
                 // options, so that when gen opts get another field, compiler
@@ -624,8 +626,8 @@ impl WorldFileLegacy {
     /// should construct a call chain that ultimately ends up with a modern
     /// version.
     pub fn into_modern(self) -> Result<ModernMap, WorldFileError> {
-        // NOTE: At this point, we assume that any remaining legacy maps were 1024 ×
-        // 1024.
+        // NOTE: At this point, we assume that any remaining legacy maps were
+        // 1024 × 1024.
         if self.alt.len() != self.basement.len() || self.alt.len() != 1024 * 1024 {
             return Err(WorldFileError::WorldSizeInvalid);
         }
@@ -648,8 +650,8 @@ impl WorldMap_0_5_0 {
             return Err(WorldFileError::WorldSizeInvalid);
         }
 
-        // The recommended continent scale for maps from version 0.5.0 is (in all
-        // existing cases) just 1.0 << (f64::from(pow_size) - 10.0).
+        // The recommended continent scale for maps from version 0.5.0 is (in
+        // all existing cases) just 1.0 << (f64::from(pow_size) - 10.0).
         let continent_scale_hack = (f64::from(pow_size) - 10.0).exp2();
 
         let map = WorldMap_0_7_0 {
@@ -795,7 +797,8 @@ impl WorldSim {
         let calendar = opts.calendar; // separate lifetime of elements
         let world_file = opts.world_file;
 
-        // Parse out the contents of various map formats into the values we need.
+        // Parse out the contents of various map formats into the values we
+        // need.
         let authored_cromatolis_v0 = world_file.is_cromatolis_v0_asset();
         let (parsed_world_file, map_size_lg, gen_opts) = world_file.load_content();
         let load_authored_layer = |specifier, label| match AuthoredF32Layer::load_owned(specifier) {
@@ -839,7 +842,8 @@ impl WorldSim {
 
         info!("Starting world generation");
 
-        // NOTE: Changing order will significantly change WorldGen, so try not to!
+        // NOTE: Changing order will significantly change WorldGen, so try not
+        // to!
         let gen_ctx = GenCtx {
             turb_x_nz: SuperSimplex::new(rng.random()),
             turb_y_nz: SuperSimplex::new(rng.random()),
@@ -904,15 +908,16 @@ impl WorldSim {
         //  grid_scale = Δx / Δx'.
         let grid_scale = 1.0f64 / (4.0 / gen_opts.scale)/*1.0*/;
 
-        // Now, suppose we want to generate a world with "similar" topography, defined
-        // in this case as having roughly equal slopes at steady state, with the
-        // simulation taking roughly as many steps to get to the point the
-        // previous world was at when it finished being simulated.
+        // Now, suppose we want to generate a world with "similar" topography,
+        // defined in this case as having roughly equal slopes at steady
+        // state, with the simulation taking roughly as many steps to
+        // get to the point the previous world was at when it finished
+        // being simulated.
         //
-        // Some computations with our coupled SPL/debris flow give us (for slope S
-        // constant) the following suggested scaling parameters to make this
-        // work:   k_fs_scale ≡ (K𝑓 / K𝑓') = grid_scale^(-2m) =
-        // grid_scale^(-2θn)
+        // Some computations with our coupled SPL/debris flow give us (for slope
+        // S constant) the following suggested scaling parameters to
+        // make this work:   k_fs_scale ≡ (K𝑓 / K𝑓') = grid_scale^(-2m)
+        // = grid_scale^(-2θn)
         let k_fs_scale = |theta, n| grid_scale.powf(-2.0 * (theta * n) as f64);
 
         //   k_da_scale ≡ (K_da / K_da') = grid_scale^(-2q)
@@ -921,8 +926,8 @@ impl WorldSim {
         // Some other estimated parameters are harder to come by and *much* more
         // dubious, not being accurate for the coupled equation. But for the SPL
         // only one we roughly find, for h the height at steady state and time τ
-        // = time to steady state, with Hack's Law estimated b = 2.0 and various other
-        // simplifying assumptions, the estimate:
+        // = time to steady state, with Hack's Law estimated b = 2.0 and various
+        // other simplifying assumptions, the estimate:
         //   height_scale ≡ (h / h') = grid_scale^(n)
         let height_scale = |n: f32| grid_scale.powf(n as f64) as Alt;
         //   time_scale ≡ (τ / τ') = grid_scale^(n)
@@ -935,13 +940,14 @@ impl WorldSim {
         let alpha_scale = |n: f32| height_scale(n).recip() as f32;
         //
         // Slightly more dubiously (need to work out the math better) we find:
-        //   k_d_scale ≡ (K_d / K_d') = grid_scale^2 / (/*height_scale * */ time_scale)
+        //   k_d_scale ≡ (K_d / K_d') = grid_scale^2 / (/*height_scale * */
+        // time_scale)
         let k_d_scale = |n: f32| grid_scale.powi(2) / (/* height_scale(n) * */time_scale(n));
         //   epsilon_0_scale ≡ (ε₀ / ε₀') = height_scale(n) / time_scale(n)
         let epsilon_0_scale = |n| (height_scale(n) / time_scale(n) as Alt) as f32;
 
-        // Approximate n for purposes of computation of parameters above over the whole
-        // grid (when a chunk isn't available).
+        // Approximate n for purposes of computation of parameters above over
+        // the whole grid (when a chunk isn't available).
         let n_approx = 1.0;
         let max_erosion_per_delta_t = 64.0 * delta_t_scale(n_approx);
         let n_steps = (100.0 * gen_opts.erosion_quality) as usize;
@@ -959,17 +965,19 @@ impl WorldSim {
         let min_epsilon = 1.0 / map_size_chunks_len_f64.max(f64::EPSILON * 0.5);
         let max_epsilon = (1.0 - 1.0 / map_size_chunks_len_f64).min(1.0 - f64::EPSILON * 0.5);
 
-        // No NaNs in these uniform vectors, since the original noise value always
-        // returns Some.
+        // No NaNs in these uniform vectors, since the original noise value
+        // always returns Some.
         let ((alt_base, _), (chaos, _)) = threadpool.join(
             || {
                 uniform_noise(map_size_lg, |_, wposf| {
                     match gen_opts.map_kind {
                         MapKind::Square => {
-                            // "Base" of the chunk, to be multiplied by CONFIG.mountain_scale
+                            // "Base" of the chunk, to be multiplied by
+                            // CONFIG.mountain_scale
                             // (multiplied value is from -0.35 *
                             // (CONFIG.mountain_scale * 1.05) to
-                            // 0.35 * (CONFIG.mountain_scale * 0.95), but value here is from -0.3675
+                            // 0.35 * (CONFIG.mountain_scale * 0.95), but value
+                            // here is from -0.3675
                             // to 0.3325).
                             Some(
                                 (gen_ctx
@@ -1004,8 +1012,9 @@ impl WorldSim {
             },
             || {
                 uniform_noise(map_size_lg, |_, wposf| {
-                    // From 0 to 1.6, but the distribution before the max is from -1 and 1.6, so
-                    // there is a 50% chance that hill will end up at 0.3 or
+                    // From 0 to 1.6, but the distribution before the max is
+                    // from -1 and 1.6, so there is a 50%
+                    // chance that hill will end up at 0.3 or
                     // lower, and probably a very high change it will be exactly
                     // 0.
                     let hill = (0.0f64
@@ -1034,8 +1043,9 @@ impl WorldSim {
                     .add(0.3)
                     .max(0.0);
 
-                    // chaos produces a value in [0.12, 1.32].  It is a meta-level factor intended
-                    // to reflect how "chaotic" the region is--how much weird
+                    // chaos produces a value in [0.12, 1.32].  It is a
+                    // meta-level factor intended to reflect
+                    // how "chaotic" the region is--how much weird
                     // stuff is going on on this terrain.
                     Some(
                         ((gen_ctx
@@ -1064,35 +1074,39 @@ impl WorldSim {
             },
         );
 
-        // We ignore sea level because we actually want to be relative to sea level here
-        // and want things in CONFIG.mountain_scale units, but otherwise this is
-        // a correct altitude calculation.  Note that this is using the
-        // "unadjusted" temperature.
+        // We ignore sea level because we actually want to be relative to sea
+        // level here and want things in CONFIG.mountain_scale units,
+        // but otherwise this is a correct altitude calculation.  Note
+        // that this is using the "unadjusted" temperature.
         //
-        // No NaNs in these uniform vectors, since the original noise value always
-        // returns Some.
+        // No NaNs in these uniform vectors, since the original noise value
+        // always returns Some.
         let (alt_old, _) = uniform_noise(map_size_lg, |posi, wposf| {
-            // This is the extension upwards from the base added to some extra noise from -1
-            // to 1.
+            // This is the extension upwards from the base added to some extra
+            // noise from -1 to 1.
             //
-            // The extra noise is multiplied by alt_main (the mountain part of the
-            // extension) powered to 0.8 and clamped to [0.15, 1], to get a
-            // value between [-1, 1] again.
+            // The extra noise is multiplied by alt_main (the mountain part of
+            // the extension) powered to 0.8 and clamped to [0.15,
+            // 1], to get a value between [-1, 1] again.
             //
-            // The sides then receive the sequence (y * 0.3 + 1.0) * 0.4, so we have
-            // [-1*1*(1*0.3+1)*0.4, 1*(1*0.3+1)*0.4] = [-0.52, 0.52].
+            // The sides then receive the sequence (y * 0.3 + 1.0) * 0.4, so we
+            // have [-1*1*(1*0.3+1)*0.4, 1*(1*0.3+1)*0.4] = [-0.52,
+            // 0.52].
             //
-            // Adding this to alt_main thus yields a value between -0.4 (if alt_main = 0 and
-            // gen_ctx = -1, 0+-1*(0*.3+1)*0.4) and 1.52 (if alt_main = 1 and gen_ctx = 1).
-            // Most of the points are above 0.
+            // Adding this to alt_main thus yields a value between -0.4 (if
+            // alt_main = 0 and gen_ctx = -1, 0+-1*(0*.3+1)*0.4) and
+            // 1.52 (if alt_main = 1 and gen_ctx = 1). Most of the
+            // points are above 0.
             //
-            // Next, we add again by a sin of alt_main (between [-1, 1])^pow, getting
-            // us (after adjusting for sign) another value between [-1, 1], and then this is
-            // multiplied by 0.045 to get [-0.045, 0.045], which is added to [-0.4, 0.52] to
+            // Next, we add again by a sin of alt_main (between [-1, 1])^pow,
+            // getting us (after adjusting for sign) another value
+            // between [-1, 1], and then this is multiplied by 0.045
+            // to get [-0.045, 0.045], which is added to [-0.4, 0.52] to
             // get [-0.445, 0.565].
             let alt_main = {
-                // Extension upwards from the base.  A positive number from 0 to 1 curved to be
-                // maximal at 0.  Also to be multiplied by CONFIG.mountain_scale.
+                // Extension upwards from the base.  A positive number from 0 to
+                // 1 curved to be maximal at 0.  Also to be
+                // multiplied by CONFIG.mountain_scale.
                 let alt_main = (gen_ctx
                     .alt_nz
                     .get((wposf.div(2_000.0)).into_array())
@@ -1121,10 +1135,11 @@ impl WorldSim {
             };
 
             // Now we can compute the final altitude using chaos.
-            // We multiply by chaos clamped to [0.1, 1.32] to get a value between [0.03,
-            // 2.232] for alt_pre, then multiply by CONFIG.mountain_scale and
-            // add to the base and sea level to get an adjusted value, then
-            // multiply the whole thing by map_edge_factor (TODO: compute final
+            // We multiply by chaos clamped to [0.1, 1.32] to get a value
+            // between [0.03, 2.232] for alt_pre, then multiply by
+            // CONFIG.mountain_scale and add to the base and sea
+            // level to get an adjusted value, then multiply the
+            // whole thing by map_edge_factor (TODO: compute final
             // bounds).
             //
             // [-.3675, .3325] + [-0.445, 0.565] * [0.12, 1.32]^1.2
@@ -1146,8 +1161,8 @@ impl WorldSim {
 
         // Calculate oceans.
         let is_ocean = get_oceans(map_size_lg, |posi: usize| alt_old[posi].1);
-        // NOTE: Uncomment if you want oceans to exclusively be on the border of the
-        // map.
+        // NOTE: Uncomment if you want oceans to exclusively be on the border of
+        // the map.
         /* let is_ocean = (0..map_size_lg.chunks())
         .into_par_iter()
         .map(|i| map_edge_factor(map_size_lg, i) == 0.0)
@@ -1165,8 +1180,8 @@ impl WorldSim {
             alt_old[posi].1 * CONFIG.mountain_scale * height_scale(n_func(posi)) as f32
         };
 
-        // NOTE: Needed if you wish to use the distance to the point defining the Worley
-        // cell, not just the value within that cell.
+        // NOTE: Needed if you wish to use the distance to the point defining
+        // the Worley cell, not just the value within that cell.
         // let uplift_nz_dist = gen_ctx.uplift_nz.clone().enable_range(true);
 
         // Recalculate altitudes without oceans.
@@ -1244,20 +1259,21 @@ impl WorldSim {
             // G = d* v_s / p_0, where
             //  v_s is the settling velocity of sediment grains
             //  p_0 is the mean precipitation rate
-            //  d* is the sediment concentration ratio (between concentration near riverbed
-            //  interface, and average concentration over the water column).
-            //  d* varies with Rouse number which defines relative contribution of bed,
+            //  d* is the sediment concentration ratio (between concentration
+            // near riverbed  interface, and average concentration
+            // over the water column).  d* varies with Rouse number
+            // which defines relative contribution of bed,
             // suspended,  and washed loads.
             //
-            // G is typically on the order of 1 or greater.  However, we are only guaranteed
-            // to converge for G ≤ 1, so we keep it in the chaos range of [0.12,
-            // 1.32].
+            // G is typically on the order of 1 or greater.  However, we are
+            // only guaranteed to converge for G ≤ 1, so we keep it
+            // in the chaos range of [0.12, 1.32].
             1.0
         };
         let epsilon_0_func = |posi| {
-            // epsilon_0_scale is roughly [using Hack's Law with b = 2 and SPL without
-            // debris flow or hillslopes] equal to the ratio of the old to new
-            // area, to the power of -n_i.
+            // epsilon_0_scale is roughly [using Hack's Law with b = 2 and SPL
+            // without debris flow or hillslopes] equal to the ratio
+            // of the old to new area, to the power of -n_i.
             let epsilon_0_scale_i = epsilon_0_scale(n_func(posi));
             if is_ocean_fn(posi) {
                 // marine: ε₀ = 2.078e-3
@@ -1361,7 +1377,8 @@ impl WorldSim {
             // Oregon Coast Range: α = 3e-2
             // Nunnock river (fractured granite, least weathered?): α = 2e-3
             // Point Reyes: α = 1.6e-2
-            // The stronger  the rock, the faster the decline in soil production.
+            // The stronger  the rock, the faster the decline in soil
+            // production.
             let alpha_i = (ustrength * (4.2e-2 - 1.6e-2) + 1.6e-2) as f32;
             alpha_i * alpha_scale_i
         };
@@ -1379,8 +1396,9 @@ impl WorldSim {
 
             // u = 1e-3: normal-high (dike, mountain)
             // u = 5e-4: normal (mid example in Yuan, average mountain uplift)
-            // u = 2e-4: low (low example in Yuan; known that lagoons etc. may have u ~
-            // 0.05). u = 0: low (plateau [fan, altitude = 0.0])
+            // u = 2e-4: low (low example in Yuan; known that lagoons etc. may
+            // have u ~ 0.05). u = 0: low (plateau [fan, altitude =
+            // 0.0])
 
             height.mul(max_erosion_per_delta_t)
         };
@@ -1451,7 +1469,8 @@ impl WorldSim {
                 report_erosion,
             );
 
-            // Quick "small scale" erosion cycle in order to lower extreme angles.
+            // Quick "small scale" erosion cycle in order to lower extreme
+            // angles.
             do_erosion(
                 map_size_lg,
                 1.0f32,
@@ -1489,8 +1508,8 @@ impl WorldSim {
             world_file.save(&map);
         }
 
-        // Skip validation--we just performed a no-op conversion for this map, so it had
-        // better be valid!
+        // Skip validation--we just performed a no-op conversion for this map,
+        // so it had better be valid!
         let ModernMap {
             continent_scale_hack: _,
             map_size_lg: _,
@@ -1498,7 +1517,8 @@ impl WorldSim {
             basement,
         } = map.into_modern().unwrap();
 
-        // Additional small-scale erosion after map load, only used during testing.
+        // Additional small-scale erosion after map load, only used during
+        // testing.
         let (alt, basement) = if n_post_load_steps == 0 {
             (alt, basement)
         } else {
@@ -1564,27 +1584,31 @@ impl WorldSim {
                 indirection_idx as usize
             };
             let chunk_water_alt = if dh[lake_idx] < 0 {
-                // This is either a boundary node (dh[chunk_idx] == -2, i.e. water is at sea
-                // level) or part of a lake that flows directly into the ocean.
-                // In the former case, water is at sea level so we just return
+                // This is either a boundary node (dh[chunk_idx] == -2, i.e.
+                // water is at sea level) or part of a lake that
+                // flows directly into the ocean. In the former
+                // case, water is at sea level so we just return
                 // 0.0.  In the latter case, the lake bottom must have been a
-                // boundary node in the first place--meaning this node flows directly
-                // into the ocean.  In that case, its lake bottom is ocean, meaning its water is
+                // boundary node in the first place--meaning this node flows
+                // directly into the ocean.  In that case, its
+                // lake bottom is ocean, meaning its water is
                 // also at sea level.  Thus, we return 0.0 in both cases.
                 0.0
             } else {
-                // This chunk is draining into a body of water that isn't the ocean (i.e., a
-                // lake). Then we just need to find the pass height of the
-                // surrounding lake in order to figure out the initial water
+                // This chunk is draining into a body of water that isn't the
+                // ocean (i.e., a lake). Then we just need to
+                // find the pass height of the surrounding lake
+                // in order to figure out the initial water
                 // height (which fill_sinks will then extend to make
                 // sure it fills the entire basin).
 
-                // Find the height of "our" side of the pass (the part of it that drains into
-                // this chunk's lake).
+                // Find the height of "our" side of the pass (the part of it
+                // that drains into this chunk's lake).
                 let pass_idx = -indirection[lake_idx] as usize;
                 let pass_height_i = alt[pass_idx];
-                // Find the pass this lake is flowing into (i.e. water at the lake bottom gets
-                // pushed towards the point identified by pass_idx).
+                // Find the pass this lake is flowing into (i.e. water at the
+                // lake bottom gets pushed towards the point
+                // identified by pass_idx).
                 let neighbor_pass_idx = dh[pass_idx/*lake_idx*/];
                 // Find the height of the pass into which our lake is flowing.
                 let pass_height_j = alt[neighbor_pass_idx as usize];
@@ -1592,17 +1616,17 @@ impl WorldSim {
                 // Use the pass height as the initial water altitude.
                 pass_height_i.max(pass_height_j) /*pass_height*/
             };
-            // Use the maximum of the pass height and chunk height as the parameter to
-            // fill_sinks.
+            // Use the maximum of the pass height and chunk height as the
+            // parameter to fill_sinks.
             let chunk_alt = alt[chunk_idx];
             chunk_alt.max(chunk_water_alt)
         };
 
-        // NOTE: If for for some reason you need to avoid the expensive `fill_sinks`
-        // step here, and we haven't yet replaced it with a faster version, you
-        // may comment out this line and replace it with the commented-out code
-        // below; however, there are no guarantees that this
-        // will work correctly.
+        // NOTE: If for for some reason you need to avoid the expensive
+        // `fill_sinks` step here, and we haven't yet replaced it with a
+        // faster version, you may comment out this line and replace it
+        // with the commented-out code below; however, there are no
+        // guarantees that this will work correctly.
         let water_alt = fill_sinks(map_size_lg, water_height_initial, is_ocean_fn);
         /* let water_alt = (0..map_size_lg.chunks_len())
         .into_par_iter()
@@ -1645,17 +1669,20 @@ impl WorldSim {
                     indirection_idx as usize
                 };
                 if authored_cromatolis_v0 || dh[lake_idx] < 0 {
-                    // This is either a boundary node (dh[chunk_idx] == -2, i.e. water is at sea
-                    // level) or part of a lake that flows directly into the
+                    // This is either a boundary node (dh[chunk_idx] == -2, i.e.
+                    // water is at sea level) or part of a
+                    // lake that flows directly into the
                     // ocean.  In the former case, water is at sea level so we
-                    // just return 0.0.  In the latter case, the lake bottom must
-                    // have been a boundary node in the first place--meaning this node flows
+                    // just return 0.0.  In the latter case, the lake bottom
+                    // must have been a boundary node in the
+                    // first place--meaning this node flows
                     // directly into the ocean.  In that case, its lake bottom
                     // is ocean, meaning its water is also at sea level.  Thus,
                     // we return 0.0 in both cases.
                     0.0
                 } else {
-                    // This is not flowing into the ocean, so we can use the existing water_alt.
+                    // This is not flowing into the ocean, so we can use the
+                    // existing water_alt.
                     water_alt[chunk_idx] as f32
                 }
             })
@@ -1668,8 +1695,8 @@ impl WorldSim {
             None => false,
         };
 
-        // Check whether any tiles around this tile are not water (since Lerp will
-        // ensure that they are included).
+        // Check whether any tiles around this tile are not water (since Lerp
+        // will ensure that they are included).
         let pure_water = |posi: usize| {
             let pos = uniform_idx_as_vec2(map_size_lg, posi);
             for x in pos.x - 1..(pos.x + 1) + 1 {
@@ -1699,7 +1726,8 @@ impl WorldSim {
                                 if pure_water(posi) {
                                     None
                                 } else {
-                                    // A version of alt that is uniform over *non-water* (or
+                                    // A version of alt that is uniform over
+                                    // *non-water* (or
                                     // land-adjacent water) chunks.
                                     Some(alt[posi] as f32)
                                 }
@@ -1730,7 +1758,8 @@ impl WorldSim {
                         },
                         || {
                             uniform_noise(map_size_lg, |posi, wposf| {
-                                // Check whether any tiles around this tile are water.
+                                // Check whether any tiles around this tile are
+                                // water.
                                 if pure_water(posi) {
                                     None
                                 } else {
@@ -1909,8 +1938,8 @@ impl WorldSim {
             |pos| sample_pos(&map_config, self, index, Some(&samples_data), pos),
             |pos| sample_wpos(&map_config, self, pos),
             |pos, (r, g, b, _a)| {
-                // We currently ignore alpha and replace it with the height at pos, scaled to
-                // u8.
+                // We currently ignore alpha and replace it with the height at
+                // pos, scaled to u8.
                 let alt = sample_wpos(
                     &map_config,
                     self,
@@ -2269,8 +2298,8 @@ impl WorldSim {
     {
         // See http://articles.adsabs.harvard.edu/cgi-bin/nph-iarticle_query?1990A%26A...239..443S&defaultprint=YES&page_ind=0&filetype=.pdf
         //
-        // Note that these are only guaranteed monotone in one dimension; fortunately,
-        // that is sufficient for our purposes.
+        // Note that these are only guaranteed monotone in one dimension;
+        // fortunately, that is sufficient for our purposes.
         let pos = pos.as_::<f64>().wpos_to_cpos();
 
         let secant = |b: T, c: T| c - b;
@@ -2300,8 +2329,8 @@ impl WorldSim {
             // = a * -0.5 + c * 0.5 + b * -0.5 + d * 0.5 - 2 * (c - b)
             // = a * -0.5 + b * 1.5 - c * 1.5 + d * 0.5;
             let co1 = s_b * 3.0 - slope_b * 2.0 - slope_c;
-            // = (3.0 * (c - b) - 2.0 * (a * -0.5 + c * 0.5) - (b * -0.5 + d * 0.5))
-            // = a + b * -2.5 + c * 2.0 + d * -0.5;
+            // = (3.0 * (c - b) - 2.0 * (a * -0.5 + c * 0.5) - (b * -0.5 + d *
+            // 0.5)) = a + b * -2.5 + c * 2.0 + d * -0.5;
             let co2 = slope_b;
             // = a * -0.5 + c * 0.5;
             let co3 = b;
@@ -2332,19 +2361,20 @@ impl WorldSim {
         F: FnMut(&SimChunk) -> T,
     {
         // (i) Find downhill for all four points.
-        // (ii) Compute distance from each downhill point and do linear interpolation on
-        // their heights. (iii) Compute distance between each neighboring point
-        // and do linear interpolation on       their distance-interpolated
-        // heights.
+        // (ii) Compute distance from each downhill point and do linear
+        // interpolation on their heights. (iii) Compute distance
+        // between each neighboring point and do linear interpolation on
+        // their distance-interpolated heights.
 
         // See http://articles.adsabs.harvard.edu/cgi-bin/nph-iarticle_query?1990A%26A...239..443S&defaultprint=YES&page_ind=0&filetype=.pdf
         //
-        // Note that these are only guaranteed monotone in one dimension; fortunately,
-        // that is sufficient for our purposes.
+        // Note that these are only guaranteed monotone in one dimension;
+        // fortunately, that is sufficient for our purposes.
         let pos = pos.as_::<f64>().wpos_to_cpos();
 
-        // Orient the chunk in the direction of the most downhill point of the four.  If
-        // there is no "most downhill" point, then we don't care.
+        // Orient the chunk in the direction of the most downhill point of the
+        // four.  If there is no "most downhill" point, then we don't
+        // care.
         let x0 = pos.map2(Vec2::new(0, 0), |e, q| e.max(0.0) as i32 + q);
         let p0 = self.get(x0)?;
         let y0 = f(p0);
@@ -2686,8 +2716,9 @@ impl SimChunk {
         let flux = gen_cdf.flux[posi] as f32;
         let river = gen_cdf.rivers[posi].clone();
 
-        // Can have NaNs in non-uniform part where pure_water returned true.  We just
-        // test one of the four in order to find out whether this is the case.
+        // Can have NaNs in non-uniform part where pure_water returned true.  We
+        // just test one of the four in order to find out whether this
+        // is the case.
         let (flux_uniform, /* flux_non_uniform */ _) = gen_cdf.pure_flux[posi];
         let (alt_uniform, _) = gen_cdf.alt_no_water[posi];
         let (temp_uniform, _) = gen_cdf.temp_base[posi];
@@ -2703,8 +2734,8 @@ impl SimChunk {
         // Even less granular--if this matters we can make the sign affect the quantity slightly.
         let abs_lat_uniform = latitude_uniform.abs(); */
 
-        // We also correlate temperature negatively with altitude and absolute latitude,
-        // using different weighting than we use for humidity.
+        // We also correlate temperature negatively with altitude and absolute
+        // latitude, using different weighting than we use for humidity.
         const TEMP_WEIGHTS: [f32; 3] = [/* 1.5, */ 1.0, 2.0, 1.0];
         let mut temp = cdf_irwin_hall(
             &TEMP_WEIGHTS,
@@ -2721,8 +2752,9 @@ impl SimChunk {
             temp = if alt_pre > 970.0 { -1.0 } else { 0.55 };
         }
 
-        // Take the weighted average of our randomly generated base humidity, and the
-        // calculated water flux over this point in order to compute humidity.
+        // Take the weighted average of our randomly generated base humidity,
+        // and the calculated water flux over this point in order to
+        // compute humidity.
         const HUMID_WEIGHTS: [f32; 3] = [1.0, 1.0, 0.75];
         let mut humidity = cdf_irwin_hall(&HUMID_WEIGHTS, [humid_uniform, flux_uniform, 1.0]);
         // Moisture evaporates more in hot places
@@ -2809,8 +2841,9 @@ impl SimChunk {
                 }
             },
             Some(RiverKind::Lake { .. }) => {
-                // Forces lakes to be downhill from the land around them, and adds some noise to
-                // the lake bed to make sure it's not too flat.
+                // Forces lakes to be downhill from the land around them, and
+                // adds some noise to the lake bed to make sure
+                // it's not too flat.
                 let lake_bottom_nz = (gen_ctx.small_nz.get((wposf.div(20.0)).into_array()) as f32)
                     .clamp(-1.0, 1.0)
                     .mul(3.0);
@@ -2864,7 +2897,8 @@ impl SimChunk {
             }
         }
 
-        // Add geologically short timescale undulation to the world for various reasons
+        // Add geologically short timescale undulation to the world for various
+        // reasons
         let alt =
             // Don't add undulation to rivers, mainly because this could accidentally result in rivers flowing uphill
             if river.near_water() {

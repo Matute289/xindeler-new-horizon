@@ -586,9 +586,9 @@ impl PremultiplyUpload {
     ) -> Self {
         // TODO: duplicating some code from `Texture` since:
         // 1. We don't need to create a sampler.
-        // 2. Texture::new accepts &DynamicImage which isn't possible to create from
-        //    &RgbaImage without cloning. (this might be addressed on zoomy worldgen
-        //    branch)
+        // 2. Texture::new accepts &DynamicImage which isn't possible to create
+        //    from &RgbaImage without cloning. (this might be addressed on zoomy
+        //    worldgen branch)
         let image_size = wgpu::Extent3d {
             width: image.width(),
             height: image.height(),

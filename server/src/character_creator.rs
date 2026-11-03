@@ -175,7 +175,8 @@ pub fn create_character(
         return Err(CreationError::InvalidClass);
     }
     // [None, None] (no weapons) bypasses the class whitelist on purpose — stock
-    // clients may create without weapons (zesterer); guard structure preserves it.
+    // clients may create without weapons (zesterer); guard structure preserves
+    // it.
     if !(character_mainhand.is_none() && character_offhand.is_none())
         && !valid_starter_items(character_class)
             .contains(&[character_mainhand.as_deref(), character_offhand.as_deref()])
@@ -243,6 +244,9 @@ pub fn create_character(
         trigger_slots: common::comp::TriggerSlots::default(),
         // Mastery accrues in-game, never at creation.
         spell_mastery: common::comp::SpellMastery::default(),
+        // Every narrative variable starts at its manifest default; a character
+        // has made no authored choice before they exist.
+        narrative_state: common::comp::NarrativeState::default(),
     });
     Ok(())
 }

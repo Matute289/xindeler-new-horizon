@@ -245,7 +245,8 @@ pub fn init_split_logs(prefix: &str, logs_dir: &Path) -> LogGuards {
     };
     lifecycle.cleanup_on_startup(info_ret, err_ret);
 
-    // Build the shared log-level filter (same directives as the existing init())
+    // Build the shared log-level filter (same directives as the existing
+    // init())
     let filter = build_split_filter();
 
     // ErrorDetectorLayer — tracks whether any WARN/ERROR was emitted

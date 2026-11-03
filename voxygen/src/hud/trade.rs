@@ -275,7 +275,8 @@ impl<'a> Trade<'a> {
             .scroll_kids_vertically()
             .set(state.ids.inv_alignment[who], ui);
 
-        // Retrieve player's name and gender from player list or default to Player {idx}
+        // Retrieve player's name and gender from player list or default to
+        // Player {idx}
         let name = self
             .client
             .player_list()
@@ -542,9 +543,10 @@ impl<'a> Trade<'a> {
             });
         }
 
-        // Local focus: area 0 = our offer grid, area 1 = their offer grid (view-only —
-        // see the note in `Trade::update`). `grid_apply` (Apply pressed this frame
-        // while the matching area is focused) was computed once in `Trade::update`.
+        // Local focus: area 0 = our offer grid, area 1 = their offer grid
+        // (view-only — see the note in `Trade::update`). `grid_apply`
+        // (Apply pressed this frame while the matching area is focused)
+        // was computed once in `Trade::update`.
         let local_focus_area = if ours { 0 } else { 1 };
         let active_slot_index = if ours {
             state.active_our_slot
@@ -709,8 +711,9 @@ impl<'a> Trade<'a> {
                 Color::Rgba(1.0, 1.0, 1.0, 1.0),
             )
         };
-        // Local focus area 2 (accept/decline). `active_action_btn` (0 = decline,
-        // 1 = accept) is toggled by Left/Right in `Trade::update`.
+        // Local focus area 2 (accept/decline). `active_action_btn` (0 =
+        // decline, 1 = accept) is toggled by Left/Right in
+        // `Trade::update`.
         let decline_highlighted =
             menu_active && state.active_content == 2 && state.active_action_btn == 0;
         let accept_highlighted =
@@ -972,36 +975,40 @@ impl Widget for Trade<'_> {
             });
         }
 
-        // MENU INPUTS: trade window navigation, mirroring the SlotGrid/menu_events
-        // pattern the bag already uses (see hud/slot_grid.rs, hud/bag.rs).
+        // MENU INPUTS: trade window navigation, mirroring the
+        // SlotGrid/menu_events pattern the bag already uses (see
+        // hud/slot_grid.rs, hud/bag.rs).
         //
         // Local focus areas (LocalFocus cycles through them):
-        // - Area 0, our offer grid: Up/Down/Left/Right highlights a slot (4 columns),
-        //   Apply selects the highlighted slot via the shared SlotManager (same live
-        //   fabricate(.., menu_hover, clicked) mechanism the bag's inventory grid
-        //   already uses), opening the Remove/Cancel menu below. Offering a *new* item
-        //   still requires a mouse drag from the bag — see the note below.
-        // - Area 1, their offer grid: view-only (mouse-hover tooltips only); nav here
-        //   is for visual parity — the `ours` check in `hud/mod.rs`'s slot-event
-        //   handling rejects any cross-party drag, so no action reaches the wire.
-        // - Area 2, accept/decline: Left/Right toggles between the two buttons, Apply
-        //   activates the highlighted one.
+        // - Area 0, our offer grid: Up/Down/Left/Right highlights a slot (4
+        //   columns), Apply selects the highlighted slot via the shared
+        //   SlotManager (same live fabricate(.., menu_hover, clicked) mechanism
+        //   the bag's inventory grid already uses), opening the Remove/Cancel
+        //   menu below. Offering a *new* item still requires a mouse drag from
+        //   the bag — see the note below.
+        // - Area 1, their offer grid: view-only (mouse-hover tooltips only);
+        //   nav here is for visual parity — the `ours` check in `hud/mod.rs`'s
+        //   slot-event handling rejects any cross-party drag, so no action
+        //   reaches the wire.
+        // - Area 2, accept/decline: Left/Right toggles between the two buttons,
+        //   Apply activates the highlighted one.
         //
-        // Back cancels an open offer-slot selection if one is active, else declines
-        // the trade (same as the window's own close button).
+        // Back cancels an open offer-slot selection if one is active, else
+        // declines the trade (same as the window's own close button).
         //
-        // Note: like the bag's own SlotGrid, this reads `self.menu_events` whenever
-        // the trade window is open, with no cross-window arbitration against Bag
-        // (commonly open at the same time, to drag items into the trade).
-        // `Show::focus` (`hud/mod.rs`) tracks which windows are open but does not yet
-        // gate which one consumes `menu_events` per frame — whichever window renders
-        // last in a given frame "wins" the shared SlotManager's selection. This is a
-        // pre-existing gap in how `menu_events` is dispatched, not something
-        // introduced here — it's also why offering a new item is deliberately left
-        // mouse-only rather than wired
-        // through a menu-driven select-to-swap, which would let one stray keypress fire
-        // a real `TradeAction` against whatever slot happened to be selected in
-        // another window.
+        // Note: like the bag's own SlotGrid, this reads `self.menu_events`
+        // whenever the trade window is open, with no cross-window
+        // arbitration against Bag (commonly open at the same time, to
+        // drag items into the trade). `Show::focus` (`hud/mod.rs`)
+        // tracks which windows are open but does not yet gate which one
+        // consumes `menu_events` per frame — whichever window renders
+        // last in a given frame "wins" the shared SlotManager's selection. This
+        // is a pre-existing gap in how `menu_events` is dispatched, not
+        // something introduced here — it's also why offering a new item
+        // is deliberately left mouse-only rather than wired
+        // through a menu-driven select-to-swap, which would let one stray
+        // keypress fire a real `TradeAction` against whatever slot
+        // happened to be selected in another window.
         let selected_our_slot = match self.slot_manager.selected() {
             Some(SlotKind::Trade(t)) if t.ours => Some(t),
             _ => None,
@@ -1013,8 +1020,9 @@ impl Widget for Trade<'_> {
         let mut slot_menu_apply = false;
 
         if selected_our_slot.is_some() {
-            // A slot is selected: grid nav is frozen; only the small Remove/Cancel
-            // menu reacts, matching SlotGrid's own context-menu behavior.
+            // A slot is selected: grid nav is frozen; only the small
+            // Remove/Cancel menu reacts, matching SlotGrid's own
+            // context-menu behavior.
             for event in self.menu_events {
                 match *event {
                     MenuInput::Up | MenuInput::Down => state.update(|s| {
@@ -1104,9 +1112,10 @@ impl Widget for Trade<'_> {
 
         // Small Remove/Cancel menu for a selected offer slot — the gamepad-nav
         // equivalent of dragging an offered item back out of the trade, since a
-        // menu-driven "select" has no continuous drag gesture to complete a swap
-        // with. Mirrors the bag's SlotGrid context menu (hud/slot_grid.rs) in shape,
-        // kept local here since only two actions apply.
+        // menu-driven "select" has no continuous drag gesture to complete a
+        // swap with. Mirrors the bag's SlotGrid context menu
+        // (hud/slot_grid.rs) in shape, kept local here since only two
+        // actions apply.
         if selected_our_slot.is_some() {
             if state.ids.slot_menu_buttons.len() < 2 {
                 state.update(|s| {

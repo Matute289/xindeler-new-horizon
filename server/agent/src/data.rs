@@ -900,8 +900,9 @@ impl AbilityData {
                 } => (
                     {
                         let dur = vertical * 2.0 / GRAVITY;
-                        // 0.75 factor to allow for fact that agent looks down as they approach, so
-                        // won't go as far
+                        // 0.75 factor to allow for fact that agent looks down
+                        // as they approach, so won't go
+                        // as far
                         forward * dur * 0.75
                     },
                     0.0,
@@ -1010,8 +1011,8 @@ impl AbilityData {
                 speed,
                 charge_dur,
             } => {
-                // TODO: Maybe figure out better way of pulling in base accel from body and
-                // accounting for friction?
+                // TODO: Maybe figure out better way of pulling in base accel
+                // from body and accounting for friction?
                 const BASE_SPEED: f32 = 3.0;
                 const ORI_RATE: f32 = 30.0;
                 let charge_dur = ((agent_data.energy.current() - initial_energy) / energy_drain)

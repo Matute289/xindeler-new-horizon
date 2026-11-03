@@ -173,14 +173,15 @@ impl Sentiment {
 
     fn decay(&mut self, rng: &mut impl Rng, dt: f32) {
         if self.positivity != 0 {
-            // TODO: Find a slightly nicer way to have sentiment decay, perhaps even by
-            // remembering the last interaction instead of constant updates.
+            // TODO: Find a slightly nicer way to have sentiment decay, perhaps
+            // even by remembering the last interaction instead of
+            // constant updates.
             let chance = (1.0
                 / ((self.value().powi(2) * 0.24 + 1.0) * (1.0 / 25.0) * DECAY_TIME_FACTOR * dt))
                 .min(1.0) as f64;
 
-            // For some reason, RNG doesn't work with small chances (possibly due to impl
-            // limits), so use two bools
+            // For some reason, RNG doesn't work with small chances (possibly
+            // due to impl limits), so use two bools
             if rng.random_bool(chance.sqrt()) && rng.random_bool(chance.sqrt()) {
                 self.positivity -= self.positivity.signum();
             }
@@ -207,9 +208,10 @@ mod tests {
 
     #[test]
     fn cleanup_forgets_weakest_sentiments_first() {
-        // ActorId is a slotmap key (opaque, not constructible from a raw integer), so
-        // mint 5 real keys via a throwaway SlotMap; `ids[n]` stands in for the nth
-        // test actor (1-indexed, matching the sentiment values below).
+        // ActorId is a slotmap key (opaque, not constructible from a raw
+        // integer), so mint 5 real keys via a throwaway SlotMap;
+        // `ids[n]` stands in for the nth test actor (1-indexed,
+        // matching the sentiment values below).
         let mut actor_ids = slotmap::SlotMap::<ActorId, ()>::default();
         let ids: [ActorId; 6] = std::array::from_fn(|_| actor_ids.insert(()));
 

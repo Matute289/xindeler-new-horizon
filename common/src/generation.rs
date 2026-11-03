@@ -381,7 +381,8 @@ impl EntityInfo {
             self = self.with_alignment(alignment);
         }
 
-        // BL-33: explicit per-config moral alignment; otherwise resolved at spawn.
+        // BL-33: explicit per-config moral alignment; otherwise resolved at
+        // spawn.
         if let Some((order, moral)) = ethos {
             self = self.with_ethos(Ethos::from_box(order, moral));
         }

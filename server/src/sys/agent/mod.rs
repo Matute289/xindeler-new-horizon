@@ -8,11 +8,11 @@ use crate::sys::agent::{
 };
 use common::{
     comp::{
-        self, Agent, Alignment, Body, CharacterState, Controller, Health, Scale,
+        self, Agent, Alignment, Body, CharacterState, Controller, Health, Posture, Scale,
         inventory::slot::EquipSlot, item::ItemDesc,
     },
     mounting::Volume,
-    path::TraversalConfig,
+    path::{TraversalConfig, TraversalDims},
 };
 use common_base::prof_span;
 use common_ecs::{Job, Origin, ParMode, Phase, System};
@@ -103,11 +103,13 @@ impl<'a> System<'a> for Sys {
                         return;
                     }
 
-                    // The entity that is moving, if riding it's the mount, otherwise it's itself
+                    // The entity that is moving, if riding it's the mount,
+                    // otherwise it's itself
                     let moving_entity = is_rider
                         .and_then(|is_rider| {
                             let mut mount = is_rider.mount;
-                            // Find the root mount, i.e the one that's doing the moving.
+                            // Find the root mount, i.e the one that's doing the
+                            // moving.
                             loop {
                                 let e = read_data.id_maps.uid_entity(mount)?;
 
@@ -136,8 +138,9 @@ impl<'a> System<'a> for Sys {
                         .get(moving_entity)
                         .unwrap_or(physics_state);
 
-                    // Hack, replace with better system when groups are more sophisticated
-                    // Override alignment if in a group unless entity is owned already
+                    // Hack, replace with better system when groups are more
+                    // sophisticated Override alignment if
+                    // in a group unless entity is owned already
                     let alignment = if matches!(
                         &read_data.alignments.get(entity),
                         &Some(Alignment::Owned(_))
@@ -162,7 +165,8 @@ impl<'a> System<'a> for Sys {
                         // (can be overridden below)
                         //
                         // This definitely breaks LeapMelee, Glide and
-                        // probably not only that, do we really need this at all?
+                        // probably not only that, do we really need this at
+                        // all?
                         controller.reset();
                         controller.inputs.look_dir = ori.look_dir();
                     }
@@ -190,16 +194,54 @@ impl<'a> System<'a> for Sys {
                     let node_tolerance = scale * 1.5;
                     let slow_factor =
                         moving_body.map_or(0.0, |b| 1.0 - 1.0 / (1.0 + b.base_accel() * 0.01));
+                    // How much room this agent actually needs, taken from the
+                    // same cylinder the physics will judge it by rather than
+                    // from the two-block constant the pathfinder used to assume
+                    // for everybody.
+                    //
+                    // This derives from `Body` rather than reading the entity's
+                    // `Collider` component, which is an *invariant that has
+                    // been checked*, not a structural guarantee: the server
+                    // also inserts a hand-written capsule for player characters
+                    // and `Collider::Point` for incorporeal and projectile
+                    // NPCs, and all three happen to clamp to the same terrain
+                    // cylinder as `body.collider()` does. If a future collider
+                    // override breaks that, this silently mis-paths rather than
+                    // failing to compile — read the component instead at that
+                    // point.
+                    //
+                    // 🔴 Ships and items are excluded before `collider()` is
+                    // called, not after. Their arm of it allocates — a `String`
+                    // for a manifest id, or for a `Volume` ship a freshly
+                    // randomised 11³ voxel collider — and this runs per agent
+                    // per tick, for airship NPCs among others. Both map back to
+                    // exactly the default dims anyway, since a voxel collider
+                    // reports a flat `(0.0, 2.0)` z-range and a radius of 1.0.
+                    let dims = match moving_body {
+                        None | Some(Body::Ship(_) | Body::Item(_)) => TraversalDims::default(),
+                        Some(body) => {
+                            // The agent's *current* posture, so a creature that
+                            // is crouching or lying down plans routes it
+                            // actually fits through rather than the ones it
+                            // would fit standing.
+                            let posture = read_data
+                                .char_states
+                                .get(moving_entity)
+                                .map_or(Posture::Stand, |cs| cs.posture(body));
+                            let (_, _, z_max) = body.collider().terrain_cylinder_in(scale, posture);
+                            TraversalDims::from_terrain_cylinder(z_max)
+                        },
+                    };
                     let traversal_config = TraversalConfig {
                         node_tolerance,
                         slow_factor,
                         on_ground: physics_state.on_ground.is_some(),
                         in_liquid: physics_state.in_liquid().is_some(),
                         min_tgt_dist: scale * moving_body.map_or(1.0, |body| body.max_radius()),
-                        can_climb: moving_body.is_some_and(Body::can_climb),
-                        can_fly: moving_body.is_some_and(|b| b.fly_thrust().is_some()),
+                        moving_body: moving_body.copied(),
                         vectored_propulsion: moving_body.is_some_and(|b| b.vectored_propulsion()),
                         is_target_loaded: true,
+                        dims,
                     };
                     let health_fraction = health.map_or(1.0, Health::fraction);
 

@@ -82,6 +82,7 @@ pub struct QueryServerMetrics {
     pub proccessing_errors: IntCounter,
     pub info_requests: IntCounter,
     pub init_requests: IntCounter,
+    pub identity_requests: IntCounter,
     pub sent_responses: IntCounter,
     pub failed_responses: IntCounter,
     pub timed_out_responses: IntCounter,
@@ -499,6 +500,10 @@ impl QueryServerMetrics {
             "query_server::ping_requests",
             "Amount of init requests received by the query server",
         ))?;
+        let identity_requests = IntCounter::with_opts(Opts::new(
+            "query_server::identity_requests",
+            "Amount of identity requests received by the query server",
+        ))?;
         let sent_responses = IntCounter::with_opts(Opts::new(
             "query_server::sent_responses",
             "Amount of responses sent by the query server",
@@ -522,6 +527,7 @@ impl QueryServerMetrics {
         registry.register(Box::new(proccessing_errors.clone()))?;
         registry.register(Box::new(info_requests.clone()))?;
         registry.register(Box::new(init_requests.clone()))?;
+        registry.register(Box::new(identity_requests.clone()))?;
         registry.register(Box::new(sent_responses.clone()))?;
         registry.register(Box::new(failed_responses.clone()))?;
         registry.register(Box::new(timed_out_responses.clone()))?;
@@ -534,6 +540,7 @@ impl QueryServerMetrics {
             proccessing_errors,
             info_requests,
             init_requests,
+            identity_requests,
             sent_responses,
             failed_responses,
             timed_out_responses,
@@ -550,6 +557,7 @@ impl QueryServerMetrics {
             proccessing_errors,
             info_requests,
             init_requests,
+            identity_requests,
             sent_responses,
             failed_responses,
             timed_out_responses,
@@ -562,6 +570,7 @@ impl QueryServerMetrics {
         self.proccessing_errors.inc_by(proccessing_errors as u64);
         self.info_requests.inc_by(info_requests as u64);
         self.init_requests.inc_by(init_requests as u64);
+        self.identity_requests.inc_by(identity_requests as u64);
         self.sent_responses.inc_by(sent_responses as u64);
         self.failed_responses.inc_by(failed_responses as u64);
         self.timed_out_responses.inc_by(timed_out_responses as u64);

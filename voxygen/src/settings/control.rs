@@ -22,8 +22,9 @@ struct ControlSettingsSerde {
 impl From<ControlSettings> for ControlSettingsSerde {
     fn from(control_settings: ControlSettings) -> Self {
         let mut user_bindings: HashMap<GameInput, Option<KeyMouse>> = HashMap::new();
-        // Do a delta between default() ControlSettings and the argument, and let
-        // keybindings be only the custom keybindings chosen by the user.
+        // Do a delta between default() ControlSettings and the argument, and
+        // let keybindings be only the custom keybindings chosen by the
+        // user.
         for (k, v) in control_settings.keybindings {
             if ControlSettings::default_binding(k) != v {
                 // Keybinding chosen by the user
@@ -149,8 +150,8 @@ impl ControlSettings {
     }
 
     pub fn modify_binding(&mut self, game_input: GameInput, key_mouse: KeyMouse) {
-        // For the KeyMouse->GameInput hashmap, we first need to remove the GameInput
-        // from the old binding
+        // For the KeyMouse->GameInput hashmap, we first need to remove the
+        // GameInput from the old binding
         if let Some(old_binding) = self.get_binding(game_input) {
             self.inverse_keybindings
                 .entry(old_binding)
@@ -167,8 +168,8 @@ impl ControlSettings {
     }
 
     pub fn modify_menu_binding(&mut self, menu_input: MenuInput, key_mouse: KeyMouse) {
-        // For the KeyMouse->MenuInput hashmap, we first need to remove the MenuInput
-        // from the old binding
+        // For the KeyMouse->MenuInput hashmap, we first need to remove the
+        // MenuInput from the old binding
         if let Some(old_binding) = self.get_menu_binding(menu_input) {
             self.inverse_menubindings
                 .entry(old_binding)
@@ -210,7 +211,8 @@ impl ControlSettings {
     pub fn default_binding(game_input: GameInput) -> Option<KeyMouse> {
         let char = |s| Key::Character(winit::keyboard::SmolStr::new(s));
 
-        // If a new GameInput is added, be sure to update GameInput::iterator() too!
+        // If a new GameInput is added, be sure to update GameInput::iterator()
+        // too!
         Some(KeyMouse::Key(match game_input {
             GameInput::Primary => return Some(KeyMouse::Mouse(MouseButton::Left)),
             GameInput::Secondary => return Some(KeyMouse::Mouse(MouseButton::Right)),

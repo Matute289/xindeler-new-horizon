@@ -84,8 +84,8 @@ impl ShutdownCoordinator {
         // Check whether shutdown has been set
         self.check_shutdown_signal(server, settings);
 
-        // If a shutdown is in progress, check whether it's time to send another warning
-        // message or shut down if the grace period has expired.
+        // If a shutdown is in progress, check whether it's time to send another
+        // warning message or shut down if the grace period has expired.
         if let Some(shutdown_initiated_at) = self.shutdown_initiated_at {
             if Instant::now() > shutdown_initiated_at.add(self.shutdown_grace_period) {
                 info!("Shutting down");
@@ -122,8 +122,8 @@ impl ShutdownCoordinator {
             let shutdown_message = settings.update_shutdown_message.to_owned();
             self.initiate_shutdown(server, grace_period, shutdown_message);
 
-            // Reset the SIGUSR1 signal indicator in case shutdown is aborted and we need to
-            // trigger shutdown again
+            // Reset the SIGUSR1 signal indicator in case shutdown is aborted
+            // and we need to trigger shutdown again
             self.shutdown_signal.store(false, Ordering::Relaxed);
         }
     }
@@ -165,9 +165,9 @@ impl ShutdownCoordinator {
         let shutdown_initiated_at = self.shutdown_initiated_at?;
         let shutdown_time = shutdown_initiated_at + self.shutdown_grace_period;
 
-        // If we're somehow trying to calculate the time until shutdown after the
-        // shutdown time Instant::checked_duration_since will return None as
-        // negative durations are not supported.
+        // If we're somehow trying to calculate the time until shutdown after
+        // the shutdown time Instant::checked_duration_since will return
+        // None as negative durations are not supported.
         shutdown_time.checked_duration_since(Instant::now())
     }
 

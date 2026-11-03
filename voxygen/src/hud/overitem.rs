@@ -116,9 +116,9 @@ impl Widget for Overitem<'_> {
         //             | E |
         //              ———
 
-        // Scale at max distance is 10, and at min distance is 30. Disabled since the
-        // scaling ruins glyph caching, causing performance issues near lootbags
-        // let scale: f64 = ((1.5
+        // Scale at max distance is 10, and at min distance is 30. Disabled
+        // since the scaling ruins glyph caching, causing performance
+        // issues near lootbags let scale: f64 = ((1.5
         //     - (self.distance_from_player_sqr /
         //       common::consts::MAX_PICKUP_RANGE.powi(2)))
         //     * 20.0)

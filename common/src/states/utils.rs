@@ -2,12 +2,13 @@ use crate::{
     astar::Astar,
     comp::{
         Alignment, Body, CharacterState, Density, HealthChange, InputAttr, InputKind, Inventory,
-        InventoryAction, Melee, Ori, Pos, Scale, StateUpdate,
+        InventoryAction, Melee, Ori, Pos, Posture, Scale, StateUpdate,
         ability::{
             AbilityInitEvent, AbilityMeta, AbilityRequirements, Capability, CharacterAbility,
             SpecifiedAbility, Stance,
         },
         arthropod, biped_large, biped_small, bird_medium,
+        body::traversal::TraversalCapabilities,
         buff::{Buff, BuffCategory, BuffChange, BuffData, BuffSource, DestInfo},
         character_state::OutputEvents,
         class::{CharacterClass, ClassKind},
@@ -208,6 +209,13 @@ impl Body {
 
     pub fn air_accel(&self) -> f32 { self.base_accel() * 0.025 }
 
+    pub fn ground_accel(&self) -> Option<f32> {
+        match self {
+            Self::FishSmall(_) | Self::FishMedium(_) => None,
+            _ => Some(self.base_accel()),
+        }
+    }
+
     /// Attempt to determine the maximum speed of the character
     /// when moving on the ground
     pub fn max_speed_approx(&self) -> f32 {
@@ -292,9 +300,10 @@ impl Body {
 
     /// Returns thrust force if the body type can swim, otherwise None
     pub fn swim_thrust(&self) -> Option<f32> {
-        // Swim thrust is proportional to the frontal area of the creature, since we
-        // assume that strength roughly scales according to square laws. Also,
-        // it happens to make balancing against drag much simpler.
+        // Swim thrust is proportional to the frontal area of the creature,
+        // since we assume that strength roughly scales according to
+        // square laws. Also, it happens to make balancing against drag
+        // much simpler.
         let front_profile = self.dimensions().x * self.dimensions().z;
         Some(
             match self {
@@ -384,7 +393,25 @@ impl Body {
         .map(|f| f * GRAVITY)
     }
 
-    pub fn can_climb(&self) -> bool { matches!(self, Body::Humanoid(_)) }
+    /// Whether this body can hold a vertical surface.
+    ///
+    /// Answered from the per-species build in
+    /// `assets/common/body_traversal.ron` rather than from a body-kind
+    /// match: an eight-legged spider and a twenty-tonne dragon both climb,
+    /// a ten-tonne stone construct does not, and each of those is a
+    /// consequence of how the creature is put together rather than a line
+    /// somebody wrote about that creature.
+    pub fn can_climb(&self) -> bool {
+        self.traversal_capabilities()
+            .contains(TraversalCapabilities::CLIMB)
+    }
+
+    /// Whether this body can wallrun — strictly harder than climbing, and so
+    /// strictly rarer: it needs the grip *and* an upright, light build.
+    pub fn can_wallrun(&self) -> bool {
+        self.traversal_capabilities()
+            .contains(TraversalCapabilities::WALLRUN)
+    }
 
     /// Returns how well a body can move backwards while strafing (0.0 = not at
     /// all, 1.0 = same as forward)
@@ -472,12 +499,12 @@ pub fn handle_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f3
     {
         swim_move(data, update, efficiency, submersion);
     } else {
-        basic_move(data, update, efficiency);
+        ground_move(data, update, efficiency);
     }
 }
 
 /// Updates components to move player as if theyre on ground or in air
-fn basic_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f32) {
+fn ground_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f32) {
     let section_modifier = match data.character.stage_section() {
         Some(StageSection::Buildup) => data.stats.buildup_move_speed_modifier,
         Some(StageSection::Charge) => data.stats.charge_move_speed_modifier,
@@ -489,8 +516,9 @@ fn basic_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f32) {
         * section_modifier;
 
     let accel = if let Some(block) = data.physics.on_ground {
-        // FRIC_GROUND temporarily used to normalize things around expected values
-        data.body.base_accel()
+        // FRIC_GROUND temporarily used to normalize things around expected
+        // values
+        data.body.ground_accel().unwrap_or(0.0)
             * data.scale.map_or(1.0, |s| s.0.sqrt())
             * block.get_traction()
             * block.get_friction()
@@ -540,7 +568,8 @@ pub fn handle_forced_movement(
         ForcedMovement::Forward(strength) => {
             let strength = strength * data.stats.move_speed_modifier * data.stats.friction_modifier;
             if let Some(accel) = data.physics.on_ground.map(|block| {
-                // FRIC_GROUND temporarily used to normalize things around expected values
+                // FRIC_GROUND temporarily used to normalize things around
+                // expected values
                 data.body.base_accel() * block.get_traction() * block.get_friction() / FRIC_GROUND
             }) {
                 update.vel.0 += Vec2::broadcast(data.dt.0)
@@ -553,7 +582,8 @@ pub fn handle_forced_movement(
         ForcedMovement::Reverse(strength) => {
             let strength = strength * data.stats.move_speed_modifier * data.stats.friction_modifier;
             if let Some(accel) = data.physics.on_ground.map(|block| {
-                // FRIC_GROUND temporarily used to normalize things around expected values
+                // FRIC_GROUND temporarily used to normalize things around
+                // expected values
                 data.body.base_accel() * block.get_traction() * block.get_friction() / FRIC_GROUND
             }) {
                 update.vel.0 += Vec2::broadcast(data.dt.0)
@@ -566,7 +596,8 @@ pub fn handle_forced_movement(
         ForcedMovement::Sideways(strength) => {
             let strength = strength * data.stats.move_speed_modifier * data.stats.friction_modifier;
             if let Some(accel) = data.physics.on_ground.map(|block| {
-                // FRIC_GROUND temporarily used to normalize things around expected values
+                // FRIC_GROUND temporarily used to normalize things around
+                // expected values
                 data.body.base_accel() * block.get_traction() * block.get_friction() / FRIC_GROUND
             }) {
                 let direction = {
@@ -592,7 +623,8 @@ pub fn handle_forced_movement(
         ForcedMovement::DirectedReverse(strength) => {
             let strength = strength * data.stats.move_speed_modifier * data.stats.friction_modifier;
             if let Some(accel) = data.physics.on_ground.map(|block| {
-                // FRIC_GROUND temporarily used to normalize things around expected values
+                // FRIC_GROUND temporarily used to normalize things around
+                // expected values
                 data.body.base_accel() * block.get_traction() * block.get_friction() / FRIC_GROUND
             }) {
                 let direction = if Vec2::from(*data.ori).dot(data.inputs.move_dir).signum() > 0.0 {
@@ -608,7 +640,8 @@ pub fn handle_forced_movement(
         ForcedMovement::AntiDirectedForward(strength) => {
             let strength = strength * data.stats.move_speed_modifier * data.stats.friction_modifier;
             if let Some(accel) = data.physics.on_ground.map(|block| {
-                // FRIC_GROUND temporarily used to normalize things around expected values
+                // FRIC_GROUND temporarily used to normalize things around
+                // expected values
                 data.body.base_accel() * block.get_traction() * block.get_friction() / FRIC_GROUND
             }) {
                 let direction = if Vec2::from(*data.ori).dot(data.inputs.move_dir).signum() < 0.0 {
@@ -708,9 +741,9 @@ pub fn handle_orientation(
     };
 
     // Direction is set to the override if one is provided, else if entity is
-    // strafing or attacking the horiontal component of the look direction is used,
-    // else we special-case talking, else the current horizontal movement direction
-    // is used
+    // strafing or attacking the horiontal component of the look direction is
+    // used, else we special-case talking, else the current horizontal
+    // movement direction is used
     let target_ori = if let Some(dir_override) = dir_override {
         dir_override.into()
     } else if let CharacterState::Talk(t) = data.character
@@ -812,7 +845,8 @@ fn swim_move(
             data.inputs.move_z
         };
 
-        // Assume that feet/flippers get less efficient as we become less submerged
+        // Assume that feet/flippers get less efficient as we become less
+        // submerged
         let move_z = move_z.min((submersion * 1.5 - 0.5).clamp(0.0, 1.0).powi(2));
 
         update.vel.0 += Vec3::new(dir.x, dir.y, move_z)
@@ -875,19 +909,21 @@ pub fn fly_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f32) 
             // led zeppelin
             Body::Ship(ship::Body::DefaultAirship) => {
                 update_fw_vel = false;
-                // airships or zeppelins are controlled by their engines and should have
-                // neutral buoyancy. Don't change their density.
-                // Assume that the airship is always level and that the engines are gimbaled
+                // airships or zeppelins are controlled by their engines and
+                // should have neutral buoyancy. Don't change
+                // their density. Assume that the airship is
+                // always level and that the engines are gimbaled
                 // so that they can provide thrust in any direction.
-                // The vector of thrust is the desired movement direction scaled by the
-                // acceleration.
+                // The vector of thrust is the desired movement direction scaled
+                // by the acceleration.
                 let thrust_dir = data.inputs.move_dir.with_z(data.inputs.move_z);
                 update.vel.0 += thrust_dir * data.dt.0 * accel;
             },
             // floaty floaty
             Body::Ship(ship) if ship.can_fly() => {
-                // Balloons gain altitude by modifying their density, e.g. by heating the air
-                // inside. Ships float by adjusting their buoyancy, e.g. by
+                // Balloons gain altitude by modifying their density, e.g. by
+                // heating the air inside. Ships float by
+                // adjusting their buoyancy, e.g. by
                 // pumping water in or out. Simulate a ship or balloon by
                 // adjusting its density.
                 let regulate_density = |min: f32, max: f32, def: f32, rate: f32| -> Density {
@@ -954,8 +990,8 @@ pub fn attempt_wield(data: &JoinData<'_>, update: &mut StateUpdate) {
             })
     };
 
-    // Calculates time required to equip weapons, if weapon in mainhand and offhand,
-    // uses maximum duration
+    // Calculates time required to equip weapons, if weapon in mainhand and
+    // offhand, uses maximum duration
     let mainhand_equip_time = equip_time(EquipSlot::ActiveMainhand);
     let offhand_equip_time = equip_time(EquipSlot::ActiveOffhand);
     let equip_time = match (mainhand_equip_time, offhand_equip_time) {
@@ -981,6 +1017,65 @@ pub fn attempt_wield(data: &JoinData<'_>, update: &mut StateUpdate) {
     }
 }
 
+/// Is the space a cylinder of `radius` and `z_max` would occupy at `pos` clear
+/// of solid terrain?
+///
+/// Samples every column the radius covers, not just the one the centre is in:
+/// standing near a block boundary straddles two, and checking only the centre
+/// would happily clear a body into a ceiling one column over.
+///
+/// Shared so that everything which can put a body upright asks the same
+/// question — a character standing up under its own power, and the server
+/// standing up somebody else's rescued character.
+pub fn terrain_column_is_clear<V>(terrain: &V, pos: Vec3<f32>, radius: f32, z_max: f32) -> bool
+where
+    V: ReadVol<Vox = Block>,
+{
+    let feet = pos.z.floor() as i32;
+    // The topmost block the body would occupy, inclusive.
+    let head = (pos.z + z_max - f32::EPSILON).floor() as i32;
+
+    let (x0, x1) = (
+        (pos.x - radius).floor() as i32,
+        (pos.x + radius).floor() as i32,
+    );
+    let (y0, y1) = (
+        (pos.y - radius).floor() as i32,
+        (pos.y + radius).floor() as i32,
+    );
+
+    (x0..=x1).all(|x| {
+        (y0..=y1).all(|y| {
+            (feet..=head).all(|z| {
+                terrain
+                    .get(Vec3::new(x, y, z))
+                    // Unloaded terrain is assumed clear. The collision solver
+                    // only visits loaded blocks, so this matches what the
+                    // physics would actually do there.
+                    .map(|block| !block.is_solid())
+                    .unwrap_or(true)
+            })
+        })
+    })
+}
+
+/// Is there room above this entity to hold itself in `posture`?
+///
+/// A momentary shrink like a roll can grow back without asking, because the
+/// game knows the roll ends in open air. A posture a body *holds* cannot: a
+/// player who crouches into a one-block slot and then stands would otherwise
+/// grow into solid rock, and the collision solver's answer to that is to push
+/// out, fail, and restore the old position — a jitter, not a crash, but not
+/// acceptable either.
+///
+/// So standing up is a request that can be refused. That contract is not new
+/// here: `crawl.rs` already refuses to let a downed player stand.
+pub fn has_room_for_posture(data: &JoinData<'_>, posture: Posture) -> bool {
+    let scale = data.scale.map_or(1.0, |s| s.0);
+    let (radius, _, z_max) = data.body.collider().terrain_cylinder_in(scale, posture);
+    terrain_column_is_clear(data.terrain, data.pos.0, radius, z_max)
+}
+
 /// Checks that player can `Sit` and updates `CharacterState` if so
 pub fn attempt_sit(data: &JoinData<'_>, update: &mut StateUpdate) {
     if data.physics.on_ground.is_some() {
@@ -990,7 +1085,12 @@ pub fn attempt_sit(data: &JoinData<'_>, update: &mut StateUpdate) {
 
 /// Checks that player can `Crawl` and updates `CharacterState` if so
 pub fn attempt_crawl(data: &JoinData<'_>, update: &mut StateUpdate) {
-    if data.physics.on_ground.is_some() {
+    if data.physics.on_ground.is_some()
+        && data
+            .body
+            .traversal_capabilities()
+            .contains(TraversalCapabilities::PRONE)
+    {
         update.character = CharacterState::Crawl;
     }
 }
@@ -1018,7 +1118,14 @@ pub fn attempt_talk(data: &JoinData<'_>, update: &mut StateUpdate, tgt: Option<U
 }
 
 pub fn attempt_sneak(data: &JoinData<'_>, update: &mut StateUpdate) {
-    if data.physics.on_ground.is_some() && data.body.is_humanoid() {
+    // Crouching is a body-shape question now rather than a "is this the player"
+    // question: anything with a spine that folds can do it.
+    if data.physics.on_ground.is_some()
+        && data
+            .body
+            .traversal_capabilities()
+            .contains(TraversalCapabilities::CROUCH)
+    {
         update.character = Idle(idle::Data {
             is_sneaking: true,
             time_entered: *data.time,
@@ -1028,21 +1135,40 @@ pub fn attempt_sneak(data: &JoinData<'_>, update: &mut StateUpdate) {
 }
 
 /// Checks that player can `Climb` and updates `CharacterState` if so
+/// Whether this body could climb this surface, ignoring what it is currently
+/// doing about it.
+///
+/// Split out of [`handle_climb`] so that an observer — an NPC deciding whether
+/// it is worth jumping at a wall — can ask the same question the state machine
+/// will actually answer, instead of keeping a second copy of these rules that
+/// silently goes stale when this one gains a condition. Callers add their own
+/// intent on top: `handle_climb` requires being airborne and pressing into the
+/// wall, an NPC requires the opposite (still grounded, so it can jump).
+pub fn can_climb_surface(body: &Body, physics: &crate::comp::PhysicsState) -> bool {
+    if physics.on_wall.is_none() {
+        return false;
+    }
+    // Only allow climbing if we are near the surface
+    let underwater = physics
+        .in_liquid()
+        .map(|depth| depth > 2.0)
+        .unwrap_or(false);
+    let can_climb = body.can_climb() || physics.in_liquid().is_some();
+    can_climb && !underwater
+}
+
 pub fn handle_climb(data: &JoinData<'_>, update: &mut StateUpdate) -> bool {
     let Some(wall_dir) = data.physics.on_wall else {
         return false;
     };
 
     let towards_wall = data.inputs.move_dir.dot(wall_dir.xy()) > 0.0;
-    // Only allow climbing if we are near the surface
-    let underwater = data
-        .physics
-        .in_liquid()
-        .map(|depth| depth > 2.0)
-        .unwrap_or(false);
-    let can_climb = data.body.can_climb() || data.physics.in_liquid().is_some();
     let in_air = data.physics.on_ground.is_none();
-    if towards_wall && in_air && !underwater && can_climb && update.energy.current() > 1.0 {
+    if towards_wall
+        && in_air
+        && can_climb_surface(data.body, data.physics)
+        && update.energy.current() > 1.0
+    {
         update.character = CharacterState::Climb(
             climb::Data::create_adjusted_by_skills(data)
                 .with_wielded(data.character.is_wield() || data.character.was_wielded()),
@@ -1057,7 +1183,7 @@ pub fn handle_wallrun(data: &JoinData<'_>, update: &mut StateUpdate) -> bool {
     if data.physics.on_wall.is_some()
         && data.physics.on_ground.is_none()
         && data.physics.in_liquid().is_none()
-        && data.body.can_climb()
+        && data.body.can_wallrun()
     {
         update.character = CharacterState::Wallrun(wallrun::Data {
             was_wielded: data.character.is_wield() || data.character.was_wielded(),
@@ -1119,8 +1245,8 @@ fn can_reach_block(
             BuildHasherDefault::<FxHasher64>::default(),
         );
 
-        // Transition uses manhattan distance as the cost, with a slightly lower cost
-        // for z transitions
+        // Transition uses manhattan distance as the cost, with a slightly lower
+        // cost for z transitions
         let transition = |a: Vec3<i32>, b: Vec3<i32>| {
             let (a, b) = (a.map(|x| x as f32), b.map(|x| x as f32));
             ((a - b) * Vec3::new(1.0, 1.0, 0.9)).map(|e| e.abs()).sum()
@@ -1175,8 +1301,9 @@ pub fn handle_manipulate_loadout(
     match inv_action {
         InventoryAction::Use(slot @ Slot::Inventory(inv_slot)) => {
             // If inventory action is using a slot, and slot is in the inventory
-            // TODO: Do some non lazy way of handling the possibility that items equipped in
-            // the loadout will have effects that are desired to be non-instantaneous
+            // TODO: Do some non lazy way of handling the possibility that items
+            // equipped in the loadout will have effects that are
+            // desired to be non-instantaneous
             use use_item::ItemUseKind;
             if let Some((item_kind, item)) = data
                 .inventory
@@ -1184,7 +1311,8 @@ pub fn handle_manipulate_loadout(
                 .and_then(|item| Option::<ItemUseKind>::from(&*item.kind()).zip(Some(item)))
             {
                 let (buildup_duration, use_duration, recover_duration) = item_kind.durations();
-                // If item returns a valid kind for item use, do into use item character state
+                // If item returns a valid kind for item use, do into use item
+                // character state
                 update.character = CharacterState::UseItem(use_item::Data {
                     static_data: use_item::StaticData {
                         buildup_duration,
@@ -1213,8 +1341,8 @@ pub fn handle_manipulate_loadout(
                 .ok()
                 .copied()
                 .and_then(|b| b.get_sprite());
-            // Checks if position has a collectible sprite as well as what sprite is at the
-            // position
+            // Checks if position has a collectible sprite as well as what
+            // sprite is at the position
             let sprite_interact =
                 sprite_at_pos.and_then(Option::<interact::SpriteInteractKind>::from);
             if let Some(sprite_interact) = sprite_interact
@@ -1237,7 +1365,8 @@ pub fn handle_manipulate_loadout(
                 });
                 // None: An required items exist but no available
                 // Some(None): No required items
-                // Some(Some(_)): Required items satisfied, contains info about them
+                // Some(Some(_)): Required items satisfied, contains info about
+                // them
                 let has_required_items = match required_item {
                     // Produces `None` if we can't find the item or `Some(Some(_))` if we can
                     Some((item_id, consume)) => data
@@ -1247,8 +1376,9 @@ pub fn handle_manipulate_loadout(
                     None => Some(None),
                 };
                 if let Some(required_item) = has_required_items {
-                    // If the sprite is collectible, enter the sprite interaction character
-                    // state TODO: Handle cases for sprite being
+                    // If the sprite is collectible, enter the sprite
+                    // interaction character state TODO:
+                    // Handle cases for sprite being
                     // interactible, but not collectible (none currently
                     // exist)
                     let (buildup_duration, use_duration, recover_duration) =
@@ -1368,8 +1498,9 @@ pub fn handle_jump(
         .and_then(|impulse| {
             if data.physics.in_liquid().is_some() {
                 if data.physics.on_wall.is_some() {
-                    // Allow entities to make a small jump when at the edge of a body of water,
-                    // allowing them to path out of it
+                    // Allow entities to make a small jump when at the edge of a
+                    // body of water, allowing them to path
+                    // out of it
                     Some(impulse * 0.75)
                 } else {
                     None
@@ -1553,8 +1684,9 @@ fn handle_ability(
                     )
             })
     {
-        // TODO: Change requirements_paid to requirements_met, and then pay requirements
-        // here (necessary after energy and combo moved to AbilityMeta)
+        // TODO: Change requirements_paid to requirements_met, and then pay
+        // requirements here (necessary after energy and combo moved to
+        // AbilityMeta)
         let ability_meta = ability.ability_meta();
         {
             let AbilityRequirements {
@@ -1594,12 +1726,14 @@ fn handle_ability(
                 //   A triggered cast neither reads nor writes the triggered
                 //   ability's `AbilityCooldowns` entry.
                 //
-                // It is as if, for that one cast, the ability had no cooldown at
-                // all. Writing the entry would grief the player (an automatic
-                // escape at 25 % HP would put his own manual escape on cooldown
+                // It is as if, for that one cast, the ability had no cooldown
+                // at all. Writing the entry would grief the
+                // player (an automatic escape at 25 % HP would
+                // put his own manual escape on cooldown
                 // he never asked for); *clearing* it would be an outright
-                // exploit (fire the trigger, then manually recast the same spell
-                // for free). Both systems leave the other's state alone.
+                // exploit (fire the trigger, then manually recast the same
+                // spell for free). Both systems leave the
+                // other's state alone.
                 let bypassing_cooldown = cooldown_bypassed(data, token, &spec_ability_copy);
                 if !bypassing_cooldown
                     && let Some(cooldown_secs) = ability_meta.cooldown
@@ -1629,8 +1763,8 @@ fn handle_ability(
 
                 // Hemomancy "blood price" (M4 / ENG-C1): casting spends the
                 // caster's own HP. The activation filter already enforced the
-                // 1-HP floor (`hp_cost_affordable`), so in normal play this never
-                // brings the caster below 1.
+                // 1-HP floor (`hp_cost_affordable`), so in normal play this
+                // never brings the caster below 1.
                 if let Some(hp_cost) = ability_meta.hp_cost
                     && hp_cost > 0.0
                 {
@@ -2400,7 +2534,8 @@ mod hp_cost_tests {
 
     #[test]
     fn hardcore_has_no_floor() {
-        // ENG-C1b: hardcore can pay the blood price even when it would be lethal
+        // ENG-C1b: hardcore can pay the blood price even when it would be
+        // lethal
         assert!(hp_cost_affordable(Some(10.0), Some(10.0), true));
         assert!(hp_cost_affordable(Some(10.0), Some(3.0), true));
         assert!(hp_cost_affordable(Some(10.0), Some(0.5), true));
@@ -2408,7 +2543,8 @@ mod hp_cost_tests {
 
     #[test]
     fn missing_health_skips_cost() {
-        // entities without a Health component (e.g. invulnerable) ignore the cost
+        // entities without a Health component (e.g. invulnerable) ignore the
+        // cost
         assert!(hp_cost_affordable(Some(10.0), None, false));
     }
 }

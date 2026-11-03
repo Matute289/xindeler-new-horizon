@@ -287,8 +287,8 @@ impl Site {
             let clamped = wpos.clamped(self.tile_wpos(tile_pos), self.tile_wpos(tile_pos + 1) - 1);
             let dist = clamped.as_::<f32>().distance(wpos.as_::<f32>()) / TILE_SIZE as f32;
             let weight = (1.0 - dist).clamped(0.001, 1.0);
-            // Special case: roads get their altitude from the tile, not the plot
-            // TODO: Should this be true of all tiles?
+            // Special case: roads get their altitude from the tile, not the
+            // plot TODO: Should this be true of all tiles?
             if let TileKind::Road { alt, .. } = &tile.kind {
                 spawn_rules.prefer_alt(*alt, weight.powi(4) * 25.0);
             } else if let TileKind::Path { closest_pos, path } = &tile.kind
@@ -402,8 +402,8 @@ impl Site {
 
         // Start and end altitudes, to clamp road tile altitudes relative to
         // let [alt_a, alt_b] = [a, b].map(|tile_pos|
-        //     match_some!(&self.tiles.get(tile_pos).kind, TileKind::Road { alt, .. } =>
-        // *alt)     .unwrap_or_else(||
+        //     match_some!(&self.tiles.get(tile_pos).kind, TileKind::Road { alt,
+        // .. } => *alt)     .unwrap_or_else(||
         // land.get_alt_approx(self.tile_center_wpos(tile_pos))));
 
         let plot = self.create_plot(Plot {
@@ -646,7 +646,8 @@ impl Site {
                     self.plazas.iter().all(|&p| {
                         let dist_sqr = if let PlotKind::Plaza(plaza) = &self.plot(p).kind {
                             let intersection = plaza.aabr.intersection(aabr);
-                            // If the size of the intersection is greater than zero they intersect
+                            // If the size of the intersection is greater than
+                            // zero they intersect
                             // on that axis and the distance on that axis is 0.
                             intersection
                                 .size()
@@ -748,16 +749,18 @@ impl Site {
                 min: tpos - Vec2::broadcast(plaza_radius as i32),
                 max: tpos + Vec2::broadcast(plaza_radius as i32 + 1),
             };
-            // if all the tiles in the proposed plaza location are also not hazards or roads
-            // then add the tile as a candidate for a plaza location
+            // if all the tiles in the proposed plaza location are also not
+            // hazards or roads then add the tile as a candidate for
+            // a plaza location
             if aabr_tiles(aabr).all(|tpos| self.tiles.get(tpos).is_empty()) {
                 plaza_locations.push(aabr);
             }
         });
         if plaza_locations.is_empty() {
-            // No suitable plaza locations were found, it's unlikely that the town will be
-            // able to be generated, but we can try to make a plaza anyway with
-            // the original make_plaza function.
+            // No suitable plaza locations were found, it's unlikely that the
+            // town will be able to be generated, but we can try to
+            // make a plaza anyway with the original make_plaza
+            // function.
             self.make_plaza(land, index, rng, generator_stats, site_name, road_kind)
         } else {
             // Choose the minimum distance from the town center.
@@ -804,8 +807,8 @@ impl Site {
         // The plaza radius can be 1, 2, or 3.
         let plaza_radius = rng.random_range(1..3);
         // look for plaza locations within a ring with an outer dimension
-        // of 24 tiles and an inner dimension that will offset the plaza from the town
-        // center.
+        // of 24 tiles and an inner dimension that will offset the plaza from
+        // the town center.
         let search_inner_radius = 7 + plaza_radius;
         const PLAZA_MAX_SEARCH_RADIUS: u32 = 24;
         self.make_initial_plaza(
@@ -985,8 +988,8 @@ impl Site {
 
         // place the initial plaza
         site.demarcate_obstacles(land);
-        // The terracotta_palace is 15 tiles in radius, so the plaza should be outside
-        // the palace.
+        // The terracotta_palace is 15 tiles in radius, so the plaza should be
+        // outside the palace.
         const TERRACOTTA_PLAZA_RADIUS: u32 = 3;
         const TERRACOTTA_PLAZA_SEARCH_INNER: u32 = 17;
         const TERRACOTTA_PLAZA_SEARCH_WIDTH: u32 = 12;
@@ -1138,8 +1141,8 @@ impl Site {
 
         // place the initial plaza
         site.demarcate_obstacles(land);
-        // The myrmidon_arena is 16 tiles in radius, so the plaza should be outside the
-        // palace.
+        // The myrmidon_arena is 16 tiles in radius, so the plaza should be
+        // outside the palace.
         const MYRMIDON_PLAZA_RADIUS: u32 = 3;
         const MYRMIDON_PLAZA_SEARCH_INNER: u32 = 18;
         const MYRMIDON_PLAZA_SEARCH_WIDTH: u32 = 12;
@@ -1545,8 +1548,9 @@ impl Site {
                     generator_stats.attempt(site.name(), GenStatPlotKind::AirshipDock);
                     // The airship dock rendered size is 10x10.
                     // The rendering code allows for a margin of 1 tile
-                    // and we want to keep the dock footprint as small as possible.
-                    // The area range for the aabr is fixed at size squared (81) since the
+                    // and we want to keep the dock footprint as small as
+                    // possible. The area range for the aabr
+                    // is fixed at size squared (81) since the
                     // dock structure is square.
                     let size = 9u32;
                     if let Some((aabr, door_tile, door_dir, _)) = attempt(32, || {
@@ -1641,8 +1645,8 @@ impl Site {
             ..Site::default()
         };
 
-        // TODO use the nearest peak name. Unfortunately this requires `Civs` but we
-        // only have access to `WorldSim`
+        // TODO use the nearest peak name. Unfortunately this requires `Civs`
+        // but we only have access to `WorldSim`
         site.name = Some(NameGen::location(&mut rng).generate_town() + " Glider Course");
 
         // Pick the starting downhill direction based on the average drop over
@@ -1690,8 +1694,8 @@ impl Site {
         const CHUNK_OFFSET: usize = 5;
         // WARNING: This assumes x and y lengths of a chunk are the same!!!
         let offset = CHUNK_OFFSET as i32 * TerrainChunkSize::RECT_SIZE.x as i32;
-        // Always convert to tiles then back to wpos to remove any integer division
-        // artifacts
+        // Always convert to tiles then back to wpos to remove any integer
+        // division artifacts
         let tile_offset = offset / TILE_SIZE as i32;
         let pos_offset = tile_offset * TILE_SIZE as i32;
 
@@ -1701,8 +1705,8 @@ impl Site {
         positions.push((pos, tile_pos));
 
         // Loops 2-9 follow the downhill path of terrain chunks
-        // In the future it may be desirable to follow ridges and the like but that
-        // would be a future MR
+        // In the future it may be desirable to follow ridges and the like but
+        // that would be a future MR
         let mut last_pos = pos;
         let mut last_tile_pos = tile_pos;
         for j in 1..(CHUNK_OFFSET * 9 + 1) {
@@ -1712,16 +1716,17 @@ impl Site {
                     downhill.map2(TerrainChunkSize::RECT_SIZE, |e, sz: u32| e / (sz as i32));
                 let downhill_chunk_pos = TerrainChunkSize::center_wpos(downhill_chunk);
                 let downhill_vec = downhill_chunk_pos - last_pos;
-                // Convert to tiles first, then back to wpos to ensure coordinates align, as
-                // chunks are not tile aligned
+                // Convert to tiles first, then back to wpos to ensure
+                // coordinates align, as chunks are not tile
+                // aligned
                 let tile_offset = downhill_vec / (TILE_SIZE as i32);
                 let pos_offset = tile_offset * TILE_SIZE as i32;
                 let pos = last_pos + pos_offset;
                 let tile_pos = last_tile_pos + tile_offset;
                 last_pos = pos;
                 last_tile_pos = tile_pos;
-                // Only want to save positions with large enough chunk offsets, not every chunk
-                // position
+                // Only want to save positions with large enough chunk offsets,
+                // not every chunk position
                 if j % CHUNK_OFFSET == 0 {
                     positions.push((pos, tile_pos));
                 }
@@ -1732,9 +1737,9 @@ impl Site {
         // Currently there is no check to ensure the delta z between rings is
         // sufficient to successfully fly through the course. This should cause
         // no glider course site to be created. Right now it just doesn't spawn
-        // one in the world (similar to towns when placed near/on bodies of water).
-        // In the future maybe the generate functions should return an `Option`
-        // instead of a `Site`
+        // one in the world (similar to towns when placed near/on bodies of
+        // water). In the future maybe the generate functions should
+        // return an `Option` instead of a `Site`
         if valid_course && positions.len() > 1 {
             for (i, window) in positions.windows(2).enumerate() {
                 if !window.is_empty() {
@@ -2271,8 +2276,9 @@ impl Site {
                     // CoastalAirshipDock
                     // The airship dock rendered size is 10x10.
                     // The rendering code allows for a margin of 1 tile
-                    // and we want to keep the dock footprint as small as possible.
-                    // The area range for the aabr is fixed at size squared (81) since the
+                    // and we want to keep the dock footprint as small as
+                    // possible. The area range for the aabr
+                    // is fixed at size squared (81) since the
                     // dock structure is square.
                     let size = 9u32;
                     generator_stats.attempt(site.name(), GenStatPlotKind::AirshipDock);
@@ -2340,8 +2346,8 @@ impl Site {
 
         // place the initial plaza
         site.demarcate_obstacles(land);
-        // The desert_city_arena is 17 tiles in radius, so the plaza should be outside
-        // the palace.
+        // The desert_city_arena is 17 tiles in radius, so the plaza should be
+        // outside the palace.
         const DESERT_CITY_PLAZA_RADIUS: u32 = 3;
         const DESERT_CITY_PLAZA_SEARCH_INNER: u32 = 19;
         const DESERT_CITY_PLAZA_SEARCH_WIDTH: u32 = 12;
@@ -2469,8 +2475,9 @@ impl Site {
                     // DesertCityAirshipDock
                     // The airship dock rendered size is 10x10.
                     // The rendering code allows for a margin of 1 tile
-                    // and we want to keep the dock footprint as small as possible.
-                    // The area range for the aabr is fixed at size squared (81) since the
+                    // and we want to keep the dock footprint as small as
+                    // possible. The area range for the aabr
+                    // is fixed at size squared (81) since the
                     // dock structure is square.
                     let size = 9u32;
                     generator_stats.attempt(site.name(), GenStatPlotKind::AirshipDock);

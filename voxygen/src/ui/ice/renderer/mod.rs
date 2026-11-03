@@ -309,8 +309,8 @@ impl IcedRenderer {
             },
         }
 
-        // Create a larger dynamic model if the mesh is larger than the current model
-        // size.
+        // Create a larger dynamic model if the mesh is larger than the current
+        // model size.
         if self.model.len() < self.mesh.vertices().len() {
             self.model = renderer.create_dynamic_model(self.mesh.vertices().len() * 4 / 3);
         }
@@ -369,8 +369,8 @@ impl IcedRenderer {
         font: FontId,
     ) -> Vec<glyph_brush::SectionGlyph> {
         use glyph_brush::{GlyphCruncher, HorizontalAlign, VerticalAlign};
-        // TODO: add option to align based on the geometry of the rendered glyphs
-        // instead of all possible glyphs
+        // TODO: add option to align based on the geometry of the rendered
+        // glyphs instead of all possible glyphs
         let (x, h_align) = match horizontal_alignment {
             iced::HorizontalAlignment::Left => (bounds.x, HorizontalAlign::Left),
             iced::HorizontalAlignment::Center => (bounds.center_x(), HorizontalAlign::Center),
@@ -459,7 +459,8 @@ impl IcedRenderer {
                 let half_res = self.half_res; // Make borrow checker happy by avoiding self in closure
                 let (source_aabr, gl_size) = {
                     // Transform the source rectangle into uv coordinate.
-                    // TODO: Make sure this is right.  Especially the conversions.
+                    // TODO: Make sure this is right.  Especially the
+                    // conversions.
                     let ((uv_l, uv_r, uv_b, uv_t), gl_size) = match graphic_cache
                         .get_graphic(graphic_id)
                     {
@@ -479,11 +480,14 @@ impl IcedRenderer {
                                     None
                                 } else {
                                     // TODO: do this earlier
-                                    // Multiply drawn image size by ratio of original image
+                                    // Multiply drawn image size by ratio of
+                                    // original image
                                     // size to
-                                    // source rectangle size (since as the proportion of the
+                                    // source rectangle size (since as the
+                                    // proportion of the
                                     // image gets
-                                    // smaller, the drawn size should get bigger), up to the
+                                    // smaller, the drawn size should get
+                                    // bigger), up to the
                                     // actual
                                     // size of the original image.
                                     let ratio_x = (image_w as f32 / source_w)
@@ -557,8 +561,8 @@ impl IcedRenderer {
                     None => return,
                 };
 
-                // Switch to the image state if we are not in it already or if a different
-                // texture id was being used.
+                // Switch to the image state if we are not in it already or if a
+                // different texture id was being used.
                 self.switch_state(State::Image(tex_id));
 
                 self.mesh
@@ -634,8 +638,8 @@ impl IcedRenderer {
                 let linear_color = apply_alpha(linear_color, alpha);
                 self.switch_state(State::Plain);
 
-                // TODO: makes sure we are not doing all this work for hidden text
-                // e.g. in chat
+                // TODO: makes sure we are not doing all this work for hidden
+                // text e.g. in chat
                 let glyph_cache = self.cache.glyph_cache_mut();
 
                 // Count glyphs
@@ -664,7 +668,8 @@ impl IcedRenderer {
                     },
                 );
 
-                // Leave ui and verts blank to fill in when processing cached glyphs
+                // Leave ui and verts blank to fill in when processing cached
+                // glyphs
                 let zero_aabr = Aabr {
                     min: Vec2::broadcast(0.0),
                     max: Vec2::broadcast(0.0),
@@ -677,9 +682,9 @@ impl IcedRenderer {
                 ));
                 for _ in 0..glyph_count {
                     // Push placeholder quad
-                    // Note: moving to some sort of layering / z based system would be an
-                    // alternative to this (and might help with reducing draw
-                    // calls)
+                    // Note: moving to some sort of layering / z based system
+                    // would be an alternative to this (and
+                    // might help with reducing draw calls)
                     self.mesh.push_quad(create_ui_quad(
                         zero_aabr,
                         zero_aabr,
@@ -710,8 +715,9 @@ impl IcedRenderer {
                     if intersection.is_valid() && intersection.size().map(|s| s > 0).reduce_and() {
                         intersection
                     } else {
-                        // If the intersection is invalid or zero sized we don't need to process
-                        // the content primitive
+                        // If the intersection is invalid or zero sized we don't
+                        // need to process the content
+                        // primitive
                         return;
                     }
                 };
@@ -731,8 +737,8 @@ impl IcedRenderer {
                 self.draw_commands.push(DrawCommand::Scissor(new_scissor));
 
                 // TODO: support nested clips?
-                // TODO: if previous command was a clip changing back to the default replace it
-                // with this
+                // TODO: if previous command was a clip changing back to the
+                // default replace it with this
                 // TODO: cull primitives outside the current scissor
 
                 // Renderer child

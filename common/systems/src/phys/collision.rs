@@ -57,8 +57,8 @@ pub(super) fn box_voxel_collision<T: BaseVol<Vox = Block> + ReadVol>(
         }
     }
 
-    // Function for determining whether the player at a specific position collides
-    // with blocks with the given criteria
+    // Function for determining whether the player at a specific position
+    // collides with blocks with the given criteria
     fn collision_with<T: BaseVol<Vox = Block> + ReadVol>(
         pos: Vec3<f32>,
         terrain: &T,
@@ -158,7 +158,8 @@ pub(super) fn box_voxel_collision<T: BaseVol<Vox = Block> + ReadVol>(
                             + Vec3::new(1.0, 1.0, block.solid_height()),
                     };
 
-                    // Determine whether the block's AABB collides with the player's AABB
+                    // Determine whether the block's AABB collides with the
+                    // player's AABB
                     if player_aabb.collides_with_aabb(block_aabb)
                         && block.valid_collision_dir(player_aabb, block_aabb, vel2.0)
                     {
@@ -187,8 +188,8 @@ pub(super) fn box_voxel_collision<T: BaseVol<Vox = Block> + ReadVol>(
             // Find the intrusion vector of the collision
             let dir = player_aabb.collision_vector_with_aabb(block_aabb);
 
-            // Determine an appropriate resolution vector (i.e: the minimum distance
-            // needed to push out of the block)
+            // Determine an appropriate resolution vector (i.e: the minimum
+            // distance needed to push out of the block)
             let max_axis = dir.map(|e| e.abs()).reduce_partial_min();
             let resolve_dir = -dir.map(|e| {
                 if e.abs().to_bits() == max_axis.to_bits() {
@@ -198,8 +199,8 @@ pub(super) fn box_voxel_collision<T: BaseVol<Vox = Block> + ReadVol>(
                 }
             });
 
-            // When the resolution direction is pointing upwards, we must be on the
-            // ground
+            // When the resolution direction is pointing upwards, we must be on
+            // the ground
             /* if resolve_dir.z > 0.0 && vel.0.z <= 0.0 { */
             if resolve_dir.z > 0.0 {
                 on_ground = Some(block);
@@ -207,8 +208,8 @@ pub(super) fn box_voxel_collision<T: BaseVol<Vox = Block> + ReadVol>(
                 on_ceiling = true;
             }
 
-            // When the resolution direction is non-vertical, we must be colliding
-            // with a wall
+            // When the resolution direction is non-vertical, we must be
+            // colliding with a wall
             //
             // If we're being pushed out horizontally...
             if resolve_dir.z == 0.0
@@ -408,7 +409,8 @@ pub(super) fn box_voxel_collision<T: BaseVol<Vox = Block> + ReadVol>(
                 (old_depth + old_pos.z - pos.0.z).max(depth)
             });
 
-            // TODO: Change this at some point to allow entities to be moved by liquids?
+            // TODO: Change this at some point to allow entities to be moved by
+            // liquids?
             let vel = Vel::zero();
 
             if depth > 0.0 {
@@ -454,8 +456,8 @@ pub(super) fn box_voxel_collision<T: BaseVol<Vox = Block> + ReadVol>(
         let lateral_dir = Vec2::new(longitudinal_dir.y, -longitudinal_dir.x);
         let squared_velocity = groundplane_velocity.magnitude_squared();
         // if we crossed an edge up or down accelerate in travelling direction,
-        // as potential energy is converted into kinetic energy we compare it with the
-        // square of velocity
+        // as potential energy is converted into kinetic energy we compare it
+        // with the square of velocity
         let vertical_difference = physics_state.skating_last_height - pos.0.z;
         // might become negative when skating slowly uphill
         let height_factor_squared = if vertical_difference != 0.0 {
@@ -470,8 +472,9 @@ pub(super) fn box_voxel_collision<T: BaseVol<Vox = Block> + ReadVol>(
             1.0
         };
 
-        // we calculate these squared as we need to combined them Euclidianly anyway,
-        // skiing: separate speed into longitudinal and lateral component
+        // we calculate these squared as we need to combined them Euclidianly
+        // anyway, skiing: separate speed into longitudinal and lateral
+        // component
         let long_speed = groundplane_velocity.dot(longitudinal_dir);
         let lat_speed = groundplane_velocity.dot(lateral_dir);
         let long_speed_squared = long_speed.powi(2);
@@ -479,8 +482,9 @@ pub(super) fn box_voxel_collision<T: BaseVol<Vox = Block> + ReadVol>(
         // lateral speed is reduced by lateral_friction,
         let new_lateral = lat_speed * lateral_friction_factor;
         let lateral_speed_reduction = lat_speed - new_lateral;
-        // we convert this reduction partically (by the cosine of the angle) into
-        // longitudinal (elastic collision) and the remainder into heat
+        // we convert this reduction partically (by the cosine of the angle)
+        // into longitudinal (elastic collision) and the remainder into
+        // heat
         let cosine_squared_aoa = long_speed_squared / squared_velocity;
         let converted_lateral_squared = cosine_squared_aoa * lateral_speed_reduction.powi(2);
         let new_longitudinal_squared = longitudinal_friction_factor_squared
@@ -494,13 +498,14 @@ pub(super) fn box_voxel_collision<T: BaseVol<Vox = Block> + ReadVol>(
     } else {
         let ground_fric = if physics_state.in_liquid().is_some() {
             // HACK:
-            // If we're in a liquid, radically reduce ground friction (i.e: assume that
-            // contact force is negligible due to buoyancy) Note that this might
-            // not be realistic for very dense entities (currently no entities in Veloren
+            // If we're in a liquid, radically reduce ground friction (i.e:
+            // assume that contact force is negligible due to
+            // buoyancy) Note that this might not be realistic for
+            // very dense entities (currently no entities in Veloren
             // are sufficiently negatively buoyant for this to matter). We
-            // should really make friction be proportional to net downward force, but
-            // that means taking into account buoyancy which is a bit difficult to do here
-            // for now.
+            // should really make friction be proportional to net downward
+            // force, but that means taking into account buoyancy
+            // which is a bit difficult to do here for now.
             0.1
         } else {
             1.0
@@ -636,8 +641,8 @@ pub(super) fn voxel_collider_bounding_sphere(
     let lower_bound = voxel_collider.volume().lower_bound().map(|e| e as f32);
     let upper_bound = voxel_collider.volume().upper_bound().map(|e| e as f32);
     let center = (lower_bound + upper_bound) / 2.0;
-    // Compute vector from the origin (where pos value corresponds to) and the model
-    // center
+    // Compute vector from the origin (where pos value corresponds to) and the
+    // model center
     let center_offset = center + origin_offset;
     // Rotate
     let oriented_center_offset = ori.local_to_global(center_offset);
@@ -743,7 +748,8 @@ pub(super) fn resolve_e2e_collision(
     // trapped (e.g. with minotaur).
     //
     // This allows using e2e pushback to gain speed by jumping out of a roll
-    // while in the middle of a collider, this is an intentional combat mechanic.
+    // while in the middle of a collider, this is an intentional combat
+    // mechanic.
     let forced_movement =
         matches!(char_state_maybe, Some(cs) if cs.is_forced_movement()) || is_riding;
 

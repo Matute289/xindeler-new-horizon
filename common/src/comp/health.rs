@@ -102,8 +102,8 @@ pub struct Health {
 
 impl Health {
     /// Used when comparisons to health are needed outside this module.
-    // This value is chosen as anything smaller than this is more precise than our
-    // units of health.
+    // This value is chosen as anything smaller than this is more precise than
+    // our units of health.
     pub const HEALTH_EPSILON: f32 = 0.5 / Self::MAX_SCALED_HEALTH as f32;
     /// Maximum value allowed for health before scaling
     const MAX_HEALTH: u16 = u16::MAX - 1;
@@ -218,9 +218,10 @@ impl Health {
             let damage = -change.amount;
             let absorb_real = self.absorb();
             let soaked = damage.min(absorb_real);
-            // BL-05 RD-6: when the hit consumes the whole pool, zero it exactly.
-            // Going through the f32 round-trip (`absorb/256 * 256 as u32`) can
-            // truncate to a 1-unit residual (~0.004 HP), which leaves `absorb()`
+            // BL-05 RD-6: when the hit consumes the whole pool, zero it
+            // exactly. Going through the f32 round-trip
+            // (`absorb/256 * 256 as u32`) can truncate to a 1-unit
+            // residual (~0.004 HP), which leaves `absorb()`
             // just above 0 — so the "absorb depleted → remove Shielded" check
             // never fires and the shield lingers, silently re-absorbing damage
             // until its timer expires. Zeroing on full depletion keeps the
@@ -263,11 +264,12 @@ impl Health {
                 }
             }
 
-            // Prune any damage contributors who haven't contributed damage for over the
-            // threshold - this enforces a maximum period that an entity will receive EXP
-            // for a kill after they last damaged the killed entity. The per-source split
-            // lives inside the same map entry, so it is pruned by this same retain with
-            // no separate timer.
+            // Prune any damage contributors who haven't contributed damage for
+            // over the threshold - this enforces a maximum period
+            // that an entity will receive EXP for a kill after they
+            // last damaged the killed entity. The per-source split
+            // lives inside the same map entry, so it is pruned by this same
+            // retain with no separate timer.
             const DAMAGE_CONTRIB_PRUNE_SECS: f64 = 600.0;
             self.damage_contributors
                 .retain(|_, entry| (change.time.0 - entry.last.0) < DAMAGE_CONTRIB_PRUNE_SECS);
@@ -538,8 +540,9 @@ mod tests {
         assert!(health.damage_contributors.contains_key(&damage_contrib1));
         assert!(health.damage_contributors.contains_key(&damage_contrib2));
 
-        // Apply damage 610 seconds after the damage from damage_contrib1 - this should
-        // result in the damage from damage_contrib1 being pruned.
+        // Apply damage 610 seconds after the damage from damage_contrib1 - this
+        // should result in the damage from damage_contrib1 being
+        // pruned.
         let health_change = HealthChange {
             amount: -5.0,
             time: Time(620.0),
@@ -717,7 +720,8 @@ mod tests {
     // BL-05 RD-6 regression: a hit that consumes the whole pool must leave
     // `absorb()` *exactly* 0, even for values whose f32 round-trip would
     // otherwise truncate to a 1-unit residual (which made the shield linger and
-    // keep absorbing until its timer expired). Tests several awkward magnitudes.
+    // keep absorbing until its timer expired). Tests several awkward
+    // magnitudes.
     #[test]
     fn full_depletion_zeroes_absorb_exactly() {
         for &amount in &[0.1_f32, 3.3, 7.7, 12.34, 49.9, 0.004, 99.99] {

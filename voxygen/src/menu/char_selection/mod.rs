@@ -315,7 +315,8 @@ impl PlayState for CharSelectionState {
                                     match hash {
                                         Ok(hash) => {
                                             if client.plugin_received(hash) == 0 {
-                                                // now load characters (plugins might contain items)
+                                                // now load characters (plugins
+                                                // might contain items)
                                                 client.load_character_list();
                                             }
                                         },

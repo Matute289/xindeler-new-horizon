@@ -398,14 +398,16 @@ mod v1 {
         ///
         /// InvalidDateRange if the end date of the ban exceeds the start date.
         fn validate(&self, prev_record: Option<&BanRecord>) -> Result<(), BanErrorKind> {
-            // Check to make sure the actions temporally line up--if they don't, we will
-            // prevent warn an administrator (since this may indicate a system
-            // clock issue and could require manual editing to resolve).
-            // However, we will not actually invalidate the ban list for this, in case
+            // Check to make sure the actions temporally line up--if they don't,
+            // we will prevent warn an administrator (since this may
+            // indicate a system clock issue and could require
+            // manual editing to resolve). However, we will not
+            // actually invalidate the ban list for this, in case
             // this would otherwise prevent people from adding a new ban.
             //
-            // We also deliberately leave the bad order intact, in case this reflects
-            // history more accurately than the system clock does.
+            // We also deliberately leave the bad order intact, in case this
+            // reflects history more accurately than the system
+            // clock does.
             if let Some(prev_record) = prev_record
                 && prev_record.date > self.date
             {
@@ -509,8 +511,8 @@ mod v1 {
                     username,
                 }
             };
-            // First, go forwards through history (also forwards in terms of the iterator
-            // direction), validating each entry in turn.
+            // First, go forwards through history (also forwards in terms of the
+            // iterator direction), validating each entry in turn.
             let mut prev_entry = None;
             for current_entry in &self.history {
                 current_entry
@@ -524,8 +526,8 @@ mod v1 {
                 .validate(prev_entry)
                 .map_err(make_error(&self.current))?;
 
-            // Make sure the expired hint is correct, and if not indicate that we should
-            // resave the file.
+            // Make sure the expired hint is correct, and if not indicate that
+            // we should resave the file.
             let is_expired = self.current.is_expired(now);
             if self.expired != is_expired {
                 self.expired = is_expired;
@@ -545,9 +547,10 @@ mod v1 {
         /// guaranteed to produce a valid settings file as long as it is
         /// called with a valid settings file from the previous version.
         pub(super) fn migrate(prev: prev::Banlist) -> Self {
-            // The ban start date for migrations from legacy is the current one; we could
-            // record that they actually have an unknown start date, but this
-            // would just complicate the format.
+            // The ban start date for migrations from legacy is the current one;
+            // we could record that they actually have an unknown
+            // start date, but this would just complicate the
+            // format.
             let date = Utc::now();
             Banlist(
                 prev.0
@@ -813,14 +816,16 @@ mod v2 {
         ///
         /// InvalidDateRange if the end date of the ban exceeds the start date.
         fn validate(&self, prev_record: Option<&BanRecord>) -> Result<(), BanErrorKind> {
-            // Check to make sure the actions temporally line up--if they don't, we will
-            // prevent warn an administrator (since this may indicate a system
-            // clock issue and could require manual editing to resolve).
-            // However, we will not actually invalidate the ban list for this, in case
+            // Check to make sure the actions temporally line up--if they don't,
+            // we will prevent warn an administrator (since this may
+            // indicate a system clock issue and could require
+            // manual editing to resolve). However, we will not
+            // actually invalidate the ban list for this, in case
             // this would otherwise prevent people from adding a new ban.
             //
-            // We also deliberately leave the bad order intact, in case this reflects
-            // history more accurately than the system clock does.
+            // We also deliberately leave the bad order intact, in case this
+            // reflects history more accurately than the system
+            // clock does.
             if let Some(prev_record) = prev_record
                 && prev_record.date > self.date
             {
@@ -935,8 +940,8 @@ mod v2 {
                 uuid,
                 username: current_entry.username_when_performed.clone(),
             };
-            // First, go forwards through history (also forwards in terms of the iterator
-            // direction), validating each entry in turn.
+            // First, go forwards through history (also forwards in terms of the
+            // iterator direction), validating each entry in turn.
             let mut prev_entry = None;
             for current_entry in &self.history {
                 current_entry
@@ -950,8 +955,8 @@ mod v2 {
                 .validate(prev_entry)
                 .map_err(|kind| make_error(kind, &self.current))?;
 
-            // Make sure the expired hint is correct, and if not indicate that we should
-            // resave the file.
+            // Make sure the expired hint is correct, and if not indicate that
+            // we should resave the file.
             let is_expired = self.current.is_expired(now);
             if self.expired != is_expired {
                 self.expired = is_expired;
@@ -1001,14 +1006,16 @@ mod v2 {
         ///
         /// InvalidDateRange if the end date of the ban exceeds the start date.
         fn validate(&self, prev_record: Option<&IpBanRecord>) -> Result<(), BanErrorKind> {
-            // Check to make sure the actions temporally line up--if they don't, we will
-            // prevent warn an administrator (since this may indicate a system
-            // clock issue and could require manual editing to resolve).
-            // However, we will not actually invalidate the ban list for this, in case
+            // Check to make sure the actions temporally line up--if they don't,
+            // we will prevent warn an administrator (since this may
+            // indicate a system clock issue and could require
+            // manual editing to resolve). However, we will not
+            // actually invalidate the ban list for this, in case
             // this would otherwise prevent people from adding a new ban.
             //
-            // We also deliberately leave the bad order intact, in case this reflects
-            // history more accurately than the system clock does.
+            // We also deliberately leave the bad order intact, in case this
+            // reflects history more accurately than the system
+            // clock does.
             if let Some(prev_record) = prev_record
                 && prev_record.date > self.date
             {
@@ -1119,8 +1126,8 @@ mod v2 {
                         .map(|e| e.current.username_when_performed.clone()),
                 }
             };
-            // First, go forwards through history (also forwards in terms of the iterator
-            // direction), validating each entry in turn.
+            // First, go forwards through history (also forwards in terms of the
+            // iterator direction), validating each entry in turn.
             let mut prev_entry = None;
             for current_entry in &self.history {
                 current_entry
@@ -1175,8 +1182,8 @@ mod v2 {
                 }
             }
 
-            // Make sure the expired hint is correct, and if not indicate that we should
-            // resave the file.
+            // Make sure the expired hint is correct, and if not indicate that
+            // we should resave the file.
             let is_expired = self.current.is_expired(now);
             if self.expired != is_expired {
                 self.expired = is_expired;
@@ -1302,8 +1309,10 @@ mod v2 {
                         let frontend_info = ban.info();
                         let action = BanAction::Ban(ban);
                         let ban_record = make_record(action);
-                        // NOTE: If there is linked IP ban, `overwrite` based changes may fail. In
-                        // the future, we may want to switch this to autoupdate the IP ban.
+                        // NOTE: If there is linked IP ban, `overwrite` based
+                        // changes may fail. In
+                        // the future, we may want to switch this to autoupdate
+                        // the IP ban.
                         banlist
                             .apply_ban_record(uuid, ban_record, overwrite, now)
                             .map(|_| Some(frontend_info))
@@ -1367,13 +1376,17 @@ mod v2 {
                         let action = BanAction::Unban(info);
                         let ban_record = make_record(action.clone());
                         let ban_effect = banlist.apply_ban_record(uuid, ban_record, overwrite, now);
-                        // If there is a matching IP ban we should remove that as well.
+                        // If there is a matching IP ban we should remove that
+                        // as well.
                         //
-                        // Validation checks that there is only one active IP ban for a particular
-                        // uuid, since if we ensure IP bans also ban the uuid and regular unbans
-                        // remove an existing IP ban if it exists then a user won't be able to
-                        // connect from another IP while there is an active IP ban linked to that
-                        // user.
+                        // Validation checks that there is only one active IP
+                        // ban for a particular
+                        // uuid, since if we ensure IP bans also ban the uuid
+                        // and regular unbans
+                        // remove an existing IP ban if it exists then a user
+                        // won't be able to connect from
+                        // another IP while there is an active IP ban linked to
+                        // that user.
                         let ip = banlist
                             .ip_bans
                             .iter()
@@ -1401,7 +1414,8 @@ mod v2 {
                             .map(|(ip, _)| *ip);
 
                         ip.and_then(|ip| {
-                            // Note: It is kind of redundant to include uuid here (since it's not
+                            // Note: It is kind of redundant to include uuid
+                            // here (since it's not
                             // going to change from the ban).
                             banlist.apply_ip_ban_record(
                                 ip,
@@ -1436,7 +1450,8 @@ mod v2 {
         ) -> Option<()> {
             match self.uuid_bans.entry(uuid) {
                 hash_map::Entry::Vacant(v) => {
-                    // If this is an unban, it will have no effect, so return early.
+                    // If this is an unban, it will have no effect, so return
+                    // early.
                     if matches!(record.action, BanAction::Unban(_)) {
                         return None;
                     }
@@ -1461,13 +1476,14 @@ mod v2 {
                 },
                 hash_map::Entry::Occupied(mut o) => {
                     let entry = o.get_mut();
-                    // If overwrite is off, check that this entry (if successful) would
-                    // actually change the ban status.
+                    // If overwrite is off, check that this entry (if
+                    // successful) would actually change the
+                    // ban status.
                     if !overwrite && entry.current.is_expired(now) == record.is_expired(now) {
                         return None;
                     }
-                    // Push the current (most recent) entry to the back of the history
-                    // list.
+                    // Push the current (most recent) entry to the back of the
+                    // history list.
                     entry.history.push(mem::replace(&mut entry.current, record));
                 },
             }
@@ -1488,7 +1504,8 @@ mod v2 {
         ) -> Option<()> {
             match self.ip_bans.entry(ip) {
                 hash_map::Entry::Vacant(v) => {
-                    // If this is an unban, it will have no effect, so return early.
+                    // If this is an unban, it will have no effect, so return
+                    // early.
                     if matches!(record.action, BanAction::Unban(_)) {
                         return None;
                     }
@@ -1513,13 +1530,14 @@ mod v2 {
                 },
                 hash_map::Entry::Occupied(mut o) => {
                     let entry = o.get_mut();
-                    // If overwrite is off, check that this entry (if successful) would
-                    // actually change the ban status.
+                    // If overwrite is off, check that this entry (if
+                    // successful) would actually change the
+                    // ban status.
                     if !overwrite && entry.current.is_expired(now) == record.is_expired(now) {
                         return None;
                     }
-                    // Push the current (most recent) entry to the back of the history
-                    // list.
+                    // Push the current (most recent) entry to the back of the
+                    // history list.
                     entry.history.push(mem::replace(&mut entry.current, record));
                 },
             }
@@ -1531,8 +1549,8 @@ mod v2 {
         /// called with a valid settings file from the previous version.
         pub(super) fn migrate(prev: prev::Banlist) -> Self {
             let prev::Banlist(uuid_map) = prev;
-            // Mostly the same structure but we introduce a new type of ban in a separate
-            // map.
+            // Mostly the same structure but we introduce a new type of ban in a
+            // separate map.
             Banlist {
                 uuid_bans: uuid_map
                     .into_iter()
@@ -1566,7 +1584,8 @@ mod v2 {
                 // linked to the same UUID. (since if timing happens to match
                 // the per entry validation won't catch this)
                 //
-                // collapsible_if: more clear not to have side effects in the if condition
+                // collapsible_if: more clear not to have side effects in the if
+                // condition
                 #[expect(clippy::collapsible_if)]
                 if let Some(uuid) = value.current.uuid_when_performed
                     && !value.current.is_expired(now)

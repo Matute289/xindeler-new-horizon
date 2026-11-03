@@ -16,8 +16,8 @@ use serde::de::DeserializeOwned;
 use specs::DispatcherBuilder;
 
 pub fn add_server_systems(dispatch_builder: &mut DispatcherBuilder) {
-    //run ping after general, as its super fast anyway. also don't get duplicate
-    // disconnect then.
+    //run ping after general, as its super fast anyway. also don't get
+    // duplicate disconnect then.
     dispatch::<gizmos::Sys>(dispatch_builder, &[]);
     dispatch::<character_screen::Sys>(dispatch_builder, &[]);
     dispatch::<general::Sys>(dispatch_builder, &[]);

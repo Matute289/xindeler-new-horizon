@@ -133,7 +133,7 @@ common-items-npc_weapons-axe-oni_blue_axe = Blue Oni Axe
 common-items-npc_weapons-staff-bipedlarge-cultist = Giant Cultist Staff
     .desc = The fire gives off no heat.
 
-common-items-npc_weapons-staff-mindflayer_staff = Mindflayer Staff
+common-items-npc_weapons-staff-mindflayer_staff = Mind-Eater Staff
     .desc = Placeholder
 
 common-items-npc_weapons-staff-ogre_staff = Ogre Staff

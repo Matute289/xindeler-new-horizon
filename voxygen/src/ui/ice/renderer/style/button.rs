@@ -61,8 +61,8 @@ impl Style {
         self
     }
 
-    // TODO: this needs to be refactored since the color isn't used if there is no
-    // background
+    // TODO: this needs to be refactored since the color isn't used if there is
+    // no background
     #[must_use]
     pub fn image_color(mut self, color: Rgba<u8>) -> Self {
         if let Some(background) = &mut self.background {

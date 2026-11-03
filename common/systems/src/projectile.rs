@@ -187,8 +187,9 @@ impl<'a> System<'a> for Sys {
                     continue;
                 }
 
-                // Skip if another projectile from the attacker has already hit this entity, and
-                // if this projectile limits the number of hits per ability
+                // Skip if another projectile from the attacker has already hit
+                // this entity, and if this projectile limits
+                // the number of hits per ability
                 if projectile.limit_per_ability
                     && projectile
                         .owner
@@ -203,8 +204,9 @@ impl<'a> System<'a> for Sys {
 
                 let entity_of = |uid: Uid| read_data.id_maps.uid_entity(uid);
 
-                // Don't hit if there is terrain between the projectile and where the entity was
-                // supposed to be hit by it.
+                // Don't hit if there is terrain between the projectile and
+                // where the entity was supposed to be hit by
+                // it.
 
                 if physics.on_surface().is_some() {
                     let projectile_direction = orientations
@@ -224,12 +226,13 @@ impl<'a> System<'a> for Sys {
                     }
                 }
 
-                // This hit entities list prevents a single projectile from hitting the same
-                // target multiple times
+                // This hit entities list prevents a single projectile from
+                // hitting the same target multiple times
                 projectile.hit_entities.push(other);
 
-                // This hit entities list prevents multiple projectiles fired from the same
-                // attacker hitting the same target multiple times (if the ability calls for
+                // This hit entities list prevents multiple projectiles fired
+                // from the same attacker hitting the same
+                // target multiple times (if the ability calls for
                 // this behavior)
                 if let Some(owner) = projectile
                     .owner
@@ -362,7 +365,8 @@ impl<'a> System<'a> for Sys {
                                 &mut emitters,
                             );
 
-                            // If the projectile splits, the original projectile should vanish
+                            // If the projectile splits, the original projectile
+                            // should vanish
                             projectile_vanished = true;
                         },
                         projectile::Effect::Pool(pool_props) => {
@@ -399,7 +403,8 @@ impl<'a> System<'a> for Sys {
                         Dir::from_unnormalized(tgt_pos.0.with_z(tgt_pos.0.z + 1.0) - pos.0),
                     )
                 {
-                    // We want the homing to be weaker when projectile first fired
+                    // We want the homing to be weaker when projectile first
+                    // fired
                     let time_factor = (projectile.init_time.0 as f32
                         - projectile.time_left.as_secs_f32())
                     .min(1.0);
@@ -414,8 +419,8 @@ impl<'a> System<'a> for Sys {
             if projectile.time_left == Duration::ZERO {
                 emitters.emit(DeleteEvent(entity));
 
-                // Check this to avoid needless cloning as we need to clone projectile in some
-                // timeout events
+                // Check this to avoid needless cloning as we need to clone
+                // projectile in some timeout events
                 if !projectile.timeout.is_empty() {
                     let init_projectile = projectile.clone();
                     for effect in projectile.timeout.drain(..) {
@@ -425,9 +430,11 @@ impl<'a> System<'a> for Sys {
                                 if ENABLE_RECURSIVE_FIREWORKS {
                                     use common::{comp::LightEmitter, event::ShootEvent};
                                     use std::f32::consts::PI;
-                                    // Note that if the expected fireworks per firework is > 1, this
+                                    // Note that if the expected fireworks per
+                                    // firework is > 1, this
                                     // will eventually cause
-                                    // enough server lag that more players can't log in.
+                                    // enough server lag that more players can't
+                                    // log in.
                                     let thresholds: &[(f32, usize)] = &[(0.25, 2), (0.7, 1)];
                                     let expected = {
                                         let mut total = 0.0;

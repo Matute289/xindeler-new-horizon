@@ -1,0 +1,125 @@
+// Every narrative variable in the game: the durable, per-character record of
+// what a character chose and what standing they earned. Adding an adventure
+// means adding entries here -- there is no engine change and no migration.
+//
+// Ids are namespaced by the lore tree's own `quest.*` / `faction.*` id space,
+// and a test asserts every prefix used here resolves against
+// `assets/lore/index.ron`. An id whose adventure or faction is not in canon
+// fails the test suite rather than quietly creating an unowned name.
+//
+// Rules the loader enforces, so a bad edit refuses to load instead of
+// misbehaving at runtime:
+//   - ids are unique, and no `renamed_from` alias shadows a live id
+//   - `Standing` tiers ascend strictly and the lowest starts at or below `min`
+//   - every `default` sits inside its own `[min, max]`
+//   - a `derived` rule's inputs all resolve, form no cycle, and never read the
+//     emergent sentiment layer
+//   - the file holds at most `MAX_NARRATIVE_VARS` entries
+//
+// Two rules the loader CANNOT enforce, and that reviewers must:
+//   - `Choice` option lists are APPEND-ONLY. A choice is stored as the option's
+//     index within its own list, so reordering or deleting one silently
+//     rewrites every character's history. `choice_option_lists_are_append_only`
+//     pins the shipped lists.
+//   - `note:` is mandatory and is the only place a variable's meaning lives.
+//     A save holds `("quest.the_kind_work.commissions", 2)` and nothing else.
+(
+    vars: [
+        // ---- The Kind Work (the hidden patron arc of the Moonstone warden) ----
+        (
+            id: "quest.the_kind_work.credit_refused",
+            kind: Flag,
+            scope: Character,
+            visibility: Hidden,
+            note: "Beat I.1: the character corrected the record on a deed she was wrongly thanked for. Unrewarded and optional in the fiction; she likes the honest ones more, which is the trap. Hidden because surfacing it would tell the player it mattered.",
+        ),
+        (
+            id: "quest.the_kind_work.commissions",
+            kind: Tally(min: 0, max: 4, default: 0),
+            scope: Character,
+            visibility: Journal,
+            note: "Phase II: how many of her four good commissions this character completed. Each increment is guarded by its own flag, since Add is the one non-idempotent effect.",
+        ),
+        (
+            id: "quest.the_kind_work.tourniquet",
+            kind: Choice(options: ["town", "waystation", "refused"]),
+            scope: Party,
+            visibility: Journal,
+            note: "Beat III.1: which ledger the party chose when saving the town required cutting the road the waystation lives on. Party scope because the group reached it together. She supports whichever, publicly, at cost to herself.",
+        ),
+        (
+            id: "quest.the_kind_work.offer",
+            kind: Choice(options: ["accepted", "declined"]),
+            scope: Character,
+            visibility: Journal,
+            note: "Beat IV.2/IV.3: the pact. Character scope on purpose -- a pact is personal even inside a party. `declined` closes the arc cleanly and keeps every reward; it is not a failure state.",
+        ),
+        (
+            id: "quest.the_kind_work.bhardo_told",
+            kind: Flag,
+            scope: Character,
+            visibility: Hidden,
+            note: "Beat V.4: the character told Bhardo who his patron actually is. The arc's best single choice. Hidden so the journal does not pre-announce that the question exists.",
+        ),
+        (
+            id: "quest.the_kind_work.footing",
+            kind: Choice(options: ["unaligned", "trusted", "complicit"]),
+            scope: Character,
+            visibility: Journal,
+            // Derived rather than written: where the character stands in the arc
+            // is a reading of what they already did, so there is no separate
+            // write that could disagree with the record.
+            derived: Some(ThresholdOf(
+                input: "quest.the_kind_work.commissions",
+                bands: [
+                    (at_least: 3, then: FromChoice(
+                        input: "quest.the_kind_work.offer",
+                        map: {
+                            "accepted": "complicit",
+                            "declined": "trusted",
+                        },
+                    )),
+                    (at_least: 0, then: Const("unaligned")),
+                ],
+            )),
+            note: "Where this character stands in her arc, read off their own record: fewer than three commissions leaves them unaligned; past that, taking the pact reads as complicit and refusing it as trusted. Recomputed on read, never stored.",
+        ),
+
+        // ---- Faction standing ----
+        (
+            id: "faction.council_of_owls.standing",
+            kind: Standing(
+                min: -100, max: 100, default: 0,
+                tiers: [
+                    (at_least: -100, name: "marked"),
+                    (at_least:  -40, name: "distrusted"),
+                    (at_least:  -10, name: "unremarked"),
+                    (at_least:   25, name: "vouched"),
+                    (at_least:   60, name: "counted"),
+                ],
+            ),
+            scope: Character,
+            visibility: Journal,
+            note: "Standing with the Council of Owls. Character scope: a faction's opinion of YOU is personal, unlike a chapter a group reached together. Never decays -- a saga-spanning standing must survive six months between chapters.",
+        ),
+        (
+            id: "faction.crownguard.standing",
+            kind: Standing(
+                min: -100, max: 100, default: 0,
+                tiers: [
+                    (at_least: -100, name: "outlawed"),
+                    (at_least:  -40, name: "suspect"),
+                    (at_least:  -10, name: "unremarked"),
+                    (at_least:   25, name: "commended"),
+                    (at_least:   60, name: "sworn"),
+                ],
+            ),
+            scope: Character,
+            visibility: Journal,
+            note: "Standing with the Crownguard. Same shape and reasoning as the Council of Owls entry above; the tier names differ because the two orders would not describe you the same way.",
+        ),
+    ],
+    // Ids no longer declared, kept so a persisted row under one is recognised
+    // and dropped quietly rather than logged as an unknown id.
+    retired: [],
+)

@@ -4,7 +4,7 @@
 use super::EventMapper;
 use crate::{
     AudioFrontend,
-    audio::sfx::{SFX_DIST_LIMIT_SQR, SfxEvent, SfxTriggerItem, SfxTriggers},
+    audio::sfx::{SFX_DIST_LIMIT_SQR, SfxEvent, SfxTag, SfxTriggerItem, SfxTriggers},
     ecs::comp::{Footsteps, Interpolated},
     scene::{Camera, FigureMgr, Terrain},
 };
@@ -154,13 +154,14 @@ impl EventMapper for MovementEventMapper {
                         sfx_trigger_item,
                         interpolated.pos,
                         Some(Self::get_volume_for_body_type(body)),
+                        SfxTag::Footstep,
                     );
                     internal_state.time = Instant::now();
                     internal_state.steps_taken = 0.0;
                 }
 
-                // update state to determine the next event. We only record the time (above) if
-                // it was dispatched
+                // update state to determine the next event. We only record the
+                // time (above) if it was dispatched
                 internal_state.event = mapped_event;
                 internal_state.on_ground = physics.on_ground.is_some();
                 internal_state.in_water = physics.in_liquid().is_some();

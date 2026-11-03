@@ -256,8 +256,8 @@ impl SkillGroup {
     /// Adds a skill point while subtracting the necessary amount of experience
     fn earn_skill_point(&mut self) -> Result<(), SpRewardError> {
         let sp_cost = self.skill_group_kind.skill_point_cost(self.earned_sp);
-        // If there is insufficient available exp, checked sub will fail as the result
-        // would be less than 0
+        // If there is insufficient available exp, checked sub will fail as the
+        // result would be less than 0
         let new_available_exp = self
             .available_exp
             .checked_sub(sp_cost)
@@ -382,16 +382,17 @@ impl SkillSet {
             skills: SkillSet::initial_skills(),
             character_level: 0,
         };
-        // Lifetime XP is fixed by the restored skill groups and is never mutated
-        // below (skill unlocking only spends SP), so derive the cache once here.
+        // Lifetime XP is fixed by the restored skill groups and is never
+        // mutated below (skill unlocking only spends SP), so derive the
+        // cache once here.
         skillset.recompute_character_level();
         let mut persistence_load_error = None;
 
         // Directly-granted skill groups (Class, Feats — see
         // `SkillGroupKind::is_directly_granted`) are unlocked via
-        // `unlock_skill_group` at creation / `/set_class` / level-milestone, not
-        // earned through the skill tree, so seed their unlock skill here — both
-        // the loop below and class-gated abilities key off
+        // `unlock_skill_group` at creation / `/set_class` / level-milestone,
+        // not earned through the skill tree, so seed their unlock skill
+        // here — both the loop below and class-gated abilities key off
         // has_skill(UnlockGroup(..)). Also repairs characters saved before this
         // seeding.
         let directly_granted_groups: Vec<SkillGroupKind> = skillset
@@ -404,22 +405,23 @@ impl SkillSet {
             skillset.skills.entry(Skill::UnlockGroup(kind)).or_insert(1);
         }
 
-        // Loops while checking the all_skills hashmap. For as long as it can find an
-        // entry where the skill group kind is unlocked, insert the skills corresponding
-        // to that skill group kind. When no more skill group kinds can be found, break
-        // the loop.
+        // Loops while checking the all_skills hashmap. For as long as it can
+        // find an entry where the skill group kind is unlocked, insert
+        // the skills corresponding to that skill group kind. When no
+        // more skill group kinds can be found, break the loop.
         while let Some(skill_group_kind) = all_skills
             .keys()
             .find(|kind| skillset.has_skill(Skill::UnlockGroup(**kind)))
             .copied()
         {
-            // Remove valid skill group kind from the hash map so that loop eventually
-            // terminates.
+            // Remove valid skill group kind from the hash map so that loop
+            // eventually terminates.
             if let Some(skills_result) = all_skills.remove(&skill_group_kind) {
                 match skills_result {
                     Ok(skills) => {
                         let backup_skillset = skillset.clone();
-                        // Iterate over all skills and make sure that unlocking them is successful.
+                        // Iterate over all skills and make sure that unlocking
+                        // them is successful.
                         // If any fail, fall back to skillset before
                         // unlocking any to allow a full respec
                         if !skills
@@ -459,9 +461,10 @@ impl SkillSet {
             self.skill_groups
                 .insert(skill_group_kind, SkillGroup::new(skill_group_kind));
         }
-        // Record the group's unlock skill so `has_skill(UnlockGroup(..))` reflects
-        // membership. Class-gated abilities key off this, and load_from_database's
-        // skill-loading loop already assumes it. Symmetric with the General group.
+        // Record the group's unlock skill so `has_skill(UnlockGroup(..))`
+        // reflects membership. Class-gated abilities key off this, and
+        // load_from_database's skill-loading loop already assumes it.
+        // Symmetric with the General group.
         self.skills
             .entry(Skill::UnlockGroup(skill_group_kind))
             .or_insert(1);
@@ -478,9 +481,9 @@ impl SkillSet {
     /// Returns a mutable reference to a particular skill group in a skillset
     /// Requires that skillset contains skill that unlocks the skill group
     fn skill_group_mut(&mut self, skill_group: SkillGroupKind) -> Option<&mut SkillGroup> {
-        // In order to mutate skill group, we check that the prerequisite skill has been
-        // acquired, as this is one of the requirements for us to consider the skill
-        // group accessible.
+        // In order to mutate skill group, we check that the prerequisite skill
+        // has been acquired, as this is one of the requirements for us
+        // to consider the skill group accessible.
         let skill_group_accessible = self.skill_group_accessible(skill_group);
         if skill_group_accessible {
             self.skill_groups.get_mut(&skill_group)
@@ -548,12 +551,14 @@ impl SkillSet {
         let other_earned = self.total_earned_exp().saturating_sub(general_earned);
         let new_general_earned = target.saturating_sub(other_earned);
         if let Some(sg) = self.skill_groups.get_mut(&general) {
-            // Never drop earned_exp below what's already been spent on skill points:
-            // doing so would make `spent_exp()` silently shrink while the unlocked
-            // skills + earned_sp remain, desyncing the live component from its
-            // persisted form (a forced respec on relog). Floor at `spent` instead —
-            // a down-level request below that floor just can't go lower (rare; the
-            // General tree has no purchasable skills in v1, so spent is normally 0).
+            // Never drop earned_exp below what's already been spent on skill
+            // points: doing so would make `spent_exp()` silently
+            // shrink while the unlocked skills + earned_sp remain,
+            // desyncing the live component from its persisted form
+            // (a forced respec on relog). Floor at `spent` instead —
+            // a down-level request below that floor just can't go lower (rare;
+            // the General tree has no purchasable skills in v1, so
+            // spent is normally 0).
             let spent = sg.spent_exp();
             sg.earned_exp = new_general_earned.max(spent);
             sg.available_exp = sg.earned_exp - spent;
@@ -687,12 +692,16 @@ impl SkillSet {
                             .available_sp
                             .checked_sub(skill.skill_cost(next_level))
                         {
-                            // Perform all mutation inside this branch, to avoid triggering a copy
-                            // on write or flagged storage in cases where this matters.
+                            // Perform all mutation inside this branch, to avoid
+                            // triggering a copy
+                            // on write or flagged storage in cases where this
+                            // matters.
                             let this_ = to_mut(this_);
                             let this = this_.borrow_mut();
-                            // NOTE: Verified to exist previously when we accessed
-                            // this.skill_groups (assuming a non-pathological implementation of
+                            // NOTE: Verified to exist previously when we
+                            // accessed
+                            // this.skill_groups (assuming a non-pathological
+                            // implementation of
                             // ToOwned).
                             let skill_group = this.skill_groups.get_mut(&skill_group_kind).expect(
                                 "Verified to exist when we previously accessed this.skill_groups",
@@ -929,7 +938,8 @@ mod character_level_tests {
     #[test]
     fn character_level_cache_matches_derived_after_experience_gain() {
         let mut skill_set = SkillSet::default();
-        // Fresh skillset: cached field is the level-1 baseline, not the u16 default.
+        // Fresh skillset: cached field is the level-1 baseline, not the u16
+        // default.
         assert_eq!(skill_set.character_level, 1);
 
         // Cross a few level boundaries via the public add-experience path.
@@ -970,10 +980,11 @@ mod character_level_tests {
     }
 
     // BL-20 regression (post-#129 smoke test): `SkillSet::default()` unlocks
-    // Feats directly (both `skill_groups` and the `UnlockGroup` skill flag), but
-    // a DB round-trip used to reset `skills` and only re-seed `UnlockGroup` for
-    // `Class(_)` groups, silently dropping Feats accessibility for every
-    // character after load. Fixed via `SkillGroupKind::is_directly_granted`.
+    // Feats directly (both `skill_groups` and the `UnlockGroup` skill flag),
+    // but a DB round-trip used to reset `skills` and only re-seed
+    // `UnlockGroup` for `Class(_)` groups, silently dropping Feats
+    // accessibility for every character after load. Fixed via
+    // `SkillGroupKind::is_directly_granted`.
     #[test]
     fn feats_group_accessible_after_load_from_database() {
         let created = SkillSet::default();
@@ -1003,8 +1014,9 @@ mod character_level_tests {
 
     #[test]
     fn character_level_cache_repopulated_after_deserialize() {
-        // SkillSet is network-synced via serde; the cache is never sent over the
-        // wire (#[serde(skip)]) and must be rebuilt from XP on deserialize.
+        // SkillSet is network-synced via serde; the cache is never sent over
+        // the wire (#[serde(skip)]) and must be rebuilt from XP on
+        // deserialize.
         let mut skill_set = SkillSet::default();
         skill_set.add_experience(SkillGroupKind::General, LEVEL_XP_BASE * 9);
         let expected = skill_set.character_level;
@@ -1037,8 +1049,8 @@ mod character_level_tests {
 
     #[test]
     fn set_level_downlevel_never_corrupts_spent_exp() {
-        // Simulate a General group with spent exp (earned 5000, available 1000 →
-        // spent 4000), as if skill points had been bought.
+        // Simulate a General group with spent exp (earned 5000, available 1000
+        // → spent 4000), as if skill points had been bought.
         let mut ss = SkillSet::default();
         {
             let sg = ss
@@ -1051,7 +1063,8 @@ mod character_level_tests {
         assert_eq!(ss.skill_groups[&SkillGroupKind::General].spent_exp(), 4000);
 
         // Down-level to 1 (target total exp 0): earned must floor at spent, not
-        // drop below it (which would silently shrink spent_exp → respec on relog).
+        // drop below it (which would silently shrink spent_exp → respec on
+        // relog).
         ss.set_level(1);
         let sg = &ss.skill_groups[&SkillGroupKind::General];
         assert!(
@@ -1118,9 +1131,9 @@ mod class_tree_tests {
         assert!(!mage.has_skill(Skill::UnlockGroup(SkillGroupKind::Class(ClassKind::Cleric))));
     }
 
-    // A character loaded from the DB (skill_groups restored, skills map lacking the
-    // class UnlockGroup — e.g. saved before the seeding) still registers
-    // membership.
+    // A character loaded from the DB (skill_groups restored, skills map lacking
+    // the class UnlockGroup — e.g. saved before the seeding) still
+    // registers membership.
     #[test]
     fn loaded_class_member_keeps_unlock_skill() {
         let kind = SkillGroupKind::Class(ClassKind::Cleric);

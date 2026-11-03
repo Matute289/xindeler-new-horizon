@@ -168,8 +168,9 @@ impl CharacterBehavior for Data {
                     || self.static_data.auto_progress)
                     && let CharacterState::ComboMelee2(c) = &mut update.character
                 {
-                    // Only have the next strike skip the recover period of this strike if not
-                    // every strike in the combo is complete yet
+                    // Only have the next strike skip the recover period of this
+                    // strike if not every strike in the
+                    // combo is complete yet
                     c.start_next_strike = (c.completed_strikes + 1) < c.static_data.strikes.len();
                 }
                 if self.timer.as_secs_f32()
@@ -184,7 +185,6 @@ impl CharacterBehavior for Data {
                     let precision_mult = data
                         .derived
                         .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
-                    let tool_stats = get_tool_stats(data, self.static_data.ability_info);
 
                     data.updater.insert(
                         data.entity,
@@ -192,18 +192,15 @@ impl CharacterBehavior for Data {
                             .melee_constructor
                             .clone()
                             .custom_combo(strike_data.custom_combo.clone())
-                            .create_melee(
-                                precision_mult,
-                                tool_stats,
-                                self.static_data.ability_info,
-                            ),
+                            .create_melee(precision_mult, self.static_data.ability_info),
                     );
                 } else if self.timer < strike_data.swing_duration {
                     // Swings
                     if let CharacterState::ComboMelee2(c) = &mut update.character {
                         c.timer = tick_attack_or_default(data, self.timer, None);
                     }
-                    // TODO: Remove this, this should never have been added in this way
+                    // TODO: Remove this, this should never have been added in
+                    // this way
                     if self.static_data.specifier == Some(FrontendSpecifier::IronGolemFist) {
                         let damage = AttackDamage::new(
                             Damage {

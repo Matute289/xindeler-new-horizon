@@ -88,15 +88,13 @@ impl CharacterBehavior for Data {
                     let precision_mult = data
                         .derived
                         .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
-                    let tool_stats = get_tool_stats(data, self.static_data.ability_info);
 
                     data.updater.insert(
                         data.entity,
-                        self.static_data.melee_constructor.clone().create_melee(
-                            precision_mult,
-                            tool_stats,
-                            self.static_data.ability_info,
-                        ),
+                        self.static_data
+                            .melee_constructor
+                            .clone()
+                            .create_melee(precision_mult, self.static_data.ability_info),
                     );
                 } else if self.timer < self.static_data.swing_duration {
                     // Swings
@@ -111,7 +109,8 @@ impl CharacterBehavior for Data {
                     .try_change_by(-self.static_data.energy_cost)
                     .is_ok()
                 {
-                    // TODO: Remove this, this should never have been added this way
+                    // TODO: Remove this, this should never have been added this
+                    // way
                     if self.static_data.frontend_specifier == Some(FrontendSpecifier::CultistVortex)
                     {
                         let damage = AttackDamage::new(

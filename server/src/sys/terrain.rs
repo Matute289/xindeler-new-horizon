@@ -158,9 +158,9 @@ impl<'a> System<'a> for Sys {
 
         // Generate requested chunks
         //
-        // Submit requests for chunks right before receiving finished chunks so that we
-        // don't create duplicate work for chunks that just finished but are not
-        // yet added to the terrain.
+        // Submit requests for chunks right before receiving finished chunks so
+        // that we don't create duplicate work for chunks that just
+        // finished but are not yet added to the terrain.
         data.chunk_requests.drain(..).for_each(|request| {
             data.chunk_generator.generate_chunk(
                 Some(request.entity),
@@ -207,8 +207,8 @@ impl<'a> System<'a> for Sys {
             // Add to list of chunks to send to nearby players.
             new_chunks.push(key);
 
-            // TODO: code duplication for chunk insertion between here and state.rs
-            // Insert the chunk into terrain changes
+            // TODO: code duplication for chunk insertion between here and
+            // state.rs Insert the chunk into terrain changes
             if data.terrain.insert(key, chunk).is_some() {
                 data.terrain_changes.modified_chunks.insert(key);
             } else {
@@ -311,8 +311,8 @@ impl<'a> System<'a> for Sys {
             }
         }
 
-        // TODO: Consider putting this in another system since this forces us to take
-        // positions by write rather than read access.
+        // TODO: Consider putting this in another system since this forces us to
+        // take positions by write rather than read access.
         let repositioned = (&data.entities, &mut data.positions, (&mut data.forced_updates).maybe(), &data.reposition_entities)
             // TODO: Consider using par_bridge() because Rayon has very poor work splitting for
             // sparse joins.
@@ -363,28 +363,32 @@ impl<'a> System<'a> for Sys {
         new_chunks.par_iter().for_each_init(
             || data.chunk_send_bus.emitter(),
             |chunk_send_emitter, chunk_key| {
-                // We only have to check players inside the maximum view distance of the server
-                // of our own position.
+                // We only have to check players inside the maximum view
+                // distance of the server of our own position.
                 //
-                // We start by partitioning by X, finding only entities in chunks within the X
-                // range of us.  These are guaranteed in bounds due to restrictions on max view
-                // distance (namely: the square of any chunk coordinate plus the max view
-                // distance along both axes must fit in an i32).
+                // We start by partitioning by X, finding only entities in
+                // chunks within the X range of us.  These are
+                // guaranteed in bounds due to restrictions on max view
+                // distance (namely: the square of any chunk coordinate plus the
+                // max view distance along both axes must fit in
+                // an i32).
                 let min_chunk_x = chunk_key.x - real_max_view_distance;
                 let max_chunk_x = chunk_key.x + real_max_view_distance;
                 let start = presences_position_entities
                     .partition_point(|((pos, _), _)| i32::from(pos.x) < min_chunk_x);
-                // NOTE: We *could* just scan forward until we hit the end, but this way we save
-                // a comparison in the inner loop, since also needs to check the
+                // NOTE: We *could* just scan forward until we hit the end, but
+                // this way we save a comparison in the inner
+                // loop, since also needs to check the
                 // list length.  We could also save some time by starting from
                 // start rather than end, but the hope is that this way the
                 // compiler (and machine) can reorder things so both ends are
-                // fetched in parallel; since the vast majority of the time both fetched
-                // elements should already be in cache, this should not use any
-                // extra memory bandwidth.
+                // fetched in parallel; since the vast majority of the time both
+                // fetched elements should already be in cache,
+                // this should not use any extra memory
+                // bandwidth.
                 //
-                // TODO: Benchmark and figure out whether this is better in practice than just
-                // scanning forward.
+                // TODO: Benchmark and figure out whether this is better in
+                // practice than just scanning forward.
                 let end = presences_position_entities
                     .partition_point(|((pos, _), _)| i32::from(pos.x) < max_chunk_x);
                 let interior = &presences_position_entities[start..end];
@@ -406,9 +410,9 @@ impl<'a> System<'a> for Sys {
 
         // Remove chunks that are too far from players.
         //
-        // Note that all chunks involved here (both terrain chunks and pending chunks)
-        // are guaranteed in bounds.  This simplifies the rest of the logic
-        // here.
+        // Note that all chunks involved here (both terrain chunks and pending
+        // chunks) are guaranteed in bounds.  This simplifies the rest
+        // of the logic here.
         let chunks_to_remove = data.terrain
             .par_keys()
             .copied()
@@ -467,11 +471,13 @@ impl<'a> System<'a> for Sys {
 
                 data.chunk_generator.cancel_if_pending(key);
 
-                // If you want to trigger any behaivour on unload, do it in `Server::tick` by
-                // reading `TerrainChanges::removed_chunks` since chunks can also be removed
-                // using eg. /reload_chunks
+                // If you want to trigger any behaivour on unload, do it in
+                // `Server::tick` by
+                // reading `TerrainChanges::removed_chunks` since chunks can
+                // also be removed using eg. /reload_chunks
 
-                // TODO: code duplication for chunk insertion between here and state.rs
+                // TODO: code duplication for chunk insertion between here and
+                // state.rs
                 data.terrain.remove(key).inspect(|_| {
                     data.terrain_changes.removed_chunks.insert(key);
                 })
@@ -624,6 +630,8 @@ impl SpawnEntityData {
                     .with_trade_site(trade_for_site),
             );
 
+            agent.mark = agent_mark;
+
             // Non-humanoids get a patrol origin to stop them moving too far
             if !matches!(body, comp::Body::Humanoid(_)) {
                 agent = agent.with_patrol_origin(pos);
@@ -749,13 +757,15 @@ impl NpcData {
 }
 
 pub fn convert_to_loaded_vd(vd: u32, max_view_distance: u32) -> i32 {
-    // Hardcoded max VD to prevent stupid view distances from creating overflows.
-    // This must be a value ≤
-    // √(i32::MAX - 2 * ((1 << (MAX_WORLD_BLOCKS_LG - TERRAIN_CHUNK_BLOCKS_LG) - 1)²
+    // Hardcoded max VD to prevent stupid view distances from creating
+    // overflows. This must be a value ≤
+    // √(i32::MAX - 2 * ((1 << (MAX_WORLD_BLOCKS_LG - TERRAIN_CHUNK_BLOCKS_LG) -
+    // 1)²
     // - 1)) / 2
     //
-    // since otherwise we could end up overflowing.  Since it is a requirement that
-    // each dimension (in chunks) has to fit in a i16, we can derive √((1<<31)-1
+    // since otherwise we could end up overflowing.  Since it is a requirement
+    // that each dimension (in chunks) has to fit in a i16, we can derive
+    // √((1<<31)-1
     // - 2*((1<<15)-1)^2) / 2 ≥ 1 << 7 as the absolute limit.
     //
     // TODO: Make this more official and use it elsewhere.
@@ -784,8 +794,8 @@ fn prepare_for_vd_check(
     let pos = pos.0;
     let vd = presence.terrain_view_distance.current();
 
-    // NOTE: We use regular as casts rather than as_ because we want to saturate on
-    // overflow.
+    // NOTE: We use regular as casts rather than as_ because we want to saturate
+    // on overflow.
     let player_pos = pos.map(|x| x as i32);
     let player_chunk_pos = TerrainGrid::chunk_key(player_pos);
     let player_vd = convert_to_loaded_vd(vd, max_view_distance);
@@ -796,10 +806,10 @@ fn prepare_for_vd_check(
     // sufficiently far off the map could cause chunks they were nowhere near to
     // stay loaded, parallel universes style).
     //
-    // One could also imagine snapping a player to the part of the map nearest to
-    // them. We don't currently do this in case we rely elsewhere on players
-    // always being near the chunks they're keeping loaded, but it would allow
-    // us to use u32 exclusively so it's tempting.
+    // One could also imagine snapping a player to the part of the map nearest
+    // to them. We don't currently do this in case we rely elsewhere on
+    // players always being near the chunks they're keeping loaded, but it
+    // would allow us to use u32 exclusively so it's tempting.
     let player_aabr_in_chunks = Aabr {
         min: player_chunk_pos - player_vd,
         max: player_chunk_pos + player_vd,
@@ -830,9 +840,9 @@ pub fn prepare_player_presences<'a, P>(
 where
     P: GenericReadStorage<Component = Pos> + Join<Type = &'a Pos>,
 {
-    // We start by collecting presences and positions from players, because they are
-    // very sparse in the entity list and therefore iterating over them for each
-    // chunk can be quite slow.
+    // We start by collecting presences and positions from players, because they
+    // are very sparse in the entity list and therefore iterating over them
+    // for each chunk can be quite slow.
     let world_aabr_in_chunks = Aabr {
         min: Vec2::zero(),
         // NOTE: Cast is correct because chunk coordinates must fit in an i32 (actually, i16).
@@ -853,31 +863,34 @@ where
                 )
             })
             .partition_map(|(player_data, entity, is_client)| {
-                // For chunks with clients, we need to record their entity, because they might
-                // be used for insertion.  These elements fit in 8 bytes, so
-                // this should be pretty cache-friendly.
+                // For chunks with clients, we need to record their entity,
+                // because they might be used for insertion.
+                // These elements fit in 8 bytes, so this should
+                // be pretty cache-friendly.
                 if is_client {
                     Either::Left((player_data, entity))
                 } else {
-                    // For chunks without clients, we only need to record the position and view
-                    // distance.  These elements fit in 4 bytes, which is even cache-friendlier.
+                    // For chunks without clients, we only need to record the
+                    // position and view distance.  These
+                    // elements fit in 4 bytes, which is even cache-friendlier.
                     Either::Right(player_data)
                 }
             });
 
-    // We sort the presence lists by X position, so we can efficiently filter out
-    // players nowhere near the chunk.  This is basically a poor substitute for
-    // the effects of a proper KDTree, but a proper KDTree has too much overhead
-    // to be worth using for such a short list (~ 1000 players at most).  We
-    // also sort by y and reverse view distance; this will become important later.
+    // We sort the presence lists by X position, so we can efficiently filter
+    // out players nowhere near the chunk.  This is basically a poor
+    // substitute for the effects of a proper KDTree, but a proper KDTree
+    // has too much overhead to be worth using for such a short list (~ 1000
+    // players at most).  We also sort by y and reverse view distance; this
+    // will become important later.
     presences_positions_entities
         .sort_unstable_by_key(|&((pos, vd2), _)| (pos.x, pos.y, Reverse(vd2)));
     presences_positions.sort_unstable_by_key(|&(pos, vd2)| (pos.x, pos.y, Reverse(vd2)));
-    // For the vast majority of chunks (present and pending ones), we'll only ever
-    // need the position and view distance.  So we extend it with these from the
-    // list of client chunks, and then do some further work to improve
-    // performance (taking advantage of the fact that they don't require
-    // entities).
+    // For the vast majority of chunks (present and pending ones), we'll only
+    // ever need the position and view distance.  So we extend it with these
+    // from the list of client chunks, and then do some further work to
+    // improve performance (taking advantage of the fact that they don't
+    // require entities).
     presences_positions.extend(
         presences_positions_entities
             .iter()
@@ -887,22 +900,22 @@ where
     // sort, as it's faster in that case (theoretically a proper merge operation
     // would be ideal, but it's not worth pulling in a library for).
     presences_positions.sort_by_key(|&(pos, vd2)| (pos.x, pos.y, Reverse(vd2)));
-    // Now that the list is sorted, we deduplicate players in the same chunk (this
-    // is why we need to sort y as well as x; dedup only works if the list is
-    // sorted by the element we use to dedup).  Importantly, we can then use
-    // only the *first* element as a substitute for all the players in the
-    // chunk, because we *also* sorted from greatest to lowest view
-    // distance, and dedup_by removes all but the first matching element.  In the
-    // common case where a few chunks are very crowded, this further reduces the
-    // work required per chunk.
+    // Now that the list is sorted, we deduplicate players in the same chunk
+    // (this is why we need to sort y as well as x; dedup only works if the
+    // list is sorted by the element we use to dedup).  Importantly, we can
+    // then use only the *first* element as a substitute for all the players
+    // in the chunk, because we *also* sorted from greatest to lowest view
+    // distance, and dedup_by removes all but the first matching element.  In
+    // the common case where a few chunks are very crowded, this further
+    // reduces the work required per chunk.
     presences_positions.dedup_by_key(|&mut (pos, _)| pos);
 
     (presences_positions_entities, presences_positions)
 }
 
 pub fn chunk_in_vd(player_chunk_pos: Vec2<i16>, player_vd_sqr: i32, chunk_pos: Vec2<i32>) -> bool {
-    // NOTE: Guaranteed in bounds as long as prepare_player_presences prepared the
-    // player_chunk_pos and player_vd_sqr.
+    // NOTE: Guaranteed in bounds as long as prepare_player_presences prepared
+    // the player_chunk_pos and player_vd_sqr.
     let adjusted_dist_sqr = (player_chunk_pos.as_::<i32>() - chunk_pos).magnitude_squared();
 
     adjusted_dist_sqr <= player_vd_sqr

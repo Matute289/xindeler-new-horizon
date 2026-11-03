@@ -196,7 +196,8 @@ fn run_client(
         // Wait for other clients to connect
         loop {
             tick(&mut client)?;
-            // NOTE: it's expected that each swarm member will have a unique alias
+            // NOTE: it's expected that each swarm member will have a unique
+            // alias
             let players = client.players().collect::<HashSet<&str>>();
             if to_adminify
                 .iter()
@@ -236,8 +237,8 @@ fn run_client(
     // Main loop
     let world_center = client.world_data().chunk_size().as_::<f32>().cpos_to_wpos() / 2.0;
     loop {
-        // TODO: doesn't seem to produce an error when server is shutdown (process keeps
-        // running)
+        // TODO: doesn't seem to produce an error when server is shutdown
+        // (process keeps running)
         tick(&mut client)?;
         let entity = client.entity();
         // Move or stay still depending on specified options

@@ -156,7 +156,8 @@ impl State {
         let set_priority = move || {
             use thread_priority::*;
             let priority = if is_main_task {
-                // These threads are critical for the main tick loop, so need a higher priority
+                // These threads are critical for the main tick loop, so need a
+                // higher priority
                 ThreadPriority::Crossplatform(TryFrom::try_from(50).unwrap())
             } else {
                 ThreadPriority::Min
@@ -302,6 +303,7 @@ impl State {
         ecs.register::<comp::AbilityCooldowns>();
         ecs.register::<comp::TriggerSlots>();
         ecs.register::<comp::SpellMastery>();
+        ecs.register::<comp::NarrativeState>();
         ecs.register::<comp::AbilityPool>();
         ecs.register::<comp::AttunedItems>();
         ecs.register::<comp::Attuning>();
@@ -438,8 +440,8 @@ impl State {
         ecs.insert(EntitiesDiedLastTick::default());
         ecs.insert(RtsimGizmos::default());
         // Default to not-live; the server overwrites this from
-        // `GameplaySettings::oracle` at startup, and the client overwrites its own
-        // copy from the server on login / mid-session flip.
+        // `GameplaySettings::oracle` at startup, and the client overwrites its
+        // own copy from the server on login / mid-session flip.
         ecs.insert(OracleLive::default());
 
         let num_cpu = num_cpus::get() as u64;
@@ -721,10 +723,11 @@ impl State {
         let mut scheduled_changes = self.ecs.write_resource::<ScheduledBlockChange>();
         let current_time: f64 = self.ecs.read_resource::<Time>().0 * SECONDS_TO_MILLISECONDS;
         let current_time = current_time as u64;
-        // This is important as the poll function has a debug assert that the new poll
-        // is at a more recent time than the old poll. As Time is synced between server
-        // and client, there is a chance that client dt can get slightly ahead of a
-        // server update, so we do not want to panic in that scenario.
+        // This is important as the poll function has a debug assert that the
+        // new poll is at a more recent time than the old poll. As Time
+        // is synced between server and client, there is a chance that
+        // client dt can get slightly ahead of a server update, so we do
+        // not want to panic in that scenario.
         if scheduled_changes.last_poll_time < current_time {
             scheduled_changes.last_poll_time = current_time;
             while let Some(changes) = scheduled_changes.changes.poll(current_time) {
@@ -757,10 +760,11 @@ impl State {
             });
 
             if let (&Ok(old), true) = (&res, during_tick) {
-                // NOTE: If the changes are applied during the tick, we push the *old* value as
-                // the modified block (since it otherwise can't be recovered after the tick).
-                // Otherwise, the changes will be applied after the tick, so we push the *new*
-                // value.
+                // NOTE: If the changes are applied during the tick, we push the
+                // *old* value as the modified block (since it
+                // otherwise can't be recovered after the tick).
+                // Otherwise, the changes will be applied after the tick, so we
+                // push the *new* value.
                 *new = old;
             }
 
@@ -795,8 +799,8 @@ impl State {
         // Only do block updates not during the tick since that's when actual
         // terrain changes are applied.
         //
-        // Clients will get these changes since they're just normal block updates
-        // next tick.
+        // Clients will get these changes since they're just normal block
+        // updates next tick.
         if !during_tick {
             prof_span!(_guard, "Indirectly modified sprites");
 
@@ -907,8 +911,8 @@ impl State {
         self.ecs.write_resource::<ProgramTime>().0 += dt.as_secs_f64();
 
         // Update delta time.
-        // Beyond a delta time of MAX_DELTA_TIME, start lagging to avoid skipping
-        // important physics events.
+        // Beyond a delta time of MAX_DELTA_TIME, start lagging to avoid
+        // skipping important physics events.
         self.ecs.write_resource::<DeltaTime>().0 =
             (dt.as_secs_f32() * time_scale as f32).min(MAX_DELTA_TIME);
 

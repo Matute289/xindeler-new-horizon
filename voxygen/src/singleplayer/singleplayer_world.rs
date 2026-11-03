@@ -171,7 +171,8 @@ impl SingleplayerWorlds {
     pub fn delete_map_file(&mut self, map: usize) {
         let w = &mut self.worlds[map];
         if w.is_generated {
-            // We don't care about the result here since we aren't sure the file exists.
+            // We don't care about the result here since we aren't sure the file
+            // exists.
             let _ = fs::remove_file(&w.map_path);
         }
         w.is_generated = false;

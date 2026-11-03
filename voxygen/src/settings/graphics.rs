@@ -251,7 +251,8 @@ impl GraphicsSettings {
         let is_discrete = matches!(adapter_info.device_type, wgpu::DeviceType::DiscreteGpu);
 
         let preset = if !is_discrete {
-            // Integrated / virtual / CPU fallback — minimal preset to stay playable
+            // Integrated / virtual / CPU fallback — minimal preset to stay
+            // playable
             Preset::Minimal
         } else {
             gpu_preset_from_name(&name)

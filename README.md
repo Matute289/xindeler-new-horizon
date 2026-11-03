@@ -1,12 +1,3 @@
-> [!NOTE]
-> ## Development history
-> This repository (`xindeler-new-horizon`) is the **current, active codebase** for Xindeler.
-> Development briefly moved to a from-scratch port on the [Bevy](https://bevy.org) engine
-> (`Matute289/xindeler`), but on 2026-07-24 the project reverted to this Veloren-derived engine
-> after an engine-strategy investigation found it the more viable path. The Bevy port is
-> superseded but kept as reference; the original frozen source this repo was cloned from lives in
-> a separate `xindeler-old` checkout. All new work happens in this repository.
-
 <!-- SPDX-SnippetBegin -->
 <!-- SPDX-SnippetCopyrightText: 2025 Hrom -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
@@ -60,7 +51,7 @@ Official game downloads and launcher distribution.
 
 ## Getting Xindeler
 
-Official builds for Windows, macOS and Linux will be available through the Downloads portal.
+Official builds for Windows, macOS and Linux are available through the [Downloads](https://downloads.xindeler.com) portal, published automatically with every tagged release. macOS builds are signed and notarized; Windows builds are currently unsigned (you may see a security warning on first launch — this is expected and the binary is safe).
 
 Due to active development, builds may change frequently and compatibility between versions is not guaranteed.
 
@@ -137,5 +128,3 @@ Xindeler remains an open-source project. Refer to the repository license files f
 ## Status
 
 🚧 Active Development
-
-The project is currently undergoing infrastructure migration, rebranding, and feature expansion as part of its evolution from its original Veloren-based foundation into a standalone MMORPG platform.

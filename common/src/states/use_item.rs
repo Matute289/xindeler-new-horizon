@@ -142,7 +142,8 @@ impl CharacterBehavior for Data {
         }
 
         if matches!(update.character, CharacterState::Roll(_)) {
-            // Remove potion/saturation effect if left the use item state early by rolling
+            // Remove potion/saturation effect if left the use item state early
+            // by rolling
             output_events.emit_server(BuffEvent {
                 entity: data.entity,
                 buff_change: BuffChange::RemoveByKind(BuffKind::Potion),

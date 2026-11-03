@@ -141,7 +141,8 @@ impl RegionMap {
                 )
                     .join()
                 {
-                    // Entity should already be removed from region bitset if deleted.
+                    // Entity should already be removed from region bitset if
+                    // deleted.
                     debug_assert!(entities.is_alive(entities.entity(id)));
 
                     let should_sync = maybe_presence.is_none_or(|p| p.kind.sync_me());
@@ -168,8 +169,10 @@ impl RegionMap {
                         // Remove any non-existant entities (or just ones that lost their position
                         // component) TODO: distribute this between ticks
                         None | Some(_) => {
-                            // TODO: shouldn't there be a way to extract the bitset of entities with
-                            // positions directly from specs? Yes, with `.mask()` on the component
+                            // TODO: shouldn't there be a way to extract the
+                            // bitset of entities with
+                            // positions directly from specs? Yes, with
+                            // `.mask()` on the component
                             // storage.
                             self.entities_to_remove.push((i, id));
                         },
@@ -184,8 +187,8 @@ impl RegionMap {
             });
 
         // Mutate
-        // Note entity moving is outside the whole loop so that the same entity is not
-        // checked twice (this may be fine though...)
+        // Note entity moving is outside the whole loop so that the same entity
+        // is not checked twice (this may be fine though...)
         while let Some((i, id, pos)) = self.entities_to_move.pop() {
             // Remove from old region.
             let (prev_key, region) = self.regions.get_index_mut(i).map(|(k, v)| (*k, v)).unwrap();
@@ -204,8 +207,8 @@ impl RegionMap {
         for key in regions_to_remove.into_iter() {
             // Check that the region is still removable
             if self.regions.get(&key).unwrap().removable() {
-                // Note we have to use key's here since the index can change when others are
-                // removed
+                // Note we have to use key's here since the index can change
+                // when others are removed
                 self.regions.swap_remove(&key);
             }
         }
@@ -272,8 +275,8 @@ pub fn region_in_vd(key: Vec2<i32>, pos: Vec3<f32>, vd: f32) -> bool {
     let vd_extended = vd + TETHER_LENGTH as f32 * 2.0f32.sqrt();
 
     let min_region_pos = RegionMap::key_pos(key).map(|e| e as f32);
-    // Should be diff to closest point on the square (which can be in the middle of
-    // an edge)
+    // Should be diff to closest point on the square (which can be in the middle
+    // of an edge)
     let diff = (min_region_pos - Vec2::from(pos)).map(|e| {
         if e < 0.0 {
             (e + REGION_SIZE as f32).min(0.0)

@@ -272,8 +272,8 @@ fn weapon_stats() -> Result<(), Box<dyn Error>> {
         .collect();
 
     for record in rdr.records() {
-        // Does all items even outside weapons since we check if itemkind was a tool
-        // anyways
+        // Does all items even outside weapons since we check if itemkind was a
+        // tool anyways
         let items: Vec<comp::Item> = comp::Item::new_from_asset_glob("common.items.*")
             .expect("Failed to iterate over item folders!");
 

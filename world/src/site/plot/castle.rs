@@ -87,7 +87,8 @@ impl Structure for Castle {
                             min: wpos.with_z(self.alt - 20),
                             max: (wpos + ts).with_z(self.alt + wall_height),
                         }));
-                        // TODO Figure out logic to choose on on which site wall should be placed
+                        // TODO Figure out logic to choose on on which site wall
+                        // should be placed
                         // (inner, outer)
                         let parapet = painter.prim(Primitive::Aabb(Aabb {
                             min: (wpos - dir.yx()).with_z(self.alt + wall_height),

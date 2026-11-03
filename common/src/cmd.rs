@@ -420,7 +420,8 @@ impl FromStr for EntityTarget {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // NOTE: `@` is an invalid character in usernames, so we can use it here.
+        // NOTE: `@` is an invalid character in usernames, so we can use it
+        // here.
         if let Some((spec, data)) = s.split_once('@') {
             match spec {
                 "rtsim" => Ok(EntityTarget::RtsimNpc(data.to_string())),

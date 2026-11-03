@@ -81,7 +81,8 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| userdata_dir.join("voxygen").join("logs"));
 
-    // Init split logging (err always, info+telemetry with logging-verbose feature).
+    // Init split logging (err always, info+telemetry with logging-verbose
+    // feature).
     let log_guards = common_frontend::init_split_logs("client", &logs_dir);
     let game_version = common::util::DISPLAY_VERSION.as_str();
     common::telemetry!(
@@ -97,8 +98,8 @@ fn main() {
 
     info!("Using userdata dir at: {}", userdata_dir.display());
 
-    // Determine Voxygen's config directory either by env var or placed in veloren's
-    // userdata folder
+    // Determine Voxygen's config directory either by env var or placed in
+    // veloren's userdata folder
     let config_dir = std::env::var_os("VOXYGEN_CONFIG")
         .map(PathBuf::from)
         .and_then(|path| {
@@ -143,7 +144,8 @@ fn main() {
     };
     use tokio::runtime::Builder;
 
-    // TODO: evaluate std::thread::available_concurrency as a num_cpus replacement
+    // TODO: evaluate std::thread::available_concurrency as a num_cpus
+    // replacement
     let cores = num_cpus::get();
     let tokio_runtime = Arc::new(
         Builder::new_multi_thread()

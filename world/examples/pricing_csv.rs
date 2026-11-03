@@ -40,7 +40,8 @@ fn good_pricing_csv(world: &World, index: &Index) -> Result<(), Box<dyn Error>> 
                 && let Some(economy) = site.economy.as_ref()
             {
                 let prices = economy.get_site_prices();
-                //println!("{:?}: {:?} {:?}", site.name(), civsite.center, prices);
+                //println!("{:?}: {:?} {:?}", site.name(), civsite.center,
+                // prices);
                 csv.write_record([
                     site.name().unwrap_or(""),
                     &format!("{}", civsite.center.x),

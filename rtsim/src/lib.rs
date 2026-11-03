@@ -136,7 +136,7 @@
 //!
 //! See [`rule::npc_ai`].
 
-#![feature(never_type, binary_heap_drain_sorted)]
+#![feature(binary_heap_drain_sorted)]
 
 pub mod ai;
 pub mod data;
@@ -302,8 +302,8 @@ impl RtState {
         world: &World,
         index: IndexRef,
     ) {
-        // TODO: Queue these events up and handle them on a regular rtsim tick instead
-        // of executing their handlers immediately.
+        // TODO: Queue these events up and handle them on a regular rtsim tick
+        // instead of executing their handlers immediately.
         if let Some(handlers) = self.event_handlers.get::<EventHandlersOf<E>>() {
             handlers
                 .iter()

@@ -254,8 +254,8 @@ impl MusicMgr {
             && let Some(player_pos) = positions.get(player)
         {
             // TODO: `group::ENEMY` will eventually be moved server-side with an
-            // alignment/faction rework, so this will need an alternative way to measure
-            // "in-combat-ness"
+            // alignment/faction rework, so this will need an alternative way to
+            // measure "in-combat-ness"
             let num_nearby_entities: u32 = (&entities, &positions, &healths, &groups)
                 .join()
                 .map(|(entity, pos, health, group)| {
@@ -311,9 +311,9 @@ impl MusicMgr {
         let site_changed = current_site != self.last_site;
         self.last_site = current_site;
 
-        // On site transition override the music state to Transition(Explore, Explore)
-        // so the interrupt path triggers an immediate crossfade to a
-        // context-appropriate track.
+        // On site transition override the music state to Transition(Explore,
+        // Explore) so the interrupt path triggers an immediate
+        // crossfade to a context-appropriate track.
         if (site_changed)
             && !matches!(
                 music_state,
@@ -323,12 +323,12 @@ impl MusicMgr {
             music_state = MusicState::Transition(MusicActivity::Explore, MusicActivity::Explore);
         }
 
-        // TODO: Instead of a constant tick, make this a timer that starts only when
-        // combat might end, providing a proper "buffer".
+        // TODO: Instead of a constant tick, make this a timer that starts only
+        // when combat might end, providing a proper "buffer".
         // interrupt_delay dictates the time between attempted interrupts.
         // Transition(Explore, Explore) bypasses the delay.
-        // Site changes should always switch immediately regardless of when the last
-        // interrupt was.
+        // Site changes should always switch immediately regardless of when the
+        // last interrupt was.
         let interrupt = matches!(music_state, MusicState::Transition(_, _))
             && (matches!(
                 music_state,
@@ -336,8 +336,8 @@ impl MusicMgr {
             ) || time_f64(now) - time_f64(last_interrupt_attempt)
                 > mtm.0.interrupt_delay as f64);
 
-        // Hack to end combat music since there is currently nothing that detects
-        // transitions away
+        // Hack to end combat music since there is currently nothing that
+        // detects transitions away
         if matches!(
             music_state,
             MusicState::Transition(
@@ -368,8 +368,9 @@ impl MusicMgr {
                 self.gap_time = 0.0;
                 self.gap_length = 0.0;
                 // Transition(Explore, Explore) is an internal signal only.
-                // Resolve it to Activity(Explore) so the track filter in play_random_track
-                // finds matching soundtrack entries.
+                // Resolve it to Activity(Explore) so the track filter in
+                // play_random_track finds matching soundtrack
+                // entries.
                 let track_state = if music_state
                     == MusicState::Transition(MusicActivity::Explore, MusicActivity::Explore)
                 {
@@ -406,7 +407,8 @@ impl MusicMgr {
                     self.is_gap = true
                 } else if self.gap_time < 0.0 {
                     // Gap time is up, play a track
-                    // Hack to make combat situations not cancel explore music for now
+                    // Hack to make combat situations not cancel explore music
+                    // for now
                     if music_state
                         == MusicState::Transition(
                             MusicActivity::Explore,
@@ -471,12 +473,12 @@ impl MusicMgr {
         let current_biome = client.current_biome();
         let current_site = client.current_site();
 
-        // Filter the soundtrack in stages, so that we don't overprune it if there are
-        // too many constraints. Returning Err(()) signals that we couldn't find
-        // an appropriate track for the current state, and hence the state
-        // machine for the activity shouldn't be updated.
-        // First, filter out tracks not matching the timing, site, biome, and current
-        // activity
+        // Filter the soundtrack in stages, so that we don't overprune it if
+        // there are too many constraints. Returning Err(()) signals
+        // that we couldn't find an appropriate track for the current
+        // state, and hence the state machine for the activity shouldn't
+        // be updated. First, filter out tracks not matching the timing,
+        // site, biome, and current activity
         let mut maybe_tracks = self
             .soundtrack
             .tracks
@@ -497,8 +499,8 @@ impl MusicMgr {
             .filter(|track| &track.music_state == music_state)
             .collect::<Vec<&SoundtrackItem>>();
         if maybe_tracks.is_empty() {
-            // If tracklist is empty, it may be that the current site kind does not exist
-            // yet. Use sensible defaults in that case.
+            // If tracklist is empty, it may be that the current site kind does
+            // not exist yet. Use sensible defaults in that case.
             maybe_tracks =
                 self.soundtrack
                     .tracks
@@ -525,8 +527,8 @@ impl MusicMgr {
                 warn!(error_string);
             }
         }
-        // Second, prevent playing the last track (when not in combat, because then it
-        // needs to loop)
+        // Second, prevent playing the last track (when not in combat, because
+        // then it needs to loop)
         if matches!(
             music_state,
             &MusicState::Activity(MusicActivity::Combat(CombatIntensity::High))

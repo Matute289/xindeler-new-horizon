@@ -429,7 +429,8 @@ impl Widget for BuffsBar<'_> {
                 |(i, ((((id, timer_id), txt_id), mult_id), buff))| {
                     let max_duration = buff.kind.max_duration();
                     let current_duration = buff.end_time.map(|end| end - self.time.0);
-                    // Percentage to determine which frame of the timer overlay is displayed
+                    // Percentage to determine which frame of the timer overlay
+                    // is displayed
                     let duration_percentage = current_duration.map_or(1000.0, |cur| {
                         max_duration.map_or(1000.0, |max| cur / max.0 * 1000.0)
                     }) as u32;

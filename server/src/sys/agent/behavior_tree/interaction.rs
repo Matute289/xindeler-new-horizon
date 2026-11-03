@@ -304,13 +304,18 @@ pub fn handle_inbox_update_pending_trade(bdata: &mut BehaviorData) -> bool {
                         },
                         (Some(balance0), Some(balance1)) => {
                             if balance0 >= balance1 {
-                                // If the trade is favourable to us, only send an accept message if
+                                // If the trade is favourable to us, only send
+                                // an accept message if
                                 // we're not already accepting
-                                // (since otherwise, spam-clicking the accept button
-                                // results in lagging and moving to the review phase of an
+                                // (since otherwise, spam-clicking the accept
+                                // button
+                                // results in lagging and moving to the review
+                                // phase of an
                                 // unfavorable trade (although since
-                                // the phase is included in the message, this shouldn't
-                                // result in fully accepting an unfavourable trade))
+                                // the phase is included in the message, this
+                                // shouldn't
+                                // result in fully accepting an unfavourable
+                                // trade))
                                 if !pending.accept_flags[who] && !pending.is_empty_trade() {
                                     emitters.emit(ProcessTradeActionEvent(
                                         *agent_data.entity,
@@ -335,7 +340,8 @@ pub fn handle_inbox_update_pending_trade(bdata: &mut BehaviorData) -> bool {
                                     ));
                                 }
                                 if pending.phase != TradePhase::Mutate {
-                                    // we got into the review phase but without balanced goods,
+                                    // we got into the review phase but without
+                                    // balanced goods,
                                     // decline
                                     agent.behavior.unset(BehaviorState::TRADING);
                                     agent.target = None;
@@ -427,7 +433,8 @@ pub fn handle_inbox_cancel_interactions(bdata: &mut BehaviorData) -> bool {
                 if let (Some(target), Some(speaker)) =
                     (agent.target, get_entity_by_id(*by, bdata.read_data))
                 {
-                    // in combat, speak to players that aren't the current target
+                    // in combat, speak to players that aren't the current
+                    // target
                     if !target.hostile || target.target != speaker {
                         if agent.behavior.can_trade(agent_data.alignment.copied(), *by) {
                             agent_data.chat_npc_if_allowed_to_speak(

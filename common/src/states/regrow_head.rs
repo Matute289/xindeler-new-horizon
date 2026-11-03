@@ -84,7 +84,8 @@ impl CharacterBehavior for Data {
                 }
             },
             _ => {
-                // If we somehow ended up in an incorrect character state, end the ability
+                // If we somehow ended up in an incorrect character state, end
+                // the ability
                 end_ability(data, &mut update);
             },
         }

@@ -147,8 +147,8 @@ impl CharacterBehavior for Data {
                         Some(data.stats),
                     );
 
-                    // Removes the thrown item from the entity's inventory and creates a
-                    // projectile
+                    // Removes the thrown item from the entity's inventory and
+                    // creates a projectile
                     output_events.emit_server(ThrowEvent {
                         entity: data.entity,
                         pos,
@@ -175,7 +175,8 @@ impl CharacterBehavior for Data {
                         c.timer = tick_attack_or_default(data, self.timer, None);
                     }
 
-                    // Consumes energy if there's enough left and input is held down
+                    // Consumes energy if there's enough left and input is held
+                    // down
                     update
                         .energy
                         .change_by(-self.static_data.energy_drain * data.dt.0);
@@ -185,7 +186,8 @@ impl CharacterBehavior for Data {
                         c.timer = tick_attack_or_default(data, self.timer, None);
                     }
 
-                    // Consumes energy if there's enough left and RMB is held down
+                    // Consumes energy if there's enough left and RMB is held
+                    // down
                     update
                         .energy
                         .change_by(-self.static_data.energy_drain * data.dt.0 / 5.0);

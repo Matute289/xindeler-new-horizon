@@ -133,7 +133,8 @@ impl Link for Mounting {
                 .get(mount)
                 .is_some_and(|cs| !matches!(cs, comp::CharacterState::Roll(_)));
 
-            // Ensure that both entities are alive and that they continue to be linked
+            // Ensure that both entities are alive and that they continue to be
+            // linked
             is_alive_and_well(mount)
                 && is_alive_and_well(rider)
                 && is_mounts.get(mount).is_some()

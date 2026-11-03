@@ -76,12 +76,12 @@ impl<'a> System<'a> for Sys {
         (read_data, mut clients, mut players, mut pending_logins, mut editable_settings): Self::SystemData,
     ) {
         let mut make_admin_emitter = read_data.make_admin_events.emitter();
-        // Player list to send new players, and lookup from UUID to entity (so we don't
-        // have to do a linear scan over all entities on each login to see if
-        // it's a duplicate).
+        // Player list to send new players, and lookup from UUID to entity (so
+        // we don't have to do a linear scan over all entities on each
+        // login to see if it's a duplicate).
         //
-        // NOTE: For this to work as desired, we must maintain the invariant that there
-        // is just one player per UUID!
+        // NOTE: For this to work as desired, we must maintain the invariant
+        // that there is just one player per UUID!
         let (player_list, old_players_by_uuid): (HashMap<_, _>, HashMap<_, _>) = (
             &read_data.entities,
             &read_data.uids,
@@ -113,20 +113,20 @@ impl<'a> System<'a> for Sys {
             })
             .unzip();
         let max_players = usize::from(read_data.settings.max_players);
-        // NOTE: max_players starts as a u16, so this will not use unlimited memory even
-        // if people set absurdly high values (though we should also cap the value
-        // elsewhere).
+        // NOTE: max_players starts as a u16, so this will not use unlimited
+        // memory even if people set absurdly high values (though we
+        // should also cap the value elsewhere).
         let capacity = max_players * 2;
         // List of new players to update player lists of all clients.
         //
         // Big enough that we hopefully won't have to reallocate.
         //
-        // Also includes a list of logins to retry and finished_pending, since we
-        // happen to update those around the same time that we update the new
-        // players list.
+        // Also includes a list of logins to retry and finished_pending, since
+        // we happen to update those around the same time that we update
+        // the new players list.
         //
-        // NOTE: stdlib mutex is more than good enough on Linux and (probably) Windows,
-        // but not Mac.
+        // NOTE: stdlib mutex is more than good enough on Linux and (probably)
+        // Windows, but not Mac.
         let new_players = parking_lot::Mutex::new((
             HashMap::<_, (_, _, _, _)>::with_capacity(capacity),
             Vec::with_capacity(capacity),
@@ -430,7 +430,8 @@ impl<'a> System<'a> for Sys {
             pending_logins.remove(e);
         });
 
-        // Insert retry attempts back into pending_logins to be processed next tick
+        // Insert retry attempts back into pending_logins to be processed next
+        // tick
         for (entity, pending) in retries {
             let _ = pending_logins.insert(entity, pending);
         }
@@ -444,22 +445,25 @@ impl<'a> System<'a> for Sys {
                 info!(?username, "New User");
                 // Add Player component to this client.
                 //
-                // Note that since players has been write locked for the duration of this
-                // system, we know that nobody else added any players since we
-                // last checked its value, and we checked that everything in
+                // Note that since players has been write locked for the
+                // duration of this system, we know that nobody
+                // else added any players since we last checked
+                // its value, and we checked that everything in
                 // new_players was not already in players, so we know the insert
-                // succeeds and the old entry was vacant.  Moreover, we know that all new
-                // players we added have different UUIDs both from each other, and from any old
+                // succeeds and the old entry was vacant.  Moreover, we know
+                // that all new players we added have different
+                // UUIDs both from each other, and from any old
                 // players, preserving the uniqueness invariant.
                 players
                     .insert(entity, player)
                     .expect("The entity was joined against in the same system, so it exists");
 
-                // Give the Admin component to the player if their name exists in
-                // admin list
+                // Give the Admin component to the player if their name exists
+                // in admin list
                 if let Some(admin) = admin {
-                    // We need to defer writing to the Admin storage since it's borrowed immutably
-                    // by this system via TrackedStorages.
+                    // We need to defer writing to the Admin storage since it's
+                    // borrowed immutably by this system via
+                    // TrackedStorages.
                     make_admin_emitter.emit(MakeAdminEvent {
                         entity,
                         admin: Admin(admin.role.into()),
@@ -470,13 +474,15 @@ impl<'a> System<'a> for Sys {
             })
             .collect::<Vec<_>>();
 
-        // Tell all clients to add the new players to the player list, in parallel.
+        // Tell all clients to add the new players to the player list, in
+        // parallel.
         (players.mask(), &clients)
             .par_join()
             .for_each(|(_, client)| {
-                // Send messages sequentially within each client; by the time we have enough
-                // players to make parallelizing useful, we will have way more
-                // players than cores.
+                // Send messages sequentially within each client; by the time we
+                // have enough players to make parallelizing
+                // useful, we will have way more players than
+                // cores.
                 msgs.iter().for_each(|msg| {
                     let _ = client.send_prepared(msg);
                 });

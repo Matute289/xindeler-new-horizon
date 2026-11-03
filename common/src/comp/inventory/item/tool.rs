@@ -595,8 +595,8 @@ impl<T> AbilityKind<T> {
         buffs: Option<&Buffs>,
     ) -> Option<(&T, Option<ContextualIndex>)> {
         let unlocked = |s: Option<Skill>, a| {
-            // If there is a skill requirement and the skillset does not contain the
-            // required skill, return None
+            // If there is a skill requirement and the skillset does not contain
+            // the required skill, return None
             s.is_none_or(|s| skillset.is_some_and(|ss| ss.has_skill(s)))
                 .then_some(a)
         };

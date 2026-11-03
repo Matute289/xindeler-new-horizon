@@ -8,7 +8,7 @@ use tokio::sync::watch;
 use tracing::error;
 use xindeler_query_server::{
     client::QueryClient,
-    proto::{ServerBattleMode, ServerInfo},
+    proto::{ServerBattleMode, ServerIdentity, ServerInfo},
     server::{Metrics, QueryServer},
 };
 
@@ -37,6 +37,11 @@ async fn main() {
     println!("Ping = {}ms", ping.as_millis());
     println!("Server info: {info:?}");
     assert_eq!(info, DEFAULT_SERVER_INFO);
+
+    let (identity, ping) = client.identity().await.unwrap();
+    println!("Ping = {}ms", ping.as_millis());
+    println!("Server identity: {identity:?}");
+    assert_eq!(identity, ServerIdentity::XINDELER);
 
     let start = Instant::now();
 

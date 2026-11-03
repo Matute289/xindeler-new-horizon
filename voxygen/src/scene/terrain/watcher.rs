@@ -94,8 +94,8 @@ impl BlocksOfInterest {
         let mut flowers = Vec::new();
         let mut interactables = Vec::new();
         let mut lights = Vec::new();
-        // Lights that can be omitted at random if we have too many and need to cull
-        // some of them
+        // Lights that can be omitted at random if we have too many and need to
+        // cull some of them
         let mut minor_lights = Vec::new();
         let mut fire_bowls = Vec::new();
         let mut snow = Vec::new();
@@ -172,7 +172,8 @@ impl BlocksOfInterest {
                     }
 
                     let river_speed_sq = river_velocity.magnitude_squared();
-                    // Assign a river speed to water blocks depending on river velocity
+                    // Assign a river speed to water blocks depending on river
+                    // velocity
                     if river_speed_sq < 0.45 && river_speed_sq > 0.15 {
                         slow_river.push(pos)
                     }
@@ -296,8 +297,8 @@ impl BlocksOfInterest {
                 interactables.push((pos, Interaction::Collect));
             }
             if let Some(glow) = block.get_glow() {
-                // Currently, we count filled blocks as 'minor' lights, and sprites as
-                // non-minor.
+                // Currently, we count filled blocks as 'minor' lights, and
+                // sprites as non-minor.
                 if block.get_sprite().is_none() {
                     minor_lights.push((pos, glow));
                 } else {
@@ -306,8 +307,8 @@ impl BlocksOfInterest {
             }
         });
 
-        // TODO: Come up with a better way to prune many light sources: grouping them
-        // into larger lights with k-means clustering, perhaps?
+        // TODO: Come up with a better way to prune many light sources: grouping
+        // them into larger lights with k-means clustering, perhaps?
         const MAX_MINOR_LIGHTS: usize = 64;
         lights.extend(minor_lights.sample(&mut rng, MAX_MINOR_LIGHTS).copied());
 

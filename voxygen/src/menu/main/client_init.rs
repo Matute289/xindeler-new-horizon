@@ -102,12 +102,15 @@ impl ClientInit {
                     break;
                 }
                 let mut mismatched_server_info = None;
-                // Rebuilt fresh each attempt (unlike `trust_fn`, which only borrows `tx`/
-                // `trust_rx` and so is implicitly `Copy`): this closure runs inside
-                // `Client::acquire_auth_token`'s `spawn_blocking`, which requires
-                // `Send + 'static`, so it must own its captures -- `tx`/`code_rx` are
-                // cloned in (crossbeam channels are cheap to clone and MPMC, so whichever
-                // clone is actively blocked on `code_rx.recv()` still receives the one
+                // Rebuilt fresh each attempt (unlike `trust_fn`, which only
+                // borrows `tx`/ `trust_rx` and so is implicitly
+                // `Copy`): this closure runs inside
+                // `Client::acquire_auth_token`'s `spawn_blocking`, which
+                // requires `Send + 'static`, so it must own its
+                // captures -- `tx`/`code_rx` are
+                // cloned in (crossbeam channels are cheap to clone and MPMC, so
+                // whichever clone is actively blocked on
+                // `code_rx.recv()` still receives the one
                 // `code_tx.send` a real submission produces).
                 let code_fn = {
                     let tx = tx.clone();
@@ -188,9 +191,10 @@ impl ClientInit {
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
 
-            // Parsing/host name resolution successful but no connection succeeded
-            // If last_err is None this typically means there was no server up at the input
-            // address and all the attempts timed out.
+            // Parsing/host name resolution successful but no connection
+            // succeeded If last_err is None this typically means
+            // there was no server up at the input address and all
+            // the attempts timed out.
             let _ = tx.send(Msg::Done(Err(last_err.unwrap_or(Error::ServerNotFound))));
 
             // Safe drop runtime -- see the comment on the identical call

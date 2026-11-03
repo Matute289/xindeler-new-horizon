@@ -32,9 +32,9 @@ fn on_death(ctx: EventCtx<ReportEvents, OnDeath>) {
             })
         });
 
-        // TODO: Don't push report to NPC inboxes, have a dedicated data structure that
-        // tracks reports by chunks and then have NPCs decide to query this
-        // data structure in their own time.
+        // TODO: Don't push report to NPC inboxes, have a dedicated data
+        // structure that tracks reports by chunks and then have NPCs
+        // decide to query this data structure in their own time.
         for actor_id in nearby {
             if let Some(actor) = data.actors.get_mut(actor_id)
                 && let Some(npc) = actor.npc_mut()

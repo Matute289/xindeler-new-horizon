@@ -195,9 +195,9 @@ impl Loadout {
         time: Time,
     ) {
         if self.slot(equip_slot_b).is_none() || self.slot(equip_slot_b).is_none() {
-            // Currently all loadouts contain slots for all EquipSlots so this can never
-            // happen, but if loadouts with alternate slot combinations are
-            // introduced then it could.
+            // Currently all loadouts contain slots for all EquipSlots so this
+            // can never happen, but if loadouts with alternate slot
+            // combinations are introduced then it could.
             warn!("Cannot swap slots for non-existent equip slot");
             return;
         }
@@ -387,8 +387,8 @@ impl Loadout {
         equip_slot: EquipSlot,
         item_kind: Option<&ItemKind>,
     ) -> bool {
-        // Disallow equipping incompatible weapon pairs (i.e a two-handed weapon and a
-        // one-handed weapon)
+        // Disallow equipping incompatible weapon pairs (i.e a two-handed weapon
+        // and a one-handed weapon)
         if !(match equip_slot {
             EquipSlot::ActiveMainhand => Loadout::is_valid_weapon_pair(
                 item_kind,
@@ -432,17 +432,18 @@ impl Loadout {
     }
 
     pub(super) fn swap_equipped_weapons(&mut self, time: Time) {
-        // Checks if a given slot can hold an item right now, defaults to true if
-        // nothing is equipped in slot
+        // Checks if a given slot can hold an item right now, defaults to true
+        // if nothing is equipped in slot
         let valid_slot = |equip_slot| {
             self.equipped(equip_slot)
                 .is_none_or(|i| self.slot_can_hold(equip_slot, Some(&*i.kind())))
         };
 
-        // If every weapon is currently in a valid slot, after this change they will
-        // still be in a valid slot. This is because active mainhand and
-        // inactive mainhand, and active offhand and inactive offhand have the same
-        // requirements on what can be equipped.
+        // If every weapon is currently in a valid slot, after this change they
+        // will still be in a valid slot. This is because active
+        // mainhand and inactive mainhand, and active offhand and
+        // inactive offhand have the same requirements on what can be
+        // equipped.
         if valid_slot(EquipSlot::ActiveMainhand)
             && valid_slot(EquipSlot::ActiveOffhand)
             && valid_slot(EquipSlot::InactiveMainhand)
@@ -520,8 +521,9 @@ impl Loadout {
     pub(super) fn cull_recently_unequipped_items(&mut self, time: Time) {
         self.recently_unequipped_items
             .retain(|_def, (unequip_time, count)| {
-                // If somehow time went backwards or faulty unequip time supplied, set unequip
-                // time to minimum of current time and unequip time
+                // If somehow time went backwards or faulty unequip time
+                // supplied, set unequip time to minimum of
+                // current time and unequip time
                 if time.0 < unequip_time.0 {
                     *unequip_time = time;
                 }

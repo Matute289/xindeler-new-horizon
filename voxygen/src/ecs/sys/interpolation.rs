@@ -40,11 +40,13 @@ impl<'a> System<'a> for Sys {
         )
             .join()
         {
-            // Update interpolation values, but don't interpolate far things or objects
+            // Update interpolation values, but don't interpolate far things or
+            // objects
             if i.pos.distance_squared(pos.0) < 64.0 * 64.0 && !matches!(body, Body::Object(_)) {
-                // Note, these values are specifically tuned for smoother motion with high
-                // network latency or low network sampling rate and for smooth
-                // block hopping (which is instantaneous)
+                // Note, these values are specifically tuned for smoother motion
+                // with high network latency or low network
+                // sampling rate and for smooth block hopping
+                // (which is instantaneous)
                 const POS_LERP_RATE_FACTOR: f32 = 10.0;
                 i.pos = Lerp::lerp(i.pos, pos.0 + vel.0 * 0.03, POS_LERP_RATE_FACTOR * dt.0);
                 i.ori = Ori::slerp(i.ori, *ori, base_ori_interp(body) * dt.0);
@@ -64,8 +66,8 @@ impl<'a> System<'a> for Sys {
                 .err()
                 .map(|e| warn!(?e, "Error inserting Interpolated component"));
         }
-        // Remove Interpolated component from entities which don't have a position or an
-        // orientation or a velocity
+        // Remove Interpolated component from entities which don't have a
+        // position or an orientation or a velocity
         for entity in (&entities, !&positions, &interpolated)
             .join()
             .map(|(e, _, _)| e)

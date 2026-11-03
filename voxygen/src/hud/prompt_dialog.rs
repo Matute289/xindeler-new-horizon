@@ -152,7 +152,8 @@ impl Widget for PromptDialog<'_> {
                 .outcome_via_keypress
                 .is_some_and(|outcome| outcome)
         {
-            // Primary use should be through pressing the key instead of clicking this
+            // Primary use should be through pressing the key instead of
+            // clicking this
             event = Some(DialogOutcomeEvent::Affirmative(
                 self.prompt_dialog_settings.affirmative_event.clone(),
             ));

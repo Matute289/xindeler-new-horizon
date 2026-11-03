@@ -4,13 +4,17 @@
 # workflow around this script — this script only knows how to assemble the
 # bundle shape, not about Apple credentials.
 #
-# Usage: macos-package.sh <binary_path> <arch_label> <version>
+# Usage: macos-package.sh <binary_path> <arch_label> <version> <assets_dir>
 #   arch_label: "arm64" or "x86_64" — used in the bundle id and dmg filename.
+#   assets_dir: extracted assets/ tree to bundle into the app (NH-60 — a
+#     manual macOS download previously shipped without it, same crash as
+#     Windows/Linux; see ../../docs/design/specs/2026-09-09-updater-sync-protocol-contract.md).
 set -euo pipefail
 
 BINARY_PATH="$1"
 ARCH_LABEL="$2"
 VERSION="$3"
+ASSETS_DIR="$4"
 
 APP_NAME="Xindeler"
 APP_DIR="${APP_NAME}.app"
@@ -22,6 +26,13 @@ mkdir -p "$APP_DIR/Contents/Resources"
 
 cp "$BINARY_PATH" "$APP_DIR/Contents/MacOS/xindeler-voxygen"
 chmod +x "$APP_DIR/Contents/MacOS/xindeler-voxygen"
+
+# Assets go inside Contents/MacOS/ (sibling to the executable), not the more
+# idiomatic Contents/Resources/ — common/assets/src/lib.rs's existing search
+# order already checks "the executable's own directory + assets", proven in
+# production on Linux/Windows. Contents/Resources/ would need a new
+# macOS-specific search rule in shipped engine code for no real benefit.
+cp -r "$ASSETS_DIR" "$APP_DIR/Contents/MacOS/assets"
 
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

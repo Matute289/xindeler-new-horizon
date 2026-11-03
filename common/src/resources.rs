@@ -51,8 +51,8 @@ impl Time {
 
     pub fn add_minutes(self, minutes: f64) -> Self { Self(self.0 + minutes * 60.0) }
 
-    // Note that this applies in 'game time' and does not respect either real time
-    // or in-game time of day.
+    // Note that this applies in 'game time' and does not respect either real
+    // time or in-game time of day.
     pub fn add_days(self, days: f64, server_constants: &ServerConstants) -> Self {
         self.add_seconds(days * DAY / server_constants.day_cycle_coefficient)
     }

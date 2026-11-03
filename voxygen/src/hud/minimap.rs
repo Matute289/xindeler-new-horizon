@@ -131,16 +131,17 @@ impl VoxelMinimap {
                     } else {
                         seen_air += 1;
                     }
-                    // Don't penetrate too far into ground, only penetrate through shallow
-                    // ceilings
+                    // Don't penetrate too far into ground, only penetrate
+                    // through shallow ceilings
                     if seen_solids > 12 {
                         break;
                     }
                 }
                 let block = chunk.get(Vec3::new(v.x, v.y, z)).ok();
-                // Treat Leaves and Wood as translucent for the purposes of ceiling checks,
-                // since otherwise trees would cause ceiling removal to trigger
-                // when running under a branch.
+                // Treat Leaves and Wood as translucent for the purposes of
+                // ceiling checks, since otherwise trees would
+                // cause ceiling removal to trigger when running
+                // under a branch.
                 let is_filled = block.is_none_or(|b| {
                     b.is_filled()
                         && !matches!(
@@ -257,11 +258,12 @@ impl VoxelMinimap {
         let new_chunks = self.add_chunks_near(&pool, &terrain, cpos);
         self.remove_chunks_far(&terrain, cpos);
 
-        // ceiling_offset is the distance from the player to a block heuristically
-        // detected as the ceiling height (a non-tree solid block above them, or
-        // the sky if no such block exists). This is used for determining which
-        // z-slice of the minimap to show, such that house roofs and caves and
-        // dungeons are all handled uniformly.
+        // ceiling_offset is the distance from the player to a block
+        // heuristically detected as the ceiling height (a non-tree
+        // solid block above them, or the sky if no such block exists).
+        // This is used for determining which z-slice of the minimap to
+        // show, such that house roofs and caves and dungeons are all
+        // handled uniformly.
         let ceiling_offset = {
             let voff = Vec2::new(
                 VOXEL_MINIMAP_SIDELENGTH as f32,
@@ -332,16 +334,22 @@ impl VoxelMinimap {
                                 below,
                             } = column;
                             if (pos.z as i32).saturating_add(ceiling_offset) < *zlo {
-                                // If the ceiling is below the bottom of a chunk, color it black,
-                                // so that the middles of caves/dungeons don't show the forests
+                                // If the ceiling is below the bottom of a
+                                // chunk, color it black,
+                                // so that the middles of caves/dungeons don't
+                                // show the forests
                                 // around them.
                                 Some(Rgba::new(0, 0, 0, 255))
                             } else {
-                                // Otherwise, take the pixel from the precomputed z-level view at
-                                // the ceiling's height (using the top slice of the chunk if the
-                                // ceiling is above the chunk, (e.g. so that forests with
+                                // Otherwise, take the pixel from the
+                                // precomputed z-level view at
+                                // the ceiling's height (using the top slice of
+                                // the chunk if the
+                                // ceiling is above the chunk, (e.g. so that
+                                // forests with
                                 // differently-tall trees are handled properly)
-                                // TODO: evaluate clippy, toolchain upgrade 2021-12-19
+                                // TODO: evaluate clippy, toolchain upgrade
+                                // 2021-12-19
                                 #[expect(clippy::unnecessary_lazy_evaluations)]
                                 layers
                                     .get(
@@ -550,23 +558,25 @@ impl Widget for MiniMap<'_> {
             // Zoom Buttons
             // Don't forget to update the code in src/mop/hud.rs:4728 in the
             // `handle_map_zoom` fn when updating this! TODO: Consolidate
-            // minimap zooming, because having duplicate handlers for hotkey and interface
-            // is error prone. Find the other occurrence by searching for this comment.
+            // minimap zooming, because having duplicate handlers for hotkey and
+            // interface is error prone. Find the other occurrence
+            // by searching for this comment.
 
             // Pressing + multiplies, and - divides, zoom by ZOOM_FACTOR.
             const ZOOM_FACTOR: f64 = 2.0;
 
-            // TODO: Either prevent zooming all the way in, *or* see if we can interpolate
-            // somehow if you zoom in too far.  Or both.
+            // TODO: Either prevent zooming all the way in, *or* see if we can
+            // interpolate somehow if you zoom in too far.  Or both.
             let min_zoom = 1.0;
             let max_zoom = worldsize
                 .reduce_partial_max() as f64/*.min(f64::MAX)*/;
 
-            // NOTE: Not sure if a button can be clicked while disabled, but we still double
-            // check for both kinds of zoom to make sure that not only was the
-            // button clicked, it is also okay to perform the zoom action.
-            // Note that since `Button::image` has side effects, we must perform
-            // the `can_zoom_in` and `can_zoom_out` checks after the `&&` to avoid
+            // NOTE: Not sure if a button can be clicked while disabled, but we
+            // still double check for both kinds of zoom to make
+            // sure that not only was the button clicked, it is also
+            // okay to perform the zoom action. Note that since
+            // `Button::image` has side effects, we must perform the
+            // `can_zoom_in` and `can_zoom_out` checks after the `&&` to avoid
             // undesired early termination.
             let can_zoom_in = zoom < max_zoom;
             let can_zoom_out = zoom > min_zoom;
@@ -582,7 +592,8 @@ impl Widget for MiniMap<'_> {
                 .was_clicked()
                 && can_zoom_out
             {
-                // Set the image dimensions here, rather than recomputing each time.
+                // Set the image dimensions here, rather than recomputing each
+                // time.
                 zoom = (zoom / ZOOM_FACTOR).clamp(min_zoom, max_zoom);
                 // set_image_dims(zoom);
                 events.push(Event::SettingsChange(MinimapZoom(zoom)));
@@ -736,8 +747,8 @@ impl Widget for MiniMap<'_> {
                 let rcpos = rwpos.wpos_to_cpos();
                 // Convert to fractional coordinates relative to the worldsize
                 let rfpos = rcpos / max_zoom as f32;
-                // Convert to unrotated pixel coordinates from the player location on the map
-                // (the center)
+                // Convert to unrotated pixel coordinates from the player
+                // location on the map (the center)
                 // Accounting for zooming
                 let rpixpos = rfpos.map2(map_size, |e, sz| e * sz as f32 * zoom as f32);
                 let rpos = Vec2::unit_x().rotated_z(orientation.x) * rpixpos.x
@@ -946,7 +957,8 @@ impl Widget for MiniMap<'_> {
             let (cam_scale, cam_rotation) = if is_facing_north {
                 // shows camera cone when map is locked north
                 // target north targets the camera direction
-                // none targests the games true north direction (confusing, I know)
+                // none targests the games true north direction (confusing, I
+                // know)
                 (1.0, self.rot_imgs.view_mmap.target_north)
             } else {
                 // hides camera cone when mmap is locked north
@@ -1027,7 +1039,8 @@ impl Widget for MiniMap<'_> {
 
         match self.client.current_chunk() {
             Some(chunk) => {
-                // Count characters in the name to avoid clipping with the name display
+                // Count characters in the name to avoid clipping with the name
+                // display
                 if let Some(name) = chunk.meta().name() {
                     let name_len = name.chars().count();
                     let y_position = if show_minimap {
@@ -1074,12 +1087,13 @@ impl Widget for MiniMap<'_> {
                 // (16 + 18 + 18 + 18)
                 [scaled_map_window_size.x - (70.0 * scale), 18.0 * scale]
             } else {
-                // View is collapsed, adjust draggable area only based on right button
+                // View is collapsed, adjust draggable area only based on right
+                // button
                 [scaled_map_window_size.x - (18.0 * scale), 18.0 * scale]
             };
 
-            // If open, account for the two buttons on the right, if closed, account for the
-            // one.
+            // If open, account for the two buttons on the right, if closed,
+            // account for the one.
             let scaled_offset = if show_minimap {
                 36.0 * scale
             } else {

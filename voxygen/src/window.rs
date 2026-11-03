@@ -314,7 +314,7 @@ impl Window {
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             use winit::platform::wayland::WindowAttributesExtWayland;
-            attributes = attributes.with_name("net.veloren.veloren", "veloren");
+            attributes = attributes.with_name("com.xindeler.xindeler", "xindeler");
         }
 
         // Avoid cpal / winit OleInitialize conflict
@@ -475,9 +475,10 @@ impl Window {
         // Handle deduplicated resizing that occured
         if self.resized {
             self.resized = false;
-            // We don't use the size provided by the event because more resize events could
-            // have happened since, making the value outdated, so we must query directly
-            // from the window to prevent errors
+            // We don't use the size provided by the event because more resize
+            // events could have happened since, making the value
+            // outdated, so we must query directly from the window
+            // to prevent errors
             let physical = self.window.inner_size();
             let scale_factor = self.window.scale_factor();
             let is_maximized = self.window.is_maximized();
@@ -502,8 +503,8 @@ impl Window {
 
             // Save new window state in settings
             //
-            // We don't save the size if it's less than 1 because wgpu fails to create a
-            // surface with zero size.
+            // We don't save the size if it's less than 1 because wgpu fails to
+            // create a surface with zero size.
             if logical_size.x >= 1.0 && logical_size.y >= 1.0 {
                 settings.graphics.window.size = [logical_size.x as u32, logical_size.y as u32];
             }
@@ -687,7 +688,8 @@ impl Window {
                             .inverse_menu_axis_map
                             .get(&Axis::from((axis, code)))
                         {
-                            // TODO: possibly add sensitivity settings when this is used
+                            // TODO: possibly add sensitivity settings when this
+                            // is used
                             for action in actions {
                                 match *action {
                                     AxisMenuAction::MoveX => {
@@ -738,8 +740,8 @@ impl Window {
         }
 
         let mut events = std::mem::take(&mut self.events);
-        // Mouse emulation for the menus, to be removed when a proper menu navigation
-        // system is available
+        // Mouse emulation for the menus, to be removed when a proper menu
+        // navigation system is available
         if !self.cursor_grabbed {
             // Emulated clicks also need to reach the `iced` UIs (the main
             // menu and character selection), which only consume
@@ -854,7 +856,8 @@ impl Window {
                 self.resized = true;
             },
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                // TODO: is window resized event emitted? or do we need to handle that here?
+                // TODO: is window resized event emitted? or do we need to
+                // handle that here?
                 self.scale_factor = scale_factor;
                 self.events.push(Event::ScaleFactorChanged(scale_factor));
             },
@@ -893,13 +896,14 @@ impl Window {
                 if event.repeat {
                     return;
                 }
-                // Ignore synthetic keydown events so that we don't e.g. get tabs when
-                // alt-tabbing back into the window
+                // Ignore synthetic keydown events so that we don't e.g. get
+                // tabs when alt-tabbing back into the window
                 if matches!(event.state, winit::event::ElementState::Pressed) && is_synthetic {
                     return;
                 }
-                // Ignore Alt-F4 so we don't try to do anything heavy like take a screenshot
-                // when the window is about to close
+                // Ignore Alt-F4 so we don't try to do anything heavy like take
+                // a screenshot when the window is about to
+                // close
                 if matches!(event, winit::event::KeyEvent {
                     state: winit::event::ElementState::Pressed,
                     logical_key: winit::keyboard::Key::Named(winit::keyboard::NamedKey::F4),
@@ -1076,9 +1080,9 @@ impl Window {
         correct_depth: Option<Option<VideoModeHandle>>,
         correct_rate: Option<Option<VideoModeHandle>>,
     ) -> Option<VideoModeHandle> {
-        // if a previous iteration of this method filtered the available video modes for
-        // the correct resolution already, load that value, otherwise filter it
-        // in this iteration
+        // if a previous iteration of this method filtered the available video
+        // modes for the correct resolution already, load that value,
+        // otherwise filter it in this iteration
         let correct_res = match correct_res {
             Some(correct_res) => correct_res,
             None => self
@@ -1112,10 +1116,13 @@ impl Window {
                                 .cloned()
                         });
 
-                        // if no video mode with the given bit depth and refresh rate exists, fall
-                        // back to a video mode that fits the resolution and either bit depth or
-                        // refresh rate depending on which parameter was causing the correct video
-                        // mode not to be found
+                        // if no video mode with the given bit depth and refresh
+                        // rate exists, fall
+                        // back to a video mode that fits the resolution and
+                        // either bit depth or
+                        // refresh rate depending on which parameter was causing
+                        // the correct video mode not to
+                        // be found
                         correct_res
                             .iter()
                             .filter(|mode| mode.bit_depth() == depth)
@@ -1358,12 +1365,12 @@ impl Window {
     }
 
     // Function used to handle Mouse and Key events. It first checks if we're in
-    // remapping mode for a specific GameInput or MenuInput. If we are, we modify
-    // the binding of that GameInput/MenuInput with the KeyMouse passed. Else,
-    // we return an iterator of the GameInputs/MenuInputs for that KeyMouse. If
-    // a menu is open, it will return a MenuInput unless there is not one available
-    // (which it will then return GameInput). If a menu is not open, return
-    // GameInput.
+    // remapping mode for a specific GameInput or MenuInput. If we are, we
+    // modify the binding of that GameInput/MenuInput with the KeyMouse
+    // passed. Else, we return an iterator of the GameInputs/MenuInputs for
+    // that KeyMouse. If a menu is open, it will return a MenuInput unless
+    // there is not one available (which it will then return GameInput). If
+    // a menu is not open, return GameInput.
     fn map_input<'a>(
         key_mouse: KeyMouse,
         controls: &'a mut ControlSettings,
@@ -1397,8 +1404,9 @@ impl Window {
                         .get_associated_game_inputs(&key_mouse)
                         .map(|game_inputs| MappedInput::Game(game_inputs.iter()))
                 } else {
-                    // If a menu is open, return the associated MenuInput if any, otherwise return
-                    // the associated GameInput
+                    // If a menu is open, return the associated MenuInput if
+                    // any, otherwise return the associated
+                    // GameInput
                     if let Some(menu_inputs) = controls.get_associated_menu_inputs(&key_mouse)
                         && !menu_inputs.is_empty()
                     {
@@ -1456,8 +1464,8 @@ impl Window {
                 None
             },
             RemappingMode::None => {
-                // have to check l_entry1 and l_entry2 so LB+RB can be treated equivalent to
-                // RB+LB
+                // have to check l_entry1 and l_entry2 so LB+RB can be treated
+                // equivalent to RB+LB
                 let l_entry1 = LayerEntry {
                     button: *button,
                     mod1: modifiers.get(0).copied().unwrap_or_default(),
@@ -1488,8 +1496,9 @@ impl Window {
                             .map(|game_inputs| MappedInput::Game(game_inputs.iter()))
                     }
                 } else {
-                    // If a menu is open, return the associated MenuInput if any, otherwise return
-                    // the associated GameInput
+                    // If a menu is open, return the associated MenuInput if
+                    // any, otherwise return the associated
+                    // GameInput
                     if let Some(menu_inputs) = controller.get_associated_game_menu_inputs(button)
                         && !menu_inputs.is_empty()
                     {

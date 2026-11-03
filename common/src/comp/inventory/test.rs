@@ -371,8 +371,8 @@ fn unequip_unequipping_bag_into_its_own_slot_with_no_other_free_slots_returns_on
     );
 
     assert_eq!(result.len(), 1);
-    // Because the slot the bag was swapped with no longer exists as it was provided
-    // by itself, the bag is returned to the caller
+    // Because the slot the bag was swapped with no longer exists as it was
+    // provided by itself, the bag is returned to the caller
     assert_eq!(
         result[0].item_definition_id(),
         ItemDefinitionId::Simple(Cow::Borrowed("common.items.testing.test_bag"))

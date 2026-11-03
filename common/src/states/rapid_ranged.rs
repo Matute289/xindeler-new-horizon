@@ -115,7 +115,8 @@ impl CharacterBehavior for Data {
                 }
             },
             StageSection::Action => {
-                // We want to ensure that we only "fire all" if there is a finite amount to fire
+                // We want to ensure that we only "fire all" if there is a
+                // finite amount to fire
                 let fire_all = self.static_data.options.fire_all
                     && self.static_data.options.max_projectiles.is_some();
                 if self.timer < self.static_data.shoot_duration {
@@ -217,8 +218,9 @@ impl CharacterBehavior for Data {
                         reset_rate: false,
                     });
 
-                    // Sets new speed of shoot. Scales based off of the number of projectiles fired
-                    // if there is a speed ramp.
+                    // Sets new speed of shoot. Scales based off of the number
+                    // of projectiles fired if there is a
+                    // speed ramp.
                     let new_speed = if let Some(speed_ramp) = self.static_data.options.speed_ramp {
                         1.0 + self.projectiles_fired as f32
                             / (speed_ramp.half_speed_at as f32 + self.projectiles_fired as f32)

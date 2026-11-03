@@ -178,7 +178,8 @@ impl Discord {
                 Ok(ds) => {
                     if let Err(err) = user.0.changed().await {
                         warn!(err = ?err, "Could not execute handshake to Discord");
-                        // If no handshake is received, exit the task immediately
+                        // If no handshake is received, exit the task
+                        // immediately
                         return;
                     }
                     info!("Connected to Discord");
@@ -248,7 +249,8 @@ impl Discord {
     #[inline]
     fn update(&mut self, update: ActivityUpdate) {
         if let Self::Active { channel, .. } = self {
-            // On error, turn itself into inactive to avoid sending unecessary updates
+            // On error, turn itself into inactive to avoid sending unecessary
+            // updates
             if channel.send(update).is_err() {
                 *self = Self::Inactive;
             }

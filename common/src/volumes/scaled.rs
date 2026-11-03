@@ -17,8 +17,8 @@ where
 {
     #[inline(always)]
     fn get(&self, pos: Vec3<i32>) -> Result<&Self::Vox, Self::Error> {
-        // let ideal_pos = pos.map2(self.scale, |e, scale| (e as f32 + 0.5) / scale);
-        // let pos = ideal_pos.map(|e| e.trunc() as i32);
+        // let ideal_pos = pos.map2(self.scale, |e, scale| (e as f32 + 0.5) /
+        // scale); let pos = ideal_pos.map(|e| e.trunc() as i32);
         let min_pos = pos.map2(self.scale, |e, scale| ((e as f32) / scale).floor() as i32);
         let max_pos = pos.map2(self.scale, |e, scale| {
             ((e as f32 + 1.0) / scale).ceil() as i32

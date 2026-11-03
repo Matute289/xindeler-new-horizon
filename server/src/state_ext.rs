@@ -301,7 +301,8 @@ impl StateExt for State {
                 (&entities, &items, &positions, &loot_owners, &spatial_grid),
             );
 
-            // Merge the nearest item if possible, skip to creating a drop otherwise
+            // Merge the nearest item if possible, skip to creating a drop
+            // otherwise
             if let Some((mergeable_item, _)) =
                 nearby_items.min_by_key(|(_, dist)| (dist * 1000.0) as i32)
             {
@@ -615,10 +616,11 @@ impl StateExt for State {
         let spawn_point = self.ecs().read_resource::<SpawnPoint>().0;
 
         if let Some(player_uid) = self.read_component_copied::<Uid>(entity) {
-            // NOTE: By fetching the player_uid, we validated that the entity exists, and we
-            // call nothing that can delete it in any of the subsequent
-            // commands, so we can assume that all of these calls succeed,
-            // justifying ignoring the result of insertion.
+            // NOTE: By fetching the player_uid, we validated that the entity
+            // exists, and we call nothing that can delete it in any
+            // of the subsequent commands, so we can assume that all
+            // of these calls succeed, justifying ignoring the
+            // result of insertion.
             self.write_component_ignore_entity_dead(entity, comp::Controller::default());
             self.write_component_ignore_entity_dead(entity, comp::Pos(spawn_point));
             self.write_component_ignore_entity_dead(entity, comp::Vel(Vec3::zero()));
@@ -665,10 +667,11 @@ impl StateExt for State {
         let spawn_point = self.ecs().read_resource::<SpawnPoint>().0;
 
         if self.read_component_copied::<Uid>(entity).is_some() {
-            // NOTE: By fetching the player_uid, we validated that the entity exists, and we
-            // call nothing that can delete it in any of the subsequent
-            // commands, so we can assume that all of these calls succeed,
-            // justifying ignoring the result of insertion.
+            // NOTE: By fetching the player_uid, we validated that the entity
+            // exists, and we call nothing that can delete it in any
+            // of the subsequent commands, so we can assume that all
+            // of these calls succeed, justifying ignoring the
+            // result of insertion.
             self.write_component_ignore_entity_dead(entity, comp::Pos(spawn_point));
 
             // Make sure physics components are updated
@@ -708,6 +711,7 @@ impl StateExt for State {
             pact,
             mut trigger_slots,
             spell_mastery,
+            narrative_state,
         } = components;
 
         if let Some(player_uid) = self.read_component_copied::<Uid>(entity) {
@@ -728,7 +732,8 @@ impl StateExt for State {
             if let Err(err) = result {
                 let err = format!("Unexpected state when applying loaded character info: {err}");
                 error!("{err}");
-                // TODO: we could produce a `comp::Content` for this to allow localization.
+                // TODO: we could produce a `comp::Content` for this to allow
+                // localization.
                 return Err(err);
             }
 
@@ -736,10 +741,11 @@ impl StateExt for State {
             // NOTE: hack, read docs on body::Gender for more
             let gender = stats.original_body.humanoid_gender();
 
-            // NOTE: By fetching the player_uid, we validated that the entity exists,
-            // and we call nothing that can delete it in any of the subsequent
-            // commands, so we can assume that all of these calls succeed,
-            // justifying ignoring the result of insertion.
+            // NOTE: By fetching the player_uid, we validated that the entity
+            // exists, and we call nothing that can delete it in any
+            // of the subsequent commands, so we can assume that all
+            // of these calls succeed, justifying ignoring the
+            // result of insertion.
             self.write_component_ignore_entity_dead(entity, body.collider());
             self.write_component_ignore_entity_dead(entity, body);
             self.write_component_ignore_entity_dead(entity, body.mass());
@@ -774,6 +780,11 @@ impl StateExt for State {
             // nothing to reproject -- unlike `trigger_slots` above, it is
             // ready to insert as loaded.
             self.write_component_ignore_entity_dead(entity, spell_mastery);
+            // Narrative state is inserted even when empty, and empty is the
+            // normal state for a new character: the component has to exist for
+            // a choice made this session to have somewhere to land, and for the
+            // save tick to write it back.
+            self.write_component_ignore_entity_dead(entity, narrative_state);
             // Grant class active-ability keys + racial innate + anything the
             // character has learned into its spellbook, plus whatever the
             // pact projects (a summoned Blade boon's three attack keys).
@@ -809,8 +820,9 @@ impl StateExt for State {
                 self.write_component_ignore_entity_dead(entity, waypoint);
                 self.write_component_ignore_entity_dead(entity, comp::Pos(waypoint.get_pos()));
                 self.write_component_ignore_entity_dead(entity, comp::Vel(Vec3::zero()));
-                // TODO: We probably want to increment the existing force update counter since
-                // it is added in initialized_character (to be robust we can also insert it if
+                // TODO: We probably want to increment the existing force update
+                // counter since it is added in
+                // initialized_character (to be robust we can also insert it if
                 // it doesn't exist)
                 self.write_component_ignore_entity_dead(entity, comp::ForceUpdate::forced());
             }
@@ -875,15 +887,18 @@ impl StateExt for State {
                         char_battle_mode = *mode;
                         player_info.last_battlemode_change = Some(*change);
                     } else {
-                        // TODO: this sounds related to handle_exit_ingame? Actually, sounds like
-                        // trying to place character specific info on the `Player` component. TODO
+                        // TODO: this sounds related to handle_exit_ingame?
+                        // Actually, sounds like
+                        // trying to place character specific info on the
+                        // `Player` component. TODO
                         // document component better.
                         // FIXME:
                         // ???
                         //
                         // This probably shouldn't exist,
-                        // but without this code, character gets battle_mode from
-                        // another character on this account.
+                        // but without this code, character gets battle_mode
+                        // from another character on
+                        // this account.
                         player_info.last_battlemode_change = None;
                     }
 
@@ -958,9 +973,10 @@ impl StateExt for State {
             return true;
         };
 
-        // Don't permit players to send non-plain content sent from their clients...
-        // yet. TODO: Eventually, it would be nice for players to be able to
-        // send messages that get localised on their client!
+        // Don't permit players to send non-plain content sent from their
+        // clients... yet. TODO: Eventually, it would be nice for
+        // players to be able to send messages that get localised on
+        // their client!
         let Some(msg) = msg.as_plain() else {
             return !from_client;
         };
@@ -1051,8 +1067,9 @@ impl StateExt for State {
                 comp::ChatType::Kill(kill_source, uid) => {
                     let clients = ecs.read_storage::<Client>();
                     let clients_count = clients.count();
-                    // Avoid chat spam, send kill message only to group or nearby players if a
-                    // certain amount of clients are online
+                    // Avoid chat spam, send kill message only to group or
+                    // nearby players if a certain amount of
+                    // clients are online
                     if clients_count
                         > ecs
                             .fetch::<Settings>()
@@ -1067,8 +1084,8 @@ impl StateExt for State {
                             send_to_group(g, ecs, &resolved_msg);
                         }
 
-                        // Send kill message to nearby players that aren't part of the deceased's
-                        // group
+                        // Send kill message to nearby players that aren't part
+                        // of the deceased's group
                         let positions = ecs.read_storage::<comp::Pos>();
                         if let Some(died_player_pos) = killed_entity.and_then(|e| positions.get(e))
                         {
@@ -1166,9 +1183,11 @@ impl StateExt for State {
                 comp::ChatType::Group(from, g) => {
                     if group_info.is_none() {
                         // Group not found, reply with command error
-                        // This should usually NEVER happen since now it is checked whether the
-                        // sender is still in the group upon emitting the message (TODO: Can this be
-                        // triggered if the message is sent in the same tick as the sender is
+                        // This should usually NEVER happen since now it is
+                        // checked whether the sender is
+                        // still in the group upon emitting the message (TODO:
+                        // Can this be triggered if the
+                        // message is sent in the same tick as the sender is
                         // removed from the group?)
 
                         let reply = comp::ChatType::CommandError
@@ -1249,7 +1268,8 @@ impl StateExt for State {
                     ) {
                         true
                     } else {
-                        // Make sure to drop persist data before running deletion to avoid potential
+                        // Make sure to drop persist data before running
+                        // deletion to avoid potential
                         // access violations
                         persist_data.take();
                         L::delete(link, &mut state.ecs().system_data());
@@ -1269,9 +1289,9 @@ impl StateExt for State {
         &mut self,
         entity: EcsEntity,
     ) -> Result<(), specs::error::WrongGeneration> {
-        // NOTE: both this and handle_exit_ingame call delete_entity_common, so cleanup
-        // added here may need to be duplicated in handle_exit_ingame (depending
-        // on its nature).
+        // NOTE: both this and handle_exit_ingame call delete_entity_common, so
+        // cleanup added here may need to be duplicated in
+        // handle_exit_ingame (depending on its nature).
 
         // Remove entity from a group if they are in one.
         {
@@ -1304,8 +1324,9 @@ impl StateExt for State {
         // Cancel extant trades
         events::shared::cancel_trades_for(self, entity);
 
-        // NOTE: We expect that these 3 components are never removed from an entity (nor
-        // mutated) (at least not without updating the relevant mappings)!
+        // NOTE: We expect that these 3 components are never removed from an
+        // entity (nor mutated) (at least not without updating the
+        // relevant mappings)!
         let maybe_uid = self.read_component_copied::<Uid>(entity);
         let (maybe_character, sync_me) = self
             .read_storage::<Presence>()
@@ -1451,13 +1472,14 @@ pub(crate) fn delete_entity_common(
     if result.is_ok() {
         let region_map = state.mut_resource::<common::region::RegionMap>();
         let region_key = region_map.entity_deleted(entity);
-        // Note: Adding the `Uid` to the deleted list when exiting "in-game" relies on
-        // the client not being able to immediately re-enter the game in the
-        // same tick (since we could then mix up the ordering of things and
-        // tell other clients to forget the new entity).
+        // Note: Adding the `Uid` to the deleted list when exiting "in-game"
+        // relies on the client not being able to immediately re-enter
+        // the game in the same tick (since we could then mix up the
+        // ordering of things and tell other clients to forget the new
+        // entity).
         //
-        // The client will ignore requests to delete its own entity that are triggered
-        // by this.
+        // The client will ignore requests to delete its own entity that are
+        // triggered by this.
         if let Some(uid) = maybe_uid {
             if let Some(region_key) = region_key {
                 state
@@ -1466,8 +1488,9 @@ pub(crate) fn delete_entity_common(
             // If there is a position and sync_me is true, but the entity is not
             // in a region, something might be wrong.
             } else if sync_me && let Some(pos) = maybe_pos {
-                // Don't panic if the entity wasn't found in a region, maybe it was just created
-                // and then deleted before the region manager had a chance to assign it a region
+                // Don't panic if the entity wasn't found in a region, maybe it
+                // was just created and then deleted before the
+                // region manager had a chance to assign it a region
                 warn!(
                     ?uid,
                     ?pos,
@@ -1477,9 +1500,9 @@ pub(crate) fn delete_entity_common(
                 );
             }
         } else {
-            // For now we expect all entities have a Uid component. If this is changed, the
-            // RegionMap needs to account for presence of Uid when deciding what should be
-            // tracked.
+            // For now we expect all entities have a Uid component. If this is
+            // changed, the RegionMap needs to account for presence
+            // of Uid when deciding what should be tracked.
             error!("Deleting entity without Uid component");
         }
     }

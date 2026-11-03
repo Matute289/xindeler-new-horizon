@@ -395,8 +395,9 @@ fn resolve_piloted(
 
     let body = Body::Object(ObjectBody::ArcaneEye);
     let (sensor, sensor_uid) = spawn_sensor_base(data, body, candidate_pos, "name-arcane-eye");
-    // Drivable, unlike the static `Sensor` anchor: `common/systems/src/pilot.rs`
-    // reads/writes this every tick once the `Piloting` link below exists.
+    // Drivable, unlike the static `Sensor` anchor:
+    // `common/systems/src/pilot.rs` reads/writes this every tick once the
+    // `Piloting` link below exists.
     let _ = data.controllers.insert(sensor, Controller::default());
 
     // Wire the `Piloting` link by hand: this handler only ever gets

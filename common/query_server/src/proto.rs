@@ -28,6 +28,14 @@ pub enum QueryServerRequest {
     /// will still be dropped as the supplied `P` value is invalid).
     Init,
     ServerInfo,
+    /// Asks the server to identify which game/fork it's running, via
+    /// [`ServerIdentity`]. A server running an older build (or a different
+    /// Veloren-derived fork that never added this variant) has no match arm
+    /// for this discriminant and will simply fail to parse the request --
+    /// from the requester's side that failure (or a response missing the
+    /// expected magic) IS the "not a Xindeler server" signal, no separate
+    /// error path needed.
+    Identity,
     // New requests should be added at the end to prevent breakage.
     // NOTE: Any new (sub-)variants must be added to the `check_request_sizes` test at the end of
     // this file
@@ -63,7 +71,30 @@ pub(crate) enum RawQueryServerResponse {
 #[protocol(discriminator(u8))]
 pub enum QueryServerResponse {
     ServerInfo(ServerInfo),
+    Identity(ServerIdentity),
     // New responses should be added at the end to prevent breakage
+}
+
+/// Answers "which game/fork is this server running" -- deliberately separate
+/// from [`ServerInfo`] (whose fields are all live/mutable server state)
+/// since identity is a fixed, build-time constant. Distinguishing this from a
+/// vanilla Veloren server (or any other fork) doesn't rely on the magic value
+/// alone: a server that predates this variant has no match arm for
+/// [`QueryServerRequest::Identity`] at all, so it never produces this
+/// response in the first place. The magic bytes exist as a second,
+/// belt-and-suspenders check in case an unrelated fork independently adds a
+/// same-numbered variant of its own.
+#[derive(Protocol, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerIdentity {
+    pub magic: [u8; 4],
+}
+
+impl ServerIdentity {
+    /// Compiled into every Xindeler server build. Not derived from
+    /// `GIT_HASH`/`GIT_TIMESTAMP` on purpose -- those identify a specific
+    /// build the requester may never have seen before, whereas this
+    /// identifies the game/fork family itself, stable across every version.
+    pub const XINDELER: Self = Self { magic: *b"XNDL" };
 }
 
 #[derive(Protocol, Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,8 +150,11 @@ mod tests {
 
     #[test]
     fn check_request_sizes() {
-        const ALL_REQUESTS: &[QueryServerRequest] =
-            &[QueryServerRequest::ServerInfo, QueryServerRequest::Init];
+        const ALL_REQUESTS: &[QueryServerRequest] = &[
+            QueryServerRequest::ServerInfo,
+            QueryServerRequest::Init,
+            QueryServerRequest::Identity,
+        ];
         for request in ALL_REQUESTS {
             let request = RawQueryServerRequest {
                 p: 0,
@@ -128,5 +162,13 @@ mod tests {
             };
             request.serialize().unwrap(); // This will panic if the size is above MAX_REQUEST_SIZE
         }
+    }
+
+    #[test]
+    fn xindeler_identity_magic_is_four_bytes() {
+        // Not load-bearing for correctness (the `[u8; 4]` field type already
+        // guarantees this at compile time) -- just documents the choice so a
+        // future edit to the magic doesn't silently change its length.
+        assert_eq!(super::ServerIdentity::XINDELER.magic.len(), 4);
     }
 }

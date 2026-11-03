@@ -176,12 +176,14 @@ where
         };
 
         let (size, content) = if self.background.aspect_ratio_fixed() {
-            // To fix the aspect ratio we have to have a separate layout from the content
-            // because we can't force the content to have a specific aspect ratio
+            // To fix the aspect ratio we have to have a separate layout from
+            // the content because we can't force the content to
+            // have a specific aspect ratio
             let aspect_ratio = pixel_w as f32 / pixel_h as f32;
 
-            // To do this we need to figure out the max width/height of the limits
-            // and then adjust one down to meet the aspect ratio
+            // To do this we need to figure out the max width/height of the
+            // limits and then adjust one down to meet the aspect
+            // ratio
             let max_size = limits.max();
             let (max_width, max_height) = (max_size.width, max_size.height);
             let max_aspect_ratio = max_width / max_height;
@@ -203,14 +205,15 @@ where
             // again, why is loose() used here?
             let mut content = self.content.layout(renderer, &limits.loose());
 
-            // TODO: handle cases where self and/or children are not Length::Fill
-            // If fill use max_size
+            // TODO: handle cases where self and/or children are not
+            // Length::Fill If fill use max_size
 
             // This time we need to adjust up to meet the aspect ratio
             // so that the container is larger than the contents
             let mut content_size = content.size();
-            // Add minimum padding to content size (this works to ensure we have enough
-            // space for padding because the available space can only increase)
+            // Add minimum padding to content size (this works to ensure we have
+            // enough space for padding because the available space
+            // can only increase)
             content_size.width /= 1.0 - horizontal_pad_frac;
             content_size.height /= 1.0 - vertical_pad_frac;
             let content_aspect_ratio = content_size.width / content_size.height;

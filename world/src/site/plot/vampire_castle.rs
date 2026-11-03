@@ -1889,8 +1889,8 @@ impl Structure for VampireCastle {
                     }
                 }
             } else {
-                // side bldg far, foundation, entries, stairs for surrounding side bldg
-                // side bldg entries
+                // side bldg far, foundation, entries, stairs for surrounding
+                // side bldg side bldg entries
                 let entry_limiter = painter.aabb(Aabb {
                     min: (side_bldg_pos - (2 * side_bldg_length))
                         .with_z(side_bldg_base + side_bldg_roof_height + (side_bldg_height / 2)),

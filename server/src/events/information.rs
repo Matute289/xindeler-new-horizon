@@ -90,8 +90,9 @@ impl ServerEvent for common::event::RequestPluginsEvent {
             for hash in ev.plugins.drain(..) {
                 if let Some(plugin) = plugin_mgr.find(&hash) {
                     let buf = Vec::from(plugin.data_buf());
-                    // TODO: @perf We could possibly make this more performant by caching prepared
-                    // messages for each plugin.
+                    // TODO: @perf We could possibly make this more performant
+                    // by caching prepared messages for each
+                    // plugin.
                     client
                         .send(ServerGeneral::PluginData(buf))
                         .unwrap_or_else(|e| {

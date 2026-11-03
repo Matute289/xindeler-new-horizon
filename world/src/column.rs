@@ -252,7 +252,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                         );
                         let direction = neighbor_wpos - neighbor_pass_wpos;
 
-                        // Lakes get a special distance function to avoid cookie-cutter edges
+                        // Lakes get a special distance function to avoid
+                        // cookie-cutter edges
                         if matches!(
                             downhill_chunk.river.river_kind,
                             Some(RiverKind::Lake { .. } | RiverKind::Ocean)
@@ -289,7 +290,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                             )
                         } else {
                             let ndist = wposf.distance_squared(neighbor_wpos);
-                            /* let ddist = wposf.distance_squared(neighbor_pass_wpos); */
+                            /* let ddist =
+                             * wposf.distance_squared(neighbor_pass_wpos); */
                             let (closest_pos, closest_dist, closest_t) = /*if ndist <= ddist */ {
                                 (neighbor_wpos, ndist, 0.0)
                             } /* else {
@@ -327,14 +329,15 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                 let river_width_max = if let Some(RiverKind::River { cross_section }) =
                     downhill_chunk.river.river_kind
                 {
-                    // Harmless hack that prevents a river growing wildly outside its bounds to
-                    // create water walls
+                    // Harmless hack that prevents a river growing wildly
+                    // outside its bounds to create water
+                    // walls
                     (cross_section.x as f64).min(river_width_min * 1.75)
                 } else if let Some(RiverKind::River { cross_section }) = chunkj.river.river_kind {
                     Lerp::lerp(cross_section.x as f64, lake_width, 0.5)
                 } else {
-                    // 0.5 prevents rivers pooling into lakes having extremely wide bounds, creating
-                    // water walls
+                    // 0.5 prevents rivers pooling into lakes having extremely
+                    // wide bounds, creating water walls
                     lake_width * 0.5
                 };
                 let river_width_noise =
@@ -349,10 +352,12 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                 );
 
                 let river_width = river_width.max(2.0) * (1.0 + river_width_noise * 0.3);
-                // To find the distance, we just evaluate the quadratic equation at river_t and
-                // see if it's within width (but we should be able to use it for a
-                // lot more, and this probably isn't the very best approach anyway
-                // since it will bleed out). let river_pos = coeffs.x * river_t *
+                // To find the distance, we just evaluate the quadratic equation
+                // at river_t and see if it's within width (but
+                // we should be able to use it for a
+                // lot more, and this probably isn't the very best approach
+                // anyway since it will bleed out). let
+                // river_pos = coeffs.x * river_t *
                 // river_t + coeffs.y * river_t + coeffs.z;
                 // let river_width = 32.0f64;
                 let res = Vec2::new(0.0, (river_dist - (river_width * 0.5).max(1.0)).max(0.0));
@@ -437,10 +442,11 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             river_chunk: &SimChunk,
             downhill_chunk: &SimChunk,
         ) -> bool {
-            // Waterfalls are rare, so use some hacky RNG seeded with the position to
-            // reflect that. Additionally, the river must experience a rapid
-            // change in elevation. Pooling into a lake produces a rapid.
-            // TODO: Find a better way to produce rapids along the course of a river?
+            // Waterfalls are rare, so use some hacky RNG seeded with the
+            // position to reflect that. Additionally, the river
+            // must experience a rapid change in elevation. Pooling
+            // into a lake produces a rapid. TODO: Find a better way
+            // to produce rapids along the course of a river?
             (RandomField::new(3119).chance(chunk_pos.with_z(0), 0.1)
                 || matches!(
                     downhill_chunk.river.river_kind,
@@ -466,24 +472,27 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
 
         // What's going on here?
         //
-        // We're iterating over nearby bodies of water and calculating a weighted sum
-        // for the river water level, the lake water level, and the 'unbounded
-        // water level' (the maximum water body altitude, which we use later to
-        // prevent water walls). In doing so, we also apply various clamping strategies
+        // We're iterating over nearby bodies of water and calculating a
+        // weighted sum for the river water level, the lake water level,
+        // and the 'unbounded water level' (the maximum water body
+        // altitude, which we use later to prevent water walls). In
+        // doing so, we also apply various clamping strategies
         // to catch lots of nasty edge cases, as well as calculating the
         // distance to the nearest body of water.
         //
-        // The clamping strategies employed prevent very specific, annoying artifacts
-        // such as 'water walls' (vertical columns of water that are physically
-        // implausible) and 'backflows' (regions where a body of water appears to
-        // flow upstream due to irregular humps along its course).
+        // The clamping strategies employed prevent very specific, annoying
+        // artifacts such as 'water walls' (vertical columns of water
+        // that are physically implausible) and 'backflows' (regions
+        // where a body of water appears to flow upstream due to
+        // irregular humps along its course).
         //
-        // It is incredibly difficult to explain exactly what every part of this code is
-        // doing without visual examples. Needless to say, any changes to this
-        // code *at all* should be very ruggedly tested to ensure that
-        // they do not result in artifacts, even in edge cases. The exact configuration
-        // of this code is the product of hundreds of hours of testing and
-        // refinement and I ask that you do not take that effort lightly.
+        // It is incredibly difficult to explain exactly what every part of this
+        // code is doing without visual examples. Needless to say, any
+        // changes to this code *at all* should be very ruggedly tested
+        // to ensure that they do not result in artifacts, even in edge
+        // cases. The exact configuration of this code is the product of
+        // hundreds of hours of testing and refinement and I ask that
+        // you do not take that effort lightly.
         let (
             river_water_level,
             in_river,
@@ -530,7 +539,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
 
                     match kind {
                         RiverKind::River { .. } => {
-                            // Alt of river water *is* the alt of land (ignoring gorge, which gets
+                            // Alt of river water *is* the alt of land (ignoring
+                            // gorge, which gets
                             // applied later)
                             let river_water_alt = river_water_alt(
                                 river_chunk.alt.max(river_chunk.water_alt),
@@ -572,15 +582,19 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
 
                             lake_dist = lake_dist.min(river_edge_dist);
 
-                            // Lake border prevents a lake failing to propagate its altitude to
+                            // Lake border prevents a lake failing to propagate
+                            // its altitude to
                             // nearby rivers
                             let off = 0.0;
                             let len = 3.0;
                             if river_edge_dist <= off {
                                 // lake_water_level = lake_water_level
-                                //     // Make sure the closest lake is prioritised
-                                //     .with(lake_water_alt, near_center + 0.1 / (1.0 +
-                                // river_edge_dist));     // .with_min(lake_water_alt);
+                                //     // Make sure the closest lake is
+                                // prioritised
+                                //     .with(lake_water_alt, near_center + 0.1 /
+                                // (1.0 +
+                                // river_edge_dist));     //
+                                // .with_min(lake_water_alt);
                                 //
                                 river_water_level = river_water_level.with_min(
                                     lake_water_alt
@@ -647,28 +661,32 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
 
         // What's going on here?
         //
-        // Now that we've figured out the altitude of the water in this column, we can
-        // determine the altitude of the river banks. This initially appears
-        // somewhat backward (surely the river basin determines the water level?)
-        // but it is necessary to prevent backflows. Here, the surface of the water is
-        // king because we require global information to determine it without
-        // backflows. The river banks simply reflect the will of the water. We care
-        // much less about a river bank that's slightly rugged and irregular than we do
-        // about the surface of the water itself being rugged and irregular (and
-        // hence physically implausible). From that perspective, it makes sense
-        // that we determine river banks after the water level because it is the one
-        // that we are most at liberty to screw up.
+        // Now that we've figured out the altitude of the water in this column,
+        // we can determine the altitude of the river banks. This
+        // initially appears somewhat backward (surely the river basin
+        // determines the water level?) but it is necessary to prevent
+        // backflows. Here, the surface of the water is king because we
+        // require global information to determine it without backflows.
+        // The river banks simply reflect the will of the water. We care
+        // much less about a river bank that's slightly rugged and irregular
+        // than we do about the surface of the water itself being rugged
+        // and irregular (and hence physically implausible). From that
+        // perspective, it makes sense that we determine river banks
+        // after the water level because it is the one that we are most
+        // at liberty to screw up.
         //
-        // Similar to the iteration above, we perform a fold over nearby bodies of water
-        // and use the distance to the water to come up wight a weighted sum for
-        // the altitude. The way we determine this altitude differs somewhat
-        // between rivers, lakes, and the ocean and also whether we are *inside* said
-        // bodies of water or simply near their edge.
+        // Similar to the iteration above, we perform a fold over nearby bodies
+        // of water and use the distance to the water to come up wight a
+        // weighted sum for the altitude. The way we determine this
+        // altitude differs somewhat between rivers, lakes, and the
+        // ocean and also whether we are *inside* said bodies of water
+        // or simply near their edge.
         //
-        // As with the previous iteration, a lot of this code is extremely delicate and
-        // has been carefully designed to handle innumeral edge cases. Please
-        // test any changes to this code extremely well to avoid regressions: some
-        // edge cases are very rare indeed!
+        // As with the previous iteration, a lot of this code is extremely
+        // delicate and has been carefully designed to handle innumeral
+        // edge cases. Please test any changes to this code extremely
+        // well to avoid regressions: some edge cases are very rare
+        // indeed!
         let alt = neighbor_river_data.into_iter().fold(
             WeightedSum::default().with(riverless_alt, 1.0),
             |alt, (river_chunk_idx, river_chunk, river, dist_info)| match (
@@ -743,11 +761,13 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                                 .cos()
                                 .add(1.0)
                                 .mul(0.5);
-                            // Waterfalls 'boost' the depth of the river to prevent artifacts. This
+                            // Waterfalls 'boost' the depth of the river to
+                            // prevent artifacts. This
                             // is also necessary when rivers become very
                             // steep without explicitly being waterfalls.
-                            // TODO: Come up with a more principled way of doing this without
-                            // guessing magic numbers
+                            // TODO: Come up with a more principled way of doing
+                            // this without guessing
+                            // magic numbers
                             let waterfall_boost =
                                 if is_waterfall(river_chunk_idx, river_chunk, downhill_chunk) {
                                     (river_chunk.alt - downhill_chunk.alt).max(0.0).powf(2.0)
@@ -760,7 +780,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                                 };
                             let riverbed_depth =
                                 near_center * water_depth + MIN_DEPTH + waterfall_boost;
-                            // Handle rivers debouching into the ocean nicely by 'flattening' their
+                            // Handle rivers debouching into the ocean nicely by
+                            // 'flattening' their
                             // bottom
                             let riverbed_alt = (water_alt - riverbed_depth)
                                 .max(riverless_alt.min(base_sea_level - MIN_DEPTH));
@@ -772,9 +793,11 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                         } else {
                             const GORGE: f32 = 0.25;
                             const BANK_SCALE: f32 = 24.0;
-                            // Weighting of this riverbank on nearby terrain (higher when closer to
+                            // Weighting of this riverbank on nearby terrain
+                            // (higher when closer to
                             // the river). This 'pulls' the riverbank
-                            // toward the river's altitude to make sure that we get a smooth
+                            // toward the river's altitude to make sure that we
+                            // get a smooth
                             // transition from normal terrain to the water.
                             let weight = Lerp::lerp(
                                 BANK_STRENGTH
@@ -815,7 +838,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let alt = alt
             .eval_or(riverless_alt)
             .max(if water_dist.is_none_or(|d| d > 0.0) {
-                // Terrain below sea level breaks things, so force it to never happen
+                // Terrain below sea level breaks things, so force it to never
+                // happen
                 base_sea_level + 0.5
             } else {
                 f32::MIN
@@ -890,8 +914,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                 .map(|wd| (1.0 - wd / 32.0).clamped(0.0, 1.0).powf(0.5) * 10.0)
                 .unwrap_or(0.0);
 
-        // Columns near water have a more stable temperature and so get pushed towards
-        // the average (0)
+        // Columns near water have a more stable temperature and so get pushed
+        // towards the average (0)
         let temp = Lerp::lerp(
             Lerp::lerp(temp, 0.0, 0.1),
             temp,
@@ -984,8 +1008,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             marble_mixed.powf(1.5).sub(0.5).mul(4.0),
         );
 
-        // For below desert humidity, we are always sand or rock, depending on altitude
-        // and temperature.
+        // For below desert humidity, we are always sand or rock, depending on
+        // altitude and temperature.
         let ground = Lerp::lerp(
             Lerp::lerp(
                 dead_tundra,
@@ -1003,8 +1027,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
 
         let sub_surface_color = Lerp::lerp(cliff, ground, alt.sub(basement).mul(0.25));
 
-        // From desert to forest humidity, we go from tundra to dirt to grass to moss to
-        // sand, depending on temperature.
+        // From desert to forest humidity, we go from tundra to dirt to grass to
+        // moss to sand, depending on temperature.
         let ground = Rgb::lerp(
             ground,
             Rgb::lerp(
@@ -1043,8 +1067,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                 .div(CONFIG.forest_hum.sub(CONFIG.desert_hum))
                 .mul(1.25),
         );
-        // From forest to jungle humidity, we go from snow to dark grass to grass to
-        // tropics to sand depending on temperature.
+        // From forest to jungle humidity, we go from snow to dark grass to
+        // grass to tropics to sand depending on temperature.
         let ground = Rgb::lerp(
             ground,
             Rgb::lerp(
@@ -1074,8 +1098,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                 .div(CONFIG.jungle_hum.sub(CONFIG.forest_hum))
                 .mul(1.0),
         );
-        // From jungle humidity upwards, we go from snow to grass to rainforest to
-        // tropics to sand.
+        // From jungle humidity upwards, we go from snow to grass to rainforest
+        // to tropics to sand.
         let ground = Rgb::lerp(
             ground,
             Rgb::lerp(
@@ -1187,8 +1211,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             (sub_surface_color, ground, alt, basement)
         };
 
-        // Ground under thick trees should be receive less sunlight and so often become
-        // dirt
+        // Ground under thick trees should be receive less sunlight and so often
+        // become dirt
         let ground = Lerp::lerp(ground, sub_surface_color, marble_mid * tree_density);
 
         let path = if spawn_rules.paths {

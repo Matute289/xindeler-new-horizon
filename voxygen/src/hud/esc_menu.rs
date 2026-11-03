@@ -92,10 +92,10 @@ impl Widget for EscMenu<'_> {
         common_base::prof_span!("EscMenu::update");
         let widget::UpdateArgs { state, ui, .. } = args;
 
-        // MENU INPUTS: `Back` closes the esc menu (same as "Resume"); Up/Down moves
-        // the highlighted button (no wrap); Apply activates it — the `ContextMenu`
-        // list-nav shape from `slot_grid.rs`, replicated locally since that struct
-        // isn't exported.
+        // MENU INPUTS: `Back` closes the esc menu (same as "Resume"); Up/Down
+        // moves the highlighted button (no wrap); Apply activates it —
+        // the `ContextMenu` list-nav shape from `slot_grid.rs`,
+        // replicated locally since that struct isn't exported.
         let mut apply_pressed = false;
         for key in self.menu_events {
             match key {

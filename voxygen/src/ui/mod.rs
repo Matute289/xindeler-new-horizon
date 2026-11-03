@@ -152,9 +152,9 @@ impl Ui {
         let win_dims = scale.scaled_resolution().into_array();
 
         let mut ui = UiBuilder::new(win_dims).build();
-        // NOTE: Since we redraw the actual frame each time whether or not the UI needs
-        // to be updated, there's no reason to set the redraw count higher than
-        // 1.
+        // NOTE: Since we redraw the actual frame each time whether or not the
+        // UI needs to be updated, there's no reason to set the redraw
+        // count higher than 1.
         ui.set_num_redraw_frames(1);
 
         let item_tooltip_manager = ItemTooltipManager::new(
@@ -346,8 +346,8 @@ impl Ui {
             false
         };
 
-        // Used to tell if we need to clear out the draw commands (which contain scissor
-        // commands that can be invalidated by this change)
+        // Used to tell if we need to clear out the draw commands (which contain
+        // scissor commands that can be invalidated by this change)
         let physical_resolution_changed = renderer.resolution() != self.scale.physical_resolution();
 
         // Handle window resizing.
@@ -362,8 +362,8 @@ impl Ui {
 
             // Avoid panic in graphic cache when minimizing.
             // Avoid resetting cache if window size didn't change
-            // Somewhat inefficient for elements that won't change size after a window
-            // resize
+            // Somewhat inefficient for elements that won't change size after a
+            // window resize
             let res = renderer.resolution();
             res.x > 0 && res.y > 0 && !(old_w == w && old_h == h)
         } else {
@@ -407,10 +407,10 @@ impl Ui {
         span!(_guard, "internal", "Ui::maintain_internal");
         let (graphic_cache, text_cache, glyph_cache, cache_tex) = self.cache.cache_mut_and_tex();
 
-        // If the physical resolution changed draw commands need to be cleared since
-        // scissors commands will be invalid. A resize usually means everything
-        // needs to be redrawn anyway but certain error cases below can cause an
-        // early return.
+        // If the physical resolution changed draw commands need to be cleared
+        // since scissors commands will be invalid. A resize usually
+        // means everything needs to be redrawn anyway but certain error
+        // cases below can cause an early return.
         if physical_resolution_changed {
             self.draw_commands.clear();
         }
@@ -418,11 +418,12 @@ impl Ui {
         let mut primitives = if *retry || self.graphic_replaced || physical_resolution_changed {
             // If this is a retry, always redraw.
             //
-            // Also redraw if a texture was swapped out by replace_graphic in order to
-            // regenerate invalidated textures and clear out any invalid `TexId`s.
+            // Also redraw if a texture was swapped out by replace_graphic in
+            // order to regenerate invalidated textures and clear
+            // out any invalid `TexId`s.
             //
-            // Also redraw if the physical resolution changed since we need to regenerate
-            // the invalid scissor rect commands.
+            // Also redraw if the physical resolution changed since we need to
+            // regenerate the invalid scissor rect commands.
             self.graphic_replaced = false;
             self.ui.draw()
         } else {
@@ -444,8 +445,8 @@ impl Ui {
 
         let ui = &self.ui;
         let p_scale_factor = self.scale.scale_factor_physical();
-        // Functions for converting for conrod scalar coords to GL vertex coords (-1.0
-        // to 1.0).
+        // Functions for converting for conrod scalar coords to GL vertex coords
+        // (-1.0 to 1.0).
         let (ui_win_w, ui_win_h) = (ui.win_w, ui.win_h);
         let vx = |x: f64| (x / ui_win_w * 2.0) as f32;
         let vy = |y: f64| (y / ui_win_h * 2.0) as f32;
@@ -468,8 +469,8 @@ impl Ui {
         let fonts = &ui.fonts;
         let dpi_factor = p_scale_factor as f32;
 
-        // We can use information about whether a widget was actually updated to more
-        // easily track cache invalidations.
+        // We can use information about whether a widget was actually updated to
+        // more easily track cache invalidations.
         let updated_widgets = ui.updated_widgets();
         let mut glyph_missing = false;
 
@@ -584,16 +585,19 @@ impl Ui {
 
         if glyph_missing {
             if *retry {
-                // If a glyph was missing and this was our second try, we know something was
-                // messed up during the glyph_cache redraw.  It is possible that
+                // If a glyph was missing and this was our second try, we know
+                // something was messed up during the
+                // glyph_cache redraw.  It is possible that
                 // the queue contained unneeded glyphs, so we don't necessarily
                 // have to give up; a more precise enumeration of the
-                // glyphs required to render this frame might work out.  However, this is a
-                // pretty remote edge case, so we opt to not care about this
+                // glyphs required to render this frame might work out.
+                // However, this is a pretty remote edge case,
+                // so we opt to not care about this
                 // frame (we skip rendering it, basically), and just clear the
                 // text cache and glyph queue; next frame will then
-                // start out with an empty slate, and therefore will enqueue precisely the
-                // glyphs needed for that frame.  If *that* frame fails, we're
+                // start out with an empty slate, and therefore will enqueue
+                // precisely the glyphs needed for that frame.
+                // If *that* frame fails, we're
                 // in bigger trouble.
                 text_cache.clear();
                 glyph_cache.clear();
@@ -601,12 +605,15 @@ impl Ui {
                 self.ui.needs_redraw();
                 warn!("Could not recache queued glyphs, skipping frame.");
             } else {
-                // NOTE: If this is the first round after encountering a new glyph, we just
-                // refresh the whole glyph cache.  Technically this is not necessary since
-                // positioned_glyphs should still be accurate, but it's just the easiest way
-                // to ensure that all glyph positions get updated.  It also helps keep the glyph
-                // cache reasonable by making sure any glyphs that subsequently get rendered are
-                // actually in the cache, including glyphs that were mapped to ids but didn't
+                // NOTE: If this is the first round after encountering a new
+                // glyph, we just refresh the whole glyph cache.
+                // Technically this is not necessary since
+                // positioned_glyphs should still be accurate, but it's just the
+                // easiest way to ensure that all glyph
+                // positions get updated.  It also helps keep the glyph
+                // cache reasonable by making sure any glyphs that subsequently
+                // get rendered are actually in the cache,
+                // including glyphs that were mapped to ids but didn't
                 // happen to be rendered on the frame where the cache was
                 // refreshed.
                 text_cache.clear();
@@ -623,16 +630,18 @@ impl Ui {
 
                     renderer.update_texture(&cache_tex.0, offset, size, &new_data);
                 }) {
-                    // FIXME: If we actually hit this error, it's still possible we could salvage
-                    // things in various ways (for instance, the current queue might have extra
+                    // FIXME: If we actually hit this error, it's still possible
+                    // we could salvage things in various
+                    // ways (for instance, the current queue might have extra
                     // stuff in it, so we could try calling maintain_internal a
                     // third time with a fully clean queue; or we could try to
                     // increase the glyph texture size, etc.  But hopefully
                     // we will not actually encounter this error.
                     warn!("Failed to cache queued glyphs: {:?}", err);
 
-                    // Clear queued glyphs, so that (hopefully) next time we won't have the
-                    // offending glyph or glyph set.  We then exit the loop and don't try to
+                    // Clear queued glyphs, so that (hopefully) next time we
+                    // won't have the offending glyph or
+                    // glyph set.  We then exit the loop and don't try to
                     // rerender the frame.
                     glyph_cache.clear_queue();
                     self.ui.needs_redraw();
@@ -670,8 +679,8 @@ impl Ui {
 
         let mut placement = Placement::Interface;
 
-        // Switches to the `Plain` state and completes the previous `Command` if not
-        // already in the `Plain` state.
+        // Switches to the `Plain` state and completes the previous `Command` if
+        // not already in the `Plain` state.
         macro_rules! switch_to_plain_state {
             () => {
                 if let State::Image(id) = current_state {
@@ -738,8 +747,10 @@ impl Ui {
                 // Still drawing primitives ingame
                 Placement::InWorld(visible) => match kind {
                     PrimitiveKind::Other(container) => {
-                        // Marker widget indicates the end of primitives from widget wrapped in
-                        // `Ingame<W>`. If end marker reached, go back to drawing the interface.
+                        // Marker widget indicates the end of primitives from
+                        // widget wrapped in
+                        // `Ingame<W>`. If end marker reached, go back to
+                        // drawing the interface.
                         if container.type_id
                             == std::any::TypeId::of::<widgets::ingame::IngameEndMarkerState>()
                         {
@@ -783,7 +794,8 @@ impl Ui {
                     let gl_aabr = gl_aabr(rect);
                     let (source_aabr, gl_size) = {
                         // Transform the source rectangle into uv coordinate.
-                        // TODO: Make sure this is right.  Especially the conversions.
+                        // TODO: Make sure this is right.  Especially the
+                        // conversions.
                         let ((uv_l, uv_r, uv_b, uv_t), gl_size) =
                             match graphic_cache.get_graphic(*graphic_id) {
                                 Some(Graphic::Blank) | None => continue,
@@ -800,11 +812,14 @@ impl Ui {
                                         {
                                             None
                                         } else {
-                                            // Multiply drawn image size by ratio of original image
+                                            // Multiply drawn image size by
+                                            // ratio of original image
                                             // size to
-                                            // source rectangle size (since as the proportion of the
+                                            // source rectangle size (since as
+                                            // the proportion of the
                                             // image gets
-                                            // smaller, the drawn size should get bigger), up to the
+                                            // smaller, the drawn size should
+                                            // get bigger), up to the
                                             // actual
                                             // size of the original image.
                                             let ratio_x = (image_w as f64 / source_w).min(
@@ -939,8 +954,8 @@ impl Ui {
                     ));
                 },
                 PrimitiveKind::TrianglesSingleColor { color, triangles } => {
-                    // Don't draw transparent triangle or switch state if there are actually no
-                    // triangles.
+                    // Don't draw transparent triangle or switch state if there
+                    // are actually no triangles.
                     let color = srgba_to_linear(Rgba::from(Into::<[f32; 4]>::into(color)));
                     if triangles.is_empty() || color[3] == 0.0 {
                         continue;
@@ -974,7 +989,8 @@ impl Ui {
                         // Retrieve world position
                         let parameters = s.state.parameters;
 
-                        // Calculate position on the screen at this 3d point using the camera.
+                        // Calculate position on the screen at this 3d point
+                        // using the camera.
                         let pos_on_screen =
                             (view_projection_mat * Vec4::from_point(parameters.pos)).homogenized();
                         let visible = pos_on_screen.z > 0.0 && pos_on_screen.z < 1.0 && {
@@ -1047,8 +1063,8 @@ impl Ui {
         self.draw_commands
             .push(DrawCommand::plain(start..mesh.vertices().len())); */
 
-        // Create a larger dynamic model if the mesh is larger than the current model
-        // size.
+        // Create a larger dynamic model if the mesh is larger than the current
+        // model size.
         if self.model.len() < self.mesh.vertices().len() {
             self.model = renderer.create_dynamic_model(self.mesh.vertices().len() * 4 / 3);
         }
