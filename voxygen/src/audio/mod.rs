@@ -124,9 +124,9 @@ impl Channels {
         let index = if let Some(channel) = self.sfx.iter().position(|c| c.is_done()) {
             Some(channel)
         } else {
-            // Get the lowest available tag, and if the requested tag is higher or equal
-            // priority, and if the requested distance is closer, replace the
-            // furthest channel
+            // Get the lowest available tag, and if the requested tag is higher
+            // or equal priority, and if the requested distance is
+            // closer, replace the furthest channel
             self.sfx
                 .iter()
                 .enumerate()
@@ -146,8 +146,8 @@ impl Channels {
         if let Some(index) = index {
             Some((index, &mut self.sfx[index]))
         } else {
-            // If all channels are filled with higher priority sfx than the requested, don't
-            // emit
+            // If all channels are filled with higher priority sfx than the
+            // requested, don't emit
             None
         }
     }

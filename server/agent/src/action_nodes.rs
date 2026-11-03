@@ -1182,8 +1182,9 @@ impl AgentData<'_> {
         }
         agent.behavior_state.timers[ActionStateTimers::TimerChooseTarget as usize] = 0.0;
         let mut aggro_on = false;
-        // Read once up front: the `get_enemy` closure below must not keep a borrow
-        // of `agent` alive, because `is_detected` needs it uniquely.
+        // Read once up front: the `get_enemy` closure below must not keep a
+        // borrow of `agent` alive, because `is_detected` needs it
+        // uniquely.
         let is_guard = is_village_guard(agent);
 
         // Search the area.

@@ -436,7 +436,8 @@ pub fn maintain_egui_inner(
                                         if let Some(uid) = uids.get(entity)
                                             && ui.button("GoTo").clicked()
                                         {
-                                            // Teleports the client to this position
+                                            // Teleports the client to this
+                                            // position
                                             egui_actions.actions.push(EguiAction::ChatCommand {
                                                 cmd: ServerChatCommand::Tp,
                                                 args: vec![format!("uid@{uid}")],

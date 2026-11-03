@@ -516,7 +516,8 @@ fn ground_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f32) {
         * section_modifier;
 
     let accel = if let Some(block) = data.physics.on_ground {
-        // FRIC_GROUND temporarily used to normalize things around expected values
+        // FRIC_GROUND temporarily used to normalize things around expected
+        // values
         data.body.ground_accel().unwrap_or(0.0)
             * data.scale.map_or(1.0, |s| s.0.sqrt())
             * block.get_traction()
