@@ -1,6 +1,6 @@
 use crate::{
     astar::{Astar, PathResult},
-    comp::TERRAIN_CYLINDER_MAX_HEIGHT,
+    comp::{Body, TERRAIN_CYLINDER_MAX_HEIGHT},
     resources::Time,
     terrain::Block,
     vol::{BaseVol, ReadVol},
@@ -10,7 +10,7 @@ use fxhash::FxBuildHasher;
 #[cfg(feature = "rrt_pathfinding")]
 use hashbrown::HashMap;
 #[cfg(feature = "rrt_pathfinding")]
-use kiddo::{SquaredEuclidean, float::kdtree::KdTree, nearest_neighbour::NearestNeighbour}; /* For RRT paths (disabled for now) */
+use kiddo::{Eytzinger, KdTree, QueryResultItem, SquaredEuclidean, VecOfArrays}; /* For RRT paths (disabled for now) */
 use rand::{RngExt, rng};
 #[cfg(feature = "rrt_pathfinding")]
 use rand::{
@@ -96,10 +96,8 @@ pub struct TraversalConfig {
     pub in_liquid: bool,
     /// The distance to the target below which it is considered reached.
     pub min_tgt_dist: f32,
-    /// Whether the agent can climb.
-    pub can_climb: bool,
-    /// Whether the agent can fly.
-    pub can_fly: bool,
+    /// The body that's moving.
+    pub moving_body: Option<Body>,
     /// Whether the agent has vectored propulsion.
     pub vectored_propulsion: bool,
     /// Whether chunk containing target position is currently loaded
@@ -172,6 +170,22 @@ impl TraversalDims {
     }
 }
 
+impl TraversalConfig {
+    pub fn fly_thrust(&self) -> Option<f32> { self.moving_body.as_ref().and_then(Body::fly_thrust) }
+
+    pub fn can_fly(&self) -> bool { self.fly_thrust().is_some() }
+
+    pub fn can_climb(&self) -> bool { self.moving_body.as_ref().is_some_and(Body::can_climb) }
+
+    pub fn ground_accel(&self) -> Option<f32> {
+        self.moving_body.as_ref().and_then(Body::ground_accel)
+    }
+
+    pub fn swim_thrust(&self) -> Option<f32> {
+        self.moving_body.as_ref().and_then(Body::swim_thrust)
+    }
+}
+
 const DIAGONALS: [Vec2<i32>; 8] = [
     Vec2::new(1, 0),
     Vec2::new(1, 1),
@@ -215,17 +229,7 @@ impl Route {
             let next1 = self.next(1).unwrap_or(next0);
 
             // Stop using obstructed paths
-            if !walkable(
-                vol,
-                next0,
-                traversal_cfg.is_target_loaded,
-                traversal_cfg.dims,
-            ) || !walkable(
-                vol,
-                next1,
-                traversal_cfg.is_target_loaded,
-                traversal_cfg.dims,
-            ) {
+            if !walkable(vol, next0, traversal_cfg) || !walkable(vol, next1, traversal_cfg) {
                 return Err(TraverseStop::InvalidPath);
             }
 
@@ -854,7 +858,7 @@ where
     })
 }
 
-fn walkable<V>(vol: &V, pos: Vec3<i32>, is_target_loaded: bool, dims: TraversalDims) -> bool
+fn walkable<V>(vol: &V, pos: Vec3<i32>, traversal_cfg: &TraversalConfig) -> bool
 where
     V: BaseVol<Vox = Block> + ReadVol,
 {
@@ -871,7 +875,7 @@ where
             if below_z > Block::MAX_HEIGHT.ceil() as i32 {
                 break Block::empty();
             }
-        } else if is_target_loaded {
+        } else if traversal_cfg.is_target_loaded {
             break Block::empty();
         } else {
             // If not loaded assume we can walk there.
@@ -896,7 +900,10 @@ where
     // `walkable` is called ~30 times per expanded A* node and every `vol.get`
     // is a chunk hash lookup, so one redundant read here is thousands per
     // agent per path poll.
-    (on_ground || in_liquid) && !a.is_solid() && column_clear(vol, pos, 1, dims.height, true)
+    ((on_ground && traversal_cfg.ground_accel().is_some())
+        || (in_liquid && traversal_cfg.swim_thrust().is_some()))
+        && !a.is_solid()
+        && column_clear(vol, pos, 1, traversal_cfg.dims.height, true)
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -923,14 +930,7 @@ fn find_path<V>(
 where
     V: BaseVol<Vox = Block> + ReadVol,
 {
-    let is_walkable = |pos: &Vec3<i32>| {
-        walkable(
-            vol,
-            *pos,
-            traversal_cfg.is_target_loaded,
-            traversal_cfg.dims,
-        )
-    };
+    let is_walkable = |pos: &Vec3<i32>| walkable(vol, *pos, traversal_cfg);
     let get_walkable_z = |pos| {
         let mut z_incr = 0;
         for _ in 0..32 {
@@ -1012,7 +1012,7 @@ where
 
         // Whether this node is somewhere the agent can stand at all. Shared by
         // every direction below instead of being recomputed 13 times.
-        let here_ok = traversal_cfg.can_fly || is_walkable(&pos);
+        let here_ok = traversal_cfg.can_fly() || is_walkable(&pos);
 
         let walkable = [
             (is_walkable(&(pos + Vec3::new(1, 0, 0))), Vec3::new(1, 0, 0)),
@@ -1050,8 +1050,8 @@ where
                 (vol.get(pos - Vec3::unit_z())
                     .map(|b| !b.is_liquid())
                     .unwrap_or(traversal_cfg.is_target_loaded)
-                    || traversal_cfg.can_climb
-                    || traversal_cfg.can_fly).then_some(JUMPS.iter())
+                    || traversal_cfg.can_climb()
+                    || traversal_cfg.can_fly()).then_some(JUMPS.iter())
                     .into_iter().flatten()
             )
             .map(move |dir| (pos, dir))
@@ -1066,7 +1066,7 @@ where
                 // `(can_fly || W(pos)) && (can_fly || W(pos+dir))`, so this is
                 // the same predicate, evaluated once.
                 here_ok
-                    && (traversal_cfg.can_fly || is_walkable(&(*pos + **dir)))
+                    && (traversal_cfg.can_fly() || is_walkable(&(*pos + **dir)))
                     // Rising by `dir.z` sweeps the origin column up to
                     // `h - 1 + dir.z`; `walkable` already cleared `0..h`, so
                     // only `h .. h + dir.z` is left. At the default height of 2
@@ -1262,16 +1262,27 @@ where
     let mut path2 = Vec::new();
 
     // K-d trees are used to find the closest nodes rapidly
-    let mut kdtree1: KdTree<f32, usize, 3, 32, u32> = KdTree::with_capacity(MAX_POINTS);
-    let mut kdtree2: KdTree<f32, usize, 3, 32, u32> = KdTree::with_capacity(MAX_POINTS);
+    let mut kdtree1: KdTree<f32, usize, Eytzinger, VecOfArrays<f32, usize, 3, 32>, 3, 32> =
+        KdTree::default();
+    let mut kdtree2: KdTree<f32, usize, Eytzinger, VecOfArrays<f32, usize, 3, 32>, 3, 32> =
+        KdTree::default();
+
+    macro_rules! drop_kiddo_error {
+        ($result:expr) => {
+            if let Err(e) = $result {
+                tracing::warn!(?e, "kiddo unsplittable leaf detected");
+                return (None, false);
+            }
+        };
+    }
 
     // Add the start as the first node of the first k-d tree
-    kdtree1.add(&[startf.x, startf.y, startf.z], node_index1);
+    drop_kiddo_error!(kdtree1.add(&[startf.x, startf.y, startf.z], node_index1));
     nodes1.push(startf);
     node_index1 += 1;
 
     // Add the end as the first node of the second k-d tree
-    kdtree2.add(&[endf.x, endf.y, endf.z], node_index2);
+    drop_kiddo_error!(kdtree2.add(&[endf.x, endf.y, endf.z], node_index2));
     nodes2.push(endf);
     node_index2 += 1;
 
@@ -1298,18 +1309,14 @@ where
 
         // Find the nearest nodes to the the sampled point
         let nearest_index1 = kdtree1
-            .nearest_one::<SquaredEuclidean>(&[
-                sampled_point1.x,
-                sampled_point1.y,
-                sampled_point1.z,
-            ])
+            .query(&[sampled_point1.x, sampled_point1.y, sampled_point1.z])
+            .nearest_one::<SquaredEuclidean<f32>>()
+            .execute()
             .item;
         let nearest_index2 = kdtree2
-            .nearest_one::<SquaredEuclidean>(&[
-                sampled_point2.x,
-                sampled_point2.y,
-                sampled_point2.z,
-            ])
+            .query(&[sampled_point2.x, sampled_point2.y, sampled_point2.z])
+            .nearest_one::<SquaredEuclidean<f32>>()
+            .execute()
             .item;
         let nearest1 = nodes1[nearest_index1];
         let nearest2 = nodes2[nearest_index2];
@@ -1320,19 +1327,21 @@ where
 
         // Ensure the new nodes are valid/traversable
         if is_valid_edge(&nearest1, &new_point1) {
-            kdtree1.add(&[new_point1.x, new_point1.y, new_point1.z], node_index1);
+            drop_kiddo_error!(
+                kdtree1.add(&[new_point1.x, new_point1.y, new_point1.z], node_index1)
+            );
             nodes1.push(new_point1);
             parents1.insert(node_index1, nearest_index1);
             node_index1 += 1;
             // Check if the trees connect
-            let NearestNeighbour {
+            let QueryResultItem {
                 distance: check,
                 item: index,
-            } = kdtree2.nearest_one::<SquaredEuclidean>(&[
-                new_point1.x,
-                new_point1.y,
-                new_point1.z,
-            ]);
+                ..
+            } = kdtree2
+                .query(&[new_point1.x, new_point1.y, new_point1.z])
+                .nearest_one::<SquaredEuclidean<f32>>()
+                .execute();
             if check < radius {
                 let connection = nodes2[index];
                 connection2_idx = index;
@@ -1345,19 +1354,21 @@ where
 
         // Repeat the validity check for the second tree
         if is_valid_edge(&nearest2, &new_point2) {
-            kdtree2.add(&[new_point2.x, new_point2.y, new_point1.z], node_index2);
+            drop_kiddo_error!(
+                kdtree2.add(&[new_point2.x, new_point2.y, new_point1.z], node_index2)
+            );
             nodes2.push(new_point2);
             parents2.insert(node_index2, nearest_index2);
             node_index2 += 1;
             // Again check for a connection
-            let NearestNeighbour {
+            let QueryResultItem {
                 distance: check,
                 item: index,
-            } = kdtree1.nearest_one::<SquaredEuclidean>(&[
-                new_point2.x,
-                new_point2.y,
-                new_point1.z,
-            ]);
+                ..
+            } = kdtree1
+                .query(&[new_point2.x, new_point2.y, new_point1.z])
+                .nearest_one::<SquaredEuclidean<f32>>()
+                .execute();
             if check < radius {
                 let connection = nodes1[index];
                 connection1_idx = index;
@@ -1393,7 +1404,9 @@ where
         // If the trees did not connect, construct a path from the start to
         // the closest node to the end
         let mut current_node_index1 = kdtree1
-            .nearest_one::<SquaredEuclidean>(&[endf.x, endf.y, endf.z])
+            .query(&[endf.x, endf.y, endf.z])
+            .nearest_one::<SquaredEuclidean<f32>>()
+            .execute()
             .item;
         // Attempt to pick a node other than the start node
         for _i in 0..3 {
@@ -1732,12 +1745,21 @@ mod walkable_cost_tests {
     #[test]
     fn walkable_costs_no_more_reads_than_it_used_to() {
         let vol = CountingVol::new();
-        assert!(walkable(
-            &vol,
-            Vec3::new(0, 0, 0),
-            true,
-            TraversalDims::default()
-        ));
+        let cfg = TraversalConfig {
+            node_tolerance: 0.0,
+            slow_factor: 0.0,
+            on_ground: true,
+            in_liquid: false,
+            min_tgt_dist: 0.0,
+            moving_body: Some(Body::Humanoid(crate::comp::humanoid::Body::random_with(
+                &mut rand::rng(),
+                &crate::comp::humanoid::Species::Human,
+            ))),
+            vectored_propulsion: false,
+            is_target_loaded: true,
+            dims: TraversalDims::default(),
+        };
+        assert!(walkable(&vol, Vec3::new(0, 0, 0), &cfg));
         assert_eq!(
             vol.reads.get(),
             3,

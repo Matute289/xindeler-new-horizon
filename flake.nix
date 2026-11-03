@@ -67,7 +67,6 @@
       perSystem = {
         config,
         pkgs,
-        lib,
         ...
       }: let
         checkIfLfsIsSetup = checkFile: ''
@@ -142,6 +141,7 @@
             export VELOREN_GIT_VERSION="${git.version}"
           '';
         });
+        nci.toolchains.mkShell = pkgs: (config.nci.toolchains.mkBuild pkgs).override {extensions = ["rust-src"];};
 
         nci.projects."veloren" = {
           export = false;
@@ -184,6 +184,7 @@
             udev
             alsa-lib
             vulkan-loader
+	    libGL
             stdenv.cc.cc.lib
           ];
           depsDrvConfig = {
@@ -228,6 +229,8 @@
             rust-crane.buildFlags = ["--bin=veloren-voxygen"];
           };
         };
+
+        formatter = pkgs.alejandra;
       };
     };
 }

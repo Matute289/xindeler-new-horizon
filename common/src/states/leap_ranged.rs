@@ -63,16 +63,13 @@ impl CharacterBehavior for Data {
                         let precision_mult = data
                             .derived
                             .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
-                        let tool_stats = get_tool_stats(data, self.static_data.ability_info);
 
                         if let Some(melee) = &self.static_data.melee {
                             data.updater.insert(
                                 data.entity,
-                                melee.clone().create_melee(
-                                    precision_mult,
-                                    tool_stats,
-                                    self.static_data.ability_info,
-                                ),
+                                melee
+                                    .clone()
+                                    .create_melee(precision_mult, self.static_data.ability_info),
                             );
                         }
 
@@ -172,6 +169,8 @@ impl CharacterBehavior for Data {
                     && let CharacterState::LeapRanged(c) = &mut update.character
                 {
                     c.timer = tick_attack_or_default(data, self.timer, None);
+                } else {
+                    end_melee_ability(data, &mut update);
                 }
             },
             _ => {

@@ -185,7 +185,7 @@ impl AgentData<'_> {
         // Only jump if we are grounded and can't blockhop or if we can fly
         self.jump_if(
             (self.physics_state.on_ground.is_some() && bearing.z > 1.5)
-                || self.traversal_config.can_fly
+                || self.traversal_config.can_fly()
                 || scramble,
             controller,
         );
@@ -285,8 +285,14 @@ impl AgentData<'_> {
     }
 
     pub fn unstuck_if(&self, condition: bool, controller: &mut Controller) {
-        if condition && rng().random_bool(0.05) {
-            if matches!(self.char_state, CharacterState::Climb(_)) || rng().random_bool(0.5) {
+        let on_ground_cant_move =
+            self.traversal_config.on_ground && self.traversal_config.ground_accel().is_none();
+
+        if condition && (on_ground_cant_move || rng().random_bool(0.05)) {
+            if on_ground_cant_move
+                || matches!(self.char_state, CharacterState::Climb(_))
+                || rng().random_bool(0.5)
+            {
                 controller.push_basic_input(InputKind::Jump);
             } else {
                 controller.push_basic_input(InputKind::Roll);
@@ -376,7 +382,7 @@ impl AgentData<'_> {
                     // If it has an rtsim destination and can fly, then it
                     // should. If it is flying and bumps
                     // something above it, then it should move down.
-                    if self.traversal_config.can_fly
+                    if self.traversal_config.can_fly()
                         && !read_data
                             .terrain
                             .ray(self.pos.0, self.pos.0 + (Vec3::unit_z() * 3.0))
@@ -399,7 +405,7 @@ impl AgentData<'_> {
                         Some(speed_factor),
                     ) {
                         let height_offset = bearing.z
-                            + if self.traversal_config.can_fly {
+                            + if self.traversal_config.can_fly() {
                                 // NOTE: costs 4 us (imbris)
                                 let obstacle_ahead = read_data
                                     .terrain
@@ -795,7 +801,7 @@ impl AgentData<'_> {
             // Bats should fly
             // Use a proportional controller as the bouncing effect mimics bat
             // flight
-            if self.traversal_config.can_fly
+            if self.traversal_config.can_fly()
                 && self
                     .inventory
                     .equipped(EquipSlot::ActiveMainhand)
@@ -1176,6 +1182,10 @@ impl AgentData<'_> {
         }
         agent.behavior_state.timers[ActionStateTimers::TimerChooseTarget as usize] = 0.0;
         let mut aggro_on = false;
+        // Read once up front: the `get_enemy` closure below must not keep a
+        // borrow of `agent` alive, because `is_detected` needs it
+        // uniquely.
+        let is_guard = is_village_guard(agent);
 
         // Search the area.
         // TODO: choose target by more than just distance
@@ -1190,7 +1200,7 @@ impl AgentData<'_> {
             if attack_target {
                 if is_enemy(self, entity, read_data) {
                     Some((entity, true))
-                } else if self.should_defend(entity, read_data) {
+                } else if self.should_defend(is_guard, entity, read_data) {
                     if let Some(attacker) = get_attacker(entity, read_data) {
                         if !self.passive_towards(attacker, read_data) {
                             // aggro_on: attack immediately, do not warn/menace.
@@ -2264,8 +2274,7 @@ impl AgentData<'_> {
                 || matches!(sound.kind, SoundKind::Utterance(UtteranceKind::Scream, _));
 
             let has_enemy_alignment = matches!(self.alignment, Some(Alignment::Enemy));
-            let follows_threatening_sounds =
-                has_enemy_alignment || is_village_guard(*self.entity, read_data);
+            let follows_threatening_sounds = has_enemy_alignment || is_village_guard(agent);
 
             if sound_was_threatening && is_close {
                 if !self.below_flee_health(agent) && follows_threatening_sounds {
@@ -2471,7 +2480,7 @@ impl AgentData<'_> {
             && matches!(read_data.bodies.get(entity), Some(Body::QuadrupedSmall(_)))
     }
 
-    fn should_defend(&self, entity: EcsEntity, read_data: &ReadData) -> bool {
+    fn should_defend(&self, is_guard: bool, entity: EcsEntity, read_data: &ReadData) -> bool {
         let entity_alignment = read_data.alignments.get(entity);
 
         let we_are_friendly = entity_alignment.is_some_and(|entity_alignment| {
@@ -2488,7 +2497,7 @@ impl AgentData<'_> {
             matches!(entity_alignment, Some(Alignment::Owned(ouid)) if *self.uid == *ouid);
 
         (we_are_friendly && we_share_species)
-            || (is_village_guard(*self.entity, read_data) && is_villager(entity_alignment))
+            || (is_guard && is_villager(entity_alignment))
             || self_owns_entity
     }
 

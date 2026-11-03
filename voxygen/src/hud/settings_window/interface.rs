@@ -46,6 +46,8 @@ widget_ids! {
         biome_change_popups_button_label,
         compact_item_slots_button,
         compact_item_slots_button_label,
+        hotkey_hints_button,
+        hotkey_hints_button_label,
         ch_title,
         ch_transp_slider,
         ch_transp_value,
@@ -62,6 +64,9 @@ widget_ids! {
         row_background_opacity_text,
         row_background_opacity_slider,
         row_background_opacity_value_text,
+        pause_menu_overlay_opacity_text,
+        pause_menu_overlay_opacity_slider,
+        pause_menu_overlay_opacity_value_text,
         //
         hotbar_title,
         bar_numbers_title,
@@ -196,6 +201,11 @@ impl Widget for Interface<'_> {
         let crosshair_type = self.global_state.settings.interface.crosshair_type;
         let ui_scale = self.global_state.settings.interface.ui_scale;
         let row_opacity = self.global_state.settings.interface.row_background_opacity;
+        let pause_overlay_opacity = self
+            .global_state
+            .settings
+            .interface
+            .pause_menu_overlay_opacity;
 
         Text::new(&self.localized_strings.get_msg("hud-settings-general"))
             .top_left_with_margins_on(state.ids.window, 5.0, 5.0)
@@ -413,13 +423,41 @@ impl Widget for Interface<'_> {
         .color(TEXT_COLOR)
         .set(state.ids.compact_item_slots_button_label, ui);
 
+        // Hotkey hints
+        let show_hotkey_hints = ToggleButton::new(
+            self.global_state.settings.interface.toggle_hotkey_hints,
+            self.imgs.checkbox,
+            self.imgs.checkbox_checked,
+        )
+        .w_h(18.0, 18.0)
+        .down_from(state.ids.compact_item_slots_button, 8.0)
+        .hover_images(self.imgs.checkbox_mo, self.imgs.checkbox_checked_mo)
+        .press_images(self.imgs.checkbox_press, self.imgs.checkbox_checked)
+        .set(state.ids.hotkey_hints_button, ui);
+
+        if self.global_state.settings.interface.toggle_hotkey_hints != show_hotkey_hints {
+            events.push(ToggleHotkeyHints(show_hotkey_hints));
+        }
+
+        Text::new(
+            &self
+                .localized_strings
+                .get_msg("hud-settings-show_hotkey_hints"),
+        )
+        .right_from(state.ids.hotkey_hints_button, 10.0)
+        .font_size(self.fonts.cyri.scale(14))
+        .font_id(self.fonts.cyri.conrod_id)
+        .graphics_for(state.ids.hotkey_hints_button)
+        .color(TEXT_COLOR)
+        .set(state.ids.hotkey_hints_button_label, ui);
+
         // Row background opacity
         Text::new(
             &self
                 .localized_strings
                 .get_msg("hud-settings-row_background_opacity"),
         )
-        .down_from(state.ids.compact_item_slots_button, 10.0)
+        .down_from(state.ids.hotkey_hints_button, 10.0)
         .font_size(self.fonts.cyri.scale(14))
         .font_id(self.fonts.cyri.conrod_id)
         .color(TEXT_COLOR)
@@ -450,9 +488,46 @@ impl Widget for Interface<'_> {
             .color(TEXT_COLOR)
             .set(state.ids.row_background_opacity_value_text, ui);
 
+        // Pause menu overlay opacity
+        Text::new(
+            &self
+                .localized_strings
+                .get_msg("hud-settings-pause_menu_overlay_opacity"),
+        )
+        .down_from(state.ids.row_background_opacity_slider, 10.0)
+        .font_size(self.fonts.cyri.scale(14))
+        .font_id(self.fonts.cyri.conrod_id)
+        .color(TEXT_COLOR)
+        .set(state.ids.pause_menu_overlay_opacity_text, ui);
+
+        if let Some(new_opacity) = ImageSlider::continuous(
+            pause_overlay_opacity,
+            0.0,
+            1.0,
+            self.imgs.slider_indicator,
+            self.imgs.slider,
+        )
+        .w_h(104.0, 22.0)
+        .down_from(state.ids.pause_menu_overlay_opacity_text, 8.0)
+        .track_breadth(12.0)
+        .slider_length(10.0)
+        .pad_track((5.0, 5.0))
+        .set(state.ids.pause_menu_overlay_opacity_slider, ui)
+        {
+            events.push(PauseMenuOverlayOpacity(new_opacity));
+        }
+
+        Text::new(&format!("{:.3}", pause_overlay_opacity))
+            .right_from(state.ids.pause_menu_overlay_opacity_slider, 8.0)
+            .font_size(self.fonts.cyri.scale(14))
+            .graphics_for(state.ids.pause_menu_overlay_opacity_slider)
+            .font_id(self.fonts.cyri.conrod_id)
+            .color(TEXT_COLOR)
+            .set(state.ids.pause_menu_overlay_opacity_value_text, ui);
+
         // Ui Scale
         Text::new(&self.localized_strings.get_msg("hud-settings-ui_scale"))
-            .down_from(state.ids.row_background_opacity_slider, 10.0)
+            .down_from(state.ids.pause_menu_overlay_opacity_slider, 10.0)
             .font_size(self.fonts.cyri.scale(18))
             .font_id(self.fonts.cyri.conrod_id)
             .color(TEXT_COLOR)
