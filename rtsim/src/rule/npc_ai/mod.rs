@@ -67,10 +67,9 @@ use common::{
     store::Id,
     terrain::{CoordinateConversions, TerrainChunkSize, sprite},
     time::DayPeriod,
-    util::{Dir, Dir2},
+    util::{Dir, Dir2, fx_hash::FxHasher64},
 };
 use core::ops::ControlFlow;
-use fxhash::FxHasher64;
 use itertools::{Either, Itertools};
 use rand::{prelude::*, seq::IndexedRandom};
 use rand_chacha::ChaChaRng;

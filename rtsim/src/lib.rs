@@ -149,11 +149,11 @@ pub use self::{
     event::{Event, EventCtx, OnTick},
     rule::{Rule, RuleError},
 };
-use anymap2::SendSyncAnyMap;
+use anymap3::Map;
 use atomic_refcell::AtomicRefCell;
 use common::resources::{Time, TimeOfDay};
 use std::{
-    any::type_name,
+    any::{Any, type_name},
     ops::{Deref, DerefMut},
 };
 use tracing::{error, info};
@@ -165,6 +165,8 @@ pub struct RtState {
     event_handlers: SendSyncAnyMap,
 }
 
+/// A type-keyed store whose contents are `Send + Sync`.
+type SendSyncAnyMap = Map<dyn Any + Send + Sync>;
 type RuleState<R> = AtomicRefCell<R>;
 type EventHandlersOf<E> = Vec<
     Box<

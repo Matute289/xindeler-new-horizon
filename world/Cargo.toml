@@ -42,7 +42,6 @@ bincode = { workspace = true }
 bitvec = "1.0.1"
 enum-map = { workspace = true }
 enumset = { workspace = true }
-fxhash = { workspace = true }
 image = { workspace = true }
 itertools = { workspace = true }
 vek = { workspace = true }
