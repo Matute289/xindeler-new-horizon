@@ -185,7 +185,6 @@ impl CharacterBehavior for Data {
                     let precision_mult = data
                         .derived
                         .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
-                    let tool_stats = get_tool_stats(data, self.static_data.ability_info);
 
                     data.updater.insert(
                         data.entity,
@@ -193,11 +192,7 @@ impl CharacterBehavior for Data {
                             .melee_constructor
                             .clone()
                             .custom_combo(strike_data.custom_combo.clone())
-                            .create_melee(
-                                precision_mult,
-                                tool_stats,
-                                self.static_data.ability_info,
-                            ),
+                            .create_melee(precision_mult, self.static_data.ability_info),
                     );
                 } else if self.timer < strike_data.swing_duration {
                     // Swings

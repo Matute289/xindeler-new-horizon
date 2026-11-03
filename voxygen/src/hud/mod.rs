@@ -330,6 +330,7 @@ widget_ids! {
         buttons,
         buffs,
         esc_menu,
+        pause_overlay,
         social_window,
         quest_window,
         tutorial_window,
@@ -3413,9 +3414,11 @@ impl Hud {
         let msm = ecs.read_resource::<MaterialStatManifest>();
         let time = ecs.read_resource::<Time>();
 
-        // Action text in bottom right corner
-        DynamicTutorial::new(global_state, client, &self.fonts, &self.imgs, i18n)
-            .set(self.ids.buttons, ui_widgets);
+        if global_state.settings.interface.toggle_hotkey_hints {
+            // Action text in bottom right corner
+            DynamicTutorial::new(global_state, client, &self.fonts, &self.imgs, i18n)
+                .set(self.ids.buttons, ui_widgets);
+        }
 
         // Group Window
         for event in Group::new(
@@ -4120,6 +4123,19 @@ impl Hud {
 
         self.new_messages.clear();
         self.new_notifications.clear();
+
+        // Render overlay when escape menu or settings window is open
+        if self.show.esc_menu || matches!(self.show.open_windows, Windows::Settings) {
+            Rectangle::fill([ui_widgets.win_w, ui_widgets.win_h])
+                .rgba(
+                    0.0,
+                    0.0,
+                    0.0,
+                    global_state.settings.interface.pause_menu_overlay_opacity,
+                )
+                .top_left_with_margins_on(ui_widgets.window, 0.0, 0.0)
+                .set(self.ids.pause_overlay, ui_widgets);
+        }
 
         // Settings
         if let Windows::Settings = self.show.open_windows {

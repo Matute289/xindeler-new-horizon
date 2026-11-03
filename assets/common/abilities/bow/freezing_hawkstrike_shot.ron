@@ -19,7 +19,7 @@ ChargedRanged(
             damage_kind: Cold,
         )),
         scaled: Some((
-            damage: 35,
+            damage: 38,
             knockback: Some(10),
         )),
     ),

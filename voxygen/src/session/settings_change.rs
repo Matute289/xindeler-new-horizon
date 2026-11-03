@@ -173,6 +173,7 @@ pub enum Interface {
     ToggleDraggableWindows(bool),
     ToggleTips(bool),
     ToggleBiomeChangePopups(bool),
+    ToggleHotkeyHints(bool),
 
     CrosshairTransp(f32),
     CrosshairType(CrosshairType),
@@ -185,6 +186,7 @@ pub enum Interface {
     ToggleShortcutNumbers(ShortcutNumbers),
     BuffPosition(BuffPosition),
     RowBackgroundOpacity(f32),
+    PauseMenuOverlayOpacity(f32),
 
     UiScale(ScaleChange),
     //Minimap
@@ -784,6 +786,9 @@ impl SettingsChange {
                     Interface::ToggleBiomeChangePopups(toggle_biome_change_popups) => {
                         settings.interface.toggle_biome_change_popups = toggle_biome_change_popups;
                     },
+                    Interface::ToggleHotkeyHints(toggle_hotkey_hints) => {
+                        settings.interface.toggle_hotkey_hints = toggle_hotkey_hints;
+                    },
                     Interface::CrosshairTransp(crosshair_opacity) => {
                         settings.interface.crosshair_opacity = crosshair_opacity;
                     },
@@ -904,6 +909,9 @@ impl SettingsChange {
                     },
                     Interface::RowBackgroundOpacity(opacity) => {
                         settings.interface.row_background_opacity = opacity;
+                    },
+                    Interface::PauseMenuOverlayOpacity(opacity) => {
+                        settings.interface.pause_menu_overlay_opacity = opacity;
                     },
                 }
             },
