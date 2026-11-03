@@ -16,7 +16,7 @@ use kira::{
     track::{SpatialTrackHandle, TrackBuilder, TrackHandle},
 };
 use serde::Deserialize;
-use std::{f32, time::Duration};
+use std::time::Duration;
 use strum::EnumIter;
 use tracing::warn;
 use vek::*;
