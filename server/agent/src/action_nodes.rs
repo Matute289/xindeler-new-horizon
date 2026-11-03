@@ -1182,6 +1182,9 @@ impl AgentData<'_> {
         }
         agent.behavior_state.timers[ActionStateTimers::TimerChooseTarget as usize] = 0.0;
         let mut aggro_on = false;
+        // Read once up front: the `get_enemy` closure below must not keep a borrow
+        // of `agent` alive, because `is_detected` needs it uniquely.
+        let is_guard = is_village_guard(agent);
 
         // Search the area.
         // TODO: choose target by more than just distance
@@ -1196,7 +1199,7 @@ impl AgentData<'_> {
             if attack_target {
                 if is_enemy(self, entity, read_data) {
                     Some((entity, true))
-                } else if self.should_defend(agent, entity, read_data) {
+                } else if self.should_defend(is_guard, entity, read_data) {
                     if let Some(attacker) = get_attacker(entity, read_data) {
                         if !self.passive_towards(attacker, read_data) {
                             // aggro_on: attack immediately, do not warn/menace.
@@ -2476,7 +2479,7 @@ impl AgentData<'_> {
             && matches!(read_data.bodies.get(entity), Some(Body::QuadrupedSmall(_)))
     }
 
-    fn should_defend(&self, agent: &Agent, entity: EcsEntity, read_data: &ReadData) -> bool {
+    fn should_defend(&self, is_guard: bool, entity: EcsEntity, read_data: &ReadData) -> bool {
         let entity_alignment = read_data.alignments.get(entity);
 
         let we_are_friendly = entity_alignment.is_some_and(|entity_alignment| {
@@ -2493,7 +2496,7 @@ impl AgentData<'_> {
             matches!(entity_alignment, Some(Alignment::Owned(ouid)) if *self.uid == *ouid);
 
         (we_are_friendly && we_share_species)
-            || (is_village_guard(agent) && is_villager(entity_alignment))
+            || (is_guard && is_villager(entity_alignment))
             || self_owns_entity
     }
 
