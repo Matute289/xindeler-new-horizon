@@ -1244,7 +1244,8 @@ impl Client {
             return Err(Error::AuthServerNotTrusted);
         }
 
-        // fetching credentials from frontend, this might involve UI and take some time.
+        // fetching credentials from frontend, this might involve UI and take
+        // some time.
         debug!("query frontend for credentials...");
         let credentials = tokio::time::timeout(
             CREDENTIALS_TIMEOUT,
@@ -4063,7 +4064,7 @@ mod tests {
             "https://127.0.0.1:1".to_string(),
             "regression-test".to_string(),
             "regression-test".to_string(),
-            || None,
+            &StaticCredentialProvider::default(),
         ));
 
         let err = result.expect_err("signing in against a closed loopback port should fail");
@@ -4129,39 +4130,180 @@ mod tests {
         }
     }
 
-    /// `Client::new` must accept an OAuth request in the slot right after the
-    /// 2FA callback. This pins the parameter position that
-    /// `voxygen/src/menu/main/client_init.rs` depends on.
-    #[test]
-    fn client_new_accepts_an_oauth_login_request() {
-        fn assert_signature<F>(_: F)
-        where
-            F: FnOnce(Option<crate::oauth::OAuthLogin>),
-        {
+    /// Hands out OAuth credentials and answers 2FA prompts with a fixed code,
+    /// counting how often it was asked -- the shape voxygen's menu provider
+    /// has.
+    struct ScriptedProvider {
+        oauth: std::sync::Mutex<Option<crate::oauth::OAuthLogin>>,
+        two_fa_code: Option<&'static str>,
+        two_fa_asked: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ScriptedProvider {
+        fn answering_2fa_with(code: Option<&'static str>) -> Self {
+            Self {
+                oauth: std::sync::Mutex::new(None),
+                two_fa_code: code,
+                two_fa_asked: Default::default(),
+            }
         }
 
-        assert_signature(|oauth: Option<crate::oauth::OAuthLogin>| {
-            let runtime = Arc::new(Runtime::new().unwrap());
-            let runtime2 = Arc::clone(&runtime);
-            let mut mismatched_server_info = None;
-            let _fut = Client::new(
-                ConnectionArgs::Tcp {
-                    hostname: "127.0.0.1:9000".to_owned(),
-                    prefer_ipv6: false,
-                },
-                runtime2,
-                &mut mismatched_server_info,
-                "Foo",
-                "Bar",
-                None,
-                |_: &str| false,
-                || None,
-                oauth,
-                &|_| {},
-                |_| {},
-                PathBuf::default(),
-                ClientType::ChatOnly,
-            );
+        fn times_asked(&self) -> usize {
+            self.two_fa_asked.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl CredentialProvider for ScriptedProvider {
+        fn auth_trusted(&self, _: &Option<String>) -> bool { true }
+
+        async fn get_credentials(&self, _: &Option<String>) -> Result<Credentials, ()> {
+            let oauth = self.oauth.lock().ok().and_then(|mut oauth| oauth.take());
+            oauth.map(Credentials::OAuth).ok_or(())
+        }
+
+        async fn get_two_fa_code(&self, _: &Option<String>) -> Option<String> {
+            self.two_fa_asked
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.two_fa_code.map(str::to_owned)
+        }
+    }
+
+    /// Serves one canned raw response per incoming connection, in order, and
+    /// hands back the raw requests it received.
+    fn serve_in_sequence(responses: Vec<String>) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (requests_tx, requests_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut request = [0; 4096];
+                let read = stream.read(&mut request).unwrap_or(0);
+                let _ = requests_tx.send(String::from_utf8_lossy(&request[..read]).into_owned());
+                stream.write_all(response.as_bytes()).unwrap();
+            }
         });
+        (format!("http://{address}"), requests_rx)
+    }
+
+    fn closing_response(status_line: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status_line}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    const CHALLENGE: &str =
+        r#"{"challenge_id":"0123456789abcdef0123456789abcdef","expires_in":90}"#;
+
+    #[test]
+    fn password_2fa_challenge_asks_the_provider_and_redeems_the_code() {
+        let (addr, requests) = serve_in_sequence(vec![
+            closing_response("202 Accepted", CHALLENGE),
+            closing_response(
+                "400 Bad Request",
+                r#"{"code":"TOTP_INVALID_CODE","message":"x","request_id":"y"}"#,
+            ),
+        ]);
+        let provider = ScriptedProvider::answering_2fa_with(Some("123456"));
+        let runtime = Runtime::new().unwrap();
+
+        let err = runtime
+            .block_on(Client::acquire_auth_token(
+                addr,
+                "alice".to_owned(),
+                "hunter2".to_owned(),
+                &provider,
+            ))
+            .expect_err("the fake auth server rejects the code");
+
+        assert!(
+            matches!(err, Error::TwoFaFailed(TwoFaFailure::WrongCode)),
+            "{err:?}"
+        );
+        assert_eq!(provider.times_asked(), 1);
+        let sign_in = requests.recv().unwrap();
+        assert!(sign_in.contains("generate_token"), "{sign_in}");
+        let redeem = requests.recv().unwrap();
+        assert!(redeem.contains("/login/2fa"), "{redeem}");
+        assert!(redeem.contains("123456"), "{redeem}");
+        assert!(
+            redeem.contains("0123456789abcdef0123456789abcdef"),
+            "{redeem}"
+        );
+    }
+
+    #[test]
+    fn cancelled_2fa_prompt_aborts_without_redeeming() {
+        let (addr, requests) = serve_in_sequence(vec![closing_response("202 Accepted", CHALLENGE)]);
+        let provider = ScriptedProvider::answering_2fa_with(None);
+        let runtime = Runtime::new().unwrap();
+
+        let err = runtime
+            .block_on(Client::acquire_auth_token(
+                addr,
+                "alice".to_owned(),
+                "hunter2".to_owned(),
+                &provider,
+            ))
+            .expect_err("a cancelled 2FA prompt must not sign in");
+
+        assert!(matches!(err, Error::Other(_)), "{err:?}");
+        assert_eq!(provider.times_asked(), 1);
+        assert_eq!(
+            requests.iter().count(),
+            1,
+            "the challenge must not be redeemed"
+        );
+    }
+
+    #[test]
+    fn password_sign_in_without_2fa_never_asks_for_a_code() {
+        let (addr, _requests) = serve_in_sequence(vec![closing_response(
+            "200 OK",
+            r#"{"token":"0123456789abcdef0123456789abcdef"}"#,
+        )]);
+        let provider = ScriptedProvider::answering_2fa_with(Some("123456"));
+        let runtime = Runtime::new().unwrap();
+
+        let result = runtime.block_on(Client::acquire_auth_token(
+            addr,
+            "alice".to_owned(),
+            "hunter2".to_owned(),
+            &provider,
+        ));
+
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(provider.times_asked(), 0);
+    }
+
+    /// voxygen spawns `Client::new` on its tokio runtime, so the future must
+    /// stay `Send` with a provider that holds an OAuth login.
+    #[test]
+    fn client_new_with_an_oauth_capable_provider_is_send() {
+        fn assert_send<T: Send>(_: &T) {}
+
+        let runtime = Arc::new(Runtime::new().unwrap());
+        let provider = ScriptedProvider::answering_2fa_with(None);
+        let fut = Client::new(
+            ConnectionArgs::Tcp {
+                hostname: "127.0.0.1:9000".to_owned(),
+                prefer_ipv6: false,
+            },
+            runtime,
+            None,
+            &provider,
+            &|_| {},
+            |_| {},
+            PathBuf::default(),
+            ClientType::ChatOnly,
+        );
+        assert_send(&fut);
     }
 }

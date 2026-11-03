@@ -157,7 +157,8 @@ pub(crate) fn select_auth_flow(
     trusted_auth_provider: &Option<String>,
 ) -> Result<AuthFlow, Error> {
     match (credentials, trusted_auth_provider) {
-        (Credentials::Username(username), _) | (Credentials::UsernamePassword(username, _), None) => {
+        (Credentials::Username(username), _)
+        | (Credentials::UsernamePassword(username, _), None) => {
             Ok(AuthFlow::PlainUsername(username))
         },
         (Credentials::UsernamePassword(username, password), Some(addr)) => Ok(AuthFlow::Password {
@@ -257,4 +258,114 @@ pub(crate) async fn connect_quic(
         ConnectAddr::Quic(a, config.clone(), hostname.clone())
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::oauth::OAuthProvider;
+
+    const AUTH: &str = "https://auth.xindeler.com";
+
+    fn oauth_login() -> OAuthLogin {
+        OAuthLogin {
+            provider: OAuthProvider::Discord,
+            cancelled: Box::new(|| false),
+            on_browser_opened: Box::new(|| {}),
+            pick_username: Box::new(|_| None),
+        }
+    }
+
+    fn password() -> Credentials {
+        Credentials::UsernamePassword("alice".to_owned(), "hunter2".to_owned())
+    }
+
+    fn block_on<F: Future>(fut: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime")
+            .block_on(fut)
+    }
+
+    #[test]
+    fn password_against_an_auth_server_signs_in() {
+        let flow = select_auth_flow(password(), &Some(AUTH.to_owned()));
+        assert!(matches!(
+            flow,
+            Ok(AuthFlow::Password { ref auth_addr, ref username, ref password })
+                if auth_addr == AUTH && username == "alice" && password == "hunter2"
+        ));
+    }
+
+    #[test]
+    fn password_without_an_auth_server_sends_the_plain_username() {
+        let flow = select_auth_flow(password(), &None);
+        assert!(matches!(flow, Ok(AuthFlow::PlainUsername(ref u)) if u == "alice"));
+    }
+
+    #[test]
+    fn username_only_always_sends_the_plain_username() {
+        for auth in [None, Some(AUTH.to_owned())] {
+            let flow = select_auth_flow(Credentials::Username("bob".to_owned()), &auth);
+            assert!(matches!(flow, Ok(AuthFlow::PlainUsername(ref u)) if u == "bob"));
+        }
+    }
+
+    #[test]
+    fn oauth_against_an_auth_server_runs_the_oauth_flow() {
+        let flow = select_auth_flow(Credentials::OAuth(oauth_login()), &Some(AUTH.to_owned()));
+        assert!(matches!(
+            flow,
+            Ok(AuthFlow::OAuth { ref auth_addr, ref login })
+                if auth_addr == AUTH && login.provider == OAuthProvider::Discord
+        ));
+    }
+
+    #[test]
+    fn oauth_without_an_auth_server_fails_with_no_auth_server() {
+        let flow = select_auth_flow(Credentials::OAuth(oauth_login()), &None);
+        assert!(matches!(
+            flow,
+            Err(Error::OAuthFailed(OAuthFailure::NoAuthServer))
+        ));
+    }
+
+    #[test]
+    fn static_provider_trusts_and_answers_only_its_own_auth_servers() {
+        let provider = StaticCredentialProvider {
+            credentials_by_auth: [(Some(AUTH.to_owned()), password())].into(),
+        };
+        let other = Some("https://evil.example".to_owned());
+
+        assert!(provider.auth_trusted(&Some(AUTH.to_owned())));
+        assert!(!provider.auth_trusted(&other));
+        assert!(!provider.auth_trusted(&None));
+
+        let creds = block_on(provider.get_credentials(&Some(AUTH.to_owned())));
+        assert!(matches!(
+            creds,
+            Ok(Credentials::UsernamePassword(ref u, ref p)) if u == "alice" && p == "hunter2"
+        ));
+        assert!(block_on(provider.get_credentials(&other)).is_err());
+    }
+
+    #[test]
+    fn static_provider_never_hands_out_oauth_and_never_answers_2fa() {
+        let provider = StaticCredentialProvider {
+            credentials_by_auth: [(Some(AUTH.to_owned()), Credentials::OAuth(oauth_login()))]
+                .into(),
+        };
+        assert!(block_on(provider.get_credentials(&Some(AUTH.to_owned()))).is_err());
+        assert_eq!(
+            block_on(provider.get_two_fa_code(&Some(AUTH.to_owned()))),
+            None
+        );
+    }
+
+    #[test]
+    fn credentials_debug_never_prints_the_password() {
+        let printed = format!("{:?}", password());
+        assert!(printed.contains("alice"), "{printed}");
+        assert!(!printed.contains("hunter2"), "{printed}");
+    }
 }
