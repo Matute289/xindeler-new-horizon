@@ -15,7 +15,9 @@ use std::{
 };
 use tokio::runtime::Runtime;
 use vek::*;
-use xindeler_client::{Client, ClientType, addr::ConnectionArgs};
+use xindeler_client::{
+    Client, ClientType, Credentials, StaticCredentialProvider, addr::ConnectionArgs,
+};
 
 const CHUNK_SIZE: f32 = TerrainChunkSize::RECT_SIZE.x as f32;
 
@@ -116,16 +118,14 @@ fn run_client(
         };
         let runtime_clone = Arc::clone(&runtime);
         // NOTE: use a no-auth server
+        let provider = StaticCredentialProvider {
+            credentials_by_auth: [(None, Credentials::Username(username.clone()))].into(),
+        };
         match runtime.block_on(Client::new(
             addr,
             runtime_clone,
-            &mut None,
-            &username,
-            "",
             None,                      // locale
-            |_| false,                 // auth_trusted
-            || None,                   // two_fa_code
-            None,                      // oauth
+            &provider,                 // credential_provider
             &|_| {},                   // init_stage_update
             |_| {},                    // add_foreign_systems
             std::path::PathBuf::new(), // config_dir

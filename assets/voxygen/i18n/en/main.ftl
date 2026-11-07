@@ -73,6 +73,7 @@ main-login-oauth-listener_failed = Xindeler could not open a local port to recei
 main-login-oauth-failed = Provider sign-in failed. Please try again, or sign in with your username and password.
 main-login-server_full = Server is full.
 main-login-untrusted_auth_server = Authentication server not trusted.
+main-login-credentials_not_provided = No Credentials Entered.
 main-login-timeout = Timeout: Server did not respond in time. Hint: the server might be currently overloaded or there are issues on the network.
 main-login-server_shut_down = Server shut down.
 main-login-network_error = Network error.
