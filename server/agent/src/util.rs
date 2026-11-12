@@ -143,7 +143,7 @@ pub(crate) fn entities_have_line_of_sight(
     positions_have_line_of_sight(&eye_pos, &other_eye_pos, read_data)
 }
 
-pub fn positions_have_line_of_sight(pos_a: &Pos, pos_b: &Pos, read_data: &ReadData) -> bool {
+fn positions_have_line_of_sight(pos_a: &Pos, pos_b: &Pos, read_data: &ReadData) -> bool {
     common::terrain::positions_have_line_of_sight(&read_data.terrain, pos_a.0, pos_b.0)
 }
 
