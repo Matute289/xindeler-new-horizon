@@ -470,8 +470,8 @@ pub(crate) mod test_support {
     // ---- Heavy, real-terrain-backed tests: require the real Cromatolis LFS
     // assets pulled locally, same precedent as `gate_checkpoint.rs`'s own
     // `..._against_the_real_world` tests. Not run automatically.
-    // Recommended: `cargo test -p xindeler-server -- --ignored undercompact_gate`
-    // ----
+    // Recommended: `cargo test -p xindeler-server -- --ignored
+    // undercompact_gate` ----
 
     /// Loads the chunks under every corner (plus the center) of `aabb`'s 2D
     /// footprint -- the plug can in principle straddle a chunk boundary

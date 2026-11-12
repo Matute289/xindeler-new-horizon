@@ -501,9 +501,10 @@ mod tests {
 
     // ---- Heavy, real-terrain-backed test: requires the real Cromatolis LFS
     // assets pulled locally. Not run automated, same precedent as
-    // `xindeler-world`'s `cromatolis_world_*_regression_against_real_lfs_assets`
-    // tests (see `world/src/civ/mod.rs`). Recommended:
-    // `cargo test -p xindeler-rtsim -- --ignored mainland_to_mainland` ----
+    // `xindeler-world`'s
+    // `cromatolis_world_*_regression_against_real_lfs_assets` tests (see
+    // `world/src/civ/mod.rs`). Recommended: `cargo test -p xindeler-rtsim
+    // -- --ignored mainland_to_mainland` ----
 
     /// A land-bound NPC's path between two mainland settlements must never
     /// use a maritime `Track` edge, even when one connects them directly and

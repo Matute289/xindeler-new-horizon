@@ -272,8 +272,8 @@ impl Lod {
             }
         }
         // Update weather texture
-        // NOTE: consider moving the lerping to a shader if the overhead of uploading to
-        // the gpu each frame becomes an issue.
+        // NOTE: consider moving the lerping to a shader if the overhead of
+        // uploading to the gpu each frame becomes an issue.
         //
         // Channel layout, matching `sample_weather()` in `sky.glsl`:
         //   r = cloud cover

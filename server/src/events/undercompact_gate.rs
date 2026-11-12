@@ -136,8 +136,8 @@ mod worldgen_impl {
     // ---- Heavy, real-terrain-backed tests: require the real Cromatolis LFS
     // assets pulled locally, same precedent as `gate_checkpoint.rs`'s own
     // `..._against_the_real_world` tests. Not run automatically.
-    // Recommended: `cargo test -p xindeler-server -- --ignored undercompact_gate`
-    // ----
+    // Recommended: `cargo test -p xindeler-server -- --ignored
+    // undercompact_gate` ----
     #[cfg(test)]
     mod tests {
         use common::terrain::{Block, BlockKind, SpriteKind};

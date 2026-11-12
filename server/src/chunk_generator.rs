@@ -144,8 +144,8 @@ impl ChunkGenerator {
     }
 
     pub fn recv_new_chunk(&mut self) -> Option<ChunkGenResult> {
-        // Make sure chunk wasn't cancelled and if it was check to see if there are more
-        // chunks to receive
+        // Make sure chunk wasn't cancelled and if it was check to see if there
+        // are more chunks to receive
         while let Ok((key, chunk_version, res)) = self.chunk_rx.try_recv() {
             if self.pending_chunks.remove(&key).is_some() {
                 self.metrics.chunks_served.inc();

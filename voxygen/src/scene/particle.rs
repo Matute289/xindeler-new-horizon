@@ -808,7 +808,8 @@ impl ParticleMgr {
         let time = state.get_time();
 
         // Server-side deletion occurs at the end of the beam's timeline. Retain
-        // a short grace window so a delayed entity removal cannot grow this map.
+        // a short grace window so a delayed entity removal cannot grow this
+        // map.
         self.citadel_beam_started
             .retain(|_, started| time - *started < 6.0);
 
@@ -3503,10 +3504,11 @@ impl ParticleMgr {
                             )
                         });
 
-                        // Burning additionally smoulders: a few motionless smoke
-                        // wisps dotted around the body, on top of the flame licks
-                        // above. Cursed is a magical flame, not real fire, so it
-                        // gets no smoke.
+                        // Burning additionally smoulders: a few motionless
+                        // smoke wisps dotted around the
+                        // body, on top of the flame licks
+                        // above. Cursed is a magical flame, not real fire, so
+                        // it gets no smoke.
                         if matches!(buff_kind, BuffKind::Burning) {
                             let smoke_amount =
                                 usize::from(self.scheduler.heartbeats(Duration::from_millis(200)));
@@ -5081,8 +5083,8 @@ fn default_cache(renderer: &mut Renderer) -> HashMap<&'static str, Model<Particl
         model_cache.entry(model_key).or_insert_with(|| {
             let vox = DotVox::load_expect(model_key);
 
-            // NOTE: If we add texturing we may eventually try to share it among all
-            // particles in a single atlas.
+            // NOTE: If we add texturing we may eventually try to share it among
+            // all particles in a single atlas.
             let max_texture_size = renderer.max_texture_size();
             let max_size = Vec2::from(u16::try_from(max_texture_size).unwrap_or(u16::MAX));
             let mut greedy = GreedyMesh::new(max_size, crate::mesh::greedy::general_config());

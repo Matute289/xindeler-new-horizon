@@ -3776,9 +3776,10 @@ impl Civs {
                 if let Some((path, cost)) = find_path(ctx, get_bridge, start, end, max_novel_cost) {
                     // Write the track to the world as a path.
                     //
-                    // IMPORTANT: these writes are unguarded and would clobber an
-                    // authored route layer outright -- `neighbors` is
-                    // `|=`-merged, and `offset` below is overwritten with a
+                    // IMPORTANT: these writes are unguarded and would clobber
+                    // an authored route layer outright --
+                    // `neighbors` is `|=`-merged, and
+                    // `offset` below is overwritten with a
                     // random value. The only thing keeping them away from
                     // authored chunks is the early return at the top of this
                     // function (`authored_cromatolis_v0`), which is therefore
@@ -5172,7 +5173,8 @@ mod tests {
         for (category, expected) in AUTHORED_SETTLEMENTS_BY_CATEGORY {
             // `unwrap_or(0)`, not `get(..) == Some(expected)`: a category the
             // table legitimately drops to zero has no map entry, and must still
-            // be expressible as a `0` row rather than forcing the row's removal.
+            // be expressible as a `0` row rather than forcing the row's
+            // removal.
             assert_eq!(
                 by_category.get(category).copied().unwrap_or(0),
                 *expected,
@@ -5929,7 +5931,8 @@ mod tests {
         assert!(settlements.validate(synthetic_map_size()).is_err());
     }
 
-    // ---- Authored Cromatolis fortifications: loader + gate physical state ----
+    // ---- Authored Cromatolis fortifications: loader + gate physical state
+    // ----
 
     #[test]
     fn cromatolis_authored_fortifications_parse_and_validate_real_export_without_panicking() {

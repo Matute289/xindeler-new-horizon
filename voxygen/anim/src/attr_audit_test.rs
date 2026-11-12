@@ -90,9 +90,10 @@ fn observed_fallbacks() -> Vec<String> {
     );
 
     // `Object` and `Ship` are flat body enums rather than species/body-type
-    // pairs, but their `SkeletonAttr`s default the same way — and `Body::Object`
-    // is the documented two-bone escape hatch for props, projectiles and spell
-    // objects, so it is exactly the path a new asset is most likely to take.
+    // pairs, but their `SkeletonAttr`s default the same way — and
+    // `Body::Object` is the documented two-bone escape hatch for props,
+    // projectiles and spell objects, so it is exactly the path a new asset
+    // is most likely to take.
     for obj in object::ALL_OBJECTS {
         record!(
             "Object",

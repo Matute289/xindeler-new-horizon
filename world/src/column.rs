@@ -1665,8 +1665,8 @@ fn resolve_final_column_surface_color(
         surface_veg,
     );
     // The profile is a visual consumer of the independent authored ground
-    // cover signal: it never changes terrain, water, tree placement, or the generic
-    // color pipeline it blends over. Physical terrain remains more
+    // cover signal: it never changes terrain, water, tree placement, or the
+    // generic color pipeline it blends over. Physical terrain remains more
     // authoritative.
     if context.physical_exclusion || context.authored_region_id != Some(CROMATOLIS_V0_REGION_ID) {
         return base;

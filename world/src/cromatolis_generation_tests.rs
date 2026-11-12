@@ -707,12 +707,13 @@ fn authored_void_lookup_costs_on_the_live_carve_and_rock_paths() {
         // because the two answer different questions and only reporting one
         // of them would mislead:
         //
-        // * **uniform** -- rocks from chunks spread over the whole map, which is where
-        //   `apply_rocks_to` actually spends its time. The authored region is a percent
-        //   or two of Cromatolis, so this is what the change is worth in production.
-        // * **in-footprint** -- rocks from the authored-void chunks only. The worst
-        //   case, where the locality test cannot reject anything and only the tier
-        //   summary saves work.
+        // * **uniform** -- rocks from chunks spread over the whole map, which
+        //   is where `apply_rocks_to` actually spends its time. The authored
+        //   region is a percent or two of Cromatolis, so this is what the
+        //   change is worth in production.
+        // * **in-footprint** -- rocks from the authored-void chunks only. The
+        //   worst case, where the locality test cannot reject anything and only
+        //   the tier summary saves work.
         let params = TraversalParams::ENGINE;
         let lattice = rock::rock_lattice(info.index().seed);
         let rocks_in = |sample: &[Vec2<i32>]| -> Vec<Aabr<i32>> {

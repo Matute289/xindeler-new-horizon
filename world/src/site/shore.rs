@@ -756,9 +756,9 @@ impl Site {
 
             // Nothing may be blitted over something already built. At the point
             // in `generate_city` where this runs only the initial plaza and its
-            // road exist, so this almost never fires — but "almost never" is not
-            // "cannot", and a deck silently overwriting a bridge would be a very
-            // confusing bug to find later.
+            // road exist, so this almost never fires — but "almost never" is
+            // not "cannot", and a deck silently overwriting a
+            // bridge would be a very confusing bug to find later.
             if !self.shore_deck_is_clear(deck) {
                 continue;
             }
