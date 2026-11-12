@@ -60,12 +60,6 @@ pub struct InterfaceSettings {
     pub toggle_draggable_windows: bool,
     pub toggle_biome_change_popups: bool,
     pub toggle_compact_item_slots: bool,
-    /// Whether a regional terrain transition the player is standing inside
-    /// takes over the full screen (fade to black + centered text). When
-    /// `false`, every transition notification uses the non-blocking toast
-    /// instead, regardless of whether the player is inside the affected
-    /// region.
-    pub toggle_terrain_transitions: bool,
     pub toggle_hotkey_hints: bool,
     pub pause_menu_overlay_opacity: f32,
 }
@@ -125,7 +119,6 @@ impl Default for InterfaceSettings {
             toggle_draggable_windows: true,
             toggle_biome_change_popups: true,
             toggle_compact_item_slots: false,
-            toggle_terrain_transitions: true,
             toggle_hotkey_hints: true,
         }
     }

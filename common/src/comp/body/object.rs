@@ -101,27 +101,6 @@ enum_iter! {
         /// `RemoteSensor`) because it carries `Vel`/`Ori`/`Controller` and is
         /// driven by `common/systems/src/pilot.rs`, unlike the static sensor.
         ArcaneEye = 77,
-        /// An articulated Cromatolis Aerial Citadel defence cannon, aimed by
-        /// `common::comp::citadel::{desired_citadel_turret_angles,
-        /// update_citadel_turret}`. Fires the harmless practice beam used
-        /// while the cannon is unmanned or in drill mode.
-        CitadelArcaneCannon = 78,
-        /// Same turret footprint as `CitadelArcaneCannon`, mounted with the
-        /// sphere-barrel model for cannons that fire the practice sphere
-        /// instead of the practice beam.
-        CitadelArcaneSphereCannon = 79,
-        /// The harmless Cromatolis practice sphere fired by
-        /// `CitadelArcaneSphereCannon`, timed by
-        /// `common::comp::citadel::CitadelPracticeSphere`.
-        LaserSphereLarge = 80,
-        /// The harmless Cromatolis practice beam fired by
-        /// `CitadelArcaneCannon`, timed by
-        /// `common::comp::citadel::CitadelPracticeBeam`. Half a metre wide,
-        /// matching `CitadelPracticeBeam::diameter`.
-        LaserBeamLarge = 81,
-        /// A smaller Cromatolis practice sphere, sharing the same voxel
-        /// model as `LaserBeamSmall` (see `object_manifest.ron`).
-        LaserSphereSmall = 82,
     }
 }
 
@@ -219,11 +198,6 @@ impl Body {
             Body::ThornStake => "thorn_stake",
             Body::RemoteSensor => "remote_sensor",
             Body::ArcaneEye => "arcane_eye",
-            Body::CitadelArcaneCannon => "citadel_arcane_cannon",
-            Body::CitadelArcaneSphereCannon => "citadel_arcane_sphere_cannon",
-            Body::LaserSphereLarge => "laser_sphere_large",
-            Body::LaserBeamLarge => "laser_beam_large",
-            Body::LaserSphereSmall => "laser_sphere_small",
         }
     }
 
@@ -339,10 +313,6 @@ impl Body {
             Body::Crux => 100.0,
             Body::RemoteSensor => 1.0,
             Body::ArcaneEye => 1.0,
-            // The articulated citadel cannons render at 2.5x their source
-            // voxels; mass follows that scaled physical volume.
-            Body::CitadelArcaneCannon | Body::CitadelArcaneSphereCannon => 54_687.5,
-            Body::LaserSphereLarge | Body::LaserBeamLarge | Body::LaserSphereSmall => 80000.0,
         };
 
         Mass(m)
@@ -387,185 +357,8 @@ impl Body {
             Body::MinotaurAxe => Vec3::new(5.0, 5.0, 5.0),
             Body::Crux => Vec3::new(2.0, 2.0, 2.0),
             Body::ArrowHeavy | Body::ThornStake => Vec3::new(0.1, 0.9, 0.1),
-            Body::CitadelArcaneCannon | Body::CitadelArcaneSphereCannon => {
-                Vec3::new(9.0, 15.0, 6.25)
-            },
-            Body::LaserBeamLarge | Body::LaserSphereLarge => Vec3::broadcast(0.5),
-            Body::LaserSphereSmall => Vec3::broadcast(0.08),
             // FIXME: this *must* be exhaustive match
             _ => Vec3::broadcast(0.5),
         }
-    }
-
-    /// The client-side display-scale multiplier this body's figure should
-    /// render at, on top of any `Scale` component -- `None` for every body
-    /// that renders its own dedicated voxel model at 1:1 (the vast
-    /// majority; the caller should treat that as a multiplier of `1.0`).
-    ///
-    /// `object_manifest.ron` has `LaserBeamLarge` reuse the existing
-    /// `laser_beam` voxel model (also used, unscaled, by the unrelated
-    /// `LaserBeam` body) and has `LaserSphereLarge`/`LaserSphereSmall` both
-    /// reuse the existing `laser_beam_small` voxel model (also used,
-    /// unscaled, by the unrelated `LaserBeamSmall` body) rather than
-    /// authoring new meshes -- see the comments beside each in
-    /// `object_manifest.ron`. This scales the *shared source* model up or
-    /// down to each citadel body's own authored `dimensions()`, so the
-    /// figure displays at its intended physical size without touching
-    /// `LaserBeam`/`LaserBeamSmall` (both untouched, unrelated bodies with
-    /// their own existing enemy-ability consumers) or affecting collision,
-    /// which is computed from `dimensions()` directly and never this scale.
-    ///
-    /// The two citadel cannon bodies (`CitadelArcaneCannon`,
-    /// `CitadelArcaneSphereCannon`) have their own dedicated voxel models
-    /// (`object.citadel_arcane_cannon.*`, not shared with any other body),
-    /// authored at a smaller native voxel scale than their gameplay
-    /// `dimensions()` imply, so they return a fixed display multiplier
-    /// instead of a dimensions ratio -- matching the same 2.5x already
-    /// assumed by `Body::mass`'s `CitadelArcaneCannon |
-    /// CitadelArcaneSphereCannon` arm above. This is a display-only tuning
-    /// constant with no render-time verification in this codebase; a visual
-    /// pass in a running client is the only way to confirm it looks right
-    /// and retune it if not.
-    ///
-    /// Keeping this beside `dimensions` makes the render conversion follow
-    /// the authoritative gameplay-size ladder instead of a second table of
-    /// hand-tuned values.
-    pub fn visual_scale(&self) -> Option<f32> {
-        let source = match self {
-            Body::LaserBeamLarge => Body::LaserBeam,
-            Body::LaserSphereLarge | Body::LaserSphereSmall => Body::LaserBeamSmall,
-            Body::CitadelArcaneCannon | Body::CitadelArcaneSphereCannon => return Some(2.5),
-            _ => return None,
-        };
-
-        Some(self.dimensions().x / source.dimensions().x)
-    }
-}
-
-#[cfg(test)]
-mod visual_scale_tests {
-    use super::Body;
-
-    #[test]
-    fn laser_beam_large_scales_the_shared_laser_beam_model_down_to_its_own_dimensions() {
-        let expected = Body::LaserBeamLarge.dimensions().x / Body::LaserBeam.dimensions().x;
-        assert_eq!(Body::LaserBeamLarge.visual_scale(), Some(expected));
-        assert!(
-            expected < 1.0,
-            "the practice beam renders smaller than laser_beam's source mesh"
-        );
-    }
-
-    #[test]
-    fn laser_sphere_tiers_scale_the_shared_laser_beam_small_model_to_their_own_dimensions() {
-        let source = Body::LaserBeamSmall.dimensions().x;
-        assert_eq!(
-            Body::LaserSphereLarge.visual_scale(),
-            Some(Body::LaserSphereLarge.dimensions().x / source)
-        );
-        assert_eq!(
-            Body::LaserSphereSmall.visual_scale(),
-            Some(Body::LaserSphereSmall.dimensions().x / source)
-        );
-    }
-
-    #[test]
-    fn citadel_cannons_use_a_fixed_display_multiplier_not_a_dimensions_ratio() {
-        assert_eq!(Body::CitadelArcaneCannon.visual_scale(), Some(2.5));
-        assert_eq!(Body::CitadelArcaneSphereCannon.visual_scale(), Some(2.5));
-    }
-
-    #[test]
-    fn untouched_existing_bodies_never_get_an_implicit_scale() {
-        // The two source bodies whose voxel models are shared above must
-        // stay at their own natural 1:1 scale -- confirms this port never
-        // touches `LaserBeam`/`LaserBeamSmall` rendering.
-        assert_eq!(Body::LaserBeam.visual_scale(), None);
-        assert_eq!(Body::LaserBeamSmall.visual_scale(), None);
-        // A representative sample of ordinary, unrelated object bodies must
-        // also keep rendering at their existing implicit 1.0 scale -- this
-        // port must not change any non-citadel object body's rendered size.
-        assert_eq!(Body::Crossbow.visual_scale(), None);
-        assert_eq!(Body::Campfire.visual_scale(), None);
-        assert_eq!(Body::TrainingDummy.visual_scale(), None);
-        assert_eq!(Body::HaniwaSentry.visual_scale(), None);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Body;
-    use std::collections::HashSet;
-
-    /// The Cromatolis Aerial Citadel (COW-8) added 5 new `Body::Object`
-    /// variants at fresh discriminants (78..=82), after this repo's own
-    /// prior work had already claimed 75..=77 for `ThornStake`/
-    /// `RemoteSensor`/`ArcaneEye`. This guards against any of the 5 new
-    /// IDs colliding with those or any other existing variant.
-    #[test]
-    fn new_citadel_and_laser_body_ids_do_not_collide_with_any_existing_variant() {
-        let new_ids = [
-            (Body::CitadelArcaneCannon, "CitadelArcaneCannon"),
-            (Body::CitadelArcaneSphereCannon, "CitadelArcaneSphereCannon"),
-            (Body::LaserSphereLarge, "LaserSphereLarge"),
-            (Body::LaserBeamLarge, "LaserBeamLarge"),
-            (Body::LaserSphereSmall, "LaserSphereSmall"),
-        ];
-
-        let mut seen = HashSet::new();
-        for body in Body::ALL {
-            assert!(
-                seen.insert(body as u32),
-                "duplicate Body::Object discriminant {} ({:?})",
-                body as u32,
-                body,
-            );
-        }
-
-        for (body, name) in new_ids {
-            assert!(
-                (body as u32) >= 78,
-                "{name} must use a fresh discriminant starting at 78, got {}",
-                body as u32,
-            );
-        }
-
-        assert_eq!(Body::ThornStake as u32, 75);
-        assert_eq!(Body::RemoteSensor as u32, 76);
-        assert_eq!(Body::ArcaneEye as u32, 77);
-    }
-
-    #[test]
-    fn existing_upstream_laser_beam_bodies_are_untouched() {
-        assert_eq!(Body::LaserBeam as u32, 41);
-        assert_eq!(Body::LaserBeam.to_string(), "laser_beam");
-        assert_eq!(Body::LaserBeamSmall as u32, 55);
-        assert_eq!(Body::LaserBeamSmall.to_string(), "laser_beam_small");
-    }
-
-    #[test]
-    fn citadel_arcane_cannon_has_a_stable_asset_name_and_physical_envelope() {
-        use vek::Vec3;
-
-        assert_eq!(
-            Body::CitadelArcaneCannon.to_string(),
-            "citadel_arcane_cannon"
-        );
-        assert_eq!(
-            Body::CitadelArcaneCannon.dimensions(),
-            Vec3::new(9.0, 15.0, 6.25)
-        );
-    }
-
-    #[test]
-    fn citadel_arcane_sphere_cannon_reuses_the_turret_footprint() {
-        assert_eq!(
-            Body::CitadelArcaneSphereCannon.to_string(),
-            "citadel_arcane_sphere_cannon"
-        );
-        assert_eq!(
-            Body::CitadelArcaneSphereCannon.dimensions(),
-            Body::CitadelArcaneCannon.dimensions()
-        );
     }
 }

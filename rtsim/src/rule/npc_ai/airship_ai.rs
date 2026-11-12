@@ -198,7 +198,7 @@ impl StuckAirshipTracker {
                     let ground = ctx
                         .world
                         .sim()
-                        .surface_alt_at(last_pos.xy().map(|e| e as i32));
+                        .get_surface_alt_approx(last_pos.xy().map(|e| e as i32));
                     // The position to backout to is the current position + a
                     // distance in the backout direction.
                     let mut backout_pos =

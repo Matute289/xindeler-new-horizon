@@ -144,7 +144,6 @@ pub enum Event {
 #[derive(Debug)]
 pub enum UserNotification {
     WaypointUpdated,
-    TerrainTransition { text: Content, inside: bool },
 }
 
 pub struct WorldData {
@@ -171,7 +170,6 @@ pub struct WorldData {
     /// any land chunk (i.e. the sea level) in its x coordinate, and the maximum
     /// land height above this height (i.e. the max height) in its y coordinate.
     map: (Vec<Arc<DynamicImage>>, Vec2<u16>, Vec2<f32>),
-    minimap_voxel_overlay_alpha: u8,
 }
 
 impl WorldData {
@@ -186,8 +184,6 @@ impl WorldData {
     pub fn min_chunk_alt(&self) -> f32 { self.map.2.x }
 
     pub fn max_chunk_alt(&self) -> f32 { self.map.2.y }
-
-    pub fn minimap_voxel_overlay_alpha(&self) -> u8 { self.minimap_voxel_overlay_alpha }
 
     pub fn alt_at(&self, cpos: Vec2<i32>) -> Option<f32> {
         let [a, b, _, _] = self.lod_alt.get(cpos)?.to_le_bytes();
@@ -700,7 +696,6 @@ impl Client {
 
             let map_size = map_size_lg.chunks();
             let max_height = world_map.max_height;
-            let minimap_voxel_overlay_alpha = world_map.minimap_voxel_overlay_alpha;
             let rgba = world_map.rgba;
             let alt = world_map.alt;
             if rgba.size() != map_size.map(|e| e as i32) {
@@ -1107,7 +1102,6 @@ impl Client {
                 lod_alt,
                 Grid::from_raw(map_size.map(|e| e as i32), lod_horizon),
                 (world_map_layers, map_size, map_bounds),
-                minimap_voxel_overlay_alpha,
                 world_map.sites,
                 world_map.possible_starting_sites,
                 world_map.pois,
@@ -1128,7 +1122,6 @@ impl Client {
             lod_alt,
             lod_horizon,
             world_map,
-            minimap_voxel_overlay_alpha,
             sites,
             possible_starting_sites,
             pois,
@@ -1164,7 +1157,6 @@ impl Client {
                 lod_alt,
                 lod_horizon,
                 map: world_map,
-                minimap_voxel_overlay_alpha,
             },
             weather: WeatherLerp::default(),
             player_list: HashMap::new(),
@@ -2514,31 +2506,6 @@ impl Client {
             .unwrap_or_default()
     }
 
-    /// How much of the precipitation falling on the player is snow rather than
-    /// rain, `0.0` to `1.0`.
-    ///
-    /// Decided by the temperature already baked into the terrain chunk the
-    /// player is standing in, so it needs nothing from the server beyond the
-    /// chunk itself. Falls back to rain while that chunk is still loading.
-    pub fn snow_factor_at_player(&self) -> f32 {
-        let tuning = common::weather::WeatherTuning::load();
-        self.position()
-            .and_then(|p| common::weather::snow_factor_at(&self.state.terrain(), p.xy(), &tuning))
-            .unwrap_or(0.0)
-    }
-
-    /// Velocity of the precipitation falling on the player, which is much
-    /// slower and far more wind-blown when it is snow.
-    ///
-    /// Every consumer of the precipitation direction must agree on it — the
-    /// rain-occlusion map is rendered along this axis and then sampled along
-    /// it again — so they all read it from here rather than deriving it
-    /// themselves.
-    pub fn precip_vel_at_player(&self) -> Vec3<f32> {
-        self.weather_at_player()
-            .precip_vel(self.snow_factor_at_player())
-    }
-
     pub fn current_chunk(&self) -> Option<Arc<TerrainChunk>> {
         let chunk_pos = Vec2::from(self.position()?)
             .map2(TerrainChunkSize::RECT_SIZE, |e: f32, sz| {
@@ -3255,17 +3222,10 @@ impl Client {
                 }
             },
             ServerGeneral::Notification(n) => {
-                let user_notification = match n {
-                    Notification::WaypointSaved { location_name } => {
-                        self.waypoint = Some(location_name);
-                        UserNotification::WaypointUpdated
-                    },
-                    Notification::TerrainTransition { text, inside } => {
-                        UserNotification::TerrainTransition { text, inside }
-                    },
-                };
+                let Notification::WaypointSaved { location_name } = n.clone();
+                self.waypoint = Some(location_name);
 
-                frontend_events.push(Event::Notification(user_notification));
+                frontend_events.push(Event::Notification(UserNotification::WaypointUpdated));
             },
             ServerGeneral::PluginData(d) => {
                 let plugin_len = d.len();

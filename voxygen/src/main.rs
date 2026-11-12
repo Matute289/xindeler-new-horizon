@@ -93,13 +93,6 @@ fn main() {
     );
     info!(ver = game_version, "Session start");
 
-    // Unattended shot script: validate its environment before anything else.
-    #[cfg(feature = "shot-script")]
-    if let Err(code) = xindeler_voxygen::shot_script::login::init_from_env() {
-        drop(log_guards);
-        std::process::exit(code);
-    }
-
     // Re-run userdata selection so any warnings will be logged
     common_base::userdata_dir();
 
@@ -123,31 +116,18 @@ fn main() {
     // Load the settings — detect first launch to apply an auto-detected preset
     let is_first_run = Settings::is_new_install(&config_dir);
     let mut settings = Settings::load(&config_dir);
-    let detect = || {
+    if is_first_run {
         let instance = Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
         let adapters = instance.enumerate_adapters(Backends::default());
         // Prefer a discrete GPU; fall back to whatever is available
         let best = adapters.into_iter().max_by_key(|a| {
             matches!(a.get_info().device_type, wgpu::DeviceType::DiscreteGpu) as u8
         });
-        best.map(|adapter| {
-            xindeler_voxygen::settings::GraphicsSettings::auto_detect(&adapter.get_info())
-        })
-    };
-    let save = |settings: &Settings| settings.save_to_file_warn(&config_dir);
-    // With a shot script the order matters: the first-run preset is applied and
-    // saved BEFORE the script's in-memory overrides (see `prepare_settings`).
-    #[cfg(feature = "shot-script")]
-    xindeler_voxygen::shot_script::login::prepare_settings(
-        &mut settings,
-        is_first_run,
-        detect,
-        save,
-    );
-    #[cfg(not(feature = "shot-script"))]
-    if is_first_run && let Some(graphics) = detect() {
-        settings.graphics = graphics;
-        save(&settings);
+        if let Some(adapter) = best {
+            settings.graphics =
+                xindeler_voxygen::settings::GraphicsSettings::auto_detect(&adapter.get_info());
+            settings.save_to_file_warn(&config_dir);
+        }
     }
     settings.display_warnings();
 
@@ -299,11 +279,4 @@ fn main() {
     info!("Session end");
     // Clean-exit: delete info/telemetry logs if no errors occurred this session
     log_guards.lifecycle.cleanup_on_exit(&log_guards.has_errors);
-
-    // An aborted shot script ends with its exit code once the logs are flushed.
-    #[cfg(feature = "shot-script")]
-    if let Some(code) = xindeler_voxygen::shot_script::login::exit_code() {
-        drop(log_guards);
-        std::process::exit(code);
-    }
 }

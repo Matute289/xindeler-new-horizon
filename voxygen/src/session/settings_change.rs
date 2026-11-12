@@ -173,7 +173,6 @@ pub enum Interface {
     ToggleDraggableWindows(bool),
     ToggleTips(bool),
     ToggleBiomeChangePopups(bool),
-    ToggleTerrainTransitions(bool),
     ToggleHotkeyHints(bool),
 
     CrosshairTransp(f32),
@@ -786,9 +785,6 @@ impl SettingsChange {
                     },
                     Interface::ToggleBiomeChangePopups(toggle_biome_change_popups) => {
                         settings.interface.toggle_biome_change_popups = toggle_biome_change_popups;
-                    },
-                    Interface::ToggleTerrainTransitions(toggle_terrain_transitions) => {
-                        settings.interface.toggle_terrain_transitions = toggle_terrain_transitions;
                     },
                     Interface::ToggleHotkeyHints(toggle_hotkey_hints) => {
                         settings.interface.toggle_hotkey_hints = toggle_hotkey_hints;

@@ -8,10 +8,7 @@ use rand::{
     RngExt, rng,
     seq::{IndexedRandom, IteratorRandom},
 };
-use vek::Vec2;
-use world::{
-    CONFIG, IndexRef, World, authored_raster::queries::ChunkWater, sim::SimChunk, site::SiteKind,
-};
+use world::{CONFIG, IndexRef, World, sim::SimChunk, site::SiteKind};
 
 use crate::{
     Data, EventCtx, OnTick, RtState,
@@ -20,7 +17,6 @@ use crate::{
         architect::{Death, TrackedPopulation},
     },
     event::OnDeath,
-    generate::settlement_population,
 };
 
 use super::{Rule, RuleError};
@@ -35,23 +31,14 @@ const MIN_SPAWN_DELAY: f64 = 60.0 * 60.0 * 24.0;
 /// respawn.
 const RESPAWN_ATTEMPTS: usize = 30;
 
-// XINDELER: NH-171 technical NPC ceiling (see `ceiling`).
-mod ceiling;
-
-use ceiling::{NpcCeiling, tracked_npc_count};
-
-pub struct Architect {
-    ceiling: NpcCeiling,
-}
+pub struct Architect;
 
 impl Rule for Architect {
     fn start(rtstate: &mut RtState) -> Result<Self, RuleError> {
         rtstate.bind(on_death);
         rtstate.bind(architect_tick);
 
-        Ok(Self {
-            ceiling: NpcCeiling::from_env(),
-        })
+        Ok(Self)
     }
 }
 
@@ -76,7 +63,6 @@ fn architect_tick(ctx: EventCtx<Architect, OnTick>) {
 
     let mut rng = rng();
     let mut count_to_spawn = rng.random_range(1..20);
-    let allowance = ctx.rule.ceiling.allowance(tracked_npc_count(data));
 
     let pop = data.architect.population.clone();
     'outer: for (pop, count) in pop
@@ -234,21 +220,6 @@ fn architect_tick(ctx: EventCtx<Architect, OnTick>) {
         count_to_spawn += count;
     }
 
-    // The ceiling caps what this round may create; at 0 the queue is left
-    // exactly as it is.
-    respawn_queued(data, tod, count_to_spawn.min(allowance), |data, death| {
-        spawn_npc(data, ctx.world, ctx.index, death)
-    });
-}
-
-/// Works through the respawn queue, creating at most `count_to_spawn` NPCs
-/// with `spawn`. Deaths that cannot spawn yet stay queued, in order.
-fn respawn_queued(
-    data: &mut Data,
-    tod: TimeOfDay,
-    mut count_to_spawn: u32,
-    mut spawn: impl FnMut(&mut Data, &Death) -> bool,
-) {
     // @perf: Could reuse previous allocation here.
     let mut failed_spawn = Vec::new();
 
@@ -269,7 +240,7 @@ fn respawn_queued(
             break;
         }
 
-        if spawn(data, &death) {
+        if spawn_npc(data, ctx.world, ctx.index, &death) {
             count_to_spawn -= 1;
         } else {
             failed_spawn.push(death);
@@ -316,59 +287,6 @@ fn role_personality(rng: &mut impl RngExt, role: &Role) -> Personality {
     }
 }
 
-/// Whether a body lives in water (`Some(true)`), on land (`Some(false)`) or
-/// does not care (`None`: flyers, objects, vehicles).
-fn body_aquatic(body: &Body) -> Option<bool> {
-    match body {
-        Body::Crustacean(_) | Body::FishSmall(_) | Body::FishMedium(_) => Some(true),
-        Body::Dragon(_)
-        | Body::BirdLarge(_)
-        | Body::BirdMedium(_)
-        | Body::Object(_)
-        | Body::Ship(_)
-        | Body::Item(_)
-        | Body::Plugin(_) => None,
-        _ => Some(false),
-    }
-}
-
-/// The spawn position is the chunk's centre column, and this checks that
-/// exact column (not a chunk average). Inside an authored water region it
-/// must match the body: a
-/// water body in authored water, a land body on dry ground at least 2 m from
-/// it (a bank lip next to a deep channel is a cliff edge, not a spawn).
-/// Always true outside every region.
-fn authored_spawn_ok(world: &World, wpos: Vec2<i32>, aquatic: Option<bool>) -> bool {
-    match (world.sim().authored_column_at(wpos), aquatic) {
-        (None, _) | (_, None) => true,
-        // The natural map (an unauthored column of a partial chunk): the
-        // chunk filter decides, as outside regions.
-        (Some(col), _) if col.natural && col.cell == world::authored_raster::AuthoredCell::None => {
-            true
-        },
-        (Some(col), Some(true)) => col.cell.is_wet(),
-        (Some(col), Some(false)) => !col.cell.is_wet() && col.water_dist.is_none_or(|d| d >= 2.0),
-    }
-}
-
-/// XINDELER: the spawn height at a site position. The authored-aware ground
-/// (`WorldSim::ground_alt_at`: the authored ground inside authored regions,
-/// the chunk table everywhere else, unchanged there), except on a flooded
-/// authored column (authored water, or a sea-filled pit of authored ground,
-/// see `AuthoredColumn::is_flooded`), where that ground is a bed under
-/// water: there a body that does not live in water spawns on the water
-/// surface (`WorldSim::surface_alt_at`) instead.
-fn site_spawn_alt(world: &World, wpos: Vec2<i32>, body: &Body) -> f32 {
-    let sim = world.sim();
-    if body_aquatic(body) != Some(true)
-        && sim.authored_column_at(wpos).is_some_and(|c| c.is_flooded())
-    {
-        sim.surface_alt_at(wpos)
-    } else {
-        sim.ground_alt_at(wpos).unwrap_or(0.0)
-    }
-}
-
 fn spawn_anywhere(
     data: &mut Data,
     world: &World,
@@ -386,16 +304,11 @@ fn spawn_anywhere(
 
         // TODO: If we had access to `ChunkStates` here we could make sure
         // these aren't getting respawned in loaded chunks.
-        let center = cpos.cpos_to_wpos_center();
-        // Authored-aware: authored water and its banks count, and z comes
-        // from the authored surface (see `world::authored_raster::queries`).
-        if world
-            .sim()
-            .chunk_water(cpos)
-            .is_some_and(|w| !check || !w.underwater)
-            && (!check || authored_spawn_ok(world, center, body_aquatic(&body)))
+        if let Some(chunk) = world.sim().get(cpos)
+            && (!check || !chunk.is_underwater())
         {
-            let wpos = center.as_().with_z(world.sim().surface_alt_at(center));
+            let wpos = cpos.cpos_to_wpos_center();
+            let wpos = wpos.as_().with_z(world.sim().get_surface_alt_approx(wpos));
 
             data.spawn_actor(
                 Actor::new_npc(rng.random(), wpos, body, death.role.clone())
@@ -441,7 +354,9 @@ fn spawn_at_plot(
         .choose(rng)
     {
         let wpos = site.tile_center_wpos(plot.root_tile());
-        let wpos = wpos.as_().with_z(site_spawn_alt(world, wpos, &body));
+        let wpos = wpos
+            .as_()
+            .with_z(world.sim().get_alt_approx(wpos).unwrap_or(0.0));
         let mut npc = Actor::new_npc(rng.random(), wpos, body, death.role.clone())
             .with_personality(personality)
             .with_home(id);
@@ -491,51 +406,17 @@ fn spawn_profession(
                 },
             )
         },
-        // A town NPC goes to a settlement that still has room for its
-        // population (NH-171); when none has (or those that have are
-        // loaded), to any house as before, so the total is never lost.
-        _ => {
-            spawn_at_plot(
-                data,
-                world,
-                index,
-                death,
-                rng,
-                body,
-                personality,
-                |data, s, p| p.is_house() && settlement_has_room(data, index, s) != Some(false),
-            ) || spawn_at_plot(
-                data,
-                world,
-                index,
-                death,
-                rng,
-                body,
-                personality,
-                |_, _, p| p.is_house(),
-            )
-        },
+        _ => spawn_at_plot(
+            data,
+            world,
+            index,
+            death,
+            rng,
+            body,
+            personality,
+            |_, _, p| p.is_house(),
+        ),
     }
-}
-
-/// Whether a settlement's resident population is still below the number it
-/// wants ([`settlement_population`]): `Some(true)` / `Some(false)`, or
-/// `None` for a site that is not a settlement.
-fn settlement_has_room(data: &Data, index: IndexRef, site: common::rtsim::SiteId) -> Option<bool> {
-    let site = &data.sites[site];
-    site.world_site
-        .and_then(|ws| settlement_population(index.sites.get(ws)))
-        .map(|wanted| (site.population.len() as u32) < wanted.total())
-}
-
-/// A town NPC (not a pirate or cultist), whose respawn is steered toward
-/// settlements below their population.
-fn is_town_npc(role: &Role) -> bool {
-    matches!(
-        role,
-        Role::Civilised(Some(profession))
-            if !matches!(profession, Profession::Pirate(_) | Profession::Cultist)
-    )
 }
 
 fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> bool {
@@ -546,30 +427,16 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
     let did_spawn = if let Some(faction_id) = death.faction
         && data.factions.get(faction_id).is_some()
     {
-        let in_faction = |data: &Data, id, site: &crate::data::Site| {
-            site.faction == Some(faction_id) && !site.is_loaded() && {
-                // XINDELER: a town NPC goes to a settlement of its faction
-                // that still has room for its population (NH-171).
-                !is_town_npc(&death.role) || settlement_has_room(data, index, id) == Some(true)
-            }
-        };
-        let site = data
+        if let Some((id, site)) = data
             .sites
             .iter()
-            .filter(|(id, site)| in_faction(data, *id, site))
+            .filter(|(_, site)| site.faction == Some(faction_id) && !site.is_loaded())
             .choose(&mut rng)
-            .map(|(id, _)| id)
-            .or_else(|| {
-                data.sites
-                    .iter()
-                    .filter(|(_, site)| site.faction == Some(faction_id) && !site.is_loaded())
-                    .choose(&mut rng)
-                    .map(|(id, _)| id)
-            })
-            .map(|id| (id, &data.sites[id]));
-        if let Some((id, site)) = site {
+        {
             let wpos = site.wpos;
-            let wpos = wpos.as_().with_z(site_spawn_alt(world, wpos, &body));
+            let wpos = wpos
+                .as_()
+                .with_z(world.sim().get_alt_approx(wpos).unwrap_or(0.0));
             data.spawn_actor(
                 Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                     .with_personality(personality)
@@ -635,7 +502,9 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                     .choose(&mut rng)
                 {
                     let wpos = site.wpos;
-                    let wpos = wpos.as_().with_z(site_spawn_alt(world, wpos, &body));
+                    let wpos = wpos
+                        .as_()
+                        .with_z(world.sim().get_alt_approx(wpos).unwrap_or(0.0));
                     data.spawn_actor(
                         Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                             .with_personality(personality)
@@ -647,25 +516,25 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                 }
             },
             Role::Monster => {
-                let chunk_filter: fn(&SimChunk, &ChunkWater) -> bool = match body {
+                let chunk_filter: fn(&SimChunk) -> bool = match body {
                     Body::BipedLarge(body) => match body.species {
                         comp::biped_large::Species::Tursus
                         | comp::biped_large::Species::Gigasfrost
                         | comp::biped_large::Species::Wendigo => {
-                            |chunk, w| !w.underwater && chunk.temp < CONFIG.snow_temp
+                            |chunk| !chunk.is_underwater() && chunk.temp < CONFIG.snow_temp
                         },
-                        comp::biped_large::Species::Gigasfire => |chunk, w| {
-                            !w.underwater
+                        comp::biped_large::Species::Gigasfire => |chunk| {
+                            !chunk.is_underwater()
                                 && chunk.temp > CONFIG.desert_temp
                                 && chunk.humidity < CONFIG.desert_hum
                         },
                         comp::biped_large::Species::Mountaintroll => {
-                            |chunk, w| !w.underwater && chunk.alt > 500.0
+                            |chunk| !chunk.is_underwater() && chunk.alt > 500.0
                         },
                         comp::biped_large::Species::Swamptroll => {
-                            |chunk, w| !w.underwater && chunk.humidity > CONFIG.jungle_hum
+                            |chunk| !chunk.is_underwater() && chunk.humidity > CONFIG.jungle_hum
                         },
-                        _ => |_, w| !w.underwater,
+                        _ => |chunk| !chunk.is_underwater(),
                     },
                     Body::Arthropod(_)
                     | Body::Humanoid(_)
@@ -674,14 +543,12 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                     | Body::QuadrupedMedium(_)
                     | Body::Golem(_)
                     | Body::Theropod(_)
-                    | Body::QuadrupedLow(_) => |_, w| !w.underwater,
-                    Body::Dragon(_) | Body::BirdLarge(_) | Body::BirdMedium(_) => |_, _| true,
+                    | Body::QuadrupedLow(_) => |chunk| !chunk.is_underwater(),
+                    Body::Dragon(_) | Body::BirdLarge(_) | Body::BirdMedium(_) => |_| true,
                     Body::Crustacean(_) | Body::FishSmall(_) | Body::FishMedium(_) => {
-                        |_, w| w.underwater
+                        |chunk| chunk.is_underwater()
                     },
-                    Body::Object(_) | Body::Ship(_) | Body::Item(_) | Body::Plugin(_) => {
-                        |_, _| true
-                    },
+                    Body::Object(_) | Body::Ship(_) | Body::Item(_) | Body::Plugin(_) => |_| true,
                 };
 
                 for _ in 0..RESPAWN_ATTEMPTS {
@@ -694,16 +561,11 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                     // TODO: If we had access to `ChunkStates` here we could
                     // make sure these aren't getting
                     // respawned in loaded chunks.
-                    let center = cpos.cpos_to_wpos_center();
-                    // Authored-aware, as in `spawn_anywhere`.
-                    if world
-                        .sim()
-                        .get(cpos)
-                        .zip(world.sim().chunk_water(cpos))
-                        .is_some_and(|(chunk, w)| chunk_filter(chunk, &w))
-                        && authored_spawn_ok(world, center, body_aquatic(&body))
+                    if let Some(chunk) = world.sim().get(cpos)
+                        && chunk_filter(chunk)
                     {
-                        let wpos = center.as_().with_z(world.sim().surface_alt_at(center));
+                        let wpos = cpos.cpos_to_wpos_center();
+                        let wpos = wpos.as_().with_z(world.sim().get_surface_alt_approx(wpos));
 
                         data.spawn_actor(
                             Actor::new_npc(rng.random(), wpos, body, death.role.clone())

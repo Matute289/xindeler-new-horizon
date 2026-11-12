@@ -33,7 +33,7 @@ impl MyrmidonArena {
             max: site.tile_wpos(tile_aabr.max),
         };
         let center = bounds.center();
-        let base = land.ground_alt_at(center) as i32 + 2;
+        let base = land.get_alt_approx(center) as i32 + 2;
         let diameter = (bounds.max.x - bounds.min.x).min(bounds.max.y - bounds.min.y) - 20;
         let radius = diameter / 2;
         let entry_pos = Vec2::new(center.x, center.y + radius - 12);
@@ -488,10 +488,7 @@ impl Structure for MyrmidonArena {
                 min: Vec2::new(entry_pos.x - 1, entry_pos.y - 1).with_z(base - 18),
                 max: Vec2::new(entry_pos.x, entry_pos.y).with_z(base - 17),
             })
-            // Progression-gated, like the Haniwa dungeon's key gate: opts out
-            // of ranged/keyless unlocking (e.g. the `knock` spell) via
-            // `no_knock`. Melee key-item unlocking is unaffected.
-            .fill(locked_dungeon_keyhole(SpriteKind::MyrmidonKeyhole));
+            .fill(Fill::Block(Block::air(SpriteKind::MyrmidonKeyhole)));
 
         painter
             .aabb(Aabb {
@@ -592,10 +589,7 @@ impl Structure for MyrmidonArena {
                 },
                 Dir2::Y,
             )
-            // Progression-gated, like the Haniwa dungeon's key gate: opts out
-            // of ranged/keyless unlocking (e.g. the `knock` spell) via
-            // `no_knock`. Melee key-item unlocking is unaffected.
-            .fill(locked_dungeon_keyhole(SpriteKind::MinotaurKeyhole));
+            .fill(Fill::Block(Block::air(SpriteKind::MinotaurKeyhole)));
 
         let npc_pos = Vec2::new(boss_pos.x - 50, boss_pos.y).with_z(base - 20);
 

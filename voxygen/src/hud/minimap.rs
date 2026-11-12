@@ -239,7 +239,7 @@ impl VoxelMinimap {
         self.chunk_minimaps.retain(|key, _| key_predicate(key));
     }
 
-    pub fn maintain(&mut self, client: &Client, ui: &mut Ui, overlay_alpha: u8) {
+    pub fn maintain(&mut self, client: &Client, ui: &mut Ui) {
         let player = client.entity();
         let pos = if let Some(pos) = client.state().ecs().read_storage::<comp::Pos>().get(player) {
             pos.0
@@ -325,7 +325,7 @@ impl VoxelMinimap {
                         .map2(TerrainChunkSize::RECT_SIZE, |i, j| (i as u32).rem_euclid(j))
                         .as_();
                     let column = self.chunk_minimaps.get(&(cpos + coff));
-                    let (color, occludes_underlay): (Rgba<u8>, bool) = column
+                    let color: Rgba<u8> = column
                         .and_then(|column| {
                             let MinimapColumn {
                                 zlo,
@@ -339,7 +339,7 @@ impl VoxelMinimap {
                                 // so that the middles of caves/dungeons don't
                                 // show the forests
                                 // around them.
-                                Some((Rgba::new(0, 0, 0, 255), true))
+                                Some(Rgba::new(0, 0, 0, 255))
                             } else {
                                 // Otherwise, take the pixel from the
                                 // precomputed z-level view at
@@ -357,33 +357,21 @@ impl VoxelMinimap {
                                             as usize)
                                             .min(layers.len().saturating_sub(1)),
                                     )
-                                    .and_then(|grid| grid.get(cmod).map(|c| (c.0.as_(), false)))
+                                    .and_then(|grid| grid.get(cmod).map(|c| c.0.as_()))
                                     .or_else(|| {
-                                        Some((
-                                            if pos.z as i32 > *zlo {
-                                                above.0
-                                            } else {
-                                                below.0
-                                            },
-                                            false,
-                                        ))
+                                        Some(if pos.z as i32 > *zlo {
+                                            above.0
+                                        } else {
+                                            below.0
+                                        })
                                     })
                             }
                         })
-                        .unwrap_or_else(|| (Rgba::zero(), false));
+                        .unwrap_or_else(Rgba::zero);
                     self.composited.put_pixel(
                         x,
                         VOXEL_MINIMAP_SIDELENGTH - y - 1,
-                        image::Rgba([
-                            color.r,
-                            color.g,
-                            color.b,
-                            if occludes_underlay {
-                                color.a
-                            } else {
-                                color.a.min(overlay_alpha)
-                            },
-                        ]),
+                        image::Rgba([color.r, color.g, color.b, color.a]),
                     );
                 }
             }

@@ -79,26 +79,12 @@ impl TileGrid {
         area_range: Range<u32>,
         min_dims: Extent2<u32>,
     ) -> Result<Aabr<i32>, Aabr<i32>> {
-        self.grow_aabr_within(center, area_range, min_dims, |_| true)
-    }
-
-    /// [`Self::grow_aabr`] that only grows over tiles `allow` accepts (and
-    /// requires it of `center`): the AABR stays inside an authored
-    /// footprint instead of being rejected for leaving it.
-    pub fn grow_aabr_within(
-        &self,
-        center: Vec2<i32>,
-        area_range: Range<u32>,
-        min_dims: Extent2<u32>,
-        allow: impl Fn(Vec2<i32>) -> bool,
-    ) -> Result<Aabr<i32>, Aabr<i32>> {
-        let free = |tpos: Vec2<i32>| self.get(tpos).is_empty() && allow(tpos);
         let mut aabr = Aabr {
             min: center,
             max: center + 1,
         };
 
-        if !free(center) {
+        if !self.get(center).is_empty() {
             return Err(aabr);
         };
 
@@ -117,22 +103,26 @@ impl TileGrid {
             } else {
                 // `center.sum()` to avoid biasing certain directions
                 match (i + center.sum().abs()) % 4 {
-                    0 if (aabr.min.y..aabr.max.y + 1).all(|y| free(Vec2::new(aabr.max.x, y))) => {
+                    0 if (aabr.min.y..aabr.max.y + 1)
+                        .all(|y| self.get(Vec2::new(aabr.max.x, y)).is_empty()) =>
+                    {
                         aabr.max.x += 1;
                         last_growth = i;
                     },
-                    1 if (aabr.min.x..aabr.max.x + 1).all(|x| free(Vec2::new(x, aabr.max.y))) => {
+                    1 if (aabr.min.x..aabr.max.x + 1)
+                        .all(|x| self.get(Vec2::new(x, aabr.max.y)).is_empty()) =>
+                    {
                         aabr.max.y += 1;
                         last_growth = i;
                     },
                     2 if (aabr.min.y..aabr.max.y + 1)
-                        .all(|y| free(Vec2::new(aabr.min.x - 1, y))) =>
+                        .all(|y| self.get(Vec2::new(aabr.min.x - 1, y)).is_empty()) =>
                     {
                         aabr.min.x -= 1;
                         last_growth = i;
                     },
                     3 if (aabr.min.x..aabr.max.x + 1)
-                        .all(|x| free(Vec2::new(x, aabr.min.y - 1))) =>
+                        .all(|x| self.get(Vec2::new(x, aabr.min.y - 1)).is_empty()) =>
                     {
                         aabr.min.y -= 1;
                         last_growth = i;
@@ -194,7 +184,6 @@ pub enum TileKind {
     Road { a: u16, b: u16, w: u16, alt: f32 },
     Path { closest_pos: Vec2<f32>, path: Path },
     Building,
-    Pier,
     Castle,
     Wall(Dir2),
     Tower(RoofKind),
@@ -217,7 +206,6 @@ impl fmt::Display for TileKind {
             TileKind::Road { .. } => write!(f, "Road"),
             TileKind::Path { .. } => write!(f, "Path"),
             TileKind::Building => write!(f, "Building"),
-            TileKind::Pier => write!(f, "Pier"),
             TileKind::Castle => write!(f, "Castle"),
             TileKind::Wall(_) => write!(f, "Wall"),
             TileKind::Tower(_) => write!(f, "Tower"),
@@ -278,45 +266,6 @@ impl Tile {
             || matches!(self.kind, TileKind::Hazard(_))
             || matches!(self.kind, TileKind::Path { .. })
             || matches!(self.kind, TileKind::Field)
-            // A pier deck is an obstacle, but not a *building*: nothing may
-            // be grown against it, and nothing may treat it as buildable
-            // ground either (see `TileKind::Pier`).
-            || matches!(self.kind, TileKind::Pier)
-    }
-
-    /// Whether this tile is the seaward deck of a naval port: deck planking,
-    /// quay wall or jetty claimed over the water hazard band.
-    ///
-    /// `TileKind::Pier` carries its explanation here rather than on the
-    /// variant because a doc comment anywhere inside `TileKind` makes rustfmt
-    /// expand `Road` and `Path` too, and this enum is upstream-owned -- ten
-    /// lines of reformatting for a one-line addition is a bad trade in a file
-    /// that has to survive a monthly merge.
-    ///
-    /// It is deliberately **not** `TileKind::Building`, which is what the
-    /// landward half of the same port (the apron) uses. Two reasons:
-    ///
-    /// * A `Building` tile over water is a perfectly ordinary `is_obstacle()`
-    ///   neighbour, which invites a house to be grown against the outer end of
-    ///   a pier. `Pier` is an obstacle too, so it is excluded from every
-    ///   placement search by the same mechanism -- but it is its own kind, so
-    ///   nothing can mistake it for buildable ground.
-    /// * `hard_alt` is a claim about *ground* level, and over water that claim
-    ///   is simply false. The apron carries a `hard_alt`; the deck never does.
-    ///
-    /// It also makes "is this tile pier deck?" a question the rest of the
-    /// engine can ask, which the berth contract and any dockside NPC spawn
-    /// will want. See `site::shore` for the search that claims these tiles.
-    pub fn is_pier(&self) -> bool { matches!(self.kind, TileKind::Pier) }
-
-    /// Whether this tile carries any hazard stamped by
-    /// `Site::demarcate_obstacles`.
-    pub fn is_hazard(&self) -> bool { matches!(self.kind, TileKind::Hazard(_)) }
-
-    /// Whether this tile is specifically the *water* half of that hazard
-    /// band, as opposed to a steep-gradient hill.
-    pub fn is_water_hazard(&self) -> bool {
-        matches!(self.kind, TileKind::Hazard(HazardKind::Water))
     }
 
     pub fn is_building(&self) -> bool {

@@ -1507,44 +1507,6 @@ impl Painter {
     }
 }
 
-#[cfg(test)]
-impl Painter {
-    /// Test-only constructor: builds a bare `Painter` with no backing
-    /// canvas, so a `Structure`'s `render_inner` can be exercised directly
-    /// (against a synthetic `Land`) from a plot's own unit tests.
-    pub(crate) fn new_for_test(render_area: Aabr<i32>) -> Self {
-        Self {
-            prims: RefCell::new(Store::default()),
-            fills: RefCell::new(Vec::new()),
-            entities: RefCell::new(Vec::new()),
-            render_area,
-        }
-    }
-
-    /// Test-only: whether the block at `pos` ends up solid (non-air) once
-    /// every recorded fill has been applied. Replays fills in insertion
-    /// order, the same way real chunk generation composites them (a later
-    /// fill overrides an earlier one at the same position) -- see
-    /// `Site::render` in `site/mod.rs`.
-    pub(crate) fn is_solid_at_for_test(&self, pos: Vec3<i32>) -> bool {
-        let tree = self.prims.borrow();
-        let col = ColInfo::default();
-        let mut solid = false;
-        for (prim, fill) in self.fills.borrow().iter() {
-            if Fill::contains_at(&tree, *prim, pos, &col) {
-                solid = !matches!(fill, Fill::Block(block) if block.kind().is_air());
-            }
-        }
-        solid
-    }
-
-    /// Test-only: every entity a `Structure::render_inner` recorded via
-    /// `Painter::spawn` during this test run.
-    pub(crate) fn spawned_entities_for_test(&self) -> Vec<EntityInfo> {
-        self.entities.borrow().clone()
-    }
-}
-
 pub fn render_prefab(file_path: &str, position: Vec3<i32>, painter: &Painter) {
     let asset_handle = PrefabStructure::load_group(file_path);
     let prefab_structure = asset_handle.read()[0].clone();
@@ -1850,8 +1812,6 @@ pub trait Structure: core::any::Any {
     }
 
     fn airship_dock_info(&self) -> Option<AirshipDockInfo<'_>> { None }
-
-    fn naval_dock_info(&self) -> Option<NavalDockInfo<'_>> { None }
 
     fn door_tile(&self) -> Option<Vec2<i32>> { None }
 

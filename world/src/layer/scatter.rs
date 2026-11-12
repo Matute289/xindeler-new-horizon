@@ -1,7 +1,7 @@
 use crate::{
     CONFIG, Canvas,
     column::ColumnSample,
-    sim::{AquaticEcologyProfileId, CROMATOLIS_AQUATIC_ECOLOGY, CROMATOLIS_V0_REGION_ID, SimChunk},
+    sim::SimChunk,
     util::{RandomField, close},
 };
 use common::{
@@ -13,69 +13,6 @@ use num::traits::Pow;
 use rand::prelude::*;
 use std::f32;
 use vek::*;
-
-/// Weight `cromatolis_v0_aquatic_ecology.ron`'s profile for `c` assigns
-/// `kind`, as a fraction of that profile's single strongest `flora` entry --
-/// comparable in magnitude to the `close(...)` factor this replaces, which
-/// also peaked at `1.0`. `0.0` if `c` resolved no profile, the profile
-/// declares no flora at all (e.g. the deliberately-barren abyssal plain),
-/// `kind` is not one of the species it lists, or its entry (or every entry
-/// in the list) has a non-finite/non-positive weight -- this reads the
-/// catalog independently of [`AuthoredAquaticEcology::resolve`]'s per-entry
-/// cleanup (see [`CROMATOLIS_AQUATIC_ECOLOGY`]'s doc comment), so it filters
-/// defensively here too rather than trusting the raw authored value.
-pub(crate) fn cromatolis_aquatic_flora_weight(c: &SimChunk, kind: SpriteKind) -> f32 {
-    let Some(id) = c.aquatic_ecology_profile else {
-        return 0.0;
-    };
-    let Some(handle) = CROMATOLIS_AQUATIC_ECOLOGY.as_ref() else {
-        return 0.0;
-    };
-    let catalog = handle.read();
-    let Some(profile) = catalog
-        .profiles
-        .iter()
-        .find(|profile| AquaticEcologyProfileId::from_id(&profile.id) == Some(id))
-    else {
-        return 0.0;
-    };
-    let valid_weight = |weight: &f32| weight.is_finite() && *weight > 0.0;
-    let max_weight = profile
-        .flora
-        .iter()
-        .filter(|(weight, _)| valid_weight(weight))
-        .map(|(weight, _)| *weight)
-        .fold(0.0_f32, f32::max);
-    if max_weight <= 0.0 {
-        return 0.0;
-    }
-    profile
-        .flora
-        .iter()
-        .find(|(weight, sprite)| *sprite == kind && valid_weight(weight))
-        .map_or(0.0, |(weight, _)| weight / max_weight)
-}
-
-/// Drop-in replacement for a `close(col.temp, fallback_center,
-/// fallback_falloff)` factor in a marine `ScatterConfig`: inside the
-/// authored Cromatolis region, reads `kind`'s weight from the real resolved
-/// aquatic-ecology profile instead; everywhere else (every other world this
-/// engine can generate, which has no such profile at all) falls back to the
-/// exact `close(...)` call it replaced, so behaviour outside Cromatolis is
-/// unchanged.
-fn cromatolis_aquatic_flora_factor(
-    c: &SimChunk,
-    col: &ColumnSample,
-    kind: SpriteKind,
-    fallback_center: f32,
-    fallback_falloff: f32,
-) -> f32 {
-    if c.authored_region_id == Some(CROMATOLIS_V0_REGION_ID) {
-        cromatolis_aquatic_flora_weight(c, kind)
-    } else {
-        close(col.temp, fallback_center, fallback_falloff)
-    }
-}
 
 /// Returns a decimal value between 0 and 1.
 /// The density is maximum at the middle of the highest and the lowest allowed
@@ -869,12 +806,12 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: Seagrass,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Grass | BlockKind::Sand),
-            f: |c, col| {
+            f: |_, col| {
                 (
-                    cromatolis_aquatic_flora_factor(c, col, Seagrass, CONFIG.temperate_temp, 0.8)
+                    close(col.temp, CONFIG.temperate_temp, 0.8)
                         * MUSH_FACT
                         * 300.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM + 18.0
                         {
                             1.0
@@ -894,7 +831,7 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
                 (
                     MUSH_FACT
                         * 600.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && (col.water_level - col.alt) < 3.0
                         {
                             1.0
@@ -910,17 +847,12 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: SeaweedTemperate,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Grass | BlockKind::Sand),
-            f: |c, col| {
+            f: |_, col| {
                 (
-                    cromatolis_aquatic_flora_factor(
-                        c,
-                        col,
-                        SeaweedTemperate,
-                        CONFIG.temperate_temp,
-                        0.8,
-                    ) * MUSH_FACT
+                    close(col.temp, CONFIG.temperate_temp, 0.8)
+                        * MUSH_FACT
                         * 50.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM + 11.0
                         {
                             1.0
@@ -936,12 +868,12 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: SeaweedTropical,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Grass | BlockKind::Sand),
-            f: |c, col| {
+            f: |_, col| {
                 (
-                    cromatolis_aquatic_flora_factor(c, col, SeaweedTropical, 1.0, 0.95)
+                    close(col.temp, 1.0, 0.95)
                         * MUSH_FACT
                         * 50.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM + 11.0
                         {
                             1.0
@@ -961,7 +893,7 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
                 (
                     MUSH_FACT
                         * 250.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM + 10.0
                         {
                             1.0
@@ -981,7 +913,7 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
                 (
                     MUSH_FACT
                         * 250.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM + 10.0
                         {
                             1.0
@@ -997,12 +929,12 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: MermaidsFan,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |c, col| {
+            f: |_, col| {
                 (
-                    cromatolis_aquatic_flora_factor(c, col, MermaidsFan, 1.0, 0.95)
+                    close(col.temp, 1.0, 0.95)
                         * MUSH_FACT
                         * 500.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM + 10.0
                         {
                             1.0
@@ -1018,12 +950,12 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: SeaAnemone,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |c, col| {
+            f: |_, col| {
                 (
-                    cromatolis_aquatic_flora_factor(c, col, SeaAnemone, CONFIG.temperate_temp, 0.8)
+                    close(col.temp, CONFIG.temperate_temp, 0.8)
                         * MUSH_FACT
                         * 125.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM - 9.0
                         {
                             1.0
@@ -1039,12 +971,12 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: GiantKelp,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |c, col| {
+            f: |_, col| {
                 (
-                    cromatolis_aquatic_flora_factor(c, col, GiantKelp, CONFIG.temperate_temp, 0.8)
+                    close(col.temp, CONFIG.temperate_temp, 0.8)
                         * MUSH_FACT
                         * 220.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM - 9.0
                         {
                             1.0
@@ -1060,12 +992,12 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: BullKelp,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |c, col| {
+            f: |_, col| {
                 (
-                    cromatolis_aquatic_flora_factor(c, col, BullKelp, CONFIG.temperate_temp, 0.7)
+                    close(col.temp, CONFIG.temperate_temp, 0.7)
                         * MUSH_FACT
                         * 300.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM + 3.0
                         {
                             1.0
@@ -1081,12 +1013,12 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: StonyCoral,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |c, col| {
+            f: |_, col| {
                 (
-                    cromatolis_aquatic_flora_factor(c, col, StonyCoral, 1.0, 0.9)
+                    close(col.temp, 1.0, 0.9)
                         * MUSH_FACT
                         * 160.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM + 10.0
                         {
                             1.0
@@ -1102,12 +1034,12 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
             kind: SoftCoral,
             water_mode: Underwater,
             permit: |b| matches!(b, BlockKind::Earth | BlockKind::Sand),
-            f: |c, col| {
+            f: |_, col| {
                 (
-                    cromatolis_aquatic_flora_factor(c, col, SoftCoral, 1.0, 0.9)
+                    close(col.temp, 1.0, 0.9)
                         * MUSH_FACT
                         * 120.0
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM + 10.0
                         {
                             1.0
@@ -1127,7 +1059,7 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
                 (
                     (c.rockiness - 0.5).max(0.0)
                         * 1.0e-3
-                        * if crate::authored_raster::queries::column_is_ocean(col)
+                        * if col.water_level <= CONFIG.sea_level
                             && col.alt < col.water_level - DEPTH_WATER_NORM + 20.0
                         {
                             1.0
@@ -1226,11 +1158,6 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
     ];
 
     canvas.foreach_col(|canvas, wpos2d, col| {
-        // XINDELER: no procedural sprite rooted in (or, per region, near)
-        // authored water.
-        if col.authored_procedural_suppressed() {
-            return;
-        }
         let underwater = col.water_level.floor() > col.alt;
 
         let kind = scatter.iter().enumerate().find_map(
@@ -1247,18 +1174,6 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
                     .get(Vec3::new(wpos2d.x, wpos2d.y, col.alt as i32))
                     .kind();
                 if !permit(block_kind) {
-                    return None;
-                }
-                // A governing `BiomeProfile` override can deny this sprite
-                // kind outright (regardless of what density its own formula
-                // below would otherwise compute), or boost/dampen it by a
-                // per-kind multiplier (default `1.0`, i.e. no-op, for any
-                // kind not listed). This only ever gates/reweights the
-                // existing `ScatterConfig` entries above -- it never adds
-                // new ones.
-                if let Some(rp) = col.governing_biome_profile
-                    && rp.profile.scatter_deny.contains(kind)
-                {
                     return None;
                 }
                 let snow_covered = matches!(block_kind, BlockKind::Snow | BlockKind::Ice);
@@ -1283,26 +1198,6 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
                         }
                     })
                     .unwrap_or(density);
-                // `scatter_deny` above is binary (a sprite either spawns or
-                // doesn't -- there's no meaningful "half-denied"), but
-                // `scatter_boost` is a continuous multiplier and must fade
-                // in with the SAME `rp.strength()` (radial blend ×
-                // intensity) every other continuous effect on this profile
-                // uses, or it would visibly "pop" to full boost right at
-                // the override's falloff edge instead of smoothly fading
-                // like ground color/tree density do.
-                let density = match col.governing_biome_profile {
-                    Some(rp) => {
-                        let weight = rp
-                            .profile
-                            .scatter_boost
-                            .iter()
-                            .find(|(boosted_kind, _)| boosted_kind == kind)
-                            .map_or(1.0, |(_, weight)| *weight);
-                        density * Lerp::lerp(1.0, weight, rp.strength())
-                    },
-                    None => density,
-                };
                 if density > 0.0
                     // Now deterministic, chunk resources are tracked by rtsim
                     && /*rng.random::<f32>() < density*/ RandomField::new(i as u32).chance(Vec3::new(wpos2d.x, wpos2d.y, 0), density)

@@ -17,7 +17,7 @@ use tracing_subscriber::{
 use vek::*;
 use xindeler_world::{
     CONFIG, ColumnSample, World,
-    sim::{self, DEFAULT_WORLD_SEED, WorldOpts, get_horizon_map},
+    sim::{self, DEFAULT_WORLD_SEED, WorldOpts, get_horizon_map, sample_pos, sample_wpos},
     util::Sampler,
 };
 
@@ -81,8 +81,9 @@ fn main() {
         (0..map_size_lg.chunks_len())
             .into_par_iter()
             .map(|posi| {
-                sampler.presented_map_sample(
+                sample_pos(
                     config,
+                    sampler,
                     index,
                     samples,
                     uniform_idx_as_vec2(map_size_lg, posi),
@@ -206,7 +207,7 @@ fn main() {
             quads,
         } = config.generate(
             |pos| get_map_sample(&map_samples, pos),
-            |pos| sampler.presented_table_wpos(&config, pos),
+            |pos| sample_wpos(&config, sampler, pos),
             |pos, (r, g, b, a)| {
                 let i = pos.x;
                 let j = pos.y;
@@ -232,7 +233,7 @@ fn main() {
                 let mut buf = vec![0u8; 4 * len];
                 config.generate(
                     |pos| get_map_sample(&map_samples, pos),
-                    |pos| sampler.presented_table_wpos(&config, pos),
+                    |pos| sample_wpos(&config, sampler, pos),
                     |pos, (r, g, b, a)| {
                         let i = pos.x;
                         let j = pos.y;

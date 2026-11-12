@@ -19,7 +19,6 @@ mod credits;
 #[cfg(feature = "discord")] pub mod discord;
 mod ecs;
 pub mod error;
-#[cfg(test)] mod feature_guard_tests;
 pub mod game_input;
 pub mod hud;
 pub mod key_state;
@@ -32,8 +31,6 @@ pub mod run;
 pub mod scene;
 pub mod session;
 pub mod settings;
-#[cfg(feature = "shot-script")]
-pub mod shot_script;
 #[cfg(feature = "singleplayer")]
 pub mod singleplayer;
 pub mod window;

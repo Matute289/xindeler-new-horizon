@@ -159,7 +159,6 @@ fn do_command(
         ServerChatCommand::AreaAdd => handle_area_add,
         ServerChatCommand::AreaList => handle_area_list,
         ServerChatCommand::AreaRemove => handle_area_remove,
-        ServerChatCommand::ArenaTotem => handle_spawn_arena_totem,
         ServerChatCommand::Aura => handle_aura,
         ServerChatCommand::Ban => handle_ban,
         ServerChatCommand::BanIp => handle_ban_ip,
@@ -171,10 +170,6 @@ fn do_command(
         ServerChatCommand::Buff => handle_buff,
         ServerChatCommand::Build => handle_build,
         ServerChatCommand::Campfire => handle_spawn_campfire,
-        ServerChatCommand::CitadelPracticeBeam => handle_citadel_practice_beam,
-        ServerChatCommand::CitadelPracticeSphere => handle_citadel_practice_sphere,
-        ServerChatCommand::CitadelSphereTurretPilot => handle_citadel_sphere_turret_pilot,
-        ServerChatCommand::CitadelTurretPilot => handle_citadel_turret_pilot,
         ServerChatCommand::ClearPersistedTerrain => handle_clear_persisted_terrain,
         ServerChatCommand::DeathEffect => handle_death_effect,
         ServerChatCommand::DebugColumn => handle_debug_column,
@@ -184,14 +179,12 @@ fn do_command(
         ServerChatCommand::Dummy => handle_spawn_training_dummy,
         ServerChatCommand::Explosion => handle_explosion,
         ServerChatCommand::Faction => handle_faction,
-        ServerChatCommand::GiveGatePermit => handle_give_gate_permit,
         ServerChatCommand::GiveItem => handle_give_item,
         ServerChatCommand::GiveItemQuality => handle_give_item_quality,
         ServerChatCommand::Gizmos => handle_gizmos,
         ServerChatCommand::GizmosRange => handle_gizmos_range,
         ServerChatCommand::Goto => handle_goto,
         ServerChatCommand::GotoRand => handle_goto_rand,
-        ServerChatCommand::CromatolisGoto => handle_cromatolis_goto,
         ServerChatCommand::Group => handle_group,
         ServerChatCommand::GroupInvite => handle_group_invite,
         ServerChatCommand::GroupKick => handle_group_kick,
@@ -250,7 +243,6 @@ fn do_command(
         ServerChatCommand::Spot => handle_spot,
         ServerChatCommand::Sudo => handle_sudo,
         ServerChatCommand::Tell => handle_tell,
-        ServerChatCommand::TerrainOverride => handle_terrain_override,
         ServerChatCommand::Time => handle_time,
         ServerChatCommand::TimeScale => handle_time_scale,
         ServerChatCommand::Tp => handle_tp,
@@ -903,84 +895,6 @@ fn handle_give_item_quality(
     } else {
         Err(action.help_content())
     }
-}
-
-/// `/give_gate_permit <player>` -- grants `target` the Green Post checkpoint
-/// permit item, stamped (`Item::set_owner`) to `target`'s own `CharacterId`
-/// in the same step, so the item is immediately valid at the checkpoint.
-///
-/// This is a stopgap grant path only: real content should grant the permit
-/// narratively, through NPC/quest dialogue, once that exists. Until then,
-/// this is the only way to obtain one. Admin-gated the same way
-/// `/give_item_quality` is: `needs_role: Admin` on the command definition,
-/// re-checked here against the authoritative admin source.
-#[cfg(feature = "worldgen")]
-fn handle_give_gate_permit(
-    server: &mut Server,
-    client: EcsEntity,
-    _target: EcsEntity,
-    args: Vec<String>,
-    action: &ServerChatCommand,
-) -> CmdResult<()> {
-    let client_uuid = uuid(server, client, "client")?;
-    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
-        return Err(Content::Plain(
-            "Only admins may use /give_gate_permit.".to_string(),
-        ));
-    }
-
-    let Some(alias) = parse_cmd_args!(args, String) else {
-        return Err(action.help_content());
-    };
-    let (player, _player_uuid) = find_alias(server.state.ecs(), &alias, true)?;
-
-    let character_id = server
-        .state
-        .ecs()
-        .read_storage::<comp::Presence>()
-        .get(player)
-        .and_then(|presence| presence.kind.character_id())
-        .ok_or_else(|| {
-            Content::Plain("Target has no loaded character to bind the permit to.".to_string())
-        })?;
-
-    let mut item = Item::new_from_asset(crate::gate_checkpoint::GREEN_POST_PERMIT_ITEM_ID)
-        .inspect_err(|error| error!(?error, "Failed to load the Green Post permit asset!"))
-        .map_err(|_| Content::Plain("Failed to load the Green Post permit item.".to_string()))?;
-    item.set_owner(character_id);
-
-    let pushed = server
-        .state
-        .ecs()
-        .write_storage::<Inventory>()
-        .get_mut(player)
-        .is_some_and(|mut inv| inv.push(item).is_ok());
-    if !pushed {
-        return Err(Content::Plain(
-            "Could not give the permit -- target inventory is full or missing.".to_string(),
-        ));
-    }
-
-    let mut inventory_update_buffers = server
-        .state
-        .ecs_mut()
-        .write_storage::<comp::InventoryUpdateBuffer>();
-    if let Some(buf) = inventory_update_buffers.get_mut(player) {
-        buf.push(comp::InventoryUpdateEvent::Given);
-    }
-    drop(inventory_update_buffers);
-
-    server.notify_client(
-        client,
-        ServerGeneral::server_msg(
-            ChatType::CommandInfo,
-            Content::Plain(format!(
-                "Gave {alias} a Green Post permit bound to their character."
-            )),
-        ),
-    );
-
-    Ok(())
 }
 
 fn handle_gizmos(
@@ -1999,7 +1913,7 @@ fn handle_goto_rand(
         rng.random_range(0..(2_u32.pow(map_size.x) * chunk_side)) as f32,
         rng.random_range(0..(2_u32.pow(map_size.y) * chunk_side)) as f32,
     );
-    let pos3d = pos2d.with_z(server.world.sim().surface_alt_at(pos2d.as_()));
+    let pos3d = pos2d.with_z(server.world.sim().get_surface_alt_approx(pos2d.as_()));
     server.state.position_mut_reposition(
         target,
         parse_cmd_args!(args, bool).unwrap_or(true),
@@ -2011,517 +1925,6 @@ fn handle_goto_rand(
 
 #[cfg(not(feature = "worldgen"))]
 fn handle_goto_rand(
-    _server: &mut Server,
-    _client: EcsEntity,
-    _target: EcsEntity,
-    _args: Vec<String>,
-    _action: &ServerChatCommand,
-) -> CmdResult<()> {
-    Err(Content::Plain(
-        "Unsupported without worldgen enabled".into(),
-    ))
-}
-
-/// Clearance above the sampled surface altitude a `/cromatolis_goto`
-/// teleport lands at, so the target doesn't spawn clipped into terrain.
-#[cfg(feature = "worldgen")]
-const CROMATOLIS_TELEPORT_CLEARANCE: f32 = 5.0;
-
-/// QA convenience: teleport to the real world position that corresponds to
-/// a raw pixel coordinate on the Cromatolis source map canvas (the same
-/// `2048x1536` pixel space every authored site/route/fortification is
-/// authored against). Reimplements the same behavior as `xindeler-old`'s
-/// `cromatolis_goto` command natively against this repo's own conversion
-/// helper (`world::civ::cromatolis_source_pixel_to_wpos`), rather than
-/// porting its code.
-#[cfg(feature = "worldgen")]
-fn handle_cromatolis_goto(
-    server: &mut Server,
-    _client: EcsEntity,
-    target: EcsEntity,
-    args: Vec<String>,
-    action: &ServerChatCommand,
-) -> CmdResult<()> {
-    let (Some(source_x), Some(source_y)) = parse_cmd_args!(args, i32, i32) else {
-        return Err(action.help_content());
-    };
-
-    // Never hardcode the canvas dimensions here -- read them from the same
-    // authored asset every other Cromatolis pixel-space reader uses.
-    let Some(source_pixels) = world::civ::cromatolis_source_pixels() else {
-        return Err(Content::Plain(
-            "Could not load the Cromatolis source map canvas dimensions".into(),
-        ));
-    };
-
-    let map_size = server.world.sim().map_size_lg();
-    let Some(wpos) = world::civ::cromatolis_source_pixel_to_wpos(
-        Vec2::new(source_x as f32, source_y as f32),
-        source_pixels,
-        map_size,
-    ) else {
-        return Err(Content::Plain(format!(
-            "Cromatolis map pixels must be within 0..={} and 0..={}",
-            source_pixels.x.saturating_sub(1),
-            source_pixels.y.saturating_sub(1),
-        )));
-    };
-
-    let surface = server.world.sim().surface_alt_at(wpos);
-    server.state.position_mut_reposition(
-        target,
-        true,
-        |current_pos| {
-            current_pos.0 = wpos
-                .map(|coord| coord as f32)
-                .with_z(surface + CROMATOLIS_TELEPORT_CLEARANCE)
-        },
-        true,
-        false,
-    )
-}
-
-#[cfg(not(feature = "worldgen"))]
-fn handle_cromatolis_goto(
-    _server: &mut Server,
-    _client: EcsEntity,
-    _target: EcsEntity,
-    _args: Vec<String>,
-    _action: &ServerChatCommand,
-) -> CmdResult<()> {
-    Err(Content::Plain(
-        "Unsupported without worldgen enabled".into(),
-    ))
-}
-
-// The two Cromatolis Aerial Citadel towers the 4 pilot/practice commands
-// below operate: tower 0 (beam cannon, zero-based-even per
-// `citadel::upper_turret_body`'s alternation) and tower 1 (sphere cannon,
-// zero-based-odd). This is a separate, new concern from that alternation
-// itself -- which tower index a *pilot* interacts with -- so it is not
-// re-derived from `citadel::upper_turret_body`, only resolved *through* it
-// (via `citadel::upper_turret_pivot`/`upper_turret_rest_pose`/etc.).
-#[cfg(feature = "worldgen")]
-const CITADEL_BEAM_PILOT_TOWER_INDEX: usize = 0;
-#[cfg(feature = "worldgen")]
-const CITADEL_SPHERE_PILOT_TOWER_INDEX: usize = 1;
-#[cfg(feature = "worldgen")]
-const CITADEL_PRACTICE_BEAM_SPEED: f32 = 500.0;
-#[cfg(feature = "worldgen")]
-const CITADEL_PRACTICE_BEAM_LIFETIME: f32 = 4.0;
-#[cfg(feature = "worldgen")]
-const CITADEL_PRACTICE_SPHERE_LIFETIME: f32 = 2.0;
-
-#[cfg(feature = "worldgen")]
-fn citadel_practice_beam_visual(
-    pivot: Vec3<f32>,
-    pose: comp::CitadelTurretAngles,
-) -> comp::CitadelPracticeBeam {
-    let (origin, direction) = crate::citadel::turret_beam_muzzle(pivot, pose);
-    comp::CitadelPracticeBeam {
-        origin,
-        direction,
-        max_range: CITADEL_PRACTICE_BEAM_SPEED * CITADEL_PRACTICE_BEAM_LIFETIME / 2.0,
-        speed: CITADEL_PRACTICE_BEAM_SPEED,
-        diameter: comp::object::Body::LaserBeamLarge.dimensions().x,
-    }
-}
-
-#[cfg(feature = "worldgen")]
-fn citadel_practice_sphere_visual(
-    pivot: Vec3<f32>,
-    pose: comp::CitadelTurretAngles,
-) -> comp::CitadelPracticeSphere {
-    let (muzzle, direction) = crate::citadel::turret_sphere_muzzle(pivot, pose);
-    comp::CitadelPracticeSphere {
-        // The sphere's centre starts half its diameter beyond the open
-        // muzzle, so its rear surface begins exactly at the physical barrel
-        // tip.
-        origin: muzzle + direction * (comp::object::Body::LaserSphereLarge.dimensions().x * 0.5),
-        direction,
-        max_range: CITADEL_PRACTICE_BEAM_SPEED * CITADEL_PRACTICE_SPHERE_LIFETIME,
-        speed: CITADEL_PRACTICE_BEAM_SPEED,
-        diameter: comp::object::Body::LaserSphereLarge.dimensions().x,
-    }
-}
-
-/// Finds the already-placed, Phase-3-reconciled upper cannon for
-/// `tower_index` (server construction / the 1Hz
-/// `citadel::ensure_upper_defences` pass owns creating and recovering these 24
-/// stations -- this never spawns or duplicates one). Returns the entity, its
-/// pivot, and its current pose.
-#[cfg(feature = "worldgen")]
-fn find_citadel_upper_turret(
-    server: &Server,
-    tower_index: usize,
-) -> Option<(EcsEntity, Vec3<f32>, comp::CitadelTurretAngles)> {
-    let pivot = crate::citadel::upper_turret_pivot(tower_index);
-    let expected_body = comp::Body::Object(crate::citadel::upper_turret_body(tower_index));
-    let ecs = server.state.ecs();
-    let entities = ecs.entities();
-    let bodies = ecs.read_storage::<comp::Body>();
-    let positions = ecs.read_storage::<comp::Pos>();
-    let poses = ecs.read_storage::<comp::CitadelTurretAngles>();
-    (&entities, &bodies, &positions, &poses)
-        .join()
-        .find_map(|(entity, body, pos, pose)| {
-            (*body == expected_body && (pos.0 - pivot).magnitude_squared() < 0.01)
-                .then_some((entity, pos.0, *pose))
-        })
-}
-
-/// A pilot operating from a tower that has not yet had its station placed
-/// (e.g. immediately after server start, before the first 1Hz
-/// `citadel::ensure_upper_defences` pass) gets this instead of a spawned
-/// duplicate -- station creation and recovery belong exclusively to that
-/// reconciliation pass.
-#[cfg(feature = "worldgen")]
-fn citadel_turret_not_yet_placed_error() -> Content {
-    Content::Plain(
-        "This citadel cannon has not finished loading yet -- try again in a moment.".to_string(),
-    )
-}
-
-/// `/citadel_practice_beam` -- fires the harmless practice beam from the
-/// beam-cannon pilot tower's current aim. Purely a client-visible timeline
-/// entity (`comp::CitadelPracticeBeam`); it carries no combat or collision
-/// state.
-///
-/// Server-authoritative: gated by `needs_role: Admin` (see
-/// `ServerChatCommand::CitadelPracticeBeam`'s `cmd()` entry in
-/// `common::cmd`), enforced centrally before this handler ever runs (see
-/// `do_command`'s `cmd.needs_role() > server.entity_admin_role(client)`
-/// check). This is a deliberate, permanent divergence from the reference
-/// implementation this command was ported from, which instead gated these 4
-/// commands via `is_citadel_practice_operator`: an exact string match
-/// against a player-choosable `Faction` name (`"Cromatolis Citadel"`).
-/// That is not a real credential boundary -- any player can create a
-/// faction with that exact name and pass the check -- so it was never
-/// ported here, and no faction-based gate of any kind should be
-/// (re-)introduced for these commands.
-#[cfg(feature = "worldgen")]
-fn handle_citadel_practice_beam(
-    server: &mut Server,
-    client: EcsEntity,
-    target: EcsEntity,
-    args: Vec<String>,
-    action: &ServerChatCommand,
-) -> CmdResult<()> {
-    no_sudo(client, target)?;
-
-    if !args.is_empty() {
-        return Err(action.help_content());
-    }
-
-    let (pivot, pose) = find_citadel_upper_turret(server, CITADEL_BEAM_PILOT_TOWER_INDEX)
-        .map(|(_, pivot, pose)| (pivot, pose))
-        .ok_or_else(citadel_turret_not_yet_placed_error)?;
-    if !crate::citadel::practice_pose_fires_outward(CITADEL_BEAM_PILOT_TOWER_INDEX, pose) {
-        return Err(Content::Plain(
-            "The practice beam cannot fire back into the Aerial Citadel.".to_string(),
-        ));
-    }
-
-    let beam = citadel_practice_beam_visual(pivot, pose);
-    let beam_origin = beam.origin;
-    let lifetime = Duration::from_secs_f32(beam.total_duration());
-    let spawned_at = Time(server.state.get_time());
-    server
-        .state_mut()
-        .ecs_mut()
-        .create_entity_synced()
-        .with(comp::Pos(beam_origin))
-        .with(comp::Ori::from_unnormalized_vec(beam.direction).unwrap_or_default())
-        .with(comp::Object::DeleteAfter {
-            spawned_at,
-            timeout: lifetime,
-        })
-        .with(beam)
-        .build();
-
-    server
-        .state
-        .ecs()
-        .read_resource::<EventBus<Outcome>>()
-        .emit_now(Outcome::LaserBeam { pos: beam_origin });
-
-    server.notify_client(
-        client,
-        ServerGeneral::server_msg(
-            ChatType::CommandInfo,
-            Content::Plain("Practice beam fired outward: no damage.".to_string()),
-        ),
-    );
-    Ok(())
-}
-
-/// `/citadel_practice_sphere` -- fires the harmless practice sphere from the
-/// sphere-cannon pilot tower's current aim. See
-/// `handle_citadel_practice_beam`'s doc comment for the admin-gating
-/// rationale, which applies identically here.
-#[cfg(feature = "worldgen")]
-fn handle_citadel_practice_sphere(
-    server: &mut Server,
-    client: EcsEntity,
-    target: EcsEntity,
-    args: Vec<String>,
-    action: &ServerChatCommand,
-) -> CmdResult<()> {
-    no_sudo(client, target)?;
-
-    if !args.is_empty() {
-        return Err(action.help_content());
-    }
-
-    let (pivot, pose) = find_citadel_upper_turret(server, CITADEL_SPHERE_PILOT_TOWER_INDEX)
-        .map(|(_, pivot, pose)| (pivot, pose))
-        .ok_or_else(citadel_turret_not_yet_placed_error)?;
-    if !crate::citadel::practice_pose_fires_outward(CITADEL_SPHERE_PILOT_TOWER_INDEX, pose) {
-        return Err(Content::Plain(
-            "The practice sphere cannot fire back into the Aerial Citadel.".to_string(),
-        ));
-    }
-
-    let sphere = citadel_practice_sphere_visual(pivot, pose);
-    let lifetime = Duration::from_secs_f32(sphere.travel_duration());
-    let spawned_at = Time(server.state.get_time());
-    let body = comp::Body::Object(comp::object::Body::LaserSphereLarge);
-    let velocity = sphere.direction * sphere.speed;
-
-    server
-        .state
-        .ecs()
-        .read_resource::<EventBus<Outcome>>()
-        .emit_now(Outcome::ProjectileShot {
-            pos: sphere.origin,
-            body,
-            vel: velocity,
-        });
-
-    server
-        .state_mut()
-        .ecs_mut()
-        .create_entity_synced()
-        .with(comp::Pos(sphere.origin))
-        .with(comp::Ori::from_unnormalized_vec(sphere.direction).unwrap_or_default())
-        .with(comp::Object::DeleteAfter {
-            spawned_at,
-            timeout: lifetime,
-        })
-        .with(sphere)
-        .build();
-
-    server.notify_client(
-        client,
-        ServerGeneral::server_msg(
-            ChatType::CommandInfo,
-            Content::Plain("Practice sphere fired outward: no damage.".to_string()),
-        ),
-    );
-    Ok(())
-}
-
-/// `/citadel_sphere_turret_pilot <yaw degrees> <pitch degrees>` -- aims the
-/// sphere-cannon pilot tower's already-placed cannon (never spawns or moves
-/// a station; `citadel::ensure_upper_defences` owns placement). Purely
-/// visual: does not fire and causes no damage. See
-/// `handle_citadel_turret_pilot`'s doc comment for the angle-space and
-/// admin-gating rationale, which applies identically here.
-#[cfg(feature = "worldgen")]
-fn handle_citadel_sphere_turret_pilot(
-    server: &mut Server,
-    client: EcsEntity,
-    target: EcsEntity,
-    args: Vec<String>,
-    action: &ServerChatCommand,
-) -> CmdResult<()> {
-    no_sudo(client, target)?;
-
-    let (Some(yaw_degrees), Some(pitch_degrees)) = parse_cmd_args!(args, f32, f32) else {
-        return Err(action.help_content());
-    };
-    // Operator space -> model space (see
-    // `citadel::pilot_pose_from_operator_degrees`'s doc comment for the full
-    // 3-space story).
-    let Some(pose) = crate::citadel::pilot_pose_from_operator_degrees(
-        CITADEL_SPHERE_PILOT_TOWER_INDEX,
-        yaw_degrees,
-        pitch_degrees,
-    ) else {
-        return Err(Content::Plain(
-            "Turret pitch must be between -7 and 90 degrees.".to_string(),
-        ));
-    };
-
-    let target_pos = server
-        .state
-        .ecs()
-        .read_storage::<comp::Pos>()
-        .get(target)
-        .copied()
-        .map(|pos| pos.0)
-        .ok_or_else(|| Content::Plain("Could not read the operator's position.".to_string()))?;
-    if !crate::citadel::is_near_upper_turret(CITADEL_SPHERE_PILOT_TOWER_INDEX, target_pos) {
-        return Err(Content::Plain(
-            "The sphere pilot turret can only be operated from its own tower.".to_string(),
-        ));
-    }
-
-    let (entity, ..) = find_citadel_upper_turret(server, CITADEL_SPHERE_PILOT_TOWER_INDEX)
-        .ok_or_else(citadel_turret_not_yet_placed_error)?;
-    server
-        .state_mut()
-        .ecs_mut()
-        .write_storage::<comp::CitadelTurretAngles>()
-        .insert(entity, pose)
-        .expect("the located sphere pilot cannon must remain a live entity");
-
-    server.notify_client(
-        client,
-        ServerGeneral::server_msg(
-            ChatType::CommandInfo,
-            Content::Plain(format!(
-                "Sphere pilot turret updated: yaw {yaw_degrees:.1}, pitch {pitch_degrees:.1}. \
-                 Visual only; does not fire or cause damage."
-            )),
-        ),
-    );
-    Ok(())
-}
-
-/// `/citadel_turret_pilot <yaw degrees> <pitch degrees>` -- aims the
-/// beam-cannon pilot tower's already-placed cannon. Purely visual: does not
-/// fire and causes no damage.
-///
-/// **Angle-space note (see `citadel::upper_turret_rest_pose`'s doc comment
-/// for the full 3-space story):** `yaw_degrees`/`pitch_degrees` are in
-/// *operator space* (0 degrees yaw means "straight out of this tower" to a
-/// human pilot). `pilot_pose_from_operator_degrees` converts that into the
-/// *model space* `comp::CitadelTurretAngles` actually stored on the entity
-/// and read by `anim::object::TurretAnimation`. Never store operator-space
-/// degrees directly, and never assume model-space yaw 0 means "outward" for
-/// an arbitrary tower -- only `pilot_pose_from_operator_degrees`'s own
-/// per-tower `upper_turret_rest_pose` reference makes that translation
-/// correct for every tower, not just this pilot tower.
-///
-/// Server-authoritative: gated by `needs_role: Admin`, not the reference
-/// implementation's faction-string-match gate -- see
-/// `handle_citadel_practice_beam`'s doc comment for the full rationale of
-/// that deliberate divergence, which applies identically to all 4 of these
-/// commands.
-#[cfg(feature = "worldgen")]
-fn handle_citadel_turret_pilot(
-    server: &mut Server,
-    client: EcsEntity,
-    target: EcsEntity,
-    args: Vec<String>,
-    action: &ServerChatCommand,
-) -> CmdResult<()> {
-    no_sudo(client, target)?;
-
-    let (Some(yaw_degrees), Some(pitch_degrees)) = parse_cmd_args!(args, f32, f32) else {
-        return Err(action.help_content());
-    };
-    let Some(pose) = crate::citadel::pilot_pose_from_operator_degrees(
-        CITADEL_BEAM_PILOT_TOWER_INDEX,
-        yaw_degrees,
-        pitch_degrees,
-    ) else {
-        return Err(Content::Plain(
-            "Turret pitch must be between -7 and 90 degrees.".to_string(),
-        ));
-    };
-
-    let target_pos = server
-        .state
-        .ecs()
-        .read_storage::<comp::Pos>()
-        .get(target)
-        .copied()
-        .map(|pos| pos.0)
-        .ok_or_else(|| Content::Plain("Could not read the operator's position.".to_string()))?;
-    if !crate::citadel::is_near_upper_turret(CITADEL_BEAM_PILOT_TOWER_INDEX, target_pos) {
-        return Err(Content::Plain(
-            "The pilot turret can only be operated from its own tower.".to_string(),
-        ));
-    }
-
-    let (entity, ..) = find_citadel_upper_turret(server, CITADEL_BEAM_PILOT_TOWER_INDEX)
-        .ok_or_else(citadel_turret_not_yet_placed_error)?;
-    server
-        .state_mut()
-        .ecs_mut()
-        .write_storage::<comp::CitadelTurretAngles>()
-        .insert(entity, pose)
-        .expect("the located pilot cannon must remain a live entity");
-
-    server.notify_client(
-        client,
-        ServerGeneral::server_msg(
-            ChatType::CommandInfo,
-            Content::Plain(format!(
-                "Pilot turret updated: yaw {yaw_degrees:.1}, pitch {pitch_degrees:.1}. Visual \
-                 only; does not fire or cause damage."
-            )),
-        ),
-    );
-    Ok(())
-}
-
-#[cfg(not(feature = "worldgen"))]
-fn handle_citadel_practice_beam(
-    _server: &mut Server,
-    _client: EcsEntity,
-    _target: EcsEntity,
-    _args: Vec<String>,
-    _action: &ServerChatCommand,
-) -> CmdResult<()> {
-    Err(Content::Plain(
-        "Unsupported without worldgen enabled".into(),
-    ))
-}
-
-#[cfg(not(feature = "worldgen"))]
-fn handle_citadel_practice_sphere(
-    _server: &mut Server,
-    _client: EcsEntity,
-    _target: EcsEntity,
-    _args: Vec<String>,
-    _action: &ServerChatCommand,
-) -> CmdResult<()> {
-    Err(Content::Plain(
-        "Unsupported without worldgen enabled".into(),
-    ))
-}
-
-#[cfg(not(feature = "worldgen"))]
-fn handle_citadel_sphere_turret_pilot(
-    _server: &mut Server,
-    _client: EcsEntity,
-    _target: EcsEntity,
-    _args: Vec<String>,
-    _action: &ServerChatCommand,
-) -> CmdResult<()> {
-    Err(Content::Plain(
-        "Unsupported without worldgen enabled".into(),
-    ))
-}
-
-#[cfg(not(feature = "worldgen"))]
-fn handle_citadel_turret_pilot(
-    _server: &mut Server,
-    _client: EcsEntity,
-    _target: EcsEntity,
-    _args: Vec<String>,
-    _action: &ServerChatCommand,
-) -> CmdResult<()> {
-    Err(Content::Plain(
-        "Unsupported without worldgen enabled".into(),
-    ))
-}
-
-#[cfg(not(feature = "worldgen"))]
-fn handle_give_gate_permit(
     _server: &mut Server,
     _client: EcsEntity,
     _target: EcsEntity,
@@ -3809,36 +3212,6 @@ fn handle_spawn_campfire(
         ServerGeneral::server_msg(
             ChatType::CommandInfo,
             Content::localized("command-spawned-campfire"),
-        ),
-    );
-    Ok(())
-}
-
-/// Spawn the same `Immovable` Gnarling totem fixture used by generated arena
-/// sites. Its zero-radius auras make this safe for local physics QA while
-/// keeping the entity construction path identical to the world fixture.
-fn handle_spawn_arena_totem(
-    server: &mut Server,
-    client: EcsEntity,
-    target: EcsEntity,
-    _args: Vec<String>,
-    _action: &ServerChatCommand,
-) -> CmdResult<()> {
-    let pos = position(server, target, "target")?;
-    server
-        .state
-        .ecs()
-        .read_resource::<EventBus<CreateSpecialEntityEvent>>()
-        .emit_now(CreateSpecialEntityEvent {
-            pos: pos.0,
-            entity: SpecialEntity::ArenaTotem { range: 0.0 },
-        });
-
-    server.notify_client(
-        client,
-        ServerGeneral::server_msg(
-            ChatType::CommandInfo,
-            Content::Plain("Spawned an immovable Gnarling arena totem.".into()),
         ),
     );
     Ok(())
@@ -5993,8 +5366,6 @@ fn handle_debug_column(
         let chunk_pos = wpos.wpos_to_cpos();
         let chunk = sim.get(chunk_pos)?;
         let col = sampler.get((wpos, server.index.as_index_ref(), Some(calendar)))?;
-        // XINDELER: the chunk table's gradient by design (debug output next
-        // to the sampled column), not `WorldSim::ground_gradient_at`.
         let gradient = sim.get_gradient_approx(chunk_pos)?;
         let downhill = chunk.downhill;
         let river = &chunk.river;
@@ -6018,8 +5389,7 @@ rockiness {:?}
 tree_density {:?}
 spawn_rate {:?}
 path {:?}
-cliff_height {:?}
-authored {:?} "#,
+cliff_height {:?} "#,
             wpos,
             alt,
             col.alt,
@@ -6038,8 +5408,6 @@ authored {:?} "#,
             spawn_rate,
             path,
             cliff_height,
-            // XINDELER: the authored water raster column, if any.
-            sim.authored_column_at(wpos).map(|a| (a.cell, a.water_dist)),
         ))
     };
     if let Some(s) = msg_generator(&calendar) {
@@ -9328,33 +8696,6 @@ fn handle_weather_zone(
                 });
                 Ok(())
             },
-            // Precipitation heavy enough to register, with no wind so it does
-            // not read as a storm. Whether it actually *falls* as snow is
-            // decided by the temperature of the ground under the zone, not by
-            // this command — see `common::weather::snow_factor_at`. Over warm
-            // ground this is simply windless rain, which is the honest
-            // behaviour: a weather zone overrides the weather, never the
-            // terrain.
-            "snow" => {
-                add_zone(weather::Weather {
-                    cloud: 0.6,
-                    rain: 0.4,
-                    wind: Vec2::zero(),
-                });
-                Ok(())
-            },
-            // Fog is the overcast-but-dry case, so this is fully overcast with
-            // no precipitation at all — any rain would clear the fog back out.
-            // Unlike `snow`, this works anywhere: fog is derived from the
-            // weather cell alone and needs nothing from the ground.
-            "fog" => {
-                add_zone(weather::Weather {
-                    cloud: 1.0,
-                    rain: 0.0,
-                    wind: Vec2::zero(),
-                });
-                Ok(())
-            },
             _ => Err(Content::localized("command-weather-valid-values")),
         }
     } else {
@@ -9497,266 +8838,6 @@ fn handle_repair_equipment(
     } else {
         Err(action.help_content())
     }
-}
-
-/// Builds a fresh terrain-damage crater override centered on `center`. A
-/// free function (rather than inlined directly in `handle_terrain_override`'s
-/// `"crater"` match arm below) so the `TimeOfDay`-vs-`Time` seeding for
-/// `next_heal_at` has a plain unit test that doesn't need a full
-/// `Server`/ECS to exercise it -- see
-/// `terrain_damage_override_tests::crater_next_heal_at_is_seeded_from_time_of_day_not_time`.
-///
-/// `activated_at` must be `Time`'s value at activation (matches
-/// `RegionalTerrainOverride::activated_at`'s own doc comment).
-/// `time_of_day` must be `TimeOfDay`'s value -- the large, persisted,
-/// monotonic game clock `terrain_damage_heal::Sys` actually checks
-/// `next_heal_at` against, NEVER `Time`, which resets to 0 on every server
-/// restart.
-#[cfg(feature = "worldgen")]
-fn crater_override(
-    center: vek::Vec2<i32>,
-    radius: f32,
-    activated_at: f64,
-    time_of_day: f64,
-) -> common::terrain::RegionalTerrainOverride {
-    use common::terrain::{
-        DamageOverride, DamageShape, OverrideRegion, RegionalTerrainOverride, TerrainOverrideId,
-        TerrainOverridePayload,
-    };
-
-    RegionalTerrainOverride {
-        id: TerrainOverrideId::new_unique(),
-        region: OverrideRegion::Circle {
-            center,
-            radius,
-            edge: (radius * 0.25).max(8.0),
-        },
-        payload: TerrainOverridePayload::Damage(DamageOverride {
-            shapes: vec![DamageShape::Crater {
-                max_depth: (radius * 0.3).clamp(4.0, 24.0),
-                rim_height: (radius * 0.05).clamp(1.0, 4.0),
-            }],
-            scorch: 0.7,
-            vegetation_mul: 0.05,
-            heal_progress: 0.0,
-            heal_stages: 8,
-            heal_interval: 600.0,
-            next_heal_at: time_of_day + 600.0,
-        }),
-        priority: 100,
-        activated_at,
-        wipe_player_edits: true,
-        ephemeral: true,
-        transition: Default::default(),
-    }
-}
-
-/// Builds a fresh terrain-damage debris-field override centered on
-/// `center`. See [`crater_override`]'s doc comment -- the same
-/// `TimeOfDay`-vs-`Time` distinction for `next_heal_at` applies here too.
-#[cfg(feature = "worldgen")]
-fn debris_override(
-    center: vek::Vec2<i32>,
-    radius: f32,
-    activated_at: f64,
-    time_of_day: f64,
-) -> common::terrain::RegionalTerrainOverride {
-    use common::terrain::{
-        DamageOverride, DamageShape, OverrideRegion, RegionalTerrainOverride, TerrainOverrideId,
-        TerrainOverridePayload,
-    };
-
-    RegionalTerrainOverride {
-        id: TerrainOverrideId::new_unique(),
-        region: OverrideRegion::Circle {
-            center,
-            radius,
-            edge: (radius * 0.25).max(8.0),
-        },
-        payload: TerrainOverridePayload::Damage(DamageOverride {
-            shapes: vec![DamageShape::Debris {
-                rubble_density: 0.05,
-                felled_tree_chance: 0.4,
-            }],
-            scorch: 0.5,
-            vegetation_mul: 0.2,
-            heal_progress: 0.0,
-            heal_stages: 8,
-            heal_interval: 600.0,
-            next_heal_at: time_of_day + 600.0,
-        }),
-        priority: 100,
-        activated_at,
-        wipe_player_edits: false,
-        ephemeral: true,
-        transition: Default::default(),
-    }
-}
-
-/// Manual test entry point for the Regional Terrain Event Engine: activates
-/// a simple climate override (`snow`), a terrain-damage crater (`crater`), a
-/// terrain-damage debris field (`debris`) centered on `target`, or clears
-/// every currently active override (`clear`). Not intended for real
-/// gameplay use -- future features (weather-linked events, authored bespoke
-/// biome events) will activate overrides themselves, via
-/// `SetRegionalTerrainOverrideEvent` directly, not through this command.
-#[cfg(feature = "worldgen")]
-fn handle_terrain_override(
-    server: &mut Server,
-    _client: EcsEntity,
-    target: EcsEntity,
-    args: Vec<String>,
-    action: &ServerChatCommand,
-) -> CmdResult<()> {
-    use common::{
-        event::{SetRegionalTerrainOverrideEvent, TerrainOverrideOp},
-        terrain::{
-            BiomeProfileOverride, ClimateOverride, ClimateValue, OverrideRegion,
-            RegionalTerrainOverride, TerrainOverrideId, TerrainOverridePayload, TerrainOverrides,
-            TransitionNarrative,
-        },
-    };
-
-    // Captured before `parse_cmd_args!` below moves `args`. `"biome"` needs a
-    // raw positional `String` (the catalog profile id) at index 1;
-    // `parse_cmd_args!` only consumes an argument once it parses cleanly as
-    // the requested type in position, so asking it for a second `String`
-    // ahead of the existing `i32` radius would swallow every other mode's
-    // radius argument as a (trivially-always-parseable) string instead.
-    // Reading the raw args directly for this one mode avoids reshuffling
-    // everyone else's positions.
-    let raw_args = args.clone();
-
-    let (Some(kind), radius) = parse_cmd_args!(args, String, i32) else {
-        return Err(action.help_content());
-    };
-    let pos = position(server, target, "target")?;
-    let ecs = server.state.ecs();
-    let events = ecs.read_resource::<EventBus<SetRegionalTerrainOverrideEvent>>();
-
-    match kind.as_str() {
-        "snow" => {
-            let radius = radius.unwrap_or(64).clamp(8, 512) as f32;
-            let activated_at = ecs.read_resource::<Time>().0;
-            let new_override = RegionalTerrainOverride {
-                id: TerrainOverrideId::new_unique(),
-                region: OverrideRegion::Circle {
-                    center: pos.0.xy().as_::<i32>(),
-                    radius,
-                    edge: (radius * 0.25).max(8.0),
-                },
-                payload: TerrainOverridePayload::Climate(ClimateOverride {
-                    temp: Some(ClimateValue::Set(-10.0)),
-                    humidity: Some(ClimateValue::Set(0.9)),
-                    tree_density_mul: Some(0.1),
-                }),
-                priority: 100,
-                activated_at,
-                wipe_player_edits: false,
-                ephemeral: true,
-                transition: TransitionNarrative {
-                    on_activate: Some(
-                        "The air turns bitterly cold as an unnatural frost creeps over the land."
-                            .to_string(),
-                    ),
-                    on_deactivate: Some("The frost recedes, and warmth returns.".to_string()),
-                },
-            };
-            events.emit_now(SetRegionalTerrainOverrideEvent {
-                op: TerrainOverrideOp::Activate(new_override),
-            });
-            Ok(())
-        },
-        "crater" => {
-            let radius = radius.unwrap_or(32).clamp(8, 256) as f32;
-            let activated_at = ecs.read_resource::<Time>().0;
-            let time_of_day = ecs.read_resource::<TimeOfDay>().0;
-            let new_override =
-                crater_override(pos.0.xy().as_::<i32>(), radius, activated_at, time_of_day);
-            events.emit_now(SetRegionalTerrainOverrideEvent {
-                op: TerrainOverrideOp::Activate(new_override),
-            });
-            Ok(())
-        },
-        "debris" => {
-            let radius = radius.unwrap_or(48).clamp(8, 256) as f32;
-            let activated_at = ecs.read_resource::<Time>().0;
-            let time_of_day = ecs.read_resource::<TimeOfDay>().0;
-            let new_override =
-                debris_override(pos.0.xy().as_::<i32>(), radius, activated_at, time_of_day);
-            events.emit_now(SetRegionalTerrainOverrideEvent {
-                op: TerrainOverrideOp::Activate(new_override),
-            });
-            Ok(())
-        },
-        "biome" => {
-            // Not consumed by `parse_cmd_args!` above (it only ever parses
-            // `args[1]` as an `i32` radius) -- see `raw_args`'s own doc
-            // comment.
-            let Some(profile) = raw_args.get(1).cloned() else {
-                return Err(action.help_content());
-            };
-            let radius = raw_args
-                .get(2)
-                .and_then(|s| s.parse::<i32>().ok())
-                .unwrap_or(48)
-                .clamp(8, 256) as f32;
-            let activated_at = ecs.read_resource::<Time>().0;
-            let new_override = RegionalTerrainOverride {
-                id: TerrainOverrideId::new_unique(),
-                region: OverrideRegion::Circle {
-                    center: pos.0.xy().as_::<i32>(),
-                    radius,
-                    edge: (radius * 0.25).max(8.0),
-                },
-                payload: TerrainOverridePayload::BiomeProfile(BiomeProfileOverride {
-                    profile,
-                    intensity: 1.0,
-                    // Baked from the catalog's own `flood_depth` by
-                    // `terrain_override::apply` at activation time -- never
-                    // set here.
-                    flood_to: None,
-                }),
-                priority: 100,
-                activated_at,
-                wipe_player_edits: false,
-                ephemeral: true,
-                transition: Default::default(),
-            };
-            events.emit_now(SetRegionalTerrainOverrideEvent {
-                op: TerrainOverrideOp::Activate(new_override),
-            });
-            Ok(())
-        },
-        "clear" => {
-            let active_ids: Vec<TerrainOverrideId> = ecs
-                .read_resource::<Arc<TerrainOverrides>>()
-                .active
-                .iter()
-                .map(|o| o.id)
-                .collect();
-            for id in active_ids {
-                events.emit_now(SetRegionalTerrainOverrideEvent {
-                    op: TerrainOverrideOp::Deactivate(id),
-                });
-            }
-            Ok(())
-        },
-        _ => Err(action.help_content()),
-    }
-}
-
-#[cfg(not(feature = "worldgen"))]
-fn handle_terrain_override(
-    _server: &mut Server,
-    _client: EcsEntity,
-    _target: EcsEntity,
-    _args: Vec<String>,
-    _action: &ServerChatCommand,
-) -> CmdResult<()> {
-    Err(Content::Plain(
-        "Unsupported without worldgen enabled".into(),
-    ))
 }
 
 fn handle_tether(
@@ -9960,7 +9041,7 @@ fn handle_spot(
 
     if let Some(spot_chunk) = spot_chunk {
         let pos = spot_chunk.cpos_to_wpos_center();
-        let pos = (pos.as_() + 0.5).with_z(world.sim().surface_alt_at(pos));
+        let pos = (pos.as_() + 0.5).with_z(world.sim().get_surface_alt_approx(pos));
         drop(world);
         server.state.position_mut_reposition(
             target,
@@ -10011,72 +9092,6 @@ mod suspension_end_date_tests {
         assert_eq!(
             end_date, None,
             "an out-of-range duration must become permanent, never an already-expired date"
-        );
-    }
-}
-
-#[cfg(all(test, feature = "worldgen"))]
-mod terrain_damage_override_tests {
-    use super::*;
-
-    /// `next_heal_at` must track `TimeOfDay` (the large, persisted,
-    /// monotonic game clock `terrain_damage_heal::Sys` actually checks it
-    /// against), never `Time` (which resets to 0 on every server restart).
-    /// Deliberately uses a SMALL `activated_at` (as if fresh off a server
-    /// restart) and a LARGE `time_of_day` (as if the server has been
-    /// running a while) -- exactly the scenario where seeding
-    /// `next_heal_at` from the wrong clock would make the very next
-    /// scheduler tick see `now >= next_heal_at` and start healing almost
-    /// immediately instead of waiting `heal_interval` seconds.
-    #[test]
-    fn crater_next_heal_at_is_seeded_from_time_of_day_not_time() {
-        let activated_at = 5.0;
-        let time_of_day = 123_456.0;
-        let over = crater_override(vek::Vec2::zero(), 32.0, activated_at, time_of_day);
-
-        assert_eq!(
-            over.activated_at, activated_at,
-            "activated_at must still come from Time"
-        );
-        let damage = over
-            .damage()
-            .expect("a crater override must carry a Damage payload");
-        assert_eq!(
-            damage.next_heal_at,
-            time_of_day + 600.0,
-            "next_heal_at must be seeded from TimeOfDay, not Time"
-        );
-        assert_ne!(
-            damage.next_heal_at,
-            activated_at + 600.0,
-            "must not regress to seeding next_heal_at from Time"
-        );
-    }
-
-    /// See [`crater_next_heal_at_is_seeded_from_time_of_day_not_time`] --
-    /// same distinction, same bug shape, for the debris-field override.
-    #[test]
-    fn debris_next_heal_at_is_seeded_from_time_of_day_not_time() {
-        let activated_at = 5.0;
-        let time_of_day = 123_456.0;
-        let over = debris_override(vek::Vec2::zero(), 48.0, activated_at, time_of_day);
-
-        assert_eq!(
-            over.activated_at, activated_at,
-            "activated_at must still come from Time"
-        );
-        let damage = over
-            .damage()
-            .expect("a debris override must carry a Damage payload");
-        assert_eq!(
-            damage.next_heal_at,
-            time_of_day + 600.0,
-            "next_heal_at must be seeded from TimeOfDay, not Time"
-        );
-        assert_ne!(
-            damage.next_heal_at,
-            activated_at + 600.0,
-            "must not regress to seeding next_heal_at from Time"
         );
     }
 }
