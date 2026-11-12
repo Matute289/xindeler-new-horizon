@@ -230,8 +230,9 @@ mod tests {
     use vek::Vec2;
 
     /// The exact wire shape of an rtsim save written *before* `banished`
-    /// existed: every field `Data` has today except that one, in order, named
-    /// the same way `write_named` names them.
+    /// existed: the fields `Data` had at that point, in order, named the same
+    /// way `write_named` names them. Fields added later (all
+    /// `#[serde(default)]`) are absent too.
     #[derive(Serialize)]
     struct PreBanishmentData {
         version: u32,
@@ -283,8 +284,9 @@ mod tests {
     }
 
     /// The exact wire shape of an rtsim save written *before*
-    /// `undercompact_gate` existed (COW-7b): every field `Data` has today
-    /// except that one.
+    /// `undercompact_gate` existed (COW-7b): the fields `Data` had at that
+    /// point. Fields added later (all `#[serde(default)]`) are absent too,
+    /// as an old save would also lack them.
     #[derive(Serialize)]
     struct PreUndercompactGateData {
         version: u32,
@@ -336,8 +338,9 @@ mod tests {
     }
 
     /// The exact wire shape of an rtsim save written *before*
-    /// `terrain_overrides` existed: every field `Data` has today except that
-    /// one.
+    /// `terrain_overrides` existed: the fields `Data` had at that point.
+    /// Fields added later (all `#[serde(default)]`) are absent too, as an old
+    /// save would also lack them.
     #[derive(Serialize)]
     struct PreTerrainOverridesData {
         version: u32,
@@ -804,8 +807,9 @@ mod tests {
     }
 
     /// The exact wire shape of an rtsim save written *before* `world_narrative`
-    /// existed: every field `Data` has today except that one, in order, named
-    /// the same way `write_named` names them.
+    /// existed: the fields `Data` had at that point, in order, named the same
+    /// way `write_named` names them. Fields that landed in parallel on the
+    /// Cromatolis branch (all `#[serde(default)]`) are absent too.
     #[derive(Serialize)]
     struct PreWorldNarrativeData {
         version: u32,
