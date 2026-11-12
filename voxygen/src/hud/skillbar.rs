@@ -621,8 +621,9 @@ impl<'a> Skillbar<'a> {
             // BL-05 RD-6b: temp-HP / absorb shield drawn on top of the HP fill.
             // The shield segment sits after current HP in a distinct colour;
             // when it would fill past the end of the bar (overshield) the whole
-            // segment turns blue. NOTE: Veloren's HP fill is green, so the shield
-            // uses cyan (not green) to contrast — tune the two consts to taste.
+            // segment turns blue. NOTE: Veloren's HP fill is green, so the
+            // shield uses cyan (not green) to contrast — tune the
+            // two consts to taste.
             let absorb = self.health.absorb() as f64;
             if absorb > 0.0 && !is_downed {
                 let max_hp = f64::from(self.health.maximum()).max(1.0);
@@ -1218,8 +1219,8 @@ impl<'a> Skillbar<'a> {
         slot_maker.selected_slot = self.imgs.skillbar_slot;
 
         let slots = slot_entries(state, slot_offset);
-        // Collect cooldown data before entering the slot loop so we can draw overlays
-        // after the slot_maker/closure borrows are released.
+        // Collect cooldown data before entering the slot loop so we can draw
+        // overlays after the slot_maker/closure borrows are released.
         let cooldown_data: Vec<Option<(widget::Id, widget::Id, f64)>> = slots
             .iter()
             .enumerate()
@@ -1383,8 +1384,8 @@ impl<'a> Skillbar<'a> {
             }
         }
 
-        // Cooldown overlays — drawn after the slot loop so slot_maker borrows are
-        // released.
+        // Cooldown overlays — drawn after the slot loop so slot_maker borrows
+        // are released.
         for (entry, cd) in slots.iter().zip(cooldown_data.iter()) {
             if let Some((overlay_id, txt_id, remaining_secs)) = cd {
                 Rectangle::fill_with([40.0, 40.0], Color::Rgba(0.0, 0.0, 0.0, 0.55))

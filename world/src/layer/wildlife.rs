@@ -861,19 +861,21 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
                     },
                 };
 
-                // Checks that the entity's *entire* footprint (not just the column's center
-                // point) is clear of solid terrain around the candidate column. A
-                // center-only check lets an entity spawn with its body clipped into
-                // anything solid immediately beside the column, e.g. flush against (or
-                // inside) an adjacent tree trunk stamped into the terrain.
+                // Checks that the entity's *entire* footprint (not just the
+                // column's center point) is clear of solid
+                // terrain around the candidate column. A
+                // center-only check lets an entity spawn with its body clipped
+                // into anything solid immediately beside the
+                // column, e.g. flush against (or inside) an
+                // adjacent tree trunk stamped into the terrain.
                 let spawn_offset = |offs_wpos2d: Vec2<i32>, footprint_radius: i32| {
                     // Clamp position to chunk
                     let offs_wpos2d = (offs + offs_wpos2d)
                         .clamped(Vec2::zero(), vol.size_xy().map(|e| e as i32) - 1)
                         - offs;
 
-                    // Find the intersection between ground and air, if there is one near the
-                    // surface
+                    // Find the intersection between ground and air, if there is
+                    // one near the surface
                     let z_offset = (0..16)
                         .map(|z| if z % 2 == 0 { z } else { -z } / 2)
                         .find(|z| {
@@ -894,17 +896,21 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
                     z_offset.map(|z_offset| offs_wpos2d.with_z(z_offset).map(|e| e as f32))
                 };
 
-                // Bounded so the (2*radius+1)^2 cost of the footprint scan above can't blow
-                // up for a handful of oversized wildlife bodies; this comfortably covers
-                // ordinary wildlife (e.g. cattle sit well under it) while still being far
-                // more accurate than the previous single-point check.
+                // Bounded so the (2*radius+1)^2 cost of the footprint scan
+                // above can't blow up for a handful of
+                // oversized wildlife bodies; this comfortably covers
+                // ordinary wildlife (e.g. cattle sit well under it) while still
+                // being far more accurate than the previous
+                // single-point check.
                 const MAX_FOOTPRINT_RADIUS: i32 = 4;
                 let footprint_radius_for = |body: &common::comp::Body, scale: f32| -> i32 {
                     let radius = (body.max_radius() * scale).ceil().max(0.0) as i32;
-                    // If a future wildlife entry uses a body large enough to exceed the cap,
-                    // it'll be silently clamped back to the old imprecise checking regime for
-                    // that entry — make that loud instead of silent so it gets a wildlife.rs
-                    // deep-dive when it happens, rather than reappearing as a "mob in a tree"
+                    // If a future wildlife entry uses a body large enough to
+                    // exceed the cap, it'll be silently
+                    // clamped back to the old imprecise checking regime for
+                    // that entry — make that loud instead of silent so it gets
+                    // a wildlife.rs deep-dive when it
+                    // happens, rather than reappearing as a "mob in a tree"
                     // report.
                     debug_assert!(
                         radius <= MAX_FOOTPRINT_RADIUS,

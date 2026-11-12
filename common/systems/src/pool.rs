@@ -197,8 +197,8 @@ impl<'a> System<'a> for Sys {
                         phantom_illusion: read_data.phantom_illusions.get(target).is_some(),
                     };
 
-                    //TODO: Consider making pool hardcoded jump dodgeable only (like ground
-                    // shockwaves)
+                    //TODO: Consider making pool hardcoded jump dodgeable only
+                    // (like ground shockwaves)
                     let target_dodging = match pool.properties.dodgeable {
                         Dodgeable::Roll => read_data
                             .character_states

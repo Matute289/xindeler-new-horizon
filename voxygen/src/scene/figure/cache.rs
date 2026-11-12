@@ -242,9 +242,9 @@ impl CharacterCacheKey {
                 })
         };
 
-        // Third person tools are only modeled when the camera is either not first
-        // person, or the camera is first person and we are in a tool-using
-        // state.
+        // Third person tools are only modeled when the camera is either not
+        // first person, or the camera is first person and we are in a
+        // tool-using state.
         let are_tools_visible = !is_first_person
             || cs
             .map(|cs| cs.is_attack() || cs.is_wield())
@@ -321,7 +321,8 @@ where
     Skel::Body: BodySpec + Eq + Hash,
 {
     pub fn new() -> Self {
-        // NOTE: It might be better to bubble this error up rather than panicking.
+        // NOTE: It might be better to bubble this error up rather than
+        // panicking.
         let manifests = <Skel::Body as BodySpec>::load_spec().unwrap();
         let watcher = <Skel::Body as BodySpec>::reload_watcher(&manifests);
 
@@ -356,7 +357,8 @@ where
             LOD_COUNT,
         >>::ModelEntry,
     > {
-        // TODO: Use raw entries to avoid lots of allocation (among other things).
+        // TODO: Use raw entries to avoid lots of allocation (among other
+        // things).
         let key = FigureKey {
             body,
             item_key: item_key.map(Arc::new),
@@ -512,7 +514,8 @@ where
                                     vertex_range,
                                 );
                                 *model = FigureModelEntryFuture::Done(model_entry);
-                                // NOTE: Borrow checker isn't smart enough to figure this out.
+                                // NOTE: Borrow checker isn't smart enough to
+                                // figure this out.
                                 if let FigureModelEntryFuture::Done(model) = model {
                                     Some(model)
                                 } else {
@@ -544,10 +547,11 @@ where
                         min: anim::vek::Vec3::zero(),
                         max: anim::vek::Vec3::zero(),
                     };
-                    // Meshes all bone models for this figure using the given mesh generation
-                    // function, attaching it to the current greedy mesher and opaque vertex
-                    // list.  Returns the vertex bounds of the meshed model within the opaque
-                    // mesh.
+                    // Meshes all bone models for this figure using the given
+                    // mesh generation function, attaching
+                    // it to the current greedy mesher and opaque vertex
+                    // list.  Returns the vertex bounds of the meshed model
+                    // within the opaque mesh.
                     let mut make_model = |generate_mesh: for<'a, 'b> fn(
                         &mut GreedyMesh<'a, FigureSpriteAtlasData>,
                         &'b mut _,
@@ -572,25 +576,34 @@ where
                                 // to figure this out instead?
                                 figure_bounds.expand_to_contain(bounds);
                             });
-                        // NOTE: vertex_start and vertex_end *should* fit in a u32, by the
-                        // following logic:
+                        // NOTE: vertex_start and vertex_end *should* fit in a
+                        // u32, by the following logic:
                         //
-                        // Our new figure maximum is constrained to at most 2^8 × 2^8 × 2^8.
-                        // This uses at most 24 bits to store every vertex exactly once.
-                        // Greedy meshing can store each vertex in up to 3 quads, we have 3
-                        // greedy models, and we store 1.5x the vertex count, so the maximum
-                        // total space a model can take up is 3 * 3 * 1.5 * 2^24; rounding
-                        // up to 4 * 4 * 2^24 gets us to 2^28, which clearly still fits in a
-                        // u32.
+                        // Our new figure maximum is constrained to at most 2^8
+                        // × 2^8 × 2^8. This uses at
+                        // most 24 bits to store every vertex exactly once.
+                        // Greedy meshing can store each vertex in up to 3
+                        // quads, we have 3
+                        // greedy models, and we store 1.5x the vertex count, so
+                        // the maximum total space a
+                        // model can take up is 3 * 3 * 1.5 * 2^24; rounding
+                        // up to 4 * 4 * 2^24 gets us to 2^28, which clearly
+                        // still fits in a u32.
                         //
-                        // (We could also, though we prefer not to, reason backwards from the
-                        // maximum figure texture size of 2^15 × 2^15, also fits in a u32; we
-                        // can also see that, since we can have at most one texture entry per
-                        // vertex, any texture atlas of size 2^14 × 2^14 or higher should be
-                        // able to store data for any figure.  So the only reason we would fail
-                        // here would be if the user's computer could not store a texture large
-                        // enough to fit all the LOD models for the figure, not for fundamental
-                        // reasons related to fitting in a u32).
+                        // (We could also, though we prefer not to, reason
+                        // backwards from the
+                        // maximum figure texture size of 2^15 × 2^15, also fits
+                        // in a u32; we can also see
+                        // that, since we can have at most one texture entry per
+                        // vertex, any texture atlas of size 2^14 × 2^14 or
+                        // higher should be
+                        // able to store data for any figure.  So the only
+                        // reason we would fail
+                        // here would be if the user's computer could not store
+                        // a texture large enough to fit
+                        // all the LOD models for the figure, not for
+                        // fundamental reasons related
+                        // to fitting in a u32).
                         //
                         // Therefore, these casts are safe.
                         vertex_start as u32..opaque.vertices().len() as u32
@@ -762,7 +775,8 @@ where
                                     blocks_offset,
                                 );
                                 *model = TerrainModelEntryFuture::Done(model_entry);
-                                // NOTE: Borrow checker isn't smart enough to figure this out.
+                                // NOTE: Borrow checker isn't smart enough to
+                                // figure this out.
                                 if let TerrainModelEntryFuture::Done(model) = model {
                                     Some(model)
                                 } else {

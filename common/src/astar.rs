@@ -214,7 +214,8 @@ impl<S: Clone + Eq + Hash, H: BuildHasher + Clone> Astar<S, H> {
                                 })
                                 .is_some();
                             let h = heuristic(&neighbor);
-                            // note that `cost` field does not include the heuristic
+                            // note that `cost` field does not include the
+                            // heuristic
                             // priority queue does include heuristic
                             let cost_estimate = cost + h;
 
@@ -227,8 +228,10 @@ impl<S: Clone + Eq + Hash, H: BuildHasher + Clone> Astar<S, H> {
                                 self.closest_node = Some((node.clone(), h));
                             };
 
-                            // We don't need to reconsider already visited nodes as astar finds the
-                            // shortest path to a node the first time it's visited, assuming the
+                            // We don't need to reconsider already visited nodes
+                            // as astar finds the
+                            // shortest path to a node the first time it's
+                            // visited, assuming the
                             // heuristic function is admissible.
                             if !previously_visited {
                                 self.potential_nodes.push(PathEntry {

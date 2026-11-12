@@ -3,10 +3,14 @@
 
 pub mod addr;
 pub mod error;
+mod init;
 pub mod oauth;
 
 // Reexports
-pub use crate::error::{Error, TwoFaFailure};
+pub use crate::{
+    error::{Error, TwoFaFailure},
+    init::{ClientInitStage, CredentialProvider, Credentials, StaticCredentialProvider},
+};
 pub use authc::AuthClientError;
 pub use common_net::msg::ServerInfo;
 pub use specs::{
@@ -82,7 +86,6 @@ use image::DynamicImage;
 use network::{ConnectAddr, Network, Participant, Pid, Stream};
 use num::traits::FloatConst;
 use rayon::prelude::*;
-use rustls::client::danger::ServerCertVerified;
 use specs::Component;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -142,22 +145,6 @@ pub enum Event {
 pub enum UserNotification {
     WaypointUpdated,
     TerrainTransition { text: Content, inside: bool },
-}
-
-#[derive(Debug)]
-pub enum ClientInitStage {
-    /// A connection to the server is being created
-    ConnectionEstablish,
-    /// Waiting for server version
-    WatingForServerVersion,
-    /// We're currently authenticating with the server
-    Authentication,
-    /// Loading map data, site information, recipe information and other
-    /// initialization data
-    LoadingInitData,
-    /// Prepare data received by the server to be used by the client (insert
-    /// data into the ECS, render map)
-    StartingClient,
 }
 
 pub struct WorldData {
@@ -246,8 +233,8 @@ impl WeatherLerp {
         self.old = mem::replace(&mut self.new, (weather, Instant::now()));
     }
 
-    // TODO: Make improvements to this interpolation, it's main issue is assuming
-    // that updates come at regular intervals.
+    // TODO: Make improvements to this interpolation, it's main issue is
+    // assuming that updates come at regular intervals.
     fn update(&mut self, to_update: &mut WeatherGrid) {
         prof_span!("WeatherLerp::update");
         self.update_local_wind();
@@ -376,110 +363,26 @@ pub struct CharacterList {
     pub loading: bool,
 }
 
-async fn connect_quic(
-    network: &Network,
-    hostname: String,
-    override_port: Option<u16>,
-    prefer_ipv6: bool,
-    validate_tls: bool,
-) -> Result<network::Participant, crate::error::Error> {
-    let config = if validate_tls {
-        quinn::ClientConfig::try_with_platform_verifier()?
-    } else {
-        warn!(
-            "skipping validation of server identity. There is no guarantee that the server you're \
-             connected to is the one you expect to be connecting to."
-        );
-        #[derive(Debug)]
-        struct Verifier;
-        impl rustls::client::danger::ServerCertVerifier for Verifier {
-            fn verify_server_cert(
-                &self,
-                _end_entity: &rustls::pki_types::CertificateDer<'_>,
-                _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-                _server_name: &rustls::pki_types::ServerName<'_>,
-                _ocsp_response: &[u8],
-                _now: rustls::pki_types::UnixTime,
-            ) -> Result<ServerCertVerified, rustls::Error> {
-                Ok(ServerCertVerified::assertion())
-            }
-
-            fn verify_tls12_signature(
-                &self,
-                _message: &[u8],
-                _cert: &rustls::pki_types::CertificateDer<'_>,
-                _dss: &rustls::DigitallySignedStruct,
-            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
-            {
-                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-            }
-
-            fn verify_tls13_signature(
-                &self,
-                _message: &[u8],
-                _cert: &rustls::pki_types::CertificateDer<'_>,
-                _dss: &rustls::DigitallySignedStruct,
-            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
-            {
-                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-            }
-
-            fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-                vec![
-                    rustls::SignatureScheme::RSA_PKCS1_SHA1,
-                    rustls::SignatureScheme::ECDSA_SHA1_Legacy,
-                    rustls::SignatureScheme::RSA_PKCS1_SHA256,
-                    rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-                    rustls::SignatureScheme::RSA_PKCS1_SHA384,
-                    rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-                    rustls::SignatureScheme::RSA_PKCS1_SHA512,
-                    rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
-                    rustls::SignatureScheme::RSA_PSS_SHA256,
-                    rustls::SignatureScheme::RSA_PSS_SHA384,
-                    rustls::SignatureScheme::RSA_PSS_SHA512,
-                    rustls::SignatureScheme::ED25519,
-                    rustls::SignatureScheme::ED448,
-                ]
-            }
-        }
-
-        let mut cfg = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(Verifier))
-            .with_no_client_auth();
-        cfg.enable_early_data = true;
-
-        quinn::ClientConfig::new(Arc::new(
-            quinn::crypto::rustls::QuicClientConfig::try_from(cfg).unwrap(),
-        ))
-    };
-
-    addr::try_connect(network, &hostname, override_port, prefer_ipv6, |a| {
-        ConnectAddr::Quic(a, config.clone(), hostname.clone())
-    })
-    .await
-}
+/// How long `Client::register` waits for the `CredentialProvider` to hand
+/// out credentials (same 5 minutes as upstream). Token acquisition and 2FA
+/// that follow are not covered by it -- the OAuth flow has its own 5-minute
+/// window and a 2FA challenge has a server-side TTL.
+const CREDENTIALS_TIMEOUT: Duration = Duration::from_secs(300);
 
 impl Client {
     pub async fn new(
         addr: ConnectionArgs,
         runtime: Arc<Runtime>,
-        // TODO: refactor to avoid needing to use this out parameter
-        mismatched_server_info: &mut Option<ServerInfo>,
-        username: &str,
-        password: &str,
         locale: Option<String>,
-        auth_trusted: impl FnMut(&str) -> bool,
-        two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
-        oauth: Option<oauth::OAuthLogin>,
+        credential_provider: &impl CredentialProvider,
         init_stage_update: &(dyn Fn(ClientInitStage) + Send + Sync),
         add_foreign_systems: impl Fn(&mut DispatcherBuilder) + Send + 'static,
         #[cfg_attr(not(feature = "plugins"), expect(unused_variables))] config_dir: PathBuf,
         client_type: ClientType,
     ) -> Result<Self, Error> {
         let _ = rustls::crypto::ring::default_provider().install_default(); // needs to be initialized before usage
-        // Use `usize::MAX` as the output limit: we implicitly trust servers to not send
-        // us too much data (TODO: should we?)
+        // Use `usize::MAX` as the output limit: we implicitly trust servers to
+        // not send us too much data (TODO: should we?)
         let network = Network::new(Pid::new(), &runtime);
 
         init_stage_update(ClientInitStage::ConnectionEstablish);
@@ -491,9 +394,10 @@ impl Client {
                 validate_tls,
                 use_quic,
             } => {
-                // Try to create a resolver backed by /etc/resolv.conf or the Windows Registry
-                // first. If that fails, create a resolver being hard-coded to
-                // Google's 8.8.8.8 public resolver.
+                // Try to create a resolver backed by /etc/resolv.conf or the
+                // Windows Registry first. If that fails, create
+                // a resolver being hard-coded to Google's 8.8.
+                // 8.8 public resolver.
                 let resolver = Resolver::builder_tokio()
                     .unwrap_or_else(|error| {
                         error!(
@@ -522,8 +426,8 @@ impl Client {
                     Tcp,
                 }
 
-                // Push the results of both futures into `srv_rr`. This uses map_or_else purely
-                // for side effects.
+                // Push the results of both futures into `srv_rr`. This uses
+                // map_or_else purely for side effects.
                 let mut srv_rr = Vec::new();
                 let () = quic_rr.map_or_else(
                     |error| {
@@ -554,21 +458,29 @@ impl Client {
                     },
                 );
 
-                // SRV records have a priority; lowest priority hosts MUST be contacted first.
+                // SRV records have a priority; lowest priority hosts MUST be
+                // contacted first.
                 let srv_rr_slice = srv_rr.as_mut_slice();
                 srv_rr_slice.sort_by_key(|(_, srv)| srv.priority);
 
                 let mut iter = srv_rr_slice.iter();
 
-                // This loops exits as soon as the above iter over `srv_rr_slice` is exhausted
+                // This loops exits as soon as the above iter over
+                // `srv_rr_slice` is exhausted
                 loop {
                     if let Some((conn_mode, srv_rr)) = iter.next() {
                         let hostname = format!("{}", srv_rr.target);
                         let port = Some(srv_rr.port);
                         let conn_result = match conn_mode {
                             ConnMode::Quic => {
-                                connect_quic(&network, hostname, port, prefer_ipv6, validate_tls)
-                                    .await
+                                init::connect_quic(
+                                    &network,
+                                    hostname,
+                                    port,
+                                    prefer_ipv6,
+                                    validate_tls,
+                                )
+                                .await
                             },
                             ConnMode::Tcp => {
                                 addr::try_connect(
@@ -591,10 +503,11 @@ impl Client {
                         warn!(
                             "No SRV hosts succeeded connection, falling back to direct connection"
                         );
-                        // This case is also hit if no SRV host was returned from the query, so we
+                        // This case is also hit if no SRV host was returned
+                        // from the query, so we
                         // check for QUIC/TCP preference.
                         let c = if use_quic {
-                            connect_quic(&network, hostname, None, prefer_ipv6, validate_tls)
+                            init::connect_quic(&network, hostname, None, prefer_ipv6, validate_tls)
                                 .await?
                         } else {
                             match addr::try_connect(
@@ -630,7 +543,7 @@ impl Client {
                      TCP servers unless deactivated"
                 );
 
-                connect_quic(&network, hostname, None, prefer_ipv6, validate_tls).await?
+                init::connect_quic(&network, hostname, None, prefer_ipv6, validate_tls).await?
             },
             ConnectionArgs::Mpsc(id) => network.connect(ConnectAddr::Mpsc(id)).await?,
         };
@@ -663,34 +576,32 @@ impl Client {
                 *common::util::DISPLAY_VERSION,
             );
         }
-        // Pass the server info back to the caller to ensure they can access it even
-        // if this function errors.
-        *mismatched_server_info = Some(server_info.clone());
         debug!("Auth Server: {:?}", server_info.auth_provider);
+        init_stage_update(ClientInitStage::ServerVersionArrived(server_info.clone()));
 
         ping_stream.send(PingMsg::Ping)?;
 
         init_stage_update(ClientInitStage::Authentication);
         // Register client
         //
-        // This can take a long time: for OAuth logins, `register` waits on the player
-        // completing an entire browser-based provider consent flow, which can easily
-        // exceed the server's default `client_timeout` (40s). Keep sending pings on the
-        // usual ~1-second cadence while registration is in flight so the server doesn't
-        // time out the connection for going silent (mirrors the ping loop used below
-        // while waiting for the initial sync).
+        // This can take a long time: the credential provider may wait on UI,
+        // OAuth logins wait on the player completing an entire browser-based
+        // provider consent flow, and 2FA waits on the player typing a code --
+        // any of which can easily exceed the server's default
+        // `client_timeout` (40s). Keep sending pings on the usual ~1-second
+        // cadence while registration is in flight so the server doesn't time
+        // out the connection for going silent (mirrors the ping loop used
+        // below while waiting for the initial sync). Upstream pings from
+        // inside `register` instead, but only while waiting for credentials;
+        // ours covers the token acquisition and 2FA steps too.
         let mut ping_interval = tokio::time::interval(Duration::from_secs(1));
         // Scoped so the pinned future (and its borrows of `server_info` and
         // `register_stream`) is dropped as soon as registration finishes,
         // freeing both for use below.
         {
             let register_fut = Self::register(
-                username,
-                password,
+                credential_provider,
                 locale,
-                auth_trusted,
-                two_fa_code,
-                oauth,
                 &server_info,
                 &mut register_stream,
             );
@@ -729,8 +640,8 @@ impl Client {
         };
 
         init_stage_update(ClientInitStage::StartingClient);
-        // Spawn in a blocking thread (leaving the network thread free).  This is mostly
-        // useful for bots.
+        // Spawn in a blocking thread (leaving the network thread free).  This
+        // is mostly useful for bots.
         let mut task = tokio::task::spawn_blocking(move || {
             let map_size_lg =
                 common::terrain::MapSizeLg::new(world_map.dimensions_lg).map_err(|_| {
@@ -903,7 +814,8 @@ impl Client {
                     let [r, g, b, _a] = rgba[pos].to_le_bytes();
                     let is_water = is_water_color(r, g, b);
                     let alti = alt[pos];
-                    // Compute contours (chunks are assigned in the river code below)
+                    // Compute contours (chunks are assigned in the river code
+                    // below)
                     let altj = rescale_height(scale_height_big(alti));
                     let contour_interval = 50.0;
                     let chunk_contour = (altj * gain / contour_interval) as u32;
@@ -1208,6 +1120,8 @@ impl Client {
             ))
         });
 
+        init_stage_update(ClientInitStage::RequestingPlugins);
+
         let (
             state,
             lod_base,
@@ -1324,50 +1238,50 @@ impl Client {
     }
 
     /// Request a state transition to `ClientState::Registered`.
+    ///
+    /// `Client::new` keeps pinging the server for as long as this future is
+    /// pending, so (unlike upstream) there is no ping timer in here.
     async fn register(
-        username: &str,
-        password: &str,
+        credential_provider: &impl CredentialProvider,
         locale: Option<String>,
-        mut auth_trusted: impl FnMut(&str) -> bool,
-        two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
-        oauth: Option<oauth::OAuthLogin>,
         server_info: &ServerInfo,
         register_stream: &mut Stream,
     ) -> Result<(), Error> {
-        // Authentication
-        let token_or_username = match (&server_info.auth_provider, oauth) {
-            (Some(addr), Some(oauth)) => {
-                if auth_trusted(addr) {
-                    let token = Self::acquire_oauth_token(addr.clone(), oauth, two_fa_code).await?;
-                    Ok(token.serialize())
-                } else {
-                    Err(Error::AuthServerNotTrusted)
-                }
-            },
-            // A server with no auth provider has no OAuth flow to run and no
-            // account to link the provider to.
-            (None, Some(_)) => Err(Error::OAuthFailed(oauth::OAuthFailure::NoAuthServer)),
-            (Some(addr), None) => {
-                // Query whether this is a trusted auth server
-                if auth_trusted(addr) {
-                    let token = Self::acquire_auth_token(
-                        addr.clone(),
-                        username.to_owned(),
-                        password.to_owned(),
-                        two_fa_code,
-                    )
-                    .await?;
+        // quick sanitation check if auth is trusted
+        if !credential_provider.auth_trusted(&server_info.auth_provider) {
+            return Err(Error::AuthServerNotTrusted);
+        }
 
-                    Ok(token.serialize())
-                } else {
-                    Err(Error::AuthServerNotTrusted)
-                }
-            },
-            (None, None) => Ok(username.to_owned()),
-        }?;
+        // fetching credentials from frontend, this might involve UI and take
+        // some time.
+        debug!("query frontend for credentials...");
+        let credentials = tokio::time::timeout(
+            CREDENTIALS_TIMEOUT,
+            credential_provider.get_credentials(&server_info.auth_provider),
+        )
+        .await
+        .map_err(|_| Error::ServerTimeout)?
+        .map_err(|()| Error::CredentialsNotProvided)?;
+
+        debug!("resolving token_or_username...");
+        let token_or_username =
+            match init::select_auth_flow(credentials, &server_info.auth_provider)? {
+                init::AuthFlow::PlainUsername(username) => username,
+                init::AuthFlow::Password {
+                    auth_addr,
+                    username,
+                    password,
+                } => Self::acquire_auth_token(auth_addr, username, password, credential_provider)
+                    .await?
+                    .serialize(),
+                init::AuthFlow::OAuth { auth_addr, login } => {
+                    Self::acquire_oauth_token(auth_addr, login, credential_provider)
+                        .await?
+                        .serialize()
+                },
+            };
 
         debug!("Registering client...");
-
         register_stream.send(ClientRegister {
             token_or_username,
             locale,
@@ -1394,35 +1308,38 @@ impl Client {
     /// browser, up to the full 5-minute window.
     ///
     /// A TOTP-required outcome is redeemed through the very same
-    /// `submit_2fa_code` path password login already uses, so OAuth-then-2FA
-    /// adds no second 2FA implementation.
+    /// `redeem_2fa_challenge` path password login already uses, so
+    /// OAuth-then-2FA adds no second 2FA implementation.
     async fn acquire_oauth_token(
         auth_addr: String,
         mut oauth: oauth::OAuthLogin,
-        mut two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
+        credential_provider: &impl CredentialProvider,
     ) -> Result<authc::AuthToken, Error> {
-        tokio::task::spawn_blocking(move || {
-            match oauth::run_oauth_login(&auth_addr, &mut oauth).map_err(Error::OAuthFailed)? {
-                oauth::OAuthOutcome::Token(token) => Ok(token),
-                oauth::OAuthOutcome::TotpRequired(challenge_id) => {
-                    let Some(code) = two_fa_code() else {
-                        return Err(Error::OAuthFailed(oauth::OAuthFailure::Cancelled));
-                    };
-                    Self::submit_2fa_code(&auth_addr, challenge_id, &code)
-                        .map_err(Error::TwoFaFailed)
-                },
-            }
-        })
-        .await
-        .map_err(|err| Error::AuthErr(err.to_string()))?
+        let addr = auth_addr.clone();
+        let outcome =
+            tokio::task::spawn_blocking(move || oauth::run_oauth_login(&addr, &mut oauth))
+                .await
+                .map_err(|err| Error::AuthErr(err.to_string()))?
+                .map_err(Error::OAuthFailed)?;
+        match outcome {
+            oauth::OAuthOutcome::Token(token) => Ok(token),
+            oauth::OAuthOutcome::TotpRequired(challenge_id) => {
+                let Some(code) = credential_provider
+                    .get_two_fa_code(&Some(auth_addr.clone()))
+                    .await
+                else {
+                    return Err(Error::OAuthFailed(oauth::OAuthFailure::Cancelled));
+                };
+                Self::redeem_2fa_challenge(auth_addr, challenge_id, code).await
+            },
+        }
     }
 
     /// Sign in against `auth_addr` and return the resulting auth token.
     ///
     /// EVERYTHING that touches `authc::AuthClient` — constructing it, using it,
-    /// *and* dropping it — happens inside a single `spawn_blocking`, and it
-    /// must stay that way. Two independent reasons, either of which is
-    /// sufficient:
+    /// *and* dropping it — happens inside `spawn_blocking`, and it must stay
+    /// that way. Two independent reasons, either of which is sufficient:
     ///
     /// 1. **Correctness (this used to abort the client).** `authc` wraps
     ///    `reqwest::blocking`, whose guard against being called from async is
@@ -1445,35 +1362,57 @@ impl Client {
     ///
     /// The same reasoning is why `server::login_provider` wraps its `authc`
     /// calls in `spawn_blocking` too.
+    ///
+    /// If the account has 2FA enabled (and the password was correct), the
+    /// blocking task ends with the challenge, the player is asked for the
+    /// code through the async [`CredentialProvider::get_two_fa_code`] (the
+    /// caller keeps the connection pinged meanwhile), and the challenge is
+    /// redeemed in a second `spawn_blocking`.
     async fn acquire_auth_token(
         auth_addr: String,
         username: String,
         password: String,
-        mut two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
+        credential_provider: &impl CredentialProvider,
     ) -> Result<authc::AuthToken, Error> {
-        tokio::task::spawn_blocking(move || {
+        let addr = auth_addr.clone();
+        let sign_in = tokio::task::spawn_blocking(move || {
             // `authc` takes the whole URL, and rejects plain http for anything
             // that is not loopback.
-            let auth = authc::AuthClient::new(auth_addr.as_str())
-                .map_err(|_| Error::AuthServerUrlInvalid(auth_addr.clone()))?;
-            match auth.sign_in(&username, &password) {
-                Ok(token) => Ok(token),
-                // The account has 2FA enabled and the password was correct --
-                // block (same as the `sign_in` call just above) until the UI
-                // supplies a code, then redeem the challenge. `two_fa_code`
-                // returning `None` means the player cancelled; that aborts
-                // the whole connect attempt the same way `CancelConnect`
-                // already does elsewhere, so the exact error here is never
-                // shown to the player.
-                Err(authc::AuthClientError::TwoFactorRequired(challenge)) => {
-                    let Some(code) = two_fa_code() else {
-                        return Err(Error::Other("2FA prompt cancelled".to_owned()));
-                    };
-                    Self::submit_2fa_code(&auth_addr, challenge.challenge_id, &code)
-                        .map_err(Error::TwoFaFailed)
-                },
-                Err(other) => Err(Error::from(other)),
-            }
+            let auth = authc::AuthClient::new(addr.as_str())
+                .map_err(|_| Error::AuthServerUrlInvalid(addr.clone()))?;
+            Ok::<_, Error>(auth.sign_in(&username, &password))
+        })
+        .await
+        .map_err(|err| Error::AuthErr(err.to_string()))??;
+
+        match sign_in {
+            Ok(token) => Ok(token),
+            Err(authc::AuthClientError::TwoFactorRequired(challenge)) => {
+                // `None` means the player cancelled; that aborts the whole
+                // connect attempt the same way `CancelConnect` already does
+                // elsewhere, so the exact error here is never shown to the
+                // player.
+                let Some(code) = credential_provider
+                    .get_two_fa_code(&Some(auth_addr.clone()))
+                    .await
+                else {
+                    return Err(Error::Other("2FA prompt cancelled".to_owned()));
+                };
+                Self::redeem_2fa_challenge(auth_addr, challenge.challenge_id, code).await
+            },
+            Err(other) => Err(Error::from(other)),
+        }
+    }
+
+    /// Runs the blocking [`Self::submit_2fa_code`] on the blocking pool (same
+    /// reasons as `acquire_auth_token`).
+    async fn redeem_2fa_challenge<T: serde::Serialize + Send + 'static>(
+        auth_addr: String,
+        challenge_id: T,
+        code: String,
+    ) -> Result<authc::AuthToken, Error> {
+        tokio::task::spawn_blocking(move || {
+            Self::submit_2fa_code(&auth_addr, challenge_id, &code).map_err(Error::TwoFaFailed)
         })
         .await
         .map_err(|err| Error::AuthErr(err.to_string()))?
@@ -1553,8 +1492,9 @@ impl Client {
             const C_TYPE: ClientType = ClientType::Game;
             let verified = msg.verify(C_TYPE, self.registered, self.presence);
 
-            // Due to the fact that character loading is performed asynchronously after
-            // initial connect it is possible to receive messages after a character load
+            // Due to the fact that character loading is performed
+            // asynchronously after initial connect it is possible
+            // to receive messages after a character load
             // error while in the wrong state.
             if !verified {
                 warn!(
@@ -1725,9 +1665,10 @@ impl Client {
 
     /// Character deletion
     pub fn delete_character(&mut self, character_id: CharacterId) {
-        // Pre-emptively remove the character to be deleted from the character list as
-        // character deletes are processed asynchronously by the server so we can't rely
-        // on a timely response to update the character list
+        // Pre-emptively remove the character to be deleted from the character
+        // list as character deletes are processed asynchronously by the
+        // server so we can't rely on a timely response to update the
+        // character list
         if let Some(pos) = self
             .character_list
             .characters
@@ -2308,7 +2249,8 @@ impl Client {
 
     pub fn respawn(&mut self) -> bool {
         if self.current::<comp::Health>().is_some_and(|h| h.is_dead) {
-            // Hardcore characters cannot respawn, kick them to character selection
+            // Hardcore characters cannot respawn, kick them to character
+            // selection
             if self.current::<Hardcore>().is_some() {
                 self.request_remove_character();
             } else {
@@ -2395,6 +2337,24 @@ impl Client {
         }
     }
 
+    /// Lie down, without toggling back up if already prone.
+    ///
+    /// Distinct from [`Client::toggle_crawl`] because it backs a *hold*: the
+    /// gesture continues to fire while the key is down, and a toggle would make
+    /// the character bob between postures instead of committing to one.
+    pub fn go_prone(&mut self) {
+        let already_prone = self
+            .state
+            .ecs()
+            .read_storage::<CharacterState>()
+            .get(self.entity())
+            .is_some_and(|cs| matches!(cs, CharacterState::Crawl));
+
+        if !already_prone {
+            self.control_action(ControlAction::Crawl);
+        }
+    }
+
     pub fn toggle_crawl(&mut self) {
         let is_crawling = self
             .state
@@ -2429,15 +2389,21 @@ impl Client {
         self.send_msg(ClientGeneral::ControlEvent(ControlEvent::Utterance(kind)));
     }
 
+    /// Crouch, or stand back up from whatever posture is currently held.
+    ///
+    /// Prone counts as "currently held": the crouch key is the way into a
+    /// posture and so it has to be the way out of one, otherwise a character
+    /// that reached the floor by holding it can only get up with the separate
+    /// prone keybind. `Crawl` does not implement `sneak`, so without this arm
+    /// the key would silently do nothing while lying down.
     pub fn toggle_sneak(&mut self) {
-        let is_sneaking = self
-            .state
-            .ecs()
-            .read_storage::<CharacterState>()
+        let char_states = self.state.ecs().read_storage::<CharacterState>();
+        let posture_held = char_states
             .get(self.entity())
-            .map(CharacterState::is_stealthy);
+            .map(|cs| cs.is_stealthy() || matches!(cs, CharacterState::Crawl));
+        drop(char_states);
 
-        match is_sneaking {
+        match posture_held {
             Some(true) => self.control_action(ControlAction::Stand),
             Some(false) => self.control_action(ControlAction::Sneak),
             None => warn!("Can't toggle sneak, client entity doesn't have a `CharacterState`"),
@@ -2755,22 +2721,25 @@ impl Client {
     /// the given duration.
     pub fn tick(&mut self, inputs: ControllerInputs, dt: Duration) -> Result<Vec<Event>, Error> {
         span!(_guard, "tick", "Client::tick");
-        // This tick function is the centre of the Veloren universe. Most client-side
-        // things are managed from here, and as such it's important that it
-        // stays organised. Please consult the core developers before making
-        // significant changes to this code. Here is the approximate order of
-        // things. Please update it as this code changes.
+        // This tick function is the centre of the Veloren universe. Most
+        // client-side things are managed from here, and as such it's
+        // important that it stays organised. Please consult the core
+        // developers before making significant changes to this code.
+        // Here is the approximate order of things. Please update it as
+        // this code changes.
         //
-        // 1) Collect input from the frontend, apply input effects to the state of the
-        //    game
+        // 1) Collect input from the frontend, apply input effects to the state
+        //    of the game
         // 2) Handle messages from the server
-        // 3) Go through any events (timer-driven or otherwise) that need handling and
-        //    apply them to the state of the game
-        // 4) Perform a single LocalState tick (i.e: update the world and entities in
-        //    the world)
-        // 5) Go through the terrain update queue and apply all changes to the terrain
+        // 3) Go through any events (timer-driven or otherwise) that need
+        //    handling and apply them to the state of the game
+        // 4) Perform a single LocalState tick (i.e: update the world and
+        //    entities in the world)
+        // 5) Go through the terrain update queue and apply all changes to the
+        //    terrain
         // 6) Sync information to the server
-        // 7) Finish the tick, passing actions of the main thread back to the frontend
+        // 7) Finish the tick, passing actions of the main thread back to the
+        //    frontend
 
         // 1) Handle input from frontend.
         // Pass character actions from frontend input to the player's entity.
@@ -2802,7 +2771,8 @@ impl Client {
             self.send_msg_err(ClientGeneral::ControllerInputs(Box::new(inputs)))?;
         }
 
-        // 2) Build up a list of events for this frame, to be passed to the frontend.
+        // 2) Build up a list of events for this frame, to be passed to the
+        //    frontend.
         let mut frontend_events = Vec::new();
 
         // Prepare for new events
@@ -2851,8 +2821,9 @@ impl Client {
             self.target_time_of_day = None;
         }
 
-        // Save dead hardcore character ids to avoid displaying in the character list
-        // while the server is still in the process of deleting the character
+        // Save dead hardcore character ids to avoid displaying in the character
+        // list while the server is still in the process of deleting the
+        // character
         if self.current::<Hardcore>().is_some()
             && self.is_dead()
             && let Some(PresenceKind::Character(character_id)) = self.presence
@@ -2869,12 +2840,13 @@ impl Client {
             |_, _| {},
         );
 
-        // TODO: avoid emitting these in the first place OR actually use outcomes
-        // generated locally on the client (if they can be deduplicated from
-        // ones that the server generates or if the client can reliably generate
-        // them (e.g. syncing skipping character states past certain
-        // stages might skip points where outcomes are generated, however we might not
-        // care about this?) and the server doesn't need to send them)
+        // TODO: avoid emitting these in the first place OR actually use
+        // outcomes generated locally on the client (if they can be
+        // deduplicated from ones that the server generates or if the
+        // client can reliably generate them (e.g. syncing skipping
+        // character states past certain stages might skip points where
+        // outcomes are generated, however we might not care about
+        // this?) and the server doesn't need to send them)
         let _ = self.state.ecs().fetch::<EventBus<Outcome>>().recv_all();
 
         // 5) Terrain
@@ -2944,9 +2916,10 @@ impl Client {
             self.state.terrain().iter().for_each(|(key, _)| {
                 // Subtract 2 from the offset before computing squared magnitude
                 // 1 for the chunks needed bordering other chunks for meshing
-                // 1 as a buffer so that if the player moves back in that direction the chunks
-                //   don't need to be reloaded
-                // Take the minimum of the adjusted difference vs the view_distance + 1 to
+                // 1 as a buffer so that if the player moves back in that
+                // direction the chunks   don't need to be
+                // reloaded Take the minimum of the adjusted
+                // difference vs the view_distance + 1 to
                 //   prevent magnitude_squared from overflowing
 
                 if (chunk_pos - key)
@@ -2966,14 +2939,15 @@ impl Client {
             self.loaded_distance = ((view_distance * TerrainChunkSize::RECT_SIZE.x) as f32).powi(2);
             // +1 so we can find a chunk that's outside the vd for better fog
             for dist in 0..view_distance as i32 + 1 {
-                // Only iterate through chunks that need to be loaded for circular vd
-                // The (dist - 2) explained:
-                // -0.5 because a chunk is visible if its corner is within the view distance
-                // -0.5 for being able to move to the corner of the current chunk
-                // -1 because chunks are not meshed if they don't have all their neighbors
+                // Only iterate through chunks that need to be loaded for
+                // circular vd The (dist - 2) explained:
+                // -0.5 because a chunk is visible if its corner is within the
+                // view distance -0.5 for being able to move to
+                // the corner of the current chunk -1 because
+                // chunks are not meshed if they don't have all their neighbors
                 //     (notice also that view_distance is decreased by 1)
-                //     (this subtraction on vd is omitted elsewhere in order to provide
-                //     a buffer layer of loaded chunks)
+                //     (this subtraction on vd is omitted elsewhere in order to
+                // provide     a buffer layer of loaded chunks)
                 let top = if 2 * (dist - 2).max(0).pow(2) > (view_distance - 1).pow(2) as i32 {
                     ((view_distance - 1).pow(2) as f32 - (dist - 2).pow(2) as f32)
                         .sqrt()
@@ -3139,15 +3113,18 @@ impl Client {
                 }
             },
             ServerGeneral::PlayerListUpdate(PlayerListUpdate::Remove(uid)) => {
-                // Instead of removing players, mark them as offline because we need to
-                // remember the names of disconnected players in chat.
+                // Instead of removing players, mark them as offline because we
+                // need to remember the names of disconnected
+                // players in chat.
                 //
-                // TODO: consider alternatives since this leads to an ever growing list as
-                // players log out and in. Keep in mind we might only want to
-                // keep only so many messages in chat the history. We could
+                // TODO: consider alternatives since this leads to an ever
+                // growing list as players log out and in. Keep
+                // in mind we might only want to keep only so
+                // many messages in chat the history. We could
                 // potentially use an ID that's more persistent than the Uid.
-                // One of the reasons we don't just store the string of the player name
-                // into the message is to make alias changes reflected in older messages.
+                // One of the reasons we don't just store the string of the
+                // player name into the message is to make alias
+                // changes reflected in older messages.
 
                 if let Some(player_info) = self.player_list.get_mut(&uid) {
                     if player_info.is_online {
@@ -3242,8 +3219,9 @@ impl Client {
                 *self.state.ecs_mut().write_resource() = time_scale;
                 let mut time = self.state.ecs_mut().write_resource::<Time>();
                 // Avoid side-eye from Einstein
-                // If new time from server is at least 5 seconds ahead, replace client time.
-                // Otherwise try to slightly twean client time (by 1%) to keep it in line with
+                // If new time from server is at least 5 seconds ahead, replace
+                // client time. Otherwise try to slightly twean
+                // client time (by 1%) to keep it in line with
                 // server time.
                 self.dt_adjustment = if new_time.0 > time.0 + 5.0 {
                     *time = new_time;
@@ -3312,12 +3290,13 @@ impl Client {
         match msg {
             ServerGeneral::GroupUpdate(change_notification) => {
                 use comp::group::ChangeNotification::*;
-                // Note: we use a hashmap since this would not work with entities outside
-                // the view distance
+                // Note: we use a hashmap since this would not work with
+                // entities outside the view distance
                 match change_notification {
                     Added(uid, role) => {
-                        // Check if this is a newly formed group by looking for absence of
-                        // other non pet group members
+                        // Check if this is a newly formed group by looking for
+                        // absence of other non pet
+                        // group members
                         if !matches!(role, group::Role::Pet)
                             && !self
                                 .group_members
@@ -3376,10 +3355,11 @@ impl Client {
                     NewGroup { leader, members } => {
                         self.group_leader = Some(leader);
                         self.group_members = members.into_iter().collect();
-                        // Currently add/remove messages treat client as an implicit member
-                        // of the group whereas this message explicitly includes them so to
-                        // be consistent for now we will remove the client from the
-                        // received hashset
+                        // Currently add/remove messages treat client as an
+                        // implicit member of the group
+                        // whereas this message explicitly includes them so to
+                        // be consistent for now we will remove the client from
+                        // the received hashset
                         if let Some(uid) = self.uid() {
                             self.group_members.remove(&uid);
                         }
@@ -3440,8 +3420,9 @@ impl Client {
                 }
                 if update_inventory {
                     // Push the updated inventory component to the client
-                    // FIXME: Figure out whether this error can happen under normal gameplay,
-                    // if not find a better way to handle it, if so maybe consider kicking the
+                    // FIXME: Figure out whether this error can happen under
+                    // normal gameplay, if not find a better
+                    // way to handle it, if so maybe consider kicking the
                     // client back to login?
                     let entity = self.entity();
                     if let Err(e) = self
@@ -3468,8 +3449,8 @@ impl Client {
             ServerGeneral::SetViewDistance(vd) => {
                 self.view_distance = Some(vd);
                 frontend_events.push(Event::SetViewDistance(vd));
-                // If the server is correcting client vd selection we assume this is the max
-                // allowed view distance.
+                // If the server is correcting client vd selection we assume
+                // this is the max allowed view distance.
                 self.server_view_distance_limit = Some(vd);
             },
             ServerGeneral::Outcomes(outcomes) => {
@@ -3613,8 +3594,9 @@ impl Client {
                 self.last_server_pong = self.state.get_program_time();
                 self.last_ping_delta = self.state.get_program_time() - self.last_server_ping;
 
-                // Maintain the correct number of deltas for calculating the rolling average
-                // ping. The client sends a ping to the server every second so we should be
+                // Maintain the correct number of deltas for calculating the
+                // rolling average ping. The client sends a ping
+                // to the server every second so we should be
                 // receiving a pong reply roughly every second.
                 while self.ping_deltas.len() > PING_ROLLING_AVERAGE_SECS - 1 {
                     self.ping_deltas.pop_front();
@@ -3680,12 +3662,13 @@ impl Client {
         let mut frontend_events = Vec::new();
 
         // Check that we have an valid connection.
-        // Use the last ping time as a 1s rate limiter, we only notify the user once per
-        // second
+        // Use the last ping time as a 1s rate limiter, we only notify the user
+        // once per second
         if self.state.get_program_time() - self.last_server_ping > 1. {
             let duration_since_last_pong = self.state.get_program_time() - self.last_server_pong;
 
-            // Dispatch a notification to the HUD warning they will be kicked in {n} seconds
+            // Dispatch a notification to the HUD warning they will be kicked in
+            // {n} seconds
             const KICK_WARNING_AFTER_REL_TO_TIMEOUT_FRACTION: f64 = 0.75;
             if duration_since_last_pong
                 >= (self.client_timeout.as_secs() as f64
@@ -4027,20 +4010,24 @@ mod tests {
         let runtime2 = Arc::clone(&runtime);
         let username = "Foo";
         let password = "Bar";
-        let auth_server = "auth.xindeler.com";
+        let auth_server = "https://auth.xindeler.com";
+
+        let provider = StaticCredentialProvider {
+            credentials_by_auth: [(
+                Some(auth_server.to_string()),
+                Credentials::UsernamePassword(username.to_string(), password.to_string()),
+            )]
+            .into(),
+        };
+
         let xindeler_client: Result<Client, Error> = runtime.block_on(Client::new(
             ConnectionArgs::Tcp {
                 hostname: "127.0.0.1:9000".to_owned(),
                 prefer_ipv6: false,
             },
             runtime2,
-            &mut None,
-            username,
-            password,
             None,
-            |suggestion: &str| suggestion == auth_server,
-            || None,
-            None,
+            &provider,
             &|_| {},
             |_| {},
             PathBuf::default(),
@@ -4117,7 +4104,7 @@ mod tests {
             "https://127.0.0.1:1".to_string(),
             "regression-test".to_string(),
             "regression-test".to_string(),
-            || None,
+            &StaticCredentialProvider::default(),
         ));
 
         let err = result.expect_err("signing in against a closed loopback port should fail");
@@ -4183,39 +4170,180 @@ mod tests {
         }
     }
 
-    /// `Client::new` must accept an OAuth request in the slot right after the
-    /// 2FA callback. This pins the parameter position that
-    /// `voxygen/src/menu/main/client_init.rs` depends on.
-    #[test]
-    fn client_new_accepts_an_oauth_login_request() {
-        fn assert_signature<F>(_: F)
-        where
-            F: FnOnce(Option<crate::oauth::OAuthLogin>),
-        {
+    /// Hands out OAuth credentials and answers 2FA prompts with a fixed code,
+    /// counting how often it was asked -- the shape voxygen's menu provider
+    /// has.
+    struct ScriptedProvider {
+        oauth: std::sync::Mutex<Option<crate::oauth::OAuthLogin>>,
+        two_fa_code: Option<&'static str>,
+        two_fa_asked: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ScriptedProvider {
+        fn answering_2fa_with(code: Option<&'static str>) -> Self {
+            Self {
+                oauth: std::sync::Mutex::new(None),
+                two_fa_code: code,
+                two_fa_asked: Default::default(),
+            }
         }
 
-        assert_signature(|oauth: Option<crate::oauth::OAuthLogin>| {
-            let runtime = Arc::new(Runtime::new().unwrap());
-            let runtime2 = Arc::clone(&runtime);
-            let mut mismatched_server_info = None;
-            let _fut = Client::new(
-                ConnectionArgs::Tcp {
-                    hostname: "127.0.0.1:9000".to_owned(),
-                    prefer_ipv6: false,
-                },
-                runtime2,
-                &mut mismatched_server_info,
-                "Foo",
-                "Bar",
-                None,
-                |_: &str| false,
-                || None,
-                oauth,
-                &|_| {},
-                |_| {},
-                PathBuf::default(),
-                ClientType::ChatOnly,
-            );
+        fn times_asked(&self) -> usize {
+            self.two_fa_asked.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl CredentialProvider for ScriptedProvider {
+        fn auth_trusted(&self, _: &Option<String>) -> bool { true }
+
+        async fn get_credentials(&self, _: &Option<String>) -> Result<Credentials, ()> {
+            let oauth = self.oauth.lock().ok().and_then(|mut oauth| oauth.take());
+            oauth.map(Credentials::OAuth).ok_or(())
+        }
+
+        async fn get_two_fa_code(&self, _: &Option<String>) -> Option<String> {
+            self.two_fa_asked
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.two_fa_code.map(str::to_owned)
+        }
+    }
+
+    /// Serves one canned raw response per incoming connection, in order, and
+    /// hands back the raw requests it received.
+    fn serve_in_sequence(responses: Vec<String>) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (requests_tx, requests_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut request = [0; 4096];
+                let read = stream.read(&mut request).unwrap_or(0);
+                let _ = requests_tx.send(String::from_utf8_lossy(&request[..read]).into_owned());
+                stream.write_all(response.as_bytes()).unwrap();
+            }
         });
+        (format!("http://{address}"), requests_rx)
+    }
+
+    fn closing_response(status_line: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status_line}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    const CHALLENGE: &str =
+        r#"{"challenge_id":"0123456789abcdef0123456789abcdef","expires_in":90}"#;
+
+    #[test]
+    fn password_2fa_challenge_asks_the_provider_and_redeems_the_code() {
+        let (addr, requests) = serve_in_sequence(vec![
+            closing_response("202 Accepted", CHALLENGE),
+            closing_response(
+                "400 Bad Request",
+                r#"{"code":"TOTP_INVALID_CODE","message":"x","request_id":"y"}"#,
+            ),
+        ]);
+        let provider = ScriptedProvider::answering_2fa_with(Some("123456"));
+        let runtime = Runtime::new().unwrap();
+
+        let err = runtime
+            .block_on(Client::acquire_auth_token(
+                addr,
+                "alice".to_owned(),
+                "hunter2".to_owned(),
+                &provider,
+            ))
+            .expect_err("the fake auth server rejects the code");
+
+        assert!(
+            matches!(err, Error::TwoFaFailed(TwoFaFailure::WrongCode)),
+            "{err:?}"
+        );
+        assert_eq!(provider.times_asked(), 1);
+        let sign_in = requests.recv().unwrap();
+        assert!(sign_in.contains("generate_token"), "{sign_in}");
+        let redeem = requests.recv().unwrap();
+        assert!(redeem.contains("/login/2fa"), "{redeem}");
+        assert!(redeem.contains("123456"), "{redeem}");
+        assert!(
+            redeem.contains("0123456789abcdef0123456789abcdef"),
+            "{redeem}"
+        );
+    }
+
+    #[test]
+    fn cancelled_2fa_prompt_aborts_without_redeeming() {
+        let (addr, requests) = serve_in_sequence(vec![closing_response("202 Accepted", CHALLENGE)]);
+        let provider = ScriptedProvider::answering_2fa_with(None);
+        let runtime = Runtime::new().unwrap();
+
+        let err = runtime
+            .block_on(Client::acquire_auth_token(
+                addr,
+                "alice".to_owned(),
+                "hunter2".to_owned(),
+                &provider,
+            ))
+            .expect_err("a cancelled 2FA prompt must not sign in");
+
+        assert!(matches!(err, Error::Other(_)), "{err:?}");
+        assert_eq!(provider.times_asked(), 1);
+        assert_eq!(
+            requests.iter().count(),
+            1,
+            "the challenge must not be redeemed"
+        );
+    }
+
+    #[test]
+    fn password_sign_in_without_2fa_never_asks_for_a_code() {
+        let (addr, _requests) = serve_in_sequence(vec![closing_response(
+            "200 OK",
+            r#"{"token":"0123456789abcdef0123456789abcdef"}"#,
+        )]);
+        let provider = ScriptedProvider::answering_2fa_with(Some("123456"));
+        let runtime = Runtime::new().unwrap();
+
+        let result = runtime.block_on(Client::acquire_auth_token(
+            addr,
+            "alice".to_owned(),
+            "hunter2".to_owned(),
+            &provider,
+        ));
+
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(provider.times_asked(), 0);
+    }
+
+    /// voxygen spawns `Client::new` on its tokio runtime, so the future must
+    /// stay `Send` with a provider that holds an OAuth login.
+    #[test]
+    fn client_new_with_an_oauth_capable_provider_is_send() {
+        fn assert_send<T: Send>(_: &T) {}
+
+        let runtime = Arc::new(Runtime::new().unwrap());
+        let provider = ScriptedProvider::answering_2fa_with(None);
+        let fut = Client::new(
+            ConnectionArgs::Tcp {
+                hostname: "127.0.0.1:9000".to_owned(),
+                prefer_ipv6: false,
+            },
+            runtime,
+            None,
+            &provider,
+            &|_| {},
+            |_| {},
+            PathBuf::default(),
+            ClientType::ChatOnly,
+        );
+        assert_send(&fut);
     }
 }

@@ -3,6 +3,7 @@ mod color;
 pub mod dir;
 pub mod div;
 pub mod find_dist;
+pub mod fx_hash;
 mod grid_hasher;
 pub mod lines;
 mod macros;

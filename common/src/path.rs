@@ -1,15 +1,16 @@
 use crate::{
     astar::{Astar, PathResult},
+    comp::{Body, TERRAIN_CYLINDER_MAX_HEIGHT},
     resources::Time,
     terrain::Block,
+    util::fx_hash::FxBuildHasher,
     vol::{BaseVol, ReadVol},
 };
 use common_base::span;
-use fxhash::FxBuildHasher;
 #[cfg(feature = "rrt_pathfinding")]
 use hashbrown::HashMap;
 #[cfg(feature = "rrt_pathfinding")]
-use kiddo::{SquaredEuclidean, float::kdtree::KdTree, nearest_neighbour::NearestNeighbour}; /* For RRT paths (disabled for now) */
+use kiddo::{Eytzinger, KdTree, QueryResultItem, SquaredEuclidean, VecOfArrays}; /* For RRT paths (disabled for now) */
 use rand::{RngExt, rng};
 #[cfg(feature = "rrt_pathfinding")]
 use rand::{
@@ -95,14 +96,94 @@ pub struct TraversalConfig {
     pub in_liquid: bool,
     /// The distance to the target below which it is considered reached.
     pub min_tgt_dist: f32,
-    /// Whether the agent can climb.
-    pub can_climb: bool,
-    /// Whether the agent can fly.
-    pub can_fly: bool,
+    /// The body that's moving.
+    pub moving_body: Option<Body>,
     /// Whether the agent has vectored propulsion.
     pub vectored_propulsion: bool,
     /// Whether chunk containing target position is currently loaded
     pub is_target_loaded: bool,
+    /// How much clearance this agent actually needs, derived from the same
+    /// cylinder the physics uses against terrain. See [`TraversalDims`].
+    pub dims: TraversalDims,
+}
+
+/// The clearance an agent needs to fit somewhere, in whole blocks.
+///
+/// Before this existed, `walkable` asked for exactly two blocks of headroom for
+/// every agent in the game. That happens to be right for every shipped body *at
+/// default scale*: [`Collider::terrain_cylinder`] clamps every collider into
+/// one envelope, so a rat and a cyclops present the same 2-blocks-tall box to
+/// the world. It stops being right the moment an entity carries a `Scale` above
+/// ~1.03, which `/scale`, `EntityInfo::with_scale` and `basic_summon` all
+/// produce.
+///
+/// ## Why there is no lateral term
+///
+/// Requiring a clear column on each side once the cylinder passes half a block
+/// wide is *stricter than the physics*: `box_voxel_collision` resolves a
+/// fraction-of-a-block intrusion by pushing the agent out, so a scale-1.5 body
+/// does not actually need three clear columns to walk a corridor. It also fails
+/// in the wrong direction — when an agent's own start column cannot be
+/// certified, `find_path` returns [`PathResult::None`] and [`Chaser`] falls
+/// back to a **straight-line bearing at full speed**. An oversized NPC would
+/// not get a longer route, it would silently lose pathfinding altogether and
+/// beeline through walls. Width belongs in the cost function, not in a hard
+/// reject.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct TraversalDims {
+    /// Blocks of vertical clearance needed to stand at a node. Never zero.
+    pub height: u32,
+}
+
+impl Default for TraversalDims {
+    /// The fallback for an agent whose body is unknown: the tallest body the
+    /// terrain envelope will represent, so the guess is never optimistic.
+    ///
+    /// 🔴 **Keep this hand-written. `#[derive(Default)]` would give
+    /// `height: 0`, and a zero-height agent treats solid rock as walkable** —
+    /// `column_clear` over an empty range is vacuously true, so NPCs would
+    /// path through walls.
+    fn default() -> Self { Self::from_terrain_cylinder(TERRAIN_CYLINDER_MAX_HEIGHT) }
+}
+
+impl TraversalDims {
+    /// Build from [`Collider::terrain_cylinder`]'s `z_max` — the single
+    /// definition of the cylinder `common_systems::phys` collides against
+    /// terrain with, so the pathfinder and the physics cannot disagree about
+    /// how tall an agent is.
+    ///
+    /// Takes the already-clamped, already-scaled value, so no copy of the
+    /// envelope lives here.
+    ///
+    /// ⚠️ Anything that wants an agent to fit somewhere shorter — a crouching
+    /// or prone posture, say — must lower [`Collider::terrain_cylinder`]
+    /// itself, not just this. Terrain collision applies
+    /// [`TERRAIN_CYLINDER_MIN_HEIGHT`] unconditionally and never reads
+    /// `CharacterState`, so lowering the pathfinder's number alone produces
+    /// exactly the disagreement this function exists to prevent: routes the
+    /// agent is then too tall to walk.
+    #[inline]
+    pub fn from_terrain_cylinder(z_max: f32) -> Self {
+        Self {
+            height: (z_max.max(0.0).ceil() as u32).max(1),
+        }
+    }
+}
+
+impl TraversalConfig {
+    pub fn fly_thrust(&self) -> Option<f32> { self.moving_body.as_ref().and_then(Body::fly_thrust) }
+
+    pub fn can_fly(&self) -> bool { self.fly_thrust().is_some() }
+
+    pub fn can_climb(&self) -> bool { self.moving_body.as_ref().is_some_and(Body::can_climb) }
+
+    pub fn ground_accel(&self) -> Option<f32> {
+        self.moving_body.as_ref().and_then(Body::ground_accel)
+    }
+
+    pub fn swim_thrust(&self) -> Option<f32> {
+        self.moving_body.as_ref().and_then(Body::swim_thrust)
+    }
 }
 
 const DIAGONALS: [Vec2<i32>; 8] = [
@@ -148,13 +229,12 @@ impl Route {
             let next1 = self.next(1).unwrap_or(next0);
 
             // Stop using obstructed paths
-            if !walkable(vol, next0, traversal_cfg.is_target_loaded)
-                || !walkable(vol, next1, traversal_cfg.is_target_loaded)
-            {
+            if !walkable(vol, next0, traversal_cfg) || !walkable(vol, next1, traversal_cfg) {
                 return Err(TraverseStop::InvalidPath);
             }
 
-            // If, in any direction, there is a column of open air of several blocks
+            // If, in any direction, there is a column of open air of several
+            // blocks
             let open_space_nearby = DIAGONALS.iter().any(|pos| {
                 (-2..2).all(|z| {
                     vol.get(next0 + Vec3::new(pos.x, pos.y, z))
@@ -170,13 +250,13 @@ impl Route {
                     .unwrap_or(true)
             });
 
-            // Unwalkable obstacles, such as walls or open space or stepping up blocks can
-            // affect path-finding
+            // Unwalkable obstacles, such as walls or open space or stepping up
+            // blocks can affect path-finding
             let be_precise =
                 open_space_nearby || wall_nearby || (pos.z - next0.z as f32).abs() > 1.0;
 
-            // If we're not being precise and the next next target is closer, go towards
-            // that instead.
+            // If we're not being precise and the next next target is closer, go
+            // towards that instead.
             if !be_precise
                 && next0.as_::<f32>().distance_squared(pos)
                     > next1.as_::<f32>().distance_squared(pos)
@@ -191,7 +271,8 @@ impl Route {
                 .map2(pos, |tgt, pos| pos.clamped(tgt.floor(), tgt.ceil()))
                 .xy()
                 .with_z(next_tgt.z);
-            // Determine whether we're close enough to the next to to consider it completed
+            // Determine whether we're close enough to the next to to consider
+            // it completed
             let dist_sqrd = pos.xy().distance_squared(closest_tgt.xy());
             if dist_sqrd
                 < (traversal_cfg.node_tolerance
@@ -298,10 +379,10 @@ impl Route {
             return Err(TraverseStop::InvalidPath);
         }
 
-        // We don't always want to aim for the centre of block since this can create
-        // jerky zig-zag movement. This function attempts to find a position
-        // inside a target block's area that aligned nicely with our velocity.
-        // This has a twofold benefit:
+        // We don't always want to aim for the centre of block since this can
+        // create jerky zig-zag movement. This function attempts to find
+        // a position inside a target block's area that aligned nicely
+        // with our velocity. This has a twofold benefit:
         //
         // 1. Entities can move at any angle when
         // running on a flat surface
@@ -381,10 +462,10 @@ impl Route {
             end: align(next1, 1.0),
         };
 
-        // Use a cubic spline of the next few targets to come up with a sensible target
-        // position. We want to use a position that gives smooth movement but is
-        // also accurate enough to avoid the agent getting stuck under ledges or
-        // falling off walls.
+        // Use a cubic spline of the next few targets to come up with a sensible
+        // target position. We want to use a position that gives smooth
+        // movement but is also accurate enough to avoid the agent
+        // getting stuck under ledges or falling off walls.
         let next_dir = bez
             .evaluate_derivative(0.85)
             .try_normalized()
@@ -676,8 +757,8 @@ impl Chaser {
         if let Some((route, ..)) = &mut self.route {
             let res = route.traverse(vol, pos, vel, &traversal_cfg);
 
-            // None either means we're done, or can't continue, either way we don't care
-            // about that route anymore.
+            // None either means we're done, or can't continue, either way we
+            // don't care about that route anymore.
             if let Err(e) = &res {
                 self.route = None;
                 match e {
@@ -690,8 +771,9 @@ impl Chaser {
                         ));
                     },
                     TraverseStop::InvalidPath => {
-                        // If the path is invalid, blocks along the path have most likely changed,
-                        // so reset the astar.
+                        // If the path is invalid, blocks along the path have
+                        // most likely changed, so reset
+                        // the astar.
                         self.astar = None;
                     },
                     TraverseStop::Done => match self.path_state {
@@ -704,7 +786,8 @@ impl Chaser {
                             ));
                         },
                         PathState::Exhausted => {
-                            // Upgrade path length if path is exhausted and we're at the same
+                            // Upgrade path length if path is exhausted and
+                            // we're at the same
                             // position.
                             if self.astar.as_ref().is_some_and(|(.., start)| {
                                 start.distance_squared(pos) < traversal_cfg.node_tolerance.powi(2)
@@ -752,7 +835,30 @@ impl Chaser {
     }
 }
 
-fn walkable<V>(vol: &V, pos: Vec3<i32>, is_target_loaded: bool) -> bool
+/// Are the blocks `pos + from*z .. pos + to*z` all non-solid?
+///
+/// Split out of `walkable` so that the step-up/jump headroom filters in
+/// `find_path` can ask the same question about a partial column.
+///
+/// ⚠️ `missing_is_clear` exists because the two callers disagree, and did
+/// before this refactor: `walkable` treated an absent block as
+/// `Block::empty()` — unconditionally clear — while `find_path`'s headroom
+/// filters treat it as clear only when the target chunk is loaded. Preserved
+/// verbatim rather than unified, because unifying them would change pathing in
+/// unloaded terrain for reasons that have nothing to do with this change.
+#[inline]
+fn column_clear<V>(vol: &V, pos: Vec3<i32>, from: u32, to: u32, missing_is_clear: bool) -> bool
+where
+    V: BaseVol<Vox = Block> + ReadVol,
+{
+    (from..to).all(|z| {
+        vol.get(pos + Vec3::unit_z() * z as i32)
+            .map(|b| !b.is_solid())
+            .unwrap_or(missing_is_clear)
+    })
+}
+
+fn walkable<V>(vol: &V, pos: Vec3<i32>, traversal_cfg: &TraversalConfig) -> bool
 where
     V: BaseVol<Vox = Block> + ReadVol,
 {
@@ -769,7 +875,7 @@ where
             if below_z > Block::MAX_HEIGHT.ceil() as i32 {
                 break Block::empty();
             }
-        } else if is_target_loaded {
+        } else if traversal_cfg.is_target_loaded {
             break Block::empty();
         } else {
             // If not loaded assume we can walk there.
@@ -778,11 +884,6 @@ where
     };
 
     let a = vol.get(pos).ok().copied().unwrap_or_else(Block::empty);
-    let b = vol
-        .get(pos + Vec3::unit_z())
-        .ok()
-        .copied()
-        .unwrap_or_else(Block::empty);
 
     let on_ground = (below_z == 1 && below.is_filled())
         || below.get_sprite().is_some_and(|sprite| {
@@ -791,7 +892,18 @@ where
                 .is_some_and(|h| ((below_z - 1) as f32) < h && h <= below_z as f32)
         });
     let in_liquid = a.is_liquid();
-    (on_ground || in_liquid) && !a.is_solid() && !b.is_solid()
+
+    // `dims` replaces what used to be a hardcoded two-block check on `pos` and
+    // `pos + 1z`. At the default dims (height 2, radius 0) this performs the
+    // same two lookups as before and in the same order: `a` is reused rather
+    // than re-read, so the own-column scan starts at `z = 1`. Keep that reuse —
+    // `walkable` is called ~30 times per expanded A* node and every `vol.get`
+    // is a chunk hash lookup, so one redundant read here is thousands per
+    // agent per path poll.
+    ((on_ground && traversal_cfg.ground_accel().is_some())
+        || (in_liquid && traversal_cfg.swim_thrust().is_some()))
+        && !a.is_solid()
+        && column_clear(vol, pos, 1, traversal_cfg.dims.height, true)
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -818,7 +930,7 @@ fn find_path<V>(
 where
     V: BaseVol<Vox = Block> + ReadVol,
 {
-    let is_walkable = |pos: &Vec3<i32>| walkable(vol, *pos, traversal_cfg.is_target_loaded);
+    let is_walkable = |pos: &Vec3<i32>| walkable(vol, *pos, traversal_cfg);
     let get_walkable_z = |pos| {
         let mut z_incr = 0;
         for _ in 0..32 {
@@ -898,6 +1010,10 @@ where
         /// The cost of falling a block.
         const FALL_COST: f32 = 1.5;
 
+        // Whether this node is somewhere the agent can stand at all. Shared by
+        // every direction below instead of being recomputed 13 times.
+        let here_ok = traversal_cfg.can_fly() || is_walkable(&pos);
+
         let walkable = [
             (is_walkable(&(pos + Vec3::new(1, 0, 0))), Vec3::new(1, 0, 0)),
             (
@@ -934,28 +1050,38 @@ where
                 (vol.get(pos - Vec3::unit_z())
                     .map(|b| !b.is_liquid())
                     .unwrap_or(traversal_cfg.is_target_loaded)
-                    || traversal_cfg.can_climb
-                    || traversal_cfg.can_fly).then_some(JUMPS.iter())
+                    || traversal_cfg.can_climb()
+                    || traversal_cfg.can_fly()).then_some(JUMPS.iter())
                     .into_iter().flatten()
             )
             .map(move |dir| (pos, dir))
             .filter(move |(pos, dir)| {
-                (traversal_cfg.can_fly || is_walkable(pos) && is_walkable(&(*pos + **dir)))
-                    && ((dir.z < 1
-                        || vol
-                            .get(pos + Vec3::unit_z() * 2)
-                            .map(|b| !b.is_solid())
-                            .unwrap_or(traversal_cfg.is_target_loaded))
-                        && (dir.z < 2
-                            || vol
-                                .get(pos + Vec3::unit_z() * 3)
-                                .map(|b| !b.is_solid())
-                                .unwrap_or(traversal_cfg.is_target_loaded))
-                        && (dir.z >= 0
-                            || vol
-                                .get(pos + *dir + Vec3::unit_z() * 2)
-                                .map(|b| !b.is_solid())
-                                .unwrap_or(traversal_cfg.is_target_loaded)))
+                let h = traversal_cfg.dims.height;
+                let loaded = traversal_cfg.is_target_loaded;
+
+                // Hoisted out of the per-direction test: `pos` is the same node
+                // for all 13 directions, so this used to be 13 identical
+                // `walkable` calls (~13 chunk lookups) per expanded node.
+                // `can_fly || (W(pos) && W(pos+dir))` distributes into
+                // `(can_fly || W(pos)) && (can_fly || W(pos+dir))`, so this is
+                // the same predicate, evaluated once.
+                here_ok
+                    && (traversal_cfg.can_fly() || is_walkable(&(*pos + **dir)))
+                    // Rising by `dir.z` sweeps the origin column up to
+                    // `h - 1 + dir.z`; `walkable` already cleared `0..h`, so
+                    // only `h .. h + dir.z` is left. At the default height of 2
+                    // these are the old literal `pos + 2z` / `pos + 3z` tests.
+                    //
+                    // 🔴 These stay inside the `&&` chain rather than becoming
+                    // `let` bindings: they must not be evaluated when the
+                    // destination is unwalkable, which is the common case when
+                    // pathing against a wall — exactly where the A* burns the
+                    // most nodes.
+                    && (dir.z < 1 || column_clear(vol, *pos, h, h + dir.z as u32, loaded))
+                    // Dropping means the *destination* column must stay clear
+                    // up through where the body still is at the start of the
+                    // step.
+                    && (dir.z >= 0 || column_clear(vol, *pos + **dir, h, h + 1, loaded))
             })
             .map(move |(pos, dir)| {
                 let next_node = Node {
@@ -1136,16 +1262,27 @@ where
     let mut path2 = Vec::new();
 
     // K-d trees are used to find the closest nodes rapidly
-    let mut kdtree1: KdTree<f32, usize, 3, 32, u32> = KdTree::with_capacity(MAX_POINTS);
-    let mut kdtree2: KdTree<f32, usize, 3, 32, u32> = KdTree::with_capacity(MAX_POINTS);
+    let mut kdtree1: KdTree<f32, usize, Eytzinger, VecOfArrays<f32, usize, 3, 32>, 3, 32> =
+        KdTree::default();
+    let mut kdtree2: KdTree<f32, usize, Eytzinger, VecOfArrays<f32, usize, 3, 32>, 3, 32> =
+        KdTree::default();
+
+    macro_rules! drop_kiddo_error {
+        ($result:expr) => {
+            if let Err(e) = $result {
+                tracing::warn!(?e, "kiddo unsplittable leaf detected");
+                return (None, false);
+            }
+        };
+    }
 
     // Add the start as the first node of the first k-d tree
-    kdtree1.add(&[startf.x, startf.y, startf.z], node_index1);
+    drop_kiddo_error!(kdtree1.add(&[startf.x, startf.y, startf.z], node_index1));
     nodes1.push(startf);
     node_index1 += 1;
 
     // Add the end as the first node of the second k-d tree
-    kdtree2.add(&[endf.x, endf.y, endf.z], node_index2);
+    drop_kiddo_error!(kdtree2.add(&[endf.x, endf.y, endf.z], node_index2));
     nodes2.push(endf);
     node_index2 += 1;
 
@@ -1172,18 +1309,14 @@ where
 
         // Find the nearest nodes to the the sampled point
         let nearest_index1 = kdtree1
-            .nearest_one::<SquaredEuclidean>(&[
-                sampled_point1.x,
-                sampled_point1.y,
-                sampled_point1.z,
-            ])
+            .query(&[sampled_point1.x, sampled_point1.y, sampled_point1.z])
+            .nearest_one::<SquaredEuclidean<f32>>()
+            .execute()
             .item;
         let nearest_index2 = kdtree2
-            .nearest_one::<SquaredEuclidean>(&[
-                sampled_point2.x,
-                sampled_point2.y,
-                sampled_point2.z,
-            ])
+            .query(&[sampled_point2.x, sampled_point2.y, sampled_point2.z])
+            .nearest_one::<SquaredEuclidean<f32>>()
+            .execute()
             .item;
         let nearest1 = nodes1[nearest_index1];
         let nearest2 = nodes2[nearest_index2];
@@ -1194,19 +1327,21 @@ where
 
         // Ensure the new nodes are valid/traversable
         if is_valid_edge(&nearest1, &new_point1) {
-            kdtree1.add(&[new_point1.x, new_point1.y, new_point1.z], node_index1);
+            drop_kiddo_error!(
+                kdtree1.add(&[new_point1.x, new_point1.y, new_point1.z], node_index1)
+            );
             nodes1.push(new_point1);
             parents1.insert(node_index1, nearest_index1);
             node_index1 += 1;
             // Check if the trees connect
-            let NearestNeighbour {
+            let QueryResultItem {
                 distance: check,
                 item: index,
-            } = kdtree2.nearest_one::<SquaredEuclidean>(&[
-                new_point1.x,
-                new_point1.y,
-                new_point1.z,
-            ]);
+                ..
+            } = kdtree2
+                .query(&[new_point1.x, new_point1.y, new_point1.z])
+                .nearest_one::<SquaredEuclidean<f32>>()
+                .execute();
             if check < radius {
                 let connection = nodes2[index];
                 connection2_idx = index;
@@ -1219,19 +1354,21 @@ where
 
         // Repeat the validity check for the second tree
         if is_valid_edge(&nearest2, &new_point2) {
-            kdtree2.add(&[new_point2.x, new_point2.y, new_point1.z], node_index2);
+            drop_kiddo_error!(
+                kdtree2.add(&[new_point2.x, new_point2.y, new_point1.z], node_index2)
+            );
             nodes2.push(new_point2);
             parents2.insert(node_index2, nearest_index2);
             node_index2 += 1;
             // Again check for a connection
-            let NearestNeighbour {
+            let QueryResultItem {
                 distance: check,
                 item: index,
-            } = kdtree1.nearest_one::<SquaredEuclidean>(&[
-                new_point2.x,
-                new_point2.y,
-                new_point1.z,
-            ]);
+                ..
+            } = kdtree1
+                .query(&[new_point2.x, new_point2.y, new_point1.z])
+                .nearest_one::<SquaredEuclidean<f32>>()
+                .execute();
             if check < radius {
                 let connection = nodes1[index];
                 connection1_idx = index;
@@ -1267,7 +1404,9 @@ where
         // If the trees did not connect, construct a path from the start to
         // the closest node to the end
         let mut current_node_index1 = kdtree1
-            .nearest_one::<SquaredEuclidean>(&[endf.x, endf.y, endf.z])
+            .query(&[endf.x, endf.y, endf.z])
+            .nearest_one::<SquaredEuclidean<f32>>()
+            .execute()
             .item;
         // Attempt to pick a node other than the start node
         for _i in 0..3 {
@@ -1352,17 +1491,19 @@ pub fn point_on_prolate_spheroid(
     let midpoint = 0.5 * (focus1 + focus2);
     // Radius between the start and end of the path
     let radius: f32 = focus1.distance(focus2);
-    // The linear eccentricity of an ellipse is the distance from the origin to a
-    // focus A prolate spheroid is a half-ellipse rotated for a full revolution
-    // which is why ellipse variables are used frequently in this function
+    // The linear eccentricity of an ellipse is the distance from the origin to
+    // a focus A prolate spheroid is a half-ellipse rotated for a full
+    // revolution which is why ellipse variables are used frequently in this
+    // function
     let linear_eccentricity: f32 = 0.5 * radius;
 
     // For an ellipsoid, three variables determine the shape: a, b, and c.
     // These are the distance from the center/origin to the surface on the
     // x, y, and z axes, respectively.
     // For a prolate spheroid a and b are equal.
-    // c is determined by adding the search parameter to the linear eccentricity.
-    // As the search parameter increases the size of the spheroid increases
+    // c is determined by adding the search parameter to the linear
+    // eccentricity. As the search parameter increases the size of the
+    // spheroid increases
     let c: f32 = linear_eccentricity + search_parameter;
     // The width is calculated to prioritize increasing width over length of
     // the ellipsoid
@@ -1396,8 +1537,8 @@ pub fn point_on_prolate_spheroid(
     //let surface_point = Vec3::new(a * rtheta.cos() * lambda.cos(), b *
     // rtheta.cos() * lambda.sin(), c * rtheta.sin()); let magnitude =
     // surface_point.magnitude(); let direction = surface_point.normalized();
-    //// Randomly select a point along the vector to the previously selected surface
-    //// point using the uniform distribution
+    //// Randomly select a point along the vector to the previously selected
+    //// surface point using the uniform distribution
     //let point = magnitude * range.sample(&mut rng) * direction;
 
     // Now that a point has been selected in local space, it must be rotated and
@@ -1418,9 +1559,9 @@ pub fn point_on_prolate_spheroid(
     //} else {
     //    0.5 * PI
     //};
-    // This is unnecessary as rtheta is randomly selected between 0.0 and 2.0 * PI
-    // let rot_z_mat = Mat3::new(phi.cos(), -1.0 * phi.sin(), 0.0, phi.sin(),
-    // phi.cos(), 0.0, 0.0, 0.0, 1.0);
+    // This is unnecessary as rtheta is randomly selected between 0.0 and 2.0 *
+    // PI let rot_z_mat = Mat3::new(phi.cos(), -1.0 * phi.sin(), 0.0,
+    // phi.sin(), phi.cos(), 0.0, 0.0, 0.0, 1.0);
 
     // Rotate about perpendicular vector in the xy plane by theta
     let theta: f32 = if radius > 0.0 {
@@ -1452,4 +1593,199 @@ pub fn point_on_prolate_spheroid(
     // rot_z_mat is unneeded due to the random rotation defined by lambda
     // let global_coords = midpoint + rot_2_mat * (rot_z_mat * point);
     midpoint + rot_2_mat * point
+}
+
+#[cfg(test)]
+mod traversal_dims_tests {
+    use super::*;
+    use crate::comp::{Body, TERRAIN_CYLINDER_MIN_HEIGHT, biped_large, humanoid, quadruped_small};
+
+    /// The cylinder `common_systems::phys` builds for terrain collision. Kept
+    /// here in the same shape as the real one so that a change to either side
+    /// shows up as a failing expectation rather than as silent disagreement.
+    fn dims_of(body: &Body, scale: f32) -> TraversalDims {
+        let (_, _, z_max) = body.collider().terrain_cylinder(scale);
+        TraversalDims::from_terrain_cylinder(z_max)
+    }
+
+    fn humanoid() -> Body {
+        Body::Humanoid(humanoid::Body::random_with(
+            &mut rand::rng(),
+            &humanoid::Species::Human,
+        ))
+    }
+
+    fn cyclops() -> Body {
+        Body::BipedLarge(biped_large::Body {
+            species: biped_large::Species::Cyclops,
+            body_type: biped_large::BodyType::Male,
+        })
+    }
+
+    fn rat() -> Body {
+        Body::QuadrupedSmall(quadruped_small::Body {
+            species: quadruped_small::Species::Rat,
+            body_type: quadruped_small::BodyType::Male,
+        })
+    }
+
+    /// The load-bearing compatibility claim: at default scale the derived dims
+    /// are the constants the pathfinder used to hardcode, for every body kind.
+    /// If this ever fails, existing NPC pathing has changed and the change was
+    /// not deliberate.
+    #[test]
+    fn default_scale_reproduces_the_historical_constants() {
+        for body in Body::iter() {
+            // Ships and items don't pathfind (their collider takes a different
+            // arm in `phys` entirely), and `Body::Plugin` cannot be inspected
+            // without a loaded plugin registry — `plugin.rs` indexes straight
+            // into an empty table.
+            if matches!(body, Body::Ship(_) | Body::Item(_) | Body::Plugin(_)) {
+                continue;
+            }
+            let dims = dims_of(&body, 1.0);
+            assert_eq!(
+                dims,
+                TraversalDims::default(),
+                "{body:?} changed pathfinding clearance at default scale",
+            );
+        }
+    }
+
+    /// Why the clamp makes a rat and a cyclops identical to the pathfinder: it
+    /// is not an oversight being fixed here, it is the shipped physics.
+    #[test]
+    fn the_terrain_clamp_flattens_every_body_at_default_scale() {
+        assert_eq!(dims_of(&rat(), 1.0), dims_of(&cyclops(), 1.0));
+        assert_eq!(dims_of(&humanoid(), 1.0), dims_of(&cyclops(), 1.0));
+    }
+
+    /// …and where that stops being true. A scaled-up entity really is taller
+    /// than two blocks, and until now the pathfinder routed it through gaps it
+    /// cannot enter.
+    #[test]
+    fn scaled_up_bodies_need_more_headroom() {
+        // 1.95 * 1.1 = 2.145 -> three blocks of headroom.
+        assert_eq!(dims_of(&cyclops(), 1.1).height, 3);
+        // Just below the threshold, still two.
+        assert_eq!(dims_of(&cyclops(), 1.02).height, 2);
+    }
+
+    /// Scaling *down* must never let an agent claim it needs no room at all —
+    /// a zero height would make every solid block walkable.
+    #[test]
+    fn scaled_down_bodies_still_need_a_block() {
+        assert_eq!(dims_of(&rat(), 0.2).height, 1);
+        assert_eq!(dims_of(&rat(), 0.01).height, 1);
+    }
+
+    /// The channel this type exists to open: once a body is allowed below the
+    /// standing envelope's floor — by lying down, say — `TraversalDims` carries
+    /// that to the pathfinder with no further plumbing.
+    #[test]
+    fn a_sub_floor_height_reduces_to_one_block() {
+        // A human lying down: 1.75 standing x 0.30.
+        assert_eq!(TraversalDims::from_terrain_cylinder(1.75 * 0.30).height, 1);
+        // …and the same body standing still needs two, via the envelope floor.
+        assert_eq!(
+            TraversalDims::from_terrain_cylinder(TERRAIN_CYLINDER_MIN_HEIGHT).height,
+            2
+        );
+    }
+}
+
+#[cfg(test)]
+mod walkable_cost_tests {
+    use super::*;
+    use crate::{
+        comp::TERRAIN_CYLINDER_MIN_HEIGHT,
+        terrain::{Block, BlockKind},
+        vol::{BaseVol, ReadVol},
+    };
+    use std::cell::Cell;
+
+    /// A flat world of solid ground at `z < 0` and air above, which counts how
+    /// many block reads it is asked for.
+    struct CountingVol {
+        reads: Cell<usize>,
+        air: Block,
+        ground: Block,
+    }
+
+    impl CountingVol {
+        fn new() -> Self {
+            Self {
+                reads: Cell::new(0),
+                air: Block::empty(),
+                ground: Block::new(BlockKind::Rock, Rgb::new(0, 0, 0)),
+            }
+        }
+    }
+
+    impl BaseVol for CountingVol {
+        type Error = ();
+        type Vox = Block;
+    }
+
+    impl ReadVol for CountingVol {
+        fn get(&self, pos: Vec3<i32>) -> Result<&Block, ()> {
+            self.reads.set(self.reads.get() + 1);
+            Ok(if pos.z < 0 { &self.ground } else { &self.air })
+        }
+    }
+
+    /// `walkable` is called roughly 30 times per expanded A* node, and every
+    /// read is a chunk hash lookup, so its lookup count is a performance
+    /// contract and not an implementation detail.
+    ///
+    /// Two reads: the ground block below, and the one block of headroom above
+    /// the standing block (whose own block is reused from the ground scan).
+    /// This is what it cost before clearance was parameterised, and the first
+    /// attempt at that parameterisation silently made it three.
+    #[test]
+    fn walkable_costs_no_more_reads_than_it_used_to() {
+        let vol = CountingVol::new();
+        let cfg = TraversalConfig {
+            node_tolerance: 0.0,
+            slow_factor: 0.0,
+            on_ground: true,
+            in_liquid: false,
+            min_tgt_dist: 0.0,
+            moving_body: Some(Body::Humanoid(crate::comp::humanoid::Body::random_with(
+                &mut rand::rng(),
+                &crate::comp::humanoid::Species::Human,
+            ))),
+            vectored_propulsion: false,
+            is_target_loaded: true,
+            dims: TraversalDims::default(),
+        };
+        assert!(walkable(&vol, Vec3::new(0, 0, 0), &cfg));
+        assert_eq!(
+            vol.reads.get(),
+            3,
+            "walkable at default dims must read the block below, the standing block, and one \
+             block of headroom — no more",
+        );
+    }
+
+    /// Four shipped entity configs run below default scale (the April-Fools
+    /// rats, 0.2-0.69). They are the only shipped content whose pathing this
+    /// change alters at all, and the change is deliberate: their real cylinder
+    /// is 0.24-0.83 blocks tall, so one block of headroom genuinely is enough
+    /// and they can now plan routes through gaps they used to refuse.
+    #[test]
+    fn shipped_small_scales_need_only_one_block() {
+        for scale in [0.2, 0.328, 0.476, 0.69] {
+            assert_eq!(
+                TraversalDims::from_terrain_cylinder(TERRAIN_CYLINDER_MIN_HEIGHT * scale).height,
+                1,
+                "scale {scale} should need one block of headroom",
+            );
+        }
+        // The first scale at which a body stops fitting a two-block corridor.
+        assert_eq!(
+            TraversalDims::from_terrain_cylinder(TERRAIN_CYLINDER_MAX_HEIGHT * 1.03).height,
+            3
+        );
+    }
 }

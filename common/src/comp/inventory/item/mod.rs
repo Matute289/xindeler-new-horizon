@@ -430,8 +430,8 @@ impl ItemKind {
         )
     }
 
-    // Used for inventory sorting, what comes before the first colon (:) is used as
-    // a broader category
+    // Used for inventory sorting, what comes before the first colon (:) is used
+    // as a broader category
     pub fn get_itemkind_string(&self) -> String {
         match self {
             // Using tool and toolkind to sort tools by kind
@@ -690,9 +690,9 @@ pub enum ItemBase {
 }
 
 impl Serialize for ItemBase {
-    // Custom serialization for ItemDef, we only want to send the item_definition_id
-    // over the network, the client will use deserialize_item_def to fetch the
-    // ItemDef from assets.
+    // Custom serialization for ItemDef, we only want to send the
+    // item_definition_id over the network, the client will use
+    // deserialize_item_def to fetch the ItemDef from assets.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -1027,7 +1027,8 @@ impl TryFrom<(&Item, &AbilityMap, &MaterialStatManifest)> for ItemConfig {
     ) -> Result<Self, Self::Error> {
         match &*item.kind() {
             ItemKind::Tool(tool) => {
-                // If no custom ability set is specified, fall back to abilityset of tool kind.
+                // If no custom ability set is specified, fall back to
+                // abilityset of tool kind.
                 let tool_default = |tool_kind| {
                     let key = &AbilitySpec::Tool(tool_kind);
                     ability_map.get_ability_set(key)
@@ -1180,8 +1181,8 @@ impl Asset for ItemDef {
             spell_pages,
         } = cache.load::<Ron<_>>(specifier)?.cloned().into_inner();
 
-        // Some commands like /give_item provide the asset specifier separated with \
-        // instead of .
+        // Some commands like /give_item provide the asset specifier separated
+        // with \ instead of .
         //
         // TODO: This probably does not belong here
         let item_definition_id = specifier.replace('\\', ".");
@@ -1227,8 +1228,8 @@ pub struct OperationFailure;
 impl Item {
     pub const MAX_DURABILITY: u32 = 12;
 
-    // TODO: consider alternatives such as default abilities that can be added to a
-    // loadout when no weapon is present
+    // TODO: consider alternatives such as default abilities that can be added
+    // to a loadout when no weapon is present
     pub fn empty() -> Self { Item::new_from_asset_expect("common.items.weapons.empty.empty") }
 
     pub fn new_from_item_base(
@@ -1708,8 +1709,8 @@ impl Item {
         match &self.item_base {
             ItemBase::Simple(item_def) => {
                 item_def.ability_spec.as_ref().map(Cow::Borrowed).or({
-                    // If no custom ability set is specified, fall back to abilityset of tool
-                    // kind.
+                    // If no custom ability set is specified, fall back to
+                    // abilityset of tool kind.
                     if let ItemKind::Tool(tool) = &item_def.kind {
                         Some(Cow::Owned(AbilitySpec::Tool(tool.kind)))
                     } else {
@@ -1766,8 +1767,8 @@ impl Item {
             .is_empty()
     }
 
-    // TODO: Maybe try to make slice again instead of vec? Could also try to make an
-    // iterator?
+    // TODO: Maybe try to make slice again instead of vec? Could also try to
+    // make an iterator?
     pub fn tags(&self) -> Vec<ItemTag> {
         match &self.item_base {
             ItemBase::Simple(item_def) => item_def.tags.to_vec(),
@@ -1861,8 +1862,8 @@ impl Item {
         {
             *durability_lost += 1;
         }
-        // Update item state after applying durability because stats have potential to
-        // change from different durability
+        // Update item state after applying durability because stats have
+        // potential to change from different durability
         self.update_item_state(ability_map, msm);
     }
 
@@ -1871,21 +1872,22 @@ impl Item {
     }
 
     pub fn persistence_set_durability(&mut self, value: Option<NonZeroU32>) {
-        // If changes have been made so that item no longer needs to track durability,
-        // set to None
+        // If changes have been made so that item no longer needs to track
+        // durability, set to None
         if !self.has_durability() {
             self.durability_lost = None;
         } else {
-            // Set durability to persisted value, and if item previously had no durability,
-            // set to Some(0) so that durability will be tracked
+            // Set durability to persisted value, and if item previously had no
+            // durability, set to Some(0) so that durability will be
+            // tracked
             self.durability_lost = Some(value.map_or(0, NonZeroU32::get));
         }
     }
 
     pub fn reset_durability(&mut self, ability_map: &AbilityMap, msm: &MaterialStatManifest) {
         self.durability_lost = self.has_durability().then_some(0);
-        // Update item state after applying durability because stats have potential to
-        // change from different durability
+        // Update item state after applying durability because stats have
+        // potential to change from different durability
         self.update_item_state(ability_map, msm);
     }
 
@@ -2019,8 +2021,8 @@ impl Item {
         }
     }
 
-    // Probably doesn't need to be limited to persistence, but nothing else should
-    // really need to look at item base
+    // Probably doesn't need to be limited to persistence, but nothing else
+    // should really need to look at item base
     pub fn persistence_item_base(&self) -> &ItemBase { &self.item_base }
 }
 
@@ -2092,8 +2094,8 @@ impl PickupItem {
     // `can_merge` returns false
     pub fn try_merge(&mut self, mut other: PickupItem) -> Result<(), PickupItem> {
         if self.can_merge(&other) {
-            // Pop the last item from `self` and `other` to merge them, as only the last
-            // items can have an amount != max_amount()
+            // Pop the last item from `self` and `other` to merge them, as only
+            // the last items can have an amount != max_amount()
             let mut self_last = self
                 .items
                 .pop()
@@ -2117,8 +2119,8 @@ impl PickupItem {
                 "All items before the last in `PickupItem` should have a full amount"
             );
 
-            // We know all items except the last have a full amount, so we can safely append
-            // them here
+            // We know all items except the last have a full amount, so we can
+            // safely append them here
             self.items.append(&mut other.items);
 
             debug_assert!(

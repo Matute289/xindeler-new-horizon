@@ -42,8 +42,8 @@ fn notify_agent_prices(
     if let Some((site_id, agent)) = agents.get_mut(entity).map(|a| (a.behavior.trade_site(), a))
         && let AgentEvent::UpdatePendingTrade(boxval) = event
     {
-        // Prefer using this Agent's price data, but use the counterparty's price
-        // data if we don't have price data
+        // Prefer using this Agent's price data, but use the counterparty's
+        // price data if we don't have price data
         let prices = site_id
             .and_then(|site_id| index.get_site_prices(site_id))
             .unwrap_or(boxval.2);
@@ -145,8 +145,10 @@ pub(super) fn handle_process_trade_action(
                                 .read_component::<Inventory>()
                                 .get(e)
                                 .map(ReducedInventory::from);
-                            // Get price info from the first Agent in the trade (currently, an
-                            // Agent will never initiate a trade with another agent though)
+                            // Get price info from the first Agent in the trade
+                            // (currently, an
+                            // Agent will never initiate a trade with another
+                            // agent though)
                             #[cfg(feature = "worldgen")]
                             {
                                 prices = prices.or_else(|| {
@@ -238,8 +240,8 @@ fn commit_trade(ecs: &specs::World, trade: &PendingTrade) -> TradeResult {
     }
     let invmsg = "inventories.get_mut(entities[who]).is_none() should have returned already";
     trace!("committing trade: {:?}", trade);
-    // Compute the net change in slots of each player during the trade, to detect
-    // out-of-space-ness before transferring any items
+    // Compute the net change in slots of each player during the trade, to
+    // detect out-of-space-ness before transferring any items
     let mut delta_slots: [i64; 2] = [0, 0];
 
     // local struct used to calculate delta_slots for stackable items.
@@ -296,9 +298,10 @@ fn commit_trade(ecs: &specs::World, trade: &PendingTrade) -> TradeResult {
                 },
                 Ordering::Equal => {
                     if item.is_stackable() {
-                        // Marks a full stack to remove. Can no longer accept items from the other
-                        // party, and therefore adds the remaining capacity it holds to
-                        // `unusable_capacity`.
+                        // Marks a full stack to remove. Can no longer accept
+                        // items from the other
+                        // party, and therefore adds the remaining capacity it
+                        // holds to `unusable_capacity`.
                         let TradeQuantities {
                             max_stack_size,
                             trade_quantities,
@@ -317,9 +320,11 @@ fn commit_trade(ecs: &specs::World, trade: &PendingTrade) -> TradeResult {
                 },
                 Ordering::Greater => {
                     if item.is_stackable() {
-                        // Marks a partial stack to remove, able to accepts items from the other
-                        // party, and therefore adds the additional capacity freed after the item
-                        // exchange to `freed_capacity`.
+                        // Marks a partial stack to remove, able to accepts
+                        // items from the other
+                        // party, and therefore adds the additional capacity
+                        // freed after the item exchange
+                        // to `freed_capacity`.
                         let TradeQuantities {
                             max_stack_size: _,
                             trade_quantities,
@@ -342,9 +347,9 @@ fn commit_trade(ecs: &specs::World, trade: &PendingTrade) -> TradeResult {
             }
         }
     }
-    // at this point delta_slots only contains the slot variations for unstackable
-    // items. The following loops calculates capacity for stackable items and
-    // computes the final delta_slots in consequence.
+    // at this point delta_slots only contains the slot variations for
+    // unstackable items. The following loops calculates capacity for
+    // stackable items and computes the final delta_slots in consequence.
 
     for (
         item_id,
@@ -358,9 +363,10 @@ fn commit_trade(ecs: &specs::World, trade: &PendingTrade) -> TradeResult {
             // removes all exchanged full stacks.
             delta_slots[who] -= trade_quantities[who].full_stacks as i64;
 
-            // calculates the available item capacity in the other party's inventory,
-            // substracting the unusable space calculated previously,
-            // and adding the capacity freed by the trade.
+            // calculates the available item capacity in the other party's
+            // inventory, substracting the unusable space calculated
+            // previously, and adding the capacity freed by the
+            // trade.
             let other_party_capacity = inventories
                 .get_mut(entities[1 - who])
                 .expect(invmsg)
@@ -377,12 +383,14 @@ fn commit_trade(ecs: &specs::World, trade: &PendingTrade) -> TradeResult {
                 - trade_quantities[1 - who].unusable_capacity
                 + trade_quantities[1 - who].freed_capacity;
 
-            // checks if the capacity in remaining partial stacks of the other party is
-            // enough to contain everything, creates more stacks otherwise
+            // checks if the capacity in remaining partial stacks of the other
+            // party is enough to contain everything, creates more
+            // stacks otherwise
             if other_party_capacity < trade_quantities[who].quantity_sold {
                 let surplus = trade_quantities[who].quantity_sold - other_party_capacity;
-                // the total amount of exchanged slots can never exceed the max inventory size
-                // (around 4 * 2^32 slots), so the cast to i64 should be safe
+                // the total amount of exchanged slots can never exceed the max
+                // inventory size (around 4 * 2^32 slots), so
+                // the cast to i64 should be safe
                 delta_slots[1 - who] += (surplus / *max_stack_size as u128) as i64 + 1;
             }
         }
@@ -420,8 +428,9 @@ fn commit_trade(ecs: &specs::World, trade: &PendingTrade) -> TradeResult {
             .expect(invmsg)
             .push_all(items[who].drain(..))
         {
-            // This should only happen if the arithmetic above for delta_slots says there's
-            // enough space and there isn't (i.e. underapproximates)
+            // This should only happen if the arithmetic above for delta_slots
+            // says there's enough space and there isn't (i.e.
+            // underapproximates)
             panic!(
                 "Not enough space for all the items, leftovers are {:?}",
                 leftovers
@@ -453,9 +462,9 @@ mod tests {
     use specs::{Builder, World};
 
     // Creates a specs World containing two Entities which have Inventory
-    // components. Left over inventory size is determined by input. Mapping to the
-    // returned Entities. Any input over the maximum default inventory size will
-    // result in maximum left over space.
+    // components. Left over inventory size is determined by input. Mapping to
+    // the returned Entities. Any input over the maximum default inventory
+    // size will result in maximum left over space.
     fn create_mock_trading_world(
         player_inv_size: usize,
         merchant_inv_size: usize,

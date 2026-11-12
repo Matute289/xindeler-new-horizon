@@ -43,6 +43,7 @@ main-login-2fa-expired = Tu código de autenticación de dos factores expiró. I
 main-login-2fa-locked = Esta cuenta está bloqueada después de demasiados códigos incorrectos. Contactá a soporte para desbloquearla.
 main-login-server_full = El servidor está lleno.
 main-login-untrusted_auth_server = El servidor de autenticación no es de confianza.
+main-login-credentials_not_provided = No se ingresaron credenciales.
 main-login-timeout = Timeout: El servidor no respondió a tiempo. Consejo: el servidor podría estar sobrecargado en este momento o el problema podría ser con la red.
 main-login-server_shut_down = Servidor apagado.
 main-login-network_error = Error de red.

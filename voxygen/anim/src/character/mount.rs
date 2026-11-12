@@ -90,8 +90,8 @@ impl Animation for MountAnimation {
         next.head.orientation = Quaternion::rotation_z(head_look.x + tilt * -2.0)
             * Quaternion::rotation_x((0.35 + head_look.y + tilt.abs() * 1.2).abs());
 
-        // Don't offset the chest when mounting, we don't want the position while
-        // mounting to change with scale.
+        // Don't offset the chest when mounting, we don't want the position
+        // while mounting to change with scale.
         next.chest.position = Vec3::new(0.0, s_a.chest.0, s_a.chest.1 * 0.5);
         next.chest.orientation =
             Quaternion::rotation_x(-0.4 + tilt.abs() * -1.5 - bob * speed * 0.0)

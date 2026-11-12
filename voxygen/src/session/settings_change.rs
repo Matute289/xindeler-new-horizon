@@ -174,6 +174,7 @@ pub enum Interface {
     ToggleTips(bool),
     ToggleBiomeChangePopups(bool),
     ToggleTerrainTransitions(bool),
+    ToggleHotkeyHints(bool),
 
     CrosshairTransp(f32),
     CrosshairType(CrosshairType),
@@ -186,6 +187,7 @@ pub enum Interface {
     ToggleShortcutNumbers(ShortcutNumbers),
     BuffPosition(BuffPosition),
     RowBackgroundOpacity(f32),
+    PauseMenuOverlayOpacity(f32),
 
     UiScale(ScaleChange),
     //Minimap
@@ -470,7 +472,8 @@ impl SettingsChange {
 
                 // reset gamepad
                 Control::ResetKeyBindingsGamepad => {
-                    // Currently resets everything on the controller to the default controls, this
+                    // Currently resets everything on the controller to the
+                    // default controls, this
                     // should be intended behavior
                     settings.controller = ControllerSettings::default();
                 },
@@ -787,6 +790,9 @@ impl SettingsChange {
                     Interface::ToggleTerrainTransitions(toggle_terrain_transitions) => {
                         settings.interface.toggle_terrain_transitions = toggle_terrain_transitions;
                     },
+                    Interface::ToggleHotkeyHints(toggle_hotkey_hints) => {
+                        settings.interface.toggle_hotkey_hints = toggle_hotkey_hints;
+                    },
                     Interface::CrosshairTransp(crosshair_opacity) => {
                         settings.interface.crosshair_opacity = crosshair_opacity;
                     },
@@ -907,6 +913,9 @@ impl SettingsChange {
                     },
                     Interface::RowBackgroundOpacity(opacity) => {
                         settings.interface.row_background_opacity = opacity;
+                    },
+                    Interface::PauseMenuOverlayOpacity(opacity) => {
+                        settings.interface.pause_menu_overlay_opacity = opacity;
                     },
                 }
             },

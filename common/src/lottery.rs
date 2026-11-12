@@ -146,8 +146,8 @@ pub fn distribute_many<T: Copy + Eq + Hash, I>(
         };
 
         while distributed < amount {
-            // Can't give more than amount, and don't give more than the average between all
-            // to keep things well distributed.
+            // Can't give more than amount, and don't give more than the average
+            // between all to keep things well distributed.
             let max_give = (amount / participants.len() as u32).clamp(1, amount - distributed);
             give = give.clamp(1, max_give);
             let x = rng.random_range(0.0..=current_total_weight);
@@ -178,7 +178,8 @@ pub fn distribute_many<T: Copy + Eq + Hash, I>(
                 let winner = participants.swap_remove(index);
                 exec_item(item, winner.data, winner.current_recieved_count);
 
-                // Keep participant weights correct so that we can binary search it.
+                // Keep participant weights correct so that we can binary search
+                // it.
                 for participant in &mut participants[index..] {
                     current_total_weight += participant.weight;
                     participant.sorted_weight = current_total_weight - participant.weight;
@@ -317,20 +318,21 @@ impl<T: AsRef<str>> LootSpec<T> {
             let hash = item.item_hash();
             match items.binary_search_by_key(&hash, |(_, item)| item.item_hash()) {
                 Ok(i) => {
-                    // Since item hash can collide with other items, we search nearby items with the
-                    // same hash.
-                    // NOTE: The `ParitalEq` implementation for `Item` doesn't compare some data
-                    // like durability, or wether slots contain anything. Although since these are
-                    // Newly loaded items we don't care about comparing those for deduplication
-                    // here.
+                    // Since item hash can collide with other items, we search
+                    // nearby items with the same hash.
+                    // NOTE: The `ParitalEq` implementation for `Item` doesn't
+                    // compare some data like durability, or
+                    // wether slots contain anything. Although since these are
+                    // Newly loaded items we don't care about comparing those
+                    // for deduplication here.
                     let has_same_hash = |i: &usize| items[*i].1.item_hash() == hash;
                     if let Some(i) = (i..items.len())
                         .take_while(has_same_hash)
                         .chain((0..i).rev().take_while(has_same_hash))
                         .find(|i| items[*i].1 == item)
                     {
-                        // We saturate at 4 billion items, could use u64 instead if this isn't
-                        // desirable.
+                        // We saturate at 4 billion items, could use u64 instead
+                        // if this isn't desirable.
                         items[i].0 = items[i].0.saturating_add(count);
                     } else {
                         items.insert(i, (count, item));
@@ -409,8 +411,8 @@ impl<T: AsRef<str>> LootSpec<T> {
             },
             Self::MultiDrop(loot_spec, lower, upper) => {
                 let sub_amount = rng.random_range(*lower..=*upper);
-                // We saturate at 4 billion items, could use u64 instead if this isn't
-                // desirable.
+                // We saturate at 4 billion items, could use u64 instead if this
+                // isn't desirable.
                 loot_spec.to_items_inner(rng, sub_amount.saturating_mul(amount), items);
             },
             Self::All(loot_specs) => {

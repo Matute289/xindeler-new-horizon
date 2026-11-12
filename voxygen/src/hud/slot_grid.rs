@@ -295,8 +295,8 @@ impl<'a> Widget for SlotGrid<'a> {
             });
         }
 
-        // Add the first empty slot (if any) to the items list to help with removing
-        // gear and visualizing when more space is available
+        // Add the first empty slot (if any) to the items list to help with
+        // removing gear and visualizing when more space is available
         if self.filter != TabFilters::None
             && let Some(empty_slot) = inventory_iter().find(|(_, item)| item.is_none())
         {
@@ -380,8 +380,8 @@ impl<'a> Widget for SlotGrid<'a> {
             });
         }
 
-        // Determine the range of inventory slots that are provided by the loadout item
-        // that the mouse is over
+        // Determine the range of inventory slots that are provided by the
+        // loadout item that the mouse is over
         let mouseover_loadout_slots = self
             .slot_manager
             .mouse_over_slot
@@ -418,10 +418,11 @@ impl<'a> Widget for SlotGrid<'a> {
         };
 
         // `rendered` counts only slots that actually get drawn this frame — in
-        // details_mode for someone else's bag, empty slots are skipped (below), so
-        // it diverges from the enumerate index `i` (which stays the stable
-        // widget-id-array index). Row/column placement and the loadout-hover range
-        // check must use `rendered`, or a skipped slot leaves a gap in the layout.
+        // details_mode for someone else's bag, empty slots are skipped (below),
+        // so it diverges from the enumerate index `i` (which stays the
+        // stable widget-id-array index). Row/column placement and the
+        // loadout-hover range check must use `rendered`, or a skipped
+        // slot leaves a gap in the layout.
         let mut rendered = 0usize;
         for (i, (pos, item)) in items.into_iter().enumerate() {
             if self.details_mode && !self.is_us && item.is_none() {
@@ -458,7 +459,8 @@ impl<'a> Widget for SlotGrid<'a> {
                     (x as f64 * (self.slot_size + self.spacing)).floor(),
                 );
 
-            // Highlight slots are provided by the loadout item (bag) that the mouse is over
+            // Highlight slots are provided by the loadout item (bag) that the
+            // mouse is over
             if self.filter == TabFilters::None && mouseover_loadout_slots.contains(&rendered) {
                 slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 1.0, 1.0, 1.0));
             }
@@ -472,9 +474,10 @@ impl<'a> Widget for SlotGrid<'a> {
                 slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 0.0, 0.0, 1.0));
             }
 
-            // Caller-supplied per-slot tint, applied last so it wins over the highlights
-            // above. Deliberately not gated on `filter`: a gray-out on a filtered tab's
-            // candidate list is more useful than on the full inventory, not less.
+            // Caller-supplied per-slot tint, applied last so it wins over the
+            // highlights above. Deliberately not gated on `filter`:
+            // a gray-out on a filtered tab's candidate list is more
+            // useful than on the full inventory, not less.
             if let Some(tint) = self.slot_tint
                 && let Some(color) = tint(pos, item)
             {
@@ -533,7 +536,8 @@ impl<'a> Widget for SlotGrid<'a> {
                 }
                 if self.details_mode {
                     let (name, _) = util::item_text(item, self.localized_strings, self.item_i18n);
-                    // TODO: text is not aligned with list mode icons, need to fix
+                    // TODO: text is not aligned with list mode icons, need to
+                    // fix
                     Text::new(&name)
                         .top_left_with_margins_on(
                             id,
@@ -580,14 +584,16 @@ impl<'a> Widget for SlotGrid<'a> {
             rendered += 1;
         }
 
-        // Add padding beneath the last row of items to make scrolling feel more natural
+        // Add padding beneath the last row of items to make scrolling feel more
+        // natural
         if !state.ids.item_slots.is_empty() {
             Rectangle::fill_with([1.0, 15.0], color::TRANSPARENT)
                 .down_from(state.ids.item_slots[state.ids.item_slots.len() - 1], 0.0)
                 .set(state.ids.spacing_below, ui);
         }
 
-        // Not exactly an event, but I have to return the filtered list size somehow
+        // Not exactly an event, but I have to return the filtered list size
+        // somehow
         events.push(SlotEvents::FilteredSize(total_slots));
 
         // Open context menu if any slot is selected
@@ -599,7 +605,8 @@ impl<'a> Widget for SlotGrid<'a> {
             let context_cancel = self.localized_strings.get_msg("hud-context-menu-cancel");
 
             let actions = [context_use, context_drop, context_cancel];
-            // TODO: instead of storing [x,y] coordinates, consider storing the widget id
+            // TODO: instead of storing [x,y] coordinates, consider storing the
+            // widget id
             let [x, y] = state.context_menu_pos;
             let total_h = (actions.len() as f64 * 25.0) + ((actions.len() as f64 + 1.0) * 2.0);
 

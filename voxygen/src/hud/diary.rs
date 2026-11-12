@@ -10,7 +10,7 @@ use crate::{
     hud::{
         self,
         slots::{AbilitySlot, SlotManager},
-        util,
+        util::{self, formatted_float, formatted_float_signed},
     },
     ui::{
         ImageFrame, Tooltip, TooltipManager, Tooltipable,
@@ -508,25 +508,31 @@ impl Widget for Diary<'_> {
         let widget::UpdateArgs { state, ui, .. } = args;
         let mut events = Vec::new();
 
-        // MENU INPUTS: diary navigation, mirroring the SlotGrid/menu_events pattern
-        // the bag already uses (see hud/slot_grid.rs, hud/bag.rs).
+        // MENU INPUTS: diary navigation, mirroring the SlotGrid/menu_events
+        // pattern the bag already uses (see hud/slot_grid.rs,
+        // hud/bag.rs).
         //
         // Local focus areas (LocalFocus cycles through them):
         // - Area 0, section list: Up/Down highlights a section (SkillTrees,
-        //   AbilitySelection, Spells, Character, Recipes), Apply switches to it.
-        // - Area 1, active-abilities row: only meaningful in the AbilitySelection/
-        //   Spells sections (a no-op elsewhere). Left/Right highlights a slot in the
-        //   fixed-size action-bar row, Apply selects it via the shared SlotManager.
-        // - Area 2, ability-browse grid: only meaningful in the AbilitySelection/
-        //   Spells sections. Up/Down/Left/Right highlights a slot in the current page's
-        //   2-column grid, Apply selects it. PageUp/PageDown turns the page (works
-        //   regardless of local focus, while one of these two sections is showing) —
-        //   the existing per-section render code already clamps the page index to the
-        //   real page count each frame, so this need not know the list length up front.
+        //   AbilitySelection, Spells, Character, Recipes), Apply switches to
+        //   it.
+        // - Area 1, active-abilities row: only meaningful in the
+        //   AbilitySelection/ Spells sections (a no-op elsewhere). Left/Right
+        //   highlights a slot in the fixed-size action-bar row, Apply selects
+        //   it via the shared SlotManager.
+        // - Area 2, ability-browse grid: only meaningful in the
+        //   AbilitySelection/ Spells sections. Up/Down/Left/Right highlights a
+        //   slot in the current page's 2-column grid, Apply selects it.
+        //   PageUp/PageDown turns the page (works regardless of local focus,
+        //   while one of these two sections is showing) — the existing
+        //   per-section render code already clamps the page index to the real
+        //   page count each frame, so this need not know the list length up
+        //   front.
         //
-        // SkillTrees/Character/Recipes sections only get area 0 (section-switching)
-        // navigation in this pass — their own content (a skill-point node graph, a
-        // stats readout, and a recipe list respectively) is out of scope here; the
+        // SkillTrees/Character/Recipes sections only get area 0
+        // (section-switching) navigation in this pass — their own
+        // content (a skill-point node graph, a stats readout, and a
+        // recipe list respectively) is out of scope here; the
         // existing mouse-emulation fallback still reaches them.
         //
         // Back closes the diary, same as the X button.
@@ -783,8 +789,9 @@ impl Widget for Diary<'_> {
 
                 // Draw skillgroup tab's icons
                 for (i, skill_tree) in DiarySkillTree::iter().enumerate() {
-                    // The Class tab is only shown when the character has a class
-                    // skill group. Skip entirely otherwise so the tab doesn't
+                    // The Class tab is only shown when the character has a
+                    // class skill group. Skip entirely
+                    // otherwise so the tab doesn't
                     // appear as a locked "General" placeholder.
                     if skill_tree == DiarySkillTree::Class && class_group.is_none() {
                         continue;
@@ -1493,12 +1500,13 @@ impl Widget for Diary<'_> {
                     // The page width...
                     let text_width = 299.0 * 2.0
                         - if same_weap_kinds && matches!(ability, AuxiliaryAbility::MainWeapon(_)) {
-                            // with double the width of an ability image and some padding subtracted
+                            // with double the width of an ability image and
+                            // some padding subtracted
                             // if dual wielding two of the same weapon kind
                             (20.0 + 100.0 + 10.0) * 2.0
                         } else {
-                            // or the width of an ability image and some padding subtracted
-                            // otherwise
+                            // or the width of an ability image and some padding
+                            // subtracted otherwise
                             20.0 * 2.0 + 100.0
                         };
                     Text::new(&ability_title)
@@ -1971,8 +1979,9 @@ impl Widget for Diary<'_> {
                         Some(spell) => self.localized_strings.get_msg(&spell.name_i18n),
                         None => Cow::Borrowed(pool_key.unwrap_or_default()),
                     };
-                    // Most spells already have authored prose; a few do not, and
-                    // for those the tooltip is simply empty rather than showing a
+                    // Most spells already have authored prose; a few do not,
+                    // and for those the tooltip is simply
+                    // empty rather than showing a
                     // raw i18n key.
                     let description = spell
                         .and_then(|spell| self.localized_strings.try_msg(&spell.description_i18n))
@@ -2209,24 +2218,34 @@ impl Widget for Diary<'_> {
                             format!("{:+.0}%", (energy_rew - 1.0) * 100.0)
                         },
                         CharacterStat::Stealth => {
-                            // The player's own readout of their own concealment,
+                            // The player's own readout of their own
+                            // concealment,
                             // not an observer looking at them, so there is no
                             // observer-side pierce-concealment to apply.
                             let stealth_perception_multiplier =
                                 combat::perception_dist_multiplier_from_stealth(
                                     derived, None, self.stats, None,
                                 );
-                            let txt =
-                                format!("{:+.1}%", (1.0 - stealth_perception_multiplier) * 100.0);
+                            let txt = format!(
+                                "{}%",
+                                formatted_float_signed(
+                                    (1.0 - stealth_perception_multiplier) * 100.0,
+                                    1,
+                                )
+                            );
 
                             txt
                         },
                         CharacterStat::WeaponPower => match (main_weap_stats, off_weap_stats) {
                             (Some(m_stats), Some(o_stats)) => {
-                                format!("{}   {}", m_stats.power * 10.0, o_stats.power * 10.0)
+                                format!(
+                                    "{}   {}",
+                                    formatted_float(m_stats.power * 10.0, 2),
+                                    formatted_float(o_stats.power * 10.0, 2),
+                                )
                             },
                             (Some(stats), None) | (None, Some(stats)) => {
-                                format!("{}", stats.power * 10.0)
+                                formatted_float(stats.power * 10.0, 2)
                             },
                             (None, None) => String::new(),
                         },
@@ -2249,12 +2268,12 @@ impl Widget for Diary<'_> {
                             (Some(m_stats), Some(o_stats)) => {
                                 format!(
                                     "{}   {}",
-                                    m_stats.effect_power * 10.0,
-                                    o_stats.effect_power * 10.0
+                                    formatted_float(m_stats.effect_power * 10.0, 2),
+                                    formatted_float(o_stats.effect_power * 10.0, 2),
                                 )
                             },
                             (Some(stats), None) | (None, Some(stats)) => {
-                                format!("{}", stats.effect_power * 10.0)
+                                formatted_float(stats.effect_power * 10.0, 2)
                             },
                             (None, None) => String::new(),
                         },
@@ -2743,8 +2762,8 @@ impl Diary<'_> {
         use PositionSpecifier::TopLeftWithMarginsOn;
 
         // Title — generic localized header (the active class is conveyed by the
-        // selected tab + the character sheet, so this avoids needing a localized
-        // name key for every one of the 14 classes).
+        // selected tab + the character sheet, so this avoids needing a
+        // localized name key for every one of the 14 classes).
         let title = self.localized_strings.get_msg("hud-skill_tree-class-title");
         Text::new(&title)
             .mid_top_with_margin_on(state.ids.content_align, 2.0)
@@ -2854,7 +2873,8 @@ impl Diary<'_> {
                 .resize(n, &mut ui.widget_id_generator())
         });
 
-        // Resolve widget ids for Unlockable entries (abilities carry no id field).
+        // Resolve widget ids for Unlockable entries (abilities carry no id
+        // field).
         let mut unlockable_counter = 0usize;
         let final_icons: Vec<SkillIcon> = skill_icons
             .into_iter()
@@ -4320,8 +4340,9 @@ impl Diary<'_> {
         let (title, description) =
             skill_strings.localize(self.localized_strings, self.skill_set, skill);
         // BL-06 UX: append the next-rank SP cost to the tooltip so the red
-        // "insufficient points" colour is self-explanatory (cost scales with rank:
-        // rank N costs N SP). Mirrors the active-ability button. Omitted at max level.
+        // "insufficient points" colour is self-explanatory (cost scales with
+        // rank: rank N costs N SP). Mirrors the active-ability button.
+        // Omitted at max level.
         let description = if self.skill_set.is_at_max_level(skill) {
             format!("{description}")
         } else {

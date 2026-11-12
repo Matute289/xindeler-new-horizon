@@ -85,8 +85,8 @@ impl ServerInfoState {
     ) -> Result<Self, CharSelectionState> {
         let server = global_state.profile.servers.get(&server_info.name);
 
-        // If there are no rules, or we've already accepted these rules, we don't need
-        // this state
+        // If there are no rules, or we've already accepted these rules, we
+        // don't need this state
         if (server_description.rules.is_none()
             || server
                 .is_some_and(|s| s.accepted_rules == Some(rules_hash(&server_description.rules))))
@@ -208,7 +208,8 @@ impl PlayState for ServerInfoState {
         for message in messages {
             match message {
                 Message::Accept => {
-                    // Update last-accepted rules hash so we don't see the message again
+                    // Update last-accepted rules hash so we don't see the
+                    // message again
                     if let Some(server) = global_state
                         .profile
                         .servers
@@ -312,9 +313,9 @@ impl Controls {
             );
         }
 
-        // elements.push(iced::Text::new(format!("{}: {}", self.server_info.name,
-        // self.server_info.description))     .size(self.fonts.cyri.scale(20))
-        //     .width(Length::Shrink)
+        // elements.push(iced::Text::new(format!("{}: {}",
+        // self.server_info.name, self.server_info.description))
+        // .size(self.fonts.cyri.scale(20))     .width(Length::Shrink)
         //     .horizontal_alignment(HorizontalAlignment::Center)
         //     .into());
 

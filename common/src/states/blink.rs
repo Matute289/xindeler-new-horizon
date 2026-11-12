@@ -71,10 +71,12 @@ impl CharacterBehavior for Data {
                         ..*self
                     });
                 } else {
-                    // Blinks to target location, defaults to 25 meters in front if no target
-                    // provided. BL-05: a dimensional anchor (`Stats.disable_teleport`,
-                    // from `BuffKind::Anchored`) makes the blink fizzle — buildup
-                    // completes but no teleport happens.
+                    // Blinks to target location, defaults to 25 meters in front
+                    // if no target provided. BL-05: a
+                    // dimensional anchor (`Stats.disable_teleport`,
+                    // from `BuffKind::Anchored`) makes the blink fizzle —
+                    // buildup completes but no teleport
+                    // happens.
                     if !data.stats.disable_teleport {
                         match self.static_data.anchor {
                             // An anchored blink goes where its anchor says,

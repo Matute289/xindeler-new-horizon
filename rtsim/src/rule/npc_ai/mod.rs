@@ -67,10 +67,9 @@ use common::{
     store::Id,
     terrain::{CoordinateConversions, TerrainChunkSize, sprite},
     time::DayPeriod,
-    util::{Dir, Dir2},
+    util::{Dir, Dir2, fx_hash::FxHasher64},
 };
 use core::ops::ControlFlow;
-use fxhash::FxHasher64;
 use itertools::{Either, Itertools};
 use rand::{prelude::*, seq::IndexedRandom};
 use rand_chacha::ChaChaRng;
@@ -106,8 +105,8 @@ struct DefaultState {
 
 impl Rule for NpcAi {
     fn start(rtstate: &mut RtState) -> Result<Self, RuleError> {
-        // Keep track of the last `SIMULATED_TICK_SKIP` ticks, to know the deltatime
-        // since the last tick we ran the npc.
+        // Keep track of the last `SIMULATED_TICK_SKIP` ticks, to know the
+        // deltatime since the last tick we ran the npc.
         let mut last_ticks: VecDeque<_> = [1.0 / 30.0; SIMULATED_TICK_SKIP as usize]
             .into_iter()
             .collect();
@@ -264,9 +263,10 @@ fn smalltalk_to<S: State>(tgt: ActorId) -> impl Action<S> {
             && tgt.npc().is_some()
             && ctx.rng.random_bool(0.2)
         {
-            // Cut off the conversation sometimes to avoid infinite conversations (but only
-            // if the target is an NPC!) TODO: Don't special case this, have
-            // some sort of 'bored of conversation' system
+            // Cut off the conversation sometimes to avoid infinite
+            // conversations (but only if the target is an NPC!)
+            // TODO: Don't special case this, have some sort of
+            // 'bored of conversation' system
             idle().boxed()
         } else {
             // Mention nearby sites
@@ -1261,8 +1261,10 @@ fn check_inbox<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<S>> {
                     {
                         // TODO: Don't report self
                         let phrase = if let Some(killer) = killer {
-                            // TODO: For now, we don't make sentiment changes if the killer was an
-                            // NPC in some cases because some NPCs can't hurt one-another.
+                            // TODO: For now, we don't make sentiment changes if
+                            // the killer was an NPC
+                            // in some cases because some NPCs can't hurt
+                            // one-another.
                             // This should be changed in the future.
                             let can_damage_killer = if ctx
                                 .data
@@ -1310,8 +1312,10 @@ fn check_inbox<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<S>> {
                                 true
                             };
 
-                            // TODO: Roles themselves are kind of a hack, and so is this. This is
-                            // mostly a fix for npcs getting angry if you kill for example an ogre.
+                            // TODO: Roles themselves are kind of a hack, and so
+                            // is this. This is
+                            // mostly a fix for npcs getting angry if you kill
+                            // for example an ogre.
                             let is_victim_inherent_enemy = if let Some(actor) =
                                 ctx.data.actors.get(actor)
                                 && actor.npc().is_some()
@@ -1349,7 +1353,8 @@ fn check_inbox<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<S>> {
                             if can_damage_killer {
                                 // TODO: Don't hard-code sentiment change
                                 let change = if is_victim_enemy {
-                                    // Like the killer if we have negative sentiment towards the
+                                    // Like the killer if we have negative
+                                    // sentiment towards the
                                     // killed.
                                     0.25
                                 } else {
@@ -1360,7 +1365,8 @@ fn check_inbox<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<S>> {
                                     .change_by(change, Sentiment::VILLAIN);
                             }
 
-                            // This is a murder of a player. Feel bad for the player and stop
+                            // This is a murder of a player. Feel bad for the
+                            // player and stop
                             // attacking them.
                             if ctx
                                 .data
@@ -1399,7 +1405,8 @@ fn check_inbox<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<S>> {
                         site,
                         sprite,
                     } => {
-                        // Check if this happened at home, where we know what belongs to who
+                        // Check if this happened at home, where we know what
+                        // belongs to who
                         if let Some(site) = site
                             && ctx.actor.home == Some(site)
                         {

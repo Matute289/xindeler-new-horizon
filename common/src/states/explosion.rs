@@ -108,7 +108,8 @@ impl CharacterBehavior for Data {
                         ..*self
                     });
                 } else {
-                    // Create an explosion after action before transitioning to recover
+                    // Create an explosion after action before transitioning to
+                    // recover
                     let pos = if self.static_data.eye_height {
                         data.pos.0
                             + Vec3::unit_z() * data.body.eye_height(data.scale.map_or(1.0, |s| s.0))

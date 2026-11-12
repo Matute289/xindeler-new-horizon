@@ -725,8 +725,9 @@ impl Structure for House {
                             //2 => site.tile_wpos(Vec2::new(x, self.tile_aabr.min.y)),
                             _ => Vec2::zero(),
                         };
-                        // NOTE: Orientation 2 doesn't work for some reason. I believe it is
-                        // something to do with AABBs with min and max not smaller in the right
+                        // NOTE: Orientation 2 doesn't work for some reason. I
+                        // believe it is something to do
+                        // with AABBs with min and max not smaller in the right
                         // order. The same thing is true for orientation 3.
                         let support = match self.front {
                             Dir2::Y => painter.line(

@@ -58,9 +58,12 @@ impl<K: Hash + Eq + Send + Sync + 'static + Clone, V: Send + Sync + 'static> Key
                     KeyedJobTask::Pending(at, job) => {
                         let fresh = now - *at < KEYEDJOBS_GC_INTERVAL;
                         if !fresh && let Some(job) = job.take() {
-                            // Cancelling a job only fails if the job doesn't exist anymore,
-                            // which means that it completed while we tried to GC its pending
-                            // struct, which means that we'll GC it in the next cycle, so ignore
+                            // Cancelling a job only fails if the job doesn't
+                            // exist anymore,
+                            // which means that it completed while we tried to
+                            // GC its pending
+                            // struct, which means that we'll GC it in the next
+                            // cycle, so ignore
                             // the error in this collection.
                             let _ = pool.cancel(job);
                         }
@@ -82,8 +85,9 @@ impl<K: Hash + Eq + Send + Sync + 'static + Clone, V: Send + Sync + 'static> Key
                     ret
                 },
                 Entry::Vacant(e) => {
-                    // TODO: consider adding a limit to the number of submitted jobs based on the
-                    // number of available threads, once SlowJobPool supports a notion of
+                    // TODO: consider adding a limit to the number of submitted
+                    // jobs based on the number of available
+                    // threads, once SlowJobPool supports a notion of
                     // approximating that
                     let tx = self.tx.clone();
                     let f = f();

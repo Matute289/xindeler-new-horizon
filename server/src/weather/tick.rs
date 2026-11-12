@@ -148,8 +148,8 @@ impl<'a> System<'a> for Sys {
             }
         }
 
-        // Chance to emit lightning every frame from one or more of the cells that
-        // currently has the correct weather conditions.
+        // Chance to emit lightning every frame from one or more of the cells
+        // that currently has the correct weather conditions.
         let mut outcome_emitter = outcomes.emitter();
         let mut rng = rand::rng();
         let num_cells = lightning_cells.cells.len() as f64 * 0.0015 * delta_time.0 as f64;

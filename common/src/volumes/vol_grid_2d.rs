@@ -68,7 +68,8 @@ impl<V: RectRasterableVol + ReadVol + Debug> ReadVol for VolGrid2d<V> {
             .ok_or(VolGrid2dError::NoSuchChunk)
             .map(|chunk| {
                 let co = Self::chunk_offs(pos);
-                // Always within bounds of the chunk, so we can use the get_unchecked form
+                // Always within bounds of the chunk, so we can use the
+                // get_unchecked form
                 chunk.get_unchecked(co)
             })
     }
@@ -87,8 +88,9 @@ impl<V: RectRasterableVol + ReadVol + Debug> ReadVol for VolGrid2d<V> {
                 let pos = self.key_pos(key);
                 // Calculate intersection of Aabb and this chunk
                 // TODO: should we do this more implicitly as part of the loop
-                // TODO: this probably has to be computed in the chunk.for_each_in() as well
-                // maybe remove here?
+                // TODO: this probably has to be computed in the
+                // chunk.for_each_in() as well maybe remove
+                // here?
                 let intersection = aabb.intersection(Aabb {
                     min: pos.with_z(i32::MIN),
                     // -1 here since the Aabb is inclusive and chunk_offs below will wrap it if

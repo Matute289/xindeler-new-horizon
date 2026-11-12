@@ -222,7 +222,8 @@ impl IndexOwned {
         let biome_profiles_reloaded = self.biome_profiles_reload_watcher.reloaded();
         let reloaded = colors_reloaded || features_reloaded || biome_profiles_reloaded;
         reloaded.then(move || {
-            // Reload the fields from the asset handle, which is updated automatically
+            // Reload the fields from the asset handle, which is updated
+            // automatically
             self.colors = self.index.colors.cloned();
             self.features = self.index.features.cloned();
             self.biome_profiles = validated_biome_profiles(self.index.biome_profiles.cloned());

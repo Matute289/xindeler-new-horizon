@@ -2,7 +2,7 @@
 /// emits sfx related to weapons and attacks/abilities
 use crate::{
     AudioFrontend,
-    audio::sfx::{SFX_DIST_LIMIT_SQR, SfxEvent, SfxTriggerItem, SfxTriggers},
+    audio::sfx::{SFX_DIST_LIMIT_SQR, SfxEvent, SfxTag, SfxTriggerItem, SfxTriggers},
     scene::{Camera, FigureMgr, Terrain},
 };
 
@@ -88,17 +88,18 @@ impl EventMapper for CombatEventMapper {
                     triggers.0.get_key_value(&mapped_event),
                 ) {
                     let sfx_trigger_item = triggers.0.get_key_value(&mapped_event);
-                    audio.emit_sfx(sfx_trigger_item, pos.0, None);
+                    audio.emit_sfx(sfx_trigger_item, pos.0, None, SfxTag::Combat);
                     sfx_state.time = Instant::now();
                 }
 
-                // update state to determine the next event. We only record the time (above) if
-                // it was dispatched
+                // update state to determine the next event. We only record the
+                // time (above) if it was dispatched
                 sfx_state.event = mapped_event;
                 sfx_state.weapon_drawn = Self::weapon_drawn(character);
 
-                // Battle Refrain: layered on top of the event above, tracked on its
-                // own independent timer so a fast attack can't starve it (or vice-versa).
+                // Battle Refrain: layered on top of the event above, tracked on
+                // its own independent timer so a fast attack
+                // can't starve it (or vice-versa).
                 let refrain_event = inventory
                     .and_then(|inv| Self::map_refrain(character, inv))
                     .unwrap_or(SfxEvent::Idle);
@@ -109,7 +110,7 @@ impl EventMapper for CombatEventMapper {
                     triggers.0.get_key_value(&refrain_event),
                 ) {
                     let sfx_trigger_item = triggers.0.get_key_value(&refrain_event);
-                    audio.emit_sfx(sfx_trigger_item, pos.0, None);
+                    audio.emit_sfx(sfx_trigger_item, pos.0, None, SfxTag::Combat);
                     sfx_state.refrain_time = Instant::now();
                 }
                 sfx_state.refrain_event = refrain_event;

@@ -100,7 +100,7 @@ common-i18n = { package = "xindeler-common-i18n", path = "../common/i18n"}
 serde = { workspace = true, features = ["rc"] }
 ron = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
-rustyline = { version = "18", optional = true }
+rustyline = { version = "19", optional = true }
 ## logging
 common-frontend = { package = "xindeler-common-frontend", path = "../common/frontend", optional = true }
 

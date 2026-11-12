@@ -115,8 +115,8 @@ fn weapon_stats() -> Result<(), Box<dyn Error>> {
         "Description",
     ])?;
 
-    // Does all items even outside weapon folder since we check if itemkind was a
-    // tool anyways
+    // Does all items even outside weapon folder since we check if itemkind was
+    // a tool anyways
     let items: Vec<Item> =
         Item::new_from_asset_glob("common.items.*").expect("Failed to iterate over item folders!");
 
@@ -392,7 +392,8 @@ fn entity_drops(entity_config: &str) -> Result<(), Box<dyn Error>> {
             .map(|(chance, item)| (chance / table_weight_sum, item));
 
         for (chance, item) in table {
-            // Changes normalized weight to add to 100, and rounds at 2nd decimal
+            // Changes normalized weight to add to 100, and rounds at 2nd
+            // decimal
             let percent_chance = chance
                 .mul(10_f32.powi(4))
                 .round()

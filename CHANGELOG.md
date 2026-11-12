@@ -12,6 +12,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-03
+
+### Added
+
+- Sound effects now have a priority system, so important sounds are no longer drowned out when many play at once (from upstream).
+- The in-game ECS debug menu shows a "go to" shortcut next to each entity's position (from upstream).
+- The new on-screen hotkey hints can be toggled back on and off (from upstream).
+
+### Changed
+
+- Upstream Veloren `master` was integrated (41 upstream commits, up to the point just before upstream's login rework, which is intentionally not included). This brings in the balance, audio and stability changes listed below.
+- Skill balance changes (two batches) and a basic balancing pass on bows (from upstream).
+- Explosions are quieter, to spare players' ears (from upstream).
+- The screen behind the pause menu is darker (from upstream).
+- The diary's character overview rounds its values (from upstream).
+- Guards are now marked as guards and no longer run away from scary sounds (from upstream).
+- The server and client are now built with `nightly-2026-09-15` (the newer nightlies tried on 2026-10-25 and 2026-11-01 hit compiler bugs), and the code was reformatted for the updated rustfmt. No behaviour change.
+- The release pipeline no longer uploads the updater a second time when it has already been published.
+
+### Fixed
+
+- Players are no longer counted toward the real-time simulation's population (from upstream).
+- A server panic related to lag spikes (from upstream).
+- Effects are no longer applied when damage is above zero but below the minimum threshold, plus a small fix to the spine cracker (from upstream).
+- Fish no longer end up on land (from upstream).
+- A French translation update (from upstream); duplicate Spanish translation keys left by the upstream integration were removed.
+
+### Security
+
+- All Rust dependencies with published RustSec advisories were updated, including `wasmtime` (45 to 49), `quinn-proto`, `rustls`, `webpki`, `tokio`, `quick-xml`, `zstd`, `lru`, `memmap2`, `event-listener`, `chacha20`, `rtrb`, `crossbeam-epoch` and `clipboard-win`. The server running on the VPS should be updated to this version, since the previous release carries those vulnerable versions.
+
+## [0.26.1] - 2026-09-10
+
+### Added
+
+- Server operators can now send a "Big Screen" announcement: a full-screen message that interrupts every recipient's view for a few seconds (scaled to the message's length), shown in addition to the normal chat window, for messages that must not be missed.
+
+### Fixed
+
+- Client downloads (Windows, macOS, Linux) now bundle the game's assets together with the client binary. A manual download previously crashed on launch with "Asset directory not found" because the assets shipped as a separate file that nothing combined with the executable.
+- The game window's Linux taskbar/dock identification no longer shows the old Veloren branding.
+- macOS packaging no longer runs out of disk space signing the `.dmg` (v0.26.0's build failed on this; nothing from that tag was published).
+
+## [0.22.0] - 2026-08-28
+
 ### Added
 
 - The bag now shows contextual on-screen hints in the bottom-right corner that change with what you are doing (climbing, swimming, wielding a weapon, night-time), replacing the four fixed Settings/Social/Map/Crafting corner buttons.
@@ -94,6 +139,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A 'particle chance' slider to control the amount of particles
 - An area kind where players can change battlemode: `/area_add name battlemode_change ...`
 - Toggle for the biome change popup
+- Overlay tint when game is paused
+- Sfx priority system; more important sfx can override less important ones
 
 ### Changed
 
@@ -123,6 +170,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fast river sfx
 - All NPCs don't go to bed & wake up at the same time.
 - Mounted NPC can now properly utilize their free will.
+- Fish no longer walk on land.
+- Panic related to lag spikes
 
 ## [0.18.0] - 2026-01-23
 

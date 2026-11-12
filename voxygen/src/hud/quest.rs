@@ -188,8 +188,9 @@ impl Widget for Quest<'_> {
         }
 
         // Window BG
-        // TODO: It would be nice to use `RoundedRectangle` here, but unfortunately it
-        // seems to not propagate scroll events properly!
+        // TODO: It would be nice to use `RoundedRectangle` here, but
+        // unfortunately it seems to not propagate scroll events
+        // properly!
         Rectangle::fill_with([tweak!(130.0), tweak!(100.0)], color::TRANSPARENT)
             .mid_bottom_with_margin_on(ui.window, 80.0)
             .w_h(749.0, 234.0)
@@ -310,7 +311,8 @@ impl Widget for Quest<'_> {
             };
 
             for (i, (response_id, response)) in responses.iter().enumerate() {
-                // Determine whether all requirements for sending the response are met
+                // Determine whether all requirements for sending the response
+                // are met
                 let is_valid = if let Some((item, amount)) = &response.given_item {
                     self.client
                         .state()

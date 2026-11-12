@@ -304,7 +304,8 @@ fn generate_mesh(segment: &Segment, offs: Vec3<f32>) -> Vec<Vert> {
             let is_filled = |pos| segment.get(pos).map(|v| v.is_filled()).unwrap_or(false);
 
             let occluders = |unit_x, unit_y, dir| {
-                // Would be nice to generate unit_x and unit_y from a given direction.
+                // Would be nice to generate unit_x and unit_y from a given
+                // direction.
                 [
                     is_filled(pos + dir - unit_x),
                     is_filled(pos + dir - unit_x - unit_y),

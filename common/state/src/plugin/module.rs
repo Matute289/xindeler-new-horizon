@@ -418,7 +418,8 @@ impl PluginModule {
 
     pub fn name(&self) -> &str { &self.name }
 
-    // Implementation of the commands called from veloren and provided in plugins
+    // Implementation of the commands called from veloren and provided in
+    // plugins
     pub fn load_event(
         &mut self,
         ecs: &EcsWorld,

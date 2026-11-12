@@ -61,11 +61,23 @@ impl Data {
     }
 }
 
+/// Energy drained per second of sustained upward climbing, before skills.
+pub const CLIMB_ENERGY_COST: f32 = 15.0;
+
+/// The energy below which starting a climb is not worth it.
+///
+/// `handle_climb` itself only refuses below `1.0` — enough to enter the state
+/// and be thrown off it a few hundredths of a second later, which is fine for a
+/// player who chose to try and useless for an NPC deciding whether to commit.
+/// Expressed against [`CLIMB_ENERGY_COST`] rather than as a bare number so the
+/// two cannot drift apart: this is roughly two thirds of a second of climbing.
+pub const MIN_CLIMB_COMMIT_ENERGY: f32 = CLIMB_ENERGY_COST * 0.67;
+
 impl Default for Data {
     fn default() -> Self {
         Data {
             static_data: StaticData {
-                energy_cost: 15.0,
+                energy_cost: CLIMB_ENERGY_COST,
                 movement_speed: 5.0,
             },
             was_wielded: false,

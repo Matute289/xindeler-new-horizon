@@ -784,8 +784,8 @@ common-items-npc_armor-biped_large-gigas_fire = Armadura de Gigas de Fuego
 common-items-npc_armor-biped_large-harvester = Túnica de Segador
     .desc = Hecha de girasoles.
 
-common-items-npc_armor-biped_large-mindflayer = Armadura de Acechador Mental
-    .desc = Usado por acechadores mentales.
+common-items-npc_armor-biped_large-mindflayer = Armadura de Devoramentes
+    .desc = Usada por devoramentes.
 
 common-items-npc_armor-biped_large-minotaur = Armadura de Minotauro
     .desc = La mejor defensa es un buen ataque.

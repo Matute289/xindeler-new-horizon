@@ -72,7 +72,8 @@ impl<'a> RichText<'a> {
     // do a forward pass through the input to pre-process it
     // TODO: auto add a "\n" character if input goes passed max defined width
     fn parse(input: &'a str, imgs: &Imgs) -> (Vec<TextSegment<'a>>, usize, usize) {
-        // a magical incantation that splits strings by double colons (e.g., ":icon:")
+        // a magical incantation that splits strings by double colons (e.g.,
+        // ":icon:")
         static RE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r":(?P<tag>[^:\s]+):").expect("Invalid Regex"));
         let mut segments = Vec::new();
@@ -194,7 +195,8 @@ impl<'a> Widget for RichText<'a> {
         let available_width = rect.w();
         let justify = self.style.justify(ui.theme());
 
-        // calculate the line widths on a line-by-line basis for proper text alignment
+        // calculate the line widths on a line-by-line basis for proper text
+        // alignment
         let line_widths: Vec<f64> = {
             let font = ui.fonts.get(font_id).expect("Font not found"); // borrows ui
             let mut current_width = 0.0;
@@ -219,7 +221,8 @@ impl<'a> Widget for RichText<'a> {
             widths
         };
 
-        // dynamically update number of widgets and use the appropriate conrod primitive
+        // dynamically update number of widgets and use the appropriate conrod
+        // primitive
         state.update(|s| {
             s.ids
                 .text_ids
@@ -265,12 +268,13 @@ impl<'a> Widget for RichText<'a> {
                 },
                 TextSegment::Image(image_id) => {
                     let image_size = font_size as f64;
-                    // should this not be hardcoded to 1.5? It seems to properly align images
-                    // regardless of font_size
+                    // should this not be hardcoded to 1.5? It seems to properly
+                    // align images regardless of font_size
                     let v_offset = 1.5;
 
-                    // not sure if I like coloring icons with text, but I'll leave it for now
-                    // opacity value is important though
+                    // not sure if I like coloring icons with text, but I'll
+                    // leave it for now opacity value is
+                    // important though
                     let color = self.style.color.unwrap_or(Color::Rgba(1.0, 1.0, 1.0, 1.0));
                     widget::Image::new(*image_id)
                         .wh([image_size, image_size])

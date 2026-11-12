@@ -163,13 +163,17 @@ impl CharacterBehavior for Data {
                         c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else if let Some((item_uid, item_entity)) = self.try_grab(data) {
-                    // Grab succeeded: wire the existing `Tethered` link (caster=Leader,
-                    // item=Follower) directly via `LazyUpdate`, bypassing the
-                    // `state.link()`/`LinkHandle` bookkeeping convenience wrapper — that
-                    // wrapper's own validation (self-tether, rider/volume-rider conflicts,
-                    // cycle prevention) doesn't apply here since the follower side is
-                    // always a `PickupItem`, never a mount or another leader, and this
-                    // state already re-implements the meaningful checks in `try_grab`.
+                    // Grab succeeded: wire the existing `Tethered` link
+                    // (caster=Leader, item=Follower)
+                    // directly via `LazyUpdate`, bypassing the
+                    // `state.link()`/`LinkHandle` bookkeeping convenience
+                    // wrapper — that wrapper's own
+                    // validation (self-tether, rider/volume-rider conflicts,
+                    // cycle prevention) doesn't apply here since the follower
+                    // side is always a `PickupItem`, never
+                    // a mount or another leader, and this
+                    // state already re-implements the meaningful checks in
+                    // `try_grab`.
                     let handle = LinkHandle::from_link(Tethered {
                         leader: *data.uid,
                         follower: item_uid,
@@ -202,21 +206,25 @@ impl CharacterBehavior for Data {
                         .energy
                         .change_by(-self.static_data.energy_drain * data.dt.0);
                 } else if held {
-                    // Fully charged but still held: keep the grip alive at reduced upkeep,
-                    // mirroring `Throw`'s "holds charge" branch.
+                    // Fully charged but still held: keep the grip alive at
+                    // reduced upkeep, mirroring `Throw`'s
+                    // "holds charge" branch.
                     update
                         .energy
                         .change_by(-self.static_data.energy_drain * data.dt.0 / 5.0);
                 } else {
-                    // Released. Distinguish place vs throw by how long the item was held
-                    // (mirrors `throw::Data`'s own charge/release shape): a quick tap just
+                    // Released. Distinguish place vs throw by how long the item
+                    // was held (mirrors `throw::Data`'s own
+                    // charge/release shape): a quick tap just
                     // sets it down, a deliberate hold-then-release throws it.
                     let throw = self.timer >= self.static_data.place_threshold;
 
-                    // Free the caster's side of the link unconditionally — don't wait for
-                    // `Recover`, so it stops pulling the instant the player lets go — even
-                    // if the item itself is already gone (e.g. despawned/merged away by
-                    // `server/src/sys/item.rs` mid-charge). Only the item-side effects
+                    // Free the caster's side of the link unconditionally —
+                    // don't wait for `Recover`, so it stops
+                    // pulling the instant the player lets go — even
+                    // if the item itself is already gone (e.g. despawned/merged
+                    // away by `server/src/sys/item.rs`
+                    // mid-charge). Only the item-side effects
                     // below need the item to still resolve.
                     data.updater.remove::<Is<Leader>>(data.entity);
 
@@ -263,11 +271,12 @@ impl CharacterBehavior for Data {
                         c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
-                    // Done. Note: the caster's own recovery animation is much shorter
-                    // than how long a thrown item needs to stay a live hazard, so the
+                    // Done. Note: the caster's own recovery animation is much
+                    // shorter than how long a thrown item
+                    // needs to stay a live hazard, so the
                     // transient `Projectile` component's own `time_left` (see
-                    // `StaticData::projectile`) — not this stage — is what eventually
-                    // clears it on a miss.
+                    // `StaticData::projectile`) — not this stage — is what
+                    // eventually clears it on a miss.
                     end_ability(data, &mut update);
                 }
             },

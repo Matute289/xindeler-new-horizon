@@ -152,8 +152,8 @@ pub fn reconcile_attunement(
             .any(|(s, requires, _)| *s == slot && *requires)
     };
 
-    // 1. Instant un-attune: drop any attuned/attuning slot whose item is gone or no
-    //    longer requires attunement (covers unequip, swap-out, and drop).
+    // 1. Instant un-attune: drop any attuned/attuning slot whose item is gone
+    //    or no longer requires attunement (covers unequip, swap-out, and drop).
     attuned.0.retain(|slot| is_live(*slot));
     attuning.0.retain(|(slot, _)| is_live(*slot));
 
@@ -167,11 +167,11 @@ pub fn reconcile_attunement(
         }
     }
 
-    // 3. Complete channels whose finish time has passed: attune if under the level
-    //    cap. `attune` returns whether the slot is attuned afterwards, so a channel
-    //    is kept only while it is still running OR finished-but-over-cap (retry
-    //    next reconcile — it attunes as soon as a slot frees, with no
-    //    re-channeling).
+    // 3. Complete channels whose finish time has passed: attune if under the
+    //    level cap. `attune` returns whether the slot is attuned afterwards, so
+    //    a channel is kept only while it is still running OR
+    //    finished-but-over-cap (retry next reconcile — it attunes as soon as a
+    //    slot frees, with no re-channeling).
     let max = max_attuned_items(level);
     attuning
         .0
@@ -288,7 +288,8 @@ mod tests {
 
     #[test]
     fn channel_over_cap_stays_pending_then_attunes_when_a_slot_frees() {
-        // r1 already attuned; level 10 → cap 1; r2's channel completes but cap is full.
+        // r1 already attuned; level 10 → cap 1; r2's channel completes but cap
+        // is full.
         let mut attuned = AttunedItems(vec![R1]);
         let mut attuning = Attuning(vec![(R2, Time(3.0))]);
         reconcile_attunement(
@@ -302,7 +303,8 @@ mod tests {
         assert!(!attuned.is_attuned(R2)); // inert — cap full
         assert_eq!(attuning.0.len(), 1); // channel stays pending (finished), retries — no re-channel
 
-        // Free R1's slot (unequip it): only R2 remains equipped → R2 attunes now.
+        // Free R1's slot (unequip it): only R2 remains equipped → R2 attunes
+        // now.
         reconcile_attunement(
             &[(R2, true, Quality::Common)],
             10,

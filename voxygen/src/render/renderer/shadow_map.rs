@@ -130,7 +130,6 @@ impl ShadowMap {
         };
         clear(&cube_tex);
         clear(&tex);
-        #[expect(clippy::drop_non_drop)]
         drop(clear);
         queue.submit(std::iter::once(encoder.finish()));
 
@@ -151,8 +150,8 @@ impl ShadowMap {
         // Limit to max texture size, rather than erroring.
         let size = Vec2::new(size.0, size.1).map(|e| {
             let size = e as f32 * resolution_factor;
-            // NOTE: We know 0 <= e since we clamped the resolution factor to be between
-            // 0.25 and 4.0.
+            // NOTE: We know 0 <= e since we clamped the resolution factor to be
+            // between 0.25 and 4.0.
             if size <= max_texture_size as f32 {
                 size as u32
             } else {
@@ -171,22 +170,23 @@ impl ShadowMap {
         let max_size = size.reduce_max();
         let _min_two_size = two_size.reduce_min();
         let _max_two_size = two_size.reduce_max();
-        // For rotated shadow maps, the maximum size of a pixel along any axis is the
-        // size of a diagonal along that axis.
+        // For rotated shadow maps, the maximum size of a pixel along any axis
+        // is the size of a diagonal along that axis.
         let diag_size = size.map(f64::from).magnitude();
         let diag_cross_size = f64::from(min_size) / f64::from(max_size) * diag_size;
-        let (diag_size, _diag_cross_size) =
-            if 0.0 < diag_size && diag_size <= f64::from(max_texture_size) {
-                // NOTE: diag_cross_size must be non-negative, since it is the ratio of a
-                // non-negative and a positive number (if max_size were zero,
-                // diag_size would be 0 too).  And it must be <= diag_size,
-                // since min_size <= max_size.  Therefore, if diag_size fits in a
-                // u16, so does diag_cross_size.
-                (diag_size as u32, diag_cross_size as u32)
-            } else {
-                // Limit to max texture resolution rather than error.
-                (max_texture_size, max_texture_size)
-            };
+        let (diag_size, _diag_cross_size) = if 0.0 < diag_size
+            && diag_size <= f64::from(max_texture_size)
+        {
+            // NOTE: diag_cross_size must be non-negative, since it is the ratio
+            // of a non-negative and a positive number (if max_size
+            // were zero, diag_size would be 0 too).  And it must be
+            // <= diag_size, since min_size <= max_size.  Therefore,
+            // if diag_size fits in a u16, so does diag_cross_size.
+            (diag_size as u32, diag_cross_size as u32)
+        } else {
+            // Limit to max texture resolution rather than error.
+            (max_texture_size, max_texture_size)
+        };
         let diag_two_size = u32::checked_next_power_of_two(diag_size)
             .filter(|&e| e <= max_texture_size)
             // Limit to max texture resolution rather than error.

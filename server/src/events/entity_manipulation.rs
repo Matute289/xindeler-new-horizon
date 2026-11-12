@@ -336,7 +336,8 @@ impl ServerEvent for PoiseChangeEvent {
                 .lend_join()
                 .get(ev.entity, &entities)
             {
-                // Entity is invincible to poise change during stunned character state.
+                // Entity is invincible to poise change during stunned character
+                // state.
                 if !matches!(character_state, CharacterState::Stunned(_)) {
                     poise.change(ev.change);
                 }
@@ -405,8 +406,9 @@ impl ServerEvent for HealthChangeEvent {
                 }
 
                 // If the change amount was not zero
-                // BL-05 RD-6: track temp-HP absorb depletion across this change so
-                // the granting `Shielded` buff can be removed once the pool empties.
+                // BL-05 RD-6: track temp-HP absorb depletion across this change
+                // so the granting `Shielded` buff can be
+                // removed once the pool empties.
                 let had_absorb = health.absorb() > 0.0;
                 let changed = health.change_by(ev.change);
                 if had_absorb && health.absorb() <= 0.0 {
@@ -463,8 +465,8 @@ impl ServerEvent for HealthChangeEvent {
                 }
 
                 if let Some(mut heads) = heads {
-                    // We want some hp to be left for a headless body, so we divide by (max amount
-                    // of heads + 2)
+                    // We want some hp to be left for a headless body, so we
+                    // divide by (max amount of heads + 2)
                     let hp_per_head = health.maximum() / (heads.capacity() as f32 + 2.0);
                     let target_heads = (health.current() / hp_per_head) as usize;
                     if heads.amount() > 0 && ev.change.amount < 0.0 && heads.amount() > target_heads
@@ -543,8 +545,9 @@ impl ServerEvent for HealthChangeEvent {
                 }
             }
 
-            // This if statement filters out anything under 5 damage, for DOT ticks
-            // TODO: Find a better way to separate direct damage from DOT here
+            // This if statement filters out anything under 5 damage, for DOT
+            // ticks TODO: Find a better way to separate direct
+            // damage from DOT here
             let damage = -ev.change.amount;
             if damage > 5.0
                 && let Some(agent) = data.agents.get_mut(ev.entity)
@@ -552,10 +555,11 @@ impl ServerEvent for HealthChangeEvent {
                 agent.inbox.push_back(AgentEvent::Hurt);
             }
 
-            // Concentration (ENG-C2 / M5): an external hit at or above the break
-            // threshold ends the bearer's concentration. Only hits with a
-            // `DamageSource` cause count — self-inflicted costs (e.g. the
-            // Hemomancy HP price, cause: None) do not break it.
+            // Concentration (ENG-C2 / M5): an external hit at or above the
+            // break threshold ends the bearer's concentration. Only
+            // hits with a `DamageSource` cause count —
+            // self-inflicted costs (e.g. the Hemomancy HP price,
+            // cause: None) do not break it.
             if ev.change.amount < 0.0
                 && ev.change.cause.is_some()
                 && buff::concentration_breaks(
@@ -574,7 +578,8 @@ impl ServerEvent for HealthChangeEvent {
             }
 
             // BL-05 rider: any external attacking hit wakes a sleeping target
-            // (no threshold). RemoveByKind is a no-op if the target isn't asleep.
+            // (no threshold). RemoveByKind is a no-op if the target isn't
+            // asleep.
             if ev.change.amount < 0.0 && ev.change.cause.is_some() {
                 emitters.emit(BuffEvent {
                     entity: ev.entity,
@@ -616,6 +621,13 @@ pub struct HelpDownedEventData<'a> {
     rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
     character_states: WriteStorage<'a, comp::CharacterState>,
     healths: WriteStorage<'a, comp::Health>,
+    // Needed to check the rescued player actually fits standing up before we
+    // stand them up.
+    positions: ReadStorage<'a, comp::Pos>,
+    bodies: ReadStorage<'a, comp::Body>,
+    scales: ReadStorage<'a, comp::Scale>,
+    colliders: ReadStorage<'a, comp::Collider>,
+    terrain: ReadExpect<'a, common::terrain::TerrainGrid>,
 }
 
 impl ServerEvent for HelpDownedEvent {
@@ -627,8 +639,41 @@ impl ServerEvent for HelpDownedEvent {
                 if let Some(mut health) = data.healths.get_mut(entity) {
                     health.refresh_death_protection();
                 }
+                // Standing them up is conditional on there being room to
+                // stand. A downed player can end up somewhere only the prone
+                // cylinder fits — tight gaps being reachable prone is the
+                // point of posture — and forcing them upright there would leave
+                // them clipped into the ceiling with no way out, since being
+                // revived to `Idle` also takes away the crawl they would have
+                // used to get clear. Leaving them prone costs one keypress and
+                // is always recoverable.
+                let fits_standing = || {
+                    // Without a position or a body there is nothing to check
+                    // against, so never block a rescue on it.
+                    let (Some(pos), Some(body)) =
+                        (data.positions.get(entity), data.bodies.get(entity))
+                    else {
+                        return true;
+                    };
+                    let collider = data
+                        .colliders
+                        .get(entity)
+                        .cloned()
+                        .unwrap_or_else(|| body.collider());
+                    let scale = data.scales.get(entity).map_or(1.0, |s| s.0);
+                    let (radius, _, z_max) =
+                        collider.terrain_cylinder_in(scale, comp::Posture::Stand);
+                    common::states::utils::terrain_column_is_clear(
+                        &*data.terrain,
+                        pos.0,
+                        radius,
+                        z_max,
+                    )
+                };
+
                 if let Some(mut character_state) = data.character_states.get_mut(entity)
                     && matches!(*character_state, comp::CharacterState::Crawl)
+                    && fits_standing()
                 {
                     *character_state = CharacterState::Idle(Default::default());
                 }
@@ -710,7 +755,8 @@ impl ServerEvent for KnockbackEvent {
                 .lend_join()
                 .get(ev.entity, &entities)
             {
-                //Check if the entity is on a surface. If it is not, reduce knockback.
+                //Check if the entity is on a surface. If it is not, reduce
+                // knockback.
                 let mut impulse = ev.impulse
                     * if physics.on_surface().is_some() {
                         1.0
@@ -798,8 +844,8 @@ fn handle_exp_gain(
     let mut xp_pools = HashSet::<SkillGroupKind>::new();
     // Insert general pool since it is always accessible
     xp_pools.insert(SkillGroupKind::General);
-    // Closure to add xp pool corresponding to weapon type equipped in a particular
-    // EquipSlot
+    // Closure to add xp pool corresponding to weapon type equipped in a
+    // particular EquipSlot
     let mut add_tool_from_slot = |equip_slot| {
         let skill_group = inventory
             .equipped(equip_slot)
@@ -2210,8 +2256,9 @@ impl ServerEvent for DestroyEvent {
         // — no fractional reward, no partial loot roll. The surviving kill pays
         // the whole reward once and revokes the banishment.
         for ev in deaths.honoured(events) {
-            // TODO: Investigate duplicate `Destroy` events (but don't remove this).
-            // If the entity was already deleted, it can't be destroyed again.
+            // TODO: Investigate duplicate `Destroy` events (but don't remove
+            // this). If the entity was already deleted, it can't be
+            // destroyed again.
             if !data.entities.is_alive(ev.entity) {
                 continue;
             }
@@ -2333,7 +2380,8 @@ impl ServerEvent for DestroyEvent {
             let get_attacker_name = |cause_of_death: KillType, by: Uid| -> KillSource {
                 // Get attacker entity
                 if let Some(char_entity) = data.id_maps.uid_entity(by) {
-                    // Check if attacker is another player or entity with stats (npc)
+                    // Check if attacker is another player or entity with stats
+                    // (npc)
                     if data.players.contains(char_entity) {
                         KillSource::Player(by, cause_of_death)
                     } else if let Some(stats) = data.stats.get(char_entity) {
@@ -2346,8 +2394,9 @@ impl ServerEvent for DestroyEvent {
                 }
             };
 
-            // Push an outcome if entity is has a character state (entities that don't have
-            // one, we probably don't care about emitting death outcome)
+            // Push an outcome if entity is has a character state (entities that
+            // don't have one, we probably don't care about emitting
+            // death outcome)
             if is_kill
                 && let Some((pos, _)) = (&data.positions, &data.character_states)
                     .lend_join()
@@ -2752,7 +2801,8 @@ impl ServerEvent for DestroyEvent {
             let mut exp_awards = Vec::<(Entity, f32, Option<Group>)>::new();
             // Award EXP to damage contributors
             //
-            // NOTE: Debug logging is disabled by default for this module - to enable it add
+            // NOTE: Debug logging is disabled by default for this module - to
+            // enable it add
             // xindeler_server::events::entity_manipulation=debug to RUST_LOG
             'xp: {
                 let Some((entity_skill_set, entity_health, entity_pos)) =
@@ -2806,7 +2856,8 @@ impl ServerEvent for DestroyEvent {
                                 damage_contributors
                                     .insert(DamageContrib::Solo(attacker), (*damage, 0.0));
                             } else {
-                                // An entity who was not in a group contributed damage but is now
+                                // An entity who was not in a group contributed
+                                // damage but is now
                                 // either dead or offline. Add a
                                 // placeholder to ensure that the contributor's
                                 // exp is discarded, not distributed between
@@ -2818,9 +2869,12 @@ impl ServerEvent for DestroyEvent {
                             entity_uid: _,
                             group,
                         } => {
-                            // Damage made by entities who were in a group at the time of attack is
-                            // attributed to their group rather than themselves. This allows for all
-                            // members of a group to receive EXP, not just the damage dealers.
+                            // Damage made by entities who were in a group at
+                            // the time of attack is
+                            // attributed to their group rather than themselves.
+                            // This allows for all
+                            // members of a group to receive EXP, not just the
+                            // damage dealers.
                             let entry = damage_contributors
                                 .entry(DamageContrib::Group(*group))
                                 .or_insert((0, 0.0));
@@ -2849,8 +2903,8 @@ impl ServerEvent for DestroyEvent {
                     }
                 }
 
-                // Calculate the percentage of total damage that each DamageContributor
-                // contributed
+                // Calculate the percentage of total damage that each
+                // DamageContributor contributed
                 let total_damage: f64 = damage_contributors
                     .values()
                     .map(|(damage, _)| *damage as f64)
@@ -2864,8 +2918,9 @@ impl ServerEvent for DestroyEvent {
                 let destroyed_group = data.groups.get(ev.entity);
 
                 let within_range = |attacker_pos: &Pos| {
-                    // Maximum distance that an attacker must be from an entity at the time of its
-                    // death to receive EXP for the kill
+                    // Maximum distance that an attacker must be from an entity
+                    // at the time of its death to receive
+                    // EXP for the kill
                     const MAX_EXP_DIST: f32 = 150.0;
                     entity_pos.0.distance_squared(attacker_pos.0) < MAX_EXP_DIST.powi(2)
                 };
@@ -2874,8 +2929,9 @@ impl ServerEvent for DestroyEvent {
                     data.players.contains(ev.entity) && data.players.contains(attacker)
                 };
 
-                // Iterate through all contributors of damage for the killed entity, calculating
-                // how much EXP each contributor should be awarded based on their
+                // Iterate through all contributors of damage for the killed
+                // entity, calculating how much EXP each
+                // contributor should be awarded based on their
                 // percentage of damage contribution
                 exp_awards = damage_contributors.iter().filter_map(|(damage_contributor, (_, damage_percent))| {
                 let contributor_exp = exp_reward * damage_percent;
@@ -3122,8 +3178,9 @@ impl ServerEvent for DestroyEvent {
                             None
                         }
                     {
-                        // Remove entries where zero exp was awarded - this happens because some
-                        // entities like Object bodies don't give EXP.
+                        // Remove entries where zero exp was awarded - this
+                        // happens because some entities
+                        // like Object bodies don't give EXP.
                         let mut item_receivers = HashMap::new();
                         for (entity, exp, group) in exp_awards {
                             if exp >= f32::EPSILON {
@@ -3131,8 +3188,10 @@ impl ServerEvent for DestroyEvent {
                                     Some(LootOwnerKind::Group(group))
                                 } else {
                                     let uid = data.bodies.get(entity).and_then(|body| {
-                                        // Only humanoids are awarded loot ownership - if the winner
-                                        // was a non-humanoid NPC the loot will be free-for-all
+                                        // Only humanoids are awarded loot
+                                        // ownership - if the winner
+                                        // was a non-humanoid NPC the loot will
+                                        // be free-for-all
                                         if matches!(body, Body::Humanoid(_)) {
                                             data.uids.get(entity).copied()
                                         } else {
@@ -3287,9 +3346,10 @@ impl ServerEvent for LandOnGroundEvent {
         let mut health_change_emitter = health_change_events.emitter();
         let mut poise_change_emitter = poise_change_events.emitter();
         for ev in events {
-            // HACK: Certain ability movements currently take us above the fall damage
-            // threshold in the horizontal axis. This factor dampens velocity in the
-            // horizontal axis when applying fall damage.
+            // HACK: Certain ability movements currently take us above the fall
+            // damage threshold in the horizontal axis. This factor
+            // dampens velocity in the horizontal axis when applying
+            // fall damage.
             let horizontal_damp = 0.5
                 + ev.vel
                     .try_normalized()
@@ -3299,9 +3359,10 @@ impl ServerEvent for LandOnGroundEvent {
                     * 0.5;
 
             let relative_vel = ev.vel.dot(-ev.surface_normal) * horizontal_damp;
-            // The second part of this if statement disables all fall damage when in the
-            // water. This was added as a *temporary* fix a bug that causes you to take
-            // fall damage while swimming downwards. FIXME: Fix the actual bug and
+            // The second part of this if statement disables all fall damage
+            // when in the water. This was added as a *temporary*
+            // fix a bug that causes you to take fall damage while
+            // swimming downwards. FIXME: Fix the actual bug and
             // remove the following relevant part of the if statement.
             let falldmg_threshold = 30.0;
             if relative_vel >= falldmg_threshold
@@ -3510,8 +3571,9 @@ impl ServerEvent for ExplosionEvent {
                 let vert_distance =
                     (sphere_pos.z - (cyl_pos.z + half_body_height)).abs() - half_body_height;
 
-                // Use whichever gives maximum distance as that closer to real value. Sets
-                // minimum to 0 as negative values would indicate inside entity.
+                // Use whichever gives maximum distance as that closer to real
+                // value. Sets minimum to 0 as negative values
+                // would indicate inside entity.
                 let distance = horiz_dist.max(vert_distance).max(0.0);
 
                 if distance > radius {
@@ -3525,14 +3587,15 @@ impl ServerEvent for ExplosionEvent {
                 }
             }
 
-            // TODO: Process terrain destruction first so that entities don't get protected
-            // by terrain that gets destroyed?
+            // TODO: Process terrain destruction first so that entities don't
+            // get protected by terrain that gets destroyed?
             'effects: for effect in ev.explosion.effects {
                 match effect {
                     RadiusEffect::TerrainDestruction(power, new_color) => {
                         const RAYS: usize = 500;
 
-                        // Prevent block colour changes within the radius of a safe zone aura
+                        // Prevent block colour changes within the radius of a
+                        // safe zone aura
                         if data
                             .spatial_grid
                             .0
@@ -3652,7 +3715,8 @@ impl ServerEvent for ExplosionEvent {
                                     // Stop if:
                                     // 1) Block is liquid
                                     // 2) Consumed all energy
-                                    // 3) Can't explode block (for example we hit stone wall)
+                                    // 3) Can't explode block (for example we
+                                    //    hit stone wall)
                                     block.is_liquid()
                                         || block.explode_power().is_none()
                                         || ray_energy <= 0.0
@@ -3669,7 +3733,8 @@ impl ServerEvent for ExplosionEvent {
                         const RAY_DENSITY: f32 = 20.0;
                         const RAY_LENGTH: f32 = 50.0;
 
-                        // Prevent block colour changes within the radius of a safe zone aura
+                        // Prevent block colour changes within the radius of a
+                        // safe zone aura
                         if data
                             .spatial_grid
                             .0
@@ -3812,7 +3877,8 @@ impl ServerEvent for ExplosionEvent {
                                 1.0 - dist_sqrd / ev.explosion.radius.powi(2)
                             };
 
-                            // Cast a ray from the explosion to the entity to check visibility
+                            // Cast a ray from the explosion to the entity to
+                            // check visibility
                             if strength > 0.0
                                 && (data
                                     .terrain
@@ -3975,11 +4041,16 @@ impl ServerEvent for ExplosionEvent {
                                 let dist_sqrd = ev.pos.distance_squared(pos_b.0);
                                 1.0 - dist_sqrd / ev.explosion.radius.powi(2)
                             };
-                            // Unlike `RadiusEffect::Attack`/`Entity`, `strength` is used only as
-                            // a binary containment gate here, never threaded into a graduated
-                            // magnitude -- a "50%-applied" sleep debuff has no obvious meaning.
-                            // `min_falloff` still reshapes the containment boundary (a smaller
-                            // effective radius near the falloff edge), it just doesn't scale
+                            // Unlike `RadiusEffect::Attack`/`Entity`,
+                            // `strength` is used only as
+                            // a binary containment gate here, never threaded
+                            // into a graduated
+                            // magnitude -- a "50%-applied" sleep debuff has no
+                            // obvious meaning.
+                            // `min_falloff` still reshapes the containment
+                            // boundary (a smaller
+                            // effective radius near the falloff edge), it just
+                            // doesn't scale
                             // anything past that.
                             if strength <= 0.0 {
                                 continue;
@@ -4055,14 +4126,18 @@ impl ServerEvent for ExplosionEvent {
                                 1.0 - distance_squared / ev.explosion.radius.powi(2)
                             };
 
-                            // Player check only accounts for PvP/PvE flag (unless in a friendly
+                            // Player check only accounts for PvP/PvE flag
+                            // (unless in a friendly
                             // fire aura), but bombs are intented to do
                             // friendly fire.
                             //
-                            // What exactly is friendly fire is subject to discussion.
-                            // As we probably want to minimize possibility of being dick
-                            // even to your group members, the only exception is when
-                            // you want to harm yourself.
+                            // What exactly is friendly fire is subject to
+                            // discussion.
+                            // As we probably want to minimize possibility of
+                            // being dick
+                            // even to your group members, the only exception is
+                            // when you want to harm
+                            // yourself.
                             //
                             // This can be changed later.
                             let permit_pvp = || {
@@ -4453,11 +4528,13 @@ impl ServerEvent for BuffEvent {
         for ev in events {
             if let Some(mut buffs) = buffs.get_mut(ev.entity) {
                 use buff::BuffChange;
-                // BL-05 RD-6: invariant "absorb > 0 ⟺ a Shielded buff is active".
-                // The absorb pool is granted on Shielded-add below; here we clear
-                // it whenever *any* removal path (dispel, expiry, deplete, and
-                // crucially the death `RemoveByCategory`) drops the last Shielded
-                // buff — a single post-match check covers every arm uniformly.
+                // BL-05 RD-6: invariant "absorb > 0 ⟺ a Shielded buff is
+                // active". The absorb pool is granted on
+                // Shielded-add below; here we clear it whenever
+                // *any* removal path (dispel, expiry, deplete, and
+                // crucially the death `RemoveByCategory`) drops the last
+                // Shielded buff — a single post-match check
+                // covers every arm uniformly.
                 let had_shield = buffs.buffs.values().any(|b| b.kind == BuffKind::Shielded);
                 match ev.buff_change {
                     BuffChange::Add(mut new_buff) => {
@@ -4476,11 +4553,13 @@ impl ServerEvent for BuffEvent {
                             && immunity_by_buff.is_none()
                             && healths.get(ev.entity).is_none_or(|h| !h.is_dead);
 
-                        // A resisted mind-altering effect (Charmed/Dominated/Maddened/
-                        // Paralyzed) rolls against the target's magic resistance once,
-                        // here, rather than being applied unconditionally. Any other
-                        // buff kind, or a source with no caster entity to roll against,
-                        // always hits.
+                        // A resisted mind-altering effect
+                        // (Charmed/Dominated/Maddened/
+                        // Paralyzed) rolls against the target's magic
+                        // resistance once, here, rather
+                        // than being applied unconditionally. Any other
+                        // buff kind, or a source with no caster entity to roll
+                        // against, always hits.
                         let resisted = not_immune
                             && matches!(
                                 new_buff.kind,
@@ -4615,8 +4694,9 @@ impl ServerEvent for BuffEvent {
                                 new_buff.effects.clear();
                             }
 
-                            // Only one concentration buff at a time: adding a new
-                            // concentration buff removes any prior concentration.
+                            // Only one concentration buff at a time: adding a
+                            // new concentration
+                            // buff removes any prior concentration.
                             if new_buff.cat_ids.contains(&BuffCategory::Concentration) {
                                 let prior: Vec<_> = buffs
                                     .buffs
@@ -4646,8 +4726,9 @@ impl ServerEvent for BuffEvent {
                                 }
                             }
 
-                            // Granting a Shielded buff fills the temp-HP absorb pool
-                            // (take-higher: a re-cast refreshes rather than stacks; a
+                            // Granting a Shielded buff fills the temp-HP absorb
+                            // pool (take-higher: a
+                            // re-cast refreshes rather than stacks; a
                             // future shield *kind* would add).
                             if new_buff.kind == BuffKind::Shielded
                                 && let Some(mut health) = healths.get_mut(ev.entity)
@@ -4754,16 +4835,18 @@ impl ServerEvent for BuffEvent {
                             .values_mut()
                             .filter(|b| b.kind == kind)
                             .for_each(|buff| {
-                                // Resets buff so that its remaining duration is equal to its
+                                // Resets buff so that its remaining duration is
+                                // equal to its
                                 // original duration
                                 buff.start_time = *time;
                                 buff.end_time = buff.data.duration.map(|dur| Time(time.0 + dur.0));
                             })
                     },
                 }
-                // BL-05 RD-6: if this change dropped the last Shielded buff, empty
-                // the absorb pool so it can never linger without its grant (covers
-                // dispel/expiry/deplete and the on-death buff strip).
+                // BL-05 RD-6: if this change dropped the last Shielded buff,
+                // empty the absorb pool so it can never linger
+                // without its grant (covers dispel/expiry/
+                // deplete and the on-death buff strip).
                 if had_shield
                     && !buffs.buffs.values().any(|b| b.kind == BuffKind::Shielded)
                     && let Some(mut health) = healths.get_mut(ev.entity)
@@ -4860,7 +4943,8 @@ impl ServerEvent for ParryHookEvent {
                         false
                     },
                     CharacterState::BasicBlock(c) => {
-                        // Refund half the energy of entering the block for a successful parry
+                        // Refund half the energy of entering the block for a
+                        // successful parry
                         energy_change_emitter.emit(EnergyChangeEvent {
                             entity: ev.defender,
                             change: c.static_data.energy_regen,
@@ -4881,8 +4965,9 @@ impl ServerEvent for ParryHookEvent {
             if let Some(attacker) = ev.attacker
                 && matches!(ev.source, AttackSource::Melee)
             {
-                // When attacker is parried, the debuff lasts 2 seconds, the attacker takes
-                // poise damage, get precision vulnerability and get slower recovery speed
+                // When attacker is parried, the debuff lasts 2 seconds, the
+                // attacker takes poise damage, get precision
+                // vulnerability and get slower recovery speed
                 let data = buff::BuffData::new(1.0, Some(Secs(2.0)));
                 let source = if let Some(uid) = uids.get(ev.defender) {
                     BuffSource::Character {
@@ -5041,7 +5126,8 @@ impl ServerEvent for EntityAttackedHookEvent {
                 .lend_join()
                 .get(ev.entity, &data.entities)
             {
-                // Interrupt sprite interaction and item use if any attack is applied to entity
+                // Interrupt sprite interaction and item use if any attack is
+                // applied to entity
                 if matches!(
                     *char_state,
                     CharacterState::Interact(_) | CharacterState::UseItem(_)
@@ -5090,10 +5176,12 @@ impl ServerEvent for EntityAttackedHookEvent {
                     .map(|entity_b| {
                         // Notify both parties that the trade ended
                         let mut notify_trade_party = |entity| {
-                            // TODO: Can probably improve UX here for the user that sent the
+                            // TODO: Can probably improve UX here for the user
+                            // that sent the
                             // trade invite, since right now it
                             // may seems like their request was
-                            // purposefully declined, rather than e.g. being interrupted.
+                            // purposefully declined, rather than e.g. being
+                            // interrupted.
                             if let Some(client) = data.clients.get(entity) {
                                 client.send_fallible(ServerGeneral::FinishedTrade(
                                     TradeResult::Declined,
@@ -5852,12 +5940,13 @@ pub fn transform_entity(
 
                 // Run persistence once before disabling it
                 //
-                // We must NOT early return between persist_entity() being called and
-                // persistence being set to Possessor
+                // We must NOT early return between persist_entity() being
+                // called and persistence being set to Possessor
                 super::player::persist_entity(server.state_mut(), entity);
 
-                // We re-fetch presence here as mutable, because checking for a valid
-                // [`PresenceKind`] must be done BEFORE persist_entity but persist_entity needs
+                // We re-fetch presence here as mutable, because checking for a
+                // valid [`PresenceKind`] must be done BEFORE
+                // persist_entity but persist_entity needs
                 // exclusive mutable access to the server's state
                 let mut presences = server.state.ecs().write_storage::<Presence>();
                 let Some(presence) = presences.get_mut(entity) else {

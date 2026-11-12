@@ -141,8 +141,9 @@ impl InternalSlowJobPool {
         jobs_metrics_cnt: usize,
         _threadpool: Arc<ThreadPool>,
     ) -> Arc<Mutex<Self>> {
-        // rayon is having a bug where a ECS task could work-steal a slowjob if we use
-        // the same threadpool, which would cause lagspikes we dont want!
+        // rayon is having a bug where a ECS task could work-steal a slowjob if
+        // we use the same threadpool, which would cause lagspikes we
+        // dont want!
         let threadpool = Arc::new(
             rayon::ThreadPoolBuilder::new()
                 .num_threads(global_limit as usize)
@@ -160,10 +161,11 @@ impl InternalSlowJobPool {
                         let priority =
                             ThreadPriority::Crossplatform(TryFrom::try_from(15).unwrap());
                         if let Err(err) = cfg_select! {
-                            target_os = "linux" => std::thread::current().set_priority_and_policy(
-                                ThreadSchedulePolicy::Normal(NormalThreadSchedulePolicy::Batch),
-                                priority,
-                            ),
+                            target_os = "linux" => std::thread::current()
+                                .set_priority_and_policy(
+                                    ThreadSchedulePolicy::Normal(NormalThreadSchedulePolicy::Batch),
+                                    priority,
+                                ),
                             _ => std::thread::current().set_priority(priority),
                         } {
                             tracing::warn!(
@@ -245,7 +247,8 @@ impl InternalSlowJobPool {
                 }
             }
         }
-        //schedule rest based on their possible limites, don't use round robin here
+        //schedule rest based on their possible limites, don't use round robin
+        // here
         let total_limit = queried_capped.values().sum::<u64>() as f32;
         if total_limit < f32::EPSILON {
             return result;
@@ -792,7 +795,8 @@ mod tests {
         }
         // now finish all jobs
         barrier.wait();
-        // in this case we have to sleep to give it some time to store all the metrics
+        // in this case we have to sleep to give it some time to store all the
+        // metrics
         std::thread::sleep(Duration::from_secs(2));
         let metrics = pool.take_metrics();
         let foo = metrics.get("FOO").expect("FOO doesn't exist in metrics");

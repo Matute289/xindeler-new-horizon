@@ -3,7 +3,7 @@ use crate::{
     AudioFrontend,
     audio::{
         SfxHandle,
-        sfx::{SFX_DIST_LIMIT_SQR, SfxEvent, SfxTriggers},
+        sfx::{SFX_DIST_LIMIT_SQR, SfxEvent, SfxTag, SfxTriggers},
     },
     scene::{Camera, FigureMgr, Terrain},
 };
@@ -75,7 +75,8 @@ impl EventMapper for VehicleEventMapper {
 
                 let speed = vel.0.magnitude();
 
-                // Determines whether we play low-speed chuggs or high-speed chugging
+                // Determines whether we play low-speed chuggs or high-speed
+                // chugging
                 let chugg_lerp = ((speed - 20.0) / 25.0).clamp(0.0, 1.0);
 
                 // Low-speed chugging
@@ -87,6 +88,7 @@ impl EventMapper for VehicleEventMapper {
                         Some((event, item)),
                         pos.0,
                         Some(((1.0 - chugg_lerp) * 4.0).min(3.0)),
+                        SfxTag::Vehicle,
                     );
                     internal_state.last_chugg = Instant::now();
                 }
@@ -96,7 +98,12 @@ impl EventMapper for VehicleEventMapper {
                         >= 10.0 / speed.min(50.0)
                     && chugg_lerp < 1.0
                 {
-                    audio.emit_sfx(Some((event, item)), pos.0, Some((1.0 - chugg_lerp) * 4.0));
+                    audio.emit_sfx(
+                        Some((event, item)),
+                        pos.0,
+                        Some((1.0 - chugg_lerp) * 4.0),
+                        SfxTag::Vehicle,
+                    );
                     internal_state.last_chugg_steam = Instant::now();
                 }
                 // High-speed chugging
@@ -108,7 +115,7 @@ impl EventMapper for VehicleEventMapper {
                     {
                         internal_state.last_speed = (
                             Instant::now(),
-                            audio.emit_sfx(Some((event, item)), pos.0, None),
+                            audio.emit_sfx(Some((event, item)), pos.0, None, SfxTag::Vehicle),
                         );
                     }
 
@@ -128,7 +135,7 @@ impl EventMapper for VehicleEventMapper {
                     if internal_state.last_ambience.0.elapsed().as_secs_f32() >= item.threshold {
                         internal_state.last_ambience = (
                             Instant::now(),
-                            audio.emit_sfx(Some((event, item)), pos.0, None),
+                            audio.emit_sfx(Some((event, item)), pos.0, None, SfxTag::Vehicle),
                         );
                     }
 
@@ -150,6 +157,7 @@ impl EventMapper for VehicleEventMapper {
                         Some((event, item)),
                         pos.0,
                         Some(speed.clamp(25.0, 50.0) / 18.0),
+                        SfxTag::Vehicle,
                     );
                     internal_state.last_clack = Instant::now();
                 }

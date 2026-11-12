@@ -496,9 +496,9 @@ impl Tavern {
                 mut max_bounds: Aabr<i32>,
                 mut max_shrink_dir: impl FnMut(Dir2) -> Option<i32>,
             ) -> Option<Aabr<i32>> {
-                // Take other rooms into account when calculating `max_bounds`. We don't care
-                // about this room if it's the originating room or at another
-                // height.
+                // Take other rooms into account when calculating `max_bounds`.
+                // We don't care about this room if it's the
+                // originating room or at another height.
                 for room in rooms
                     .filter(|room| room.bounds.min.z - 1 <= max_z && room.bounds.max.z + 1 >= min_z)
                 {
@@ -506,7 +506,8 @@ impl Tavern {
                     let bounds = extend_aabr(test_bounds, 2);
                     let intersection = bounds.intersection(max_bounds);
                     if intersection.is_valid() {
-                        // Find the direction to shrink in that yields the highest area.
+                        // Find the direction to shrink in that yields the
+                        // highest area.
                         let bounds = Dir2::iter()
                             .filter(|dir| {
                                 dir.select_aabr(intersection) * dir.signum()
@@ -552,7 +553,8 @@ impl Tavern {
                     let right = in_dir.orthogonal();
                     let left = -right;
 
-                    // The maximum bounds, limited by the plot bounds and other rooms.
+                    // The maximum bounds, limited by the plot bounds and other
+                    // rooms.
                     let max_bounds = Aabr {
                         min: in_dir.select_aabr_with(from_bounds, ibounds.min)
                             + in_dir.to_vec2() * 2,
@@ -587,13 +589,15 @@ impl Tavern {
                         max_bounds,
                         |dir| {
                             if dir == in_dir {
-                                // We always want the wall to stay in exact contact on the side the
+                                // We always want the wall to stay in exact
+                                // contact on the side the
                                 // door is.
                                 Some(dir.opposite().select_aabr(max_bounds))
                             } else if dir == in_dir.opposite() {
                                 None
                             } else {
-                                // We want the wall to touch at some point along the orthogonal axis
+                                // We want the wall to touch at some point along
+                                // the orthogonal axis
                                 // to the door.
                                 Some(dir.select_aabr(extend_aabr(from_bounds, -1)))
                             }
@@ -739,7 +743,8 @@ impl Tavern {
                 };
             }
 
-            // If there are more directions to continue from, push this room again.
+            // If there are more directions to continue from, push this room
+            // again.
             if !room_meta.free_walls.is_empty() || room_meta.can_add_basement {
                 room_metas.push(room_meta);
             }
@@ -915,7 +920,8 @@ impl Tavern {
                         && orth.select_aabr(roof_bounds) <= orth.select_aabr(room_aabr) + 2
                         && (-orth).select_aabr(roof_bounds) >= (-orth).select_aabr(room_aabr) - 2
                     {
-                        // If the room we found is fully covered by a roof already, we don't go in
+                        // If the room we found is fully covered by a roof
+                        // already, we don't go in
                         // this direction.
                         if room.is_covered_by_roof(&roofs) {
                             break;

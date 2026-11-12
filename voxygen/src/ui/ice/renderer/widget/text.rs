@@ -10,7 +10,8 @@ impl text::Renderer for IcedRenderer {
 
     fn measure(&self, content: &str, size: u16, font: Self::Font, bounds: Size) -> (f32, f32) {
         // Using the physical scale might make these cached info usable below?
-        // Although we also have a position of the screen so this could be useless
+        // Although we also have a position of the screen so this could be
+        // useless
         let p_scale = self.p_scale;
         // TODO: would be nice if the method was mut
         let section = glyph_brush::Section {

@@ -149,11 +149,12 @@ where
         viewport: &Rectangle,
     ) -> R::Output {
         // Note: this breaks if the parent widget adjusts the bounds height
-        // TODO: this recomputes the identical shrink `layout` just did for the same
-        // bounds. `glyph_brush`'s own cache absorbs the expensive part (perf-reviewed,
-        // negligible at current FillText counts), but if `FillText` ever grows a
-        // persistent `State`, cache the resulting font_size in a `Cell<u16>` in
-        // `layout` and read it here instead of recomputing.
+        // TODO: this recomputes the identical shrink `layout` just did for the
+        // same bounds. `glyph_brush`'s own cache absorbs the expensive
+        // part (perf-reviewed, negligible at current FillText counts),
+        // but if `FillText` ever grows a persistent `State`, cache the
+        // resulting font_size in a `Cell<u16>` in `layout` and read it
+        // here instead of recomputing.
         let font_size = self.shrink_to_fit(
             renderer,
             (layout.bounds().height * self.fill_fraction) as u16,

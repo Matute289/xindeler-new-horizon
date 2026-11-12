@@ -48,7 +48,8 @@ impl CombinedSource {
         }
         for (n, p) in self.plugin_list.read().unwrap().iter().enumerate() {
             if let Ok(entry) = p.cache.source().read(id, ext) {
-                // the data is behind an RwLockReadGuard, so own it for returning
+                // the data is behind an RwLockReadGuard, so own it for
+                // returning
                 result.push(SourceAndContents(
                     AssetSource::Plugin { index: n },
                     match entry {
@@ -138,8 +139,8 @@ impl CombinedCache {
         mut load_from: impl FnMut(&AssetCache) -> Result<T, assets_manager::Error>,
     ) -> Result<T, assets_manager::Error> {
         let mut result = load_from(cache);
-        // Report a severe error from the filesystem asset even if later overwritten by
-        // an Ok value from a plugin
+        // Report a severe error from the filesystem asset even if later
+        // overwritten by an Ok value from a plugin
         if let Err(ref fs_error) = result {
             match fs_error
                 .reason()

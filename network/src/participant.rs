@@ -81,7 +81,8 @@ pub struct BParticipant {
 }
 
 impl BParticipant {
-    // We use integer instead of Barrier to not block mgr from freeing at the end
+    // We use integer instead of Barrier to not block mgr from freeing at the
+    // end
     const BARR_CHANNEL: i32 = 1;
     const BARR_RECV: i32 = 4;
     const BARR_SEND: i32 = 2;
@@ -283,8 +284,9 @@ impl BParticipant {
                 continue;
             }
 
-            //let (cid, active) = sorted_send_protocols.data.iter_mut().next().unwrap();
-            //used for error handling
+            //let (cid, active) =
+            // sorted_send_protocols.data.iter_mut().next().unwrap();
+            // used for error handling
             let mut cid = u64::MAX;
 
             let active_err = async {
@@ -357,8 +359,9 @@ impl BParticipant {
                 if let Some(sid) = close {
                     trace!(?stream_ids, "delete stream");
                     self.delete_stream(sid).await;
-                    // Fire&Forget the protocol will take care to verify that this Frame is delayed
-                    // till the last msg was received!
+                    // Fire&Forget the protocol will take care to verify that
+                    // this Frame is delayed till the last
+                    // msg was received!
                     if let Some(c) = sorted_stream_protocols.delete(&sid) {
                         cid = c;
                         let event = ProtocolEvent::CloseStream { sid };
@@ -389,8 +392,8 @@ impl BParticipant {
             .await;
             if let Err(e) = active_err {
                 info!(?cid, ?e, "protocol failed, shutting down channel");
-                // remote recv will now fail, which will trigger remote send which will trigger
-                // recv
+                // remote recv will now fail, which will trigger remote send
+                // which will trigger recv
                 trace!("TODO: for now decide to FAIL this participant and not wait for a failover");
                 sorted_send_protocols.delete(&cid).unwrap();
                 if let Some(info) = self.channels.write().await.get(&cid)
@@ -494,7 +497,8 @@ impl BParticipant {
                 retrigger(cid, p, &mut recv_protocols);
             };
             if let Some(cid) = remp {
-                // no need to stop the send_mgr here as it has been canceled before
+                // no need to stop the send_mgr here as it has been canceled
+                // before
                 if remove_c(&mut recv_protocols, &cid) {
                     break;
                 }
@@ -516,7 +520,8 @@ impl BParticipant {
                             promises,
                             guaranteed_bandwidth,
                         ));
-                        // waiting for receiving is not necessary, because the send_mgr will first
+                        // waiting for receiving is not necessary, because the
+                        // send_mgr will first
                         // process this before process messages!
                         let stream = self
                             .create_stream(
@@ -595,8 +600,8 @@ impl BParticipant {
             .for_each_concurrent(
                 None,
                 |(cid, _, protocol, remote_con_addr, b2s_create_channel_done_s)| {
-                    // This channel is now configured, and we are running it in scope of the
-                    // participant.
+                    // This channel is now configured, and we are running it in
+                    // scope of the participant.
                     let channels = Arc::clone(&self.channels);
                     let b2b_add_send_protocol_s = b2b_add_send_protocol_s.clone();
                     let b2b_add_recv_protocol_s = b2b_add_recv_protocol_s.clone();
@@ -733,8 +738,8 @@ impl BParticipant {
         wait_for_manager().await;
 
         if let Some((_, sender)) = awaited {
-            // Don't care whether this send succeeded since if the other end is dropped
-            // there's nothing to synchronize on.
+            // Don't care whether this send succeeded since if the other end is
+            // dropped there's nothing to synchronize on.
             let _ = sender.send(Ok(()));
         }
 
@@ -783,7 +788,8 @@ impl BParticipant {
             match &*lock {
                 Some(osi) => (osi.a2b_msg_s.clone(), osi.a2b_close_stream_s.clone()),
                 None => {
-                    // This Stream will not be able to send. feed it some "Dummy" Channels.
+                    // This Stream will not be able to send. feed it some
+                    // "Dummy" Channels.
                     debug!(
                         "It seems that a stream was requested to open, while the send_mgr is \
                          already closed"

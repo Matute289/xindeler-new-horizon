@@ -1,13 +1,13 @@
 # Evocation spell names + descriptions.
 spell-acid_splash = Acid Splash
 spell-acid_splash-desc = Hurl a tiny orb of caustic fluid that bursts at a chosen point, spattering everyone nearby. Those caught in the splash take searing acid damage unless they dodge clear.
-spell-booming_blade = Booming Blade
+spell-booming_blade = Resonant Edge
 spell-booming_blade-desc = The caster wreaths a melee weapon in humming resonance and strikes a foe within reach. The blow rings with crashing sound, jolting the target with a concussive shock.
 spell-eldritch_blast = Eldritch Blast
 spell-eldritch_blast-desc = Crackling threads of raw energy lance from the caster's fingertips toward chosen foes. Each requires a precise ranged strike and scorches its target with pure force.
 spell-frostbite = Frostbite
 spell-frostbite-desc = A bite of numbing frost crystallizes over a single creature, sapping its strength. A target that fails to steel itself takes cold damage.
-spell-green_flame_blade = Green-Flame Blade
+spell-green_flame_blade = Witchfire Edge
 spell-green_flame_blade-desc = The wielder swings an enchanted weapon, and on contact emerald fire erupts from the wound. The flames then leap to a second foe standing close beside the first, searing them as well.
 spell-lightning_lure = Lightning Lure
 spell-lightning_lure-desc = A crackling tether of electricity snaps out toward a nearby foe, yanking them closer when it bites. The lash sears them with lightning on contact.

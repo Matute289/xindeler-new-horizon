@@ -70,8 +70,9 @@ fn caster_passives_use_spell_power_channel() {
 
     let body = Body::Humanoid(humanoid::Body::iter().next().expect("a humanoid body"));
     let mut skillset = SkillSet::default();
-    // SpellPotency is re-pointed to the magic-only `spell_power` channel (Q2/Q3)
-    // so it must NOT touch the global physical `attack_damage_modifier`.
+    // SpellPotency is re-pointed to the magic-only `spell_power` channel
+    // (Q2/Q3) so it must NOT touch the global physical
+    // `attack_damage_modifier`.
     skillset
         .skills
         .insert(Skill::Mage(MageSkill::SpellPotency), 3);
@@ -105,7 +106,8 @@ fn undead_body_tag_and_smite_passive() {
         skills::ClericSkill,
     };
 
-    // Body::creature_kind (Q4): Undead for an undead species, not for a humanoid.
+    // Body::creature_kind (Q4): Undead for an undead species, not for a
+    // humanoid.
     let husk = Body::BipedSmall(biped_small::Body {
         species: biped_small::Species::Husk,
         body_type: biped_small::BodyType::Male,
@@ -224,9 +226,10 @@ fn mage_tree_extension_new_nodes_apply_expected_stats_deltas() {
 
 #[test]
 fn mana_efficiency_divisor_yields_13_percent_not_15_percent() {
-    // EnergyEfficiency is a DIVISOR (`*energy_cost /= stats.energy_efficiency`),
-    // so a naive reading of "0.05/level x 3 = +15%" is wrong: max-rank
-    // ManaEfficiency must cut a real ability's energy_cost by 13.0%, not 15%.
+    // EnergyEfficiency is a DIVISOR (`*energy_cost /=
+    // stats.energy_efficiency`), so a naive reading of "0.05/level x 3 =
+    // +15%" is wrong: max-rank ManaEfficiency must cut a real ability's
+    // energy_cost by 13.0%, not 15%.
     use crate::{
         comp::{
             Body, CharacterAbility, Stats,

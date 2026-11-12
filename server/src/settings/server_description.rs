@@ -275,8 +275,8 @@ mod v2 {
                 *self = Self::default();
                 Ok(Version::Old)
             } else if !self.descriptions.contains_key(&self.default_locale) {
-                // default locale not present, select the a random one (as ordering in hashmaps
-                // isn't predictable)
+                // default locale not present, select the a random one (as
+                // ordering in hashmaps isn't predictable)
                 self.default_locale = self
                     .descriptions
                     .keys()

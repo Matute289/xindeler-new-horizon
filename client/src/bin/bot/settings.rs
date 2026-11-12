@@ -29,7 +29,8 @@ impl Settings {
         let path = Self::get_settings_path();
 
         let settings = common::util::ron_from_path_recoverable::<Self>(&path);
-        // Save settings to add new fields or create the file if it is not already there
+        // Save settings to add new fields or create the file if it is not
+        // already there
         settings.save_to_file_warn();
         settings
     }

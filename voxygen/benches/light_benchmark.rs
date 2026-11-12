@@ -42,7 +42,8 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             terrain.insert(key, Arc::new(chunk.0));
         });
 
-    // Sample chunk (1,1) + 1-block borders, same math as meshing_benchmark L51-79
+    // Sample chunk (1,1) + 1-block borders, same math as meshing_benchmark
+    // L51-79
     let chunk_pos = Vec2::new(1, 1) + CENTER;
     let aabr = Aabr {
         min: chunk_pos.map2(TerrainGrid::chunk_size(), |e, sz| e * sz as i32 - 1),

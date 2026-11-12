@@ -169,12 +169,13 @@ impl<'a> System<'a> for Sys {
         // every tick and, on a mismatch, replaces the whole buff (never a
         // live in-place field mutation, since `strength` is not the only
         // thing `Buff::new` derives from it).
-        // Fetched once for the whole pass, not per entity: `stale_ward_strength`
-        // needs it on every bonded entity to know whether a mismatch even
-        // exists, so gating the lookup behind the mismatch check itself isn't
-        // possible -- an unconditional per-entity `AssetCache` lookup here
-        // would otherwise run every tick for every intact bond, not just the
-        // ones actually being corrected.
+        // Fetched once for the whole pass, not per entity:
+        // `stale_ward_strength` needs it on every bonded entity to know
+        // whether a mismatch even exists, so gating the lookup behind
+        // the mismatch check itself isn't possible -- an unconditional
+        // per-entity `AssetCache` lookup here would otherwise run every
+        // tick for every intact bond, not just the ones actually being
+        // corrected.
         let tuning = talisman_tuning_manifest();
         let mut stale_strength: Vec<(Entity, Entity, Uid, f32)> = Vec::new();
         for (warlock, pact) in (&entities, &pacts).join() {
@@ -458,13 +459,14 @@ mod exit_route_tests {
 
     #[test]
     fn pass_3_does_not_resurrect_a_ward_for_a_warlock_who_died_this_tick() {
-        // Regression test: pass 3 used to check only `talisman_bearer.is_some()`,
-        // not `bond_is_intact`. Pass 1's strip is an async `BuffEvent`, not
-        // yet applied to `buffs` within this same `run()`, so a dead
-        // Warlock's bearer still carries a live (and here, deliberately
-        // mismatched) ward when pass 3 reaches it -- without the
-        // `bond_is_intact` gate, pass 3 would "correct" the mismatch and
-        // queue its own `Add`, undoing pass 1's strip for one tick.
+        // Regression test: pass 3 used to check only
+        // `talisman_bearer.is_some()`, not `bond_is_intact`. Pass 1's
+        // strip is an async `BuffEvent`, not yet applied to `buffs`
+        // within this same `run()`, so a dead Warlock's bearer still
+        // carries a live (and here, deliberately mismatched) ward when
+        // pass 3 reaches it -- without the `bond_is_intact` gate, pass
+        // 3 would "correct" the mismatch and queue its own `Add`,
+        // undoing pass 1's strip for one tick.
         let mut world = mock_world();
         let (warlock, warlock_uid) = spawn(&mut world);
         let (bearer, bearer_uid) = spawn(&mut world);

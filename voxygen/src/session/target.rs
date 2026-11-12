@@ -139,8 +139,8 @@ pub(super) fn targets_under_cursor(
         .is_some_and(comp::observer_pierces_concealment);
 
     // Need to raycast by distance to cam
-    // But also filter out by distance to the player (but this only needs to be done
-    // on final result)
+    // But also filter out by distance to the player (but this only needs to be
+    // done on final result)
     let player_wielding = player_char_state.is_some_and(|cs| cs.is_wield());
     let mut nearby = (
         &ecs.entities(),
@@ -308,9 +308,11 @@ pub(super) fn ray_entities(
                 z_min,
                 z_max,
             }) => {
-                // Check if the nearest point is within the capsule's inclusive radius (radius
-                // from center to furthest possible edge corner) If not, then
-                // the ray doesn't intersect the capsule at all and we can skip it
+                // Check if the nearest point is within the capsule's inclusive
+                // radius (radius from center to furthest
+                // possible edge corner) If not, then
+                // the ray doesn't intersect the capsule at all and we can skip
+                // it
                 if nearest.distance_squared(*p) > (r * 3.0_f32.sqrt()).powi(2) {
                     return None;
                 }
@@ -328,8 +330,9 @@ pub(super) fn ray_entities(
                     + (entity_rotation.to_quat()
                         * Vec3::new(p1.x, p1.y, z_min + c.get_height() / 2.0));
 
-                // Get the closest points between the ray and the capsule's line segment
-                // If the capsule's line segment is a point, then the closest point is the point
+                // Get the closest points between the ray and the capsule's line
+                // segment If the capsule's line segment is a
+                // point, then the closest point is the point
                 // itself
                 let (p_a, p_b) = if p0 != p1 {
                     let seg_capsule = LineSegment3 {
@@ -342,9 +345,10 @@ pub(super) fn ray_entities(
                     (nearest, world_p0)
                 };
 
-                // Check if the distance between the closest points are within the capsule
-                // prism's radius on the xy plane and if the closest points are
-                // within the capsule prism's z range
+                // Check if the distance between the closest points are within
+                // the capsule prism's radius on the xy plane
+                // and if the closest points are within the
+                // capsule prism's z range
                 let distance = p_a.xy().distance_squared(p_b.xy());
                 if distance < radius.powi(2)
                     && p_a.z >= entity_position.0.z + z_min

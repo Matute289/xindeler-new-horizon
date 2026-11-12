@@ -67,8 +67,8 @@ impl Link for Tethered {
             // Forbid self-tethering
             Err(TetherError::NotTetherable)
         } else if let Some((leader, follower)) = entity(this.leader).zip(entity(this.follower)) {
-            // Ensure that neither leader or follower are already part of a conflicting
-            // relationship
+            // Ensure that neither leader or follower are already part of a
+            // conflicting relationship
             if !is_riders.contains(follower)
                 && !is_volume_rider.contains(follower)
                 && !is_followers.contains(follower)
@@ -97,7 +97,8 @@ impl Link for Tethered {
                 entities.is_alive(entity) && healths.get(entity).is_none_or(|h| !h.is_dead)
             };
 
-            // Ensure that both entities are alive and that they continue to be linked
+            // Ensure that both entities are alive and that they continue to be
+            // linked
             is_alive(leader)
                 && is_alive(follower)
                 && is_leaders.get(leader).is_some()

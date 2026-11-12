@@ -247,9 +247,9 @@ fn slerp_normalized(from: Vec3<f32>, to: Vec3<f32>, factor: f32) -> Vec3<f32> {
     }
 
     let (from, to, factor) = if dot < -0.999 {
-        // Not linearly independent (slerp will fail since it doesn't check for this)
-        // Instead we will choose a midpoint and slerp from or to that depending on the
-        // factor
+        // Not linearly independent (slerp will fail since it doesn't check for
+        // this) Instead we will choose a midpoint and slerp from or to
+        // that depending on the factor
         let mid_dir = if from.z.abs() > 0.999 {
             // If vec's lie along the z-axis default to (1, 0, 0) as midpoint
             Vec3::unit_x()

@@ -28,8 +28,8 @@ pub struct Energy {
 
 impl Energy {
     /// Used when comparisons to energy are needed outside this module.
-    // This value is chosen as anything smaller than this is more precise than our
-    // units of energy.
+    // This value is chosen as anything smaller than this is more precise than
+    // our units of energy.
     pub const ENERGY_EPSILON: f32 = 0.5 / Self::MAX_SCALED_ENERGY as f32;
     /// Maximum value allowed for energy before scaling
     const MAX_ENERGY: u16 = u16::MAX - 1;

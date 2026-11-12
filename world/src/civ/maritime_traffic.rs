@@ -13,7 +13,7 @@
 use super::AuthoredCromatolisMaritimeRoutes;
 use crate::util::{DHashMap, seed_expan};
 use common::assets::{BoxedError, FileAsset, load_ron};
-use fxhash::FxHasher64;
+use common::util::fx_hash::FxHasher64;
 use rand::{SeedableRng, prelude::*};
 use rand_chacha::ChaChaRng;
 use serde::Deserialize;

@@ -163,7 +163,8 @@ impl Widget for Controls<'_> {
             .rgba(0.33, 0.33, 0.33, 1.0)
             .set(state.ids.window_scrollbar, ui);
 
-        // These temporary variables exist so state is only borrowed by resize_ids.
+        // These temporary variables exist so state is only borrowed by
+        // resize_ids.
         let binding_mode = state.binding_mode;
         let gamepad_binding_option = state.gamepad_binding_option;
         let keymouse_binding_option = state.keymouse_binding_option;
@@ -192,7 +193,8 @@ impl Widget for Controls<'_> {
 
                     resize_ids(SORTED_GAMEINPUTS.len());
 
-                    // Loop all existing keybindings and the ids for text and button widgets
+                    // Loop all existing keybindings and the ids for text and
+                    // button widgets
                     for (game_input, (&text_id, &button_id)) in SORTED_GAMEINPUTS.iter().zip(
                         state
                             .ids
@@ -253,7 +255,8 @@ impl Widget for Controls<'_> {
                             .rgba(0.0, 0.0, 0.0, 0.0)
                             .border_rgba(0.0, 0.0, 0.0, 255.0)
                             .label_y(Relative::Scalar(3.0));
-                        // Place top-left if it's the first text, else under the previous one
+                        // Place top-left if it's the first text, else under the
+                        // previous one
                         let text_widget = match previous_element_id {
                             None => {
                                 text_widget.top_left_with_margins_on(state.ids.window, 10.0, 5.0)
@@ -272,7 +275,8 @@ impl Widget for Controls<'_> {
                         for _ in ui.widget_input(button_id).clicks().right() {
                             events.push(RemoveBindingGamepadButton(*game_input));
                         }
-                        // Set the previous id to the current one for the next cycle
+                        // Set the previous id to the current one for the next
+                        // cycle
                         previous_element_id = Some(text_id);
                     }
                 },
@@ -281,7 +285,8 @@ impl Widget for Controls<'_> {
 
                     resize_ids(SORTED_GAMEINPUTS.len());
 
-                    // Loop all existing keybindings and the ids for text and button widgets
+                    // Loop all existing keybindings and the ids for text and
+                    // button widgets
                     for (game_input, (&text_id, &button_id)) in SORTED_GAMEINPUTS.iter().zip(
                         state
                             .ids
@@ -336,7 +341,8 @@ impl Widget for Controls<'_> {
                             .rgba(0.0, 0.0, 0.0, 0.0)
                             .border_rgba(0.0, 0.0, 0.0, 255.0)
                             .label_y(Relative::Scalar(3.0));
-                        // Place top-left if it's the first text, else under the previous one
+                        // Place top-left if it's the first text, else under the
+                        // previous one
                         let text_widget = match previous_element_id {
                             None => {
                                 text_widget.top_left_with_margins_on(state.ids.window, 10.0, 5.0)
@@ -355,7 +361,8 @@ impl Widget for Controls<'_> {
                         for _ in ui.widget_input(button_id).clicks().right() {
                             events.push(RemoveBindingGamepadLayer(*game_input));
                         }
-                        // Set the previous id to the current one for the next cycle
+                        // Set the previous id to the current one for the next
+                        // cycle
                         previous_element_id = Some(text_id);
                     }
                 },
@@ -364,7 +371,8 @@ impl Widget for Controls<'_> {
 
                     resize_ids(SORTED_MENUINPUTS.len());
 
-                    // Loop all existing keybindings and the ids for text and button widgets
+                    // Loop all existing keybindings and the ids for text and
+                    // button widgets
                     for (menu_input, (&text_id, &button_id)) in SORTED_MENUINPUTS.iter().zip(
                         state
                             .ids
@@ -425,7 +433,8 @@ impl Widget for Controls<'_> {
                             .rgba(0.0, 0.0, 0.0, 0.0)
                             .border_rgba(0.0, 0.0, 0.0, 255.0)
                             .label_y(Relative::Scalar(3.0));
-                        // Place top-left if it's the first text, else under the previous one
+                        // Place top-left if it's the first text, else under the
+                        // previous one
                         let text_widget = match previous_element_id {
                             None => {
                                 text_widget.top_left_with_margins_on(state.ids.window, 10.0, 5.0)
@@ -444,7 +453,8 @@ impl Widget for Controls<'_> {
                         for _ in ui.widget_input(button_id).clicks().right() {
                             events.push(RemoveBindingGamepadMenu(*menu_input));
                         }
-                        // Set the previous id to the current one for the next cycle
+                        // Set the previous id to the current one for the next
+                        // cycle
                         previous_element_id = Some(text_id);
                     }
                 },
@@ -461,7 +471,8 @@ impl Widget for Controls<'_> {
 
                     resize_ids(SORTED_MENUINPUTS.len());
 
-                    // Loop all existing keybindings and the ids for text and button widgets
+                    // Loop all existing keybindings and the ids for text and
+                    // button widgets
                     for (menu_input, (&text_id, &button_id)) in SORTED_MENUINPUTS.iter().zip(
                         state
                             .ids
@@ -518,7 +529,8 @@ impl Widget for Controls<'_> {
                             .rgba(0.0, 0.0, 0.0, 0.0)
                             .border_rgba(0.0, 0.0, 0.0, 255.0)
                             .label_y(Relative::Scalar(3.0));
-                        // Place top-left if it's the first text, else under the previous one
+                        // Place top-left if it's the first text, else under the
+                        // previous one
                         let text_widget = match previous_element_id {
                             None => {
                                 text_widget.top_left_with_margins_on(state.ids.window, 10.0, 5.0)
@@ -537,7 +549,8 @@ impl Widget for Controls<'_> {
                         for _ in ui.widget_input(button_id).clicks().right() {
                             events.push(RemoveBindingKeyboardMenu(*menu_input));
                         }
-                        // Set the previous id to the current one for the next cycle
+                        // Set the previous id to the current one for the next
+                        // cycle
                         previous_element_id = Some(text_id);
                     }
                 },
@@ -546,7 +559,8 @@ impl Widget for Controls<'_> {
 
                     resize_ids(SORTED_GAMEINPUTS.len());
 
-                    // Loop all existing keybindings and the ids for text and button widgets
+                    // Loop all existing keybindings and the ids for text and
+                    // button widgets
                     for (game_input, (&text_id, &button_id)) in SORTED_GAMEINPUTS.iter().zip(
                         state
                             .ids
@@ -602,7 +616,8 @@ impl Widget for Controls<'_> {
                             .rgba(0.0, 0.0, 0.0, 0.0)
                             .border_rgba(0.0, 0.0, 0.0, 255.0)
                             .label_y(Relative::Scalar(3.0));
-                        // Place top-left if it's the first text, else under the previous one
+                        // Place top-left if it's the first text, else under the
+                        // previous one
                         let text_widget = match previous_element_id {
                             None => {
                                 text_widget.top_left_with_margins_on(state.ids.window, 10.0, 5.0)
@@ -621,7 +636,8 @@ impl Widget for Controls<'_> {
                         for _ in ui.widget_input(button_id).clicks().right() {
                             events.push(RemoveBindingKeyboard(*game_input));
                         }
-                        // Set the previous id to the current one for the next cycle
+                        // Set the previous id to the current one for the next
+                        // cycle
                         previous_element_id = Some(text_id);
                     }
                 },
@@ -650,8 +666,8 @@ impl Widget for Controls<'_> {
                 if state.binding_mode != BindingMode::Gamepad {
                     events.push(ResetKeyBindingsKeyboard);
                 } else {
-                    // resets all gamepad bindings no matter which tab you are in: buttons,
-                    // gamelayer, or menu
+                    // resets all gamepad bindings no matter which tab you are
+                    // in: buttons, gamelayer, or menu
                     events.push(ResetKeyBindingsGamepad);
                 }
             }
@@ -1020,7 +1036,8 @@ impl Widget for Controls<'_> {
             }
         }
 
-        // Add an empty text widget to simulate some bottom margin, because conrod sucks
+        // Add an empty text widget to simulate some bottom margin, because
+        // conrod sucks
         if let Some(prev_id) = previous_element_id {
             Rectangle::fill_with([1.0, 1.0], color::TRANSPARENT)
                 .down_from(prev_id, 10.0)

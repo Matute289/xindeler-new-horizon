@@ -265,7 +265,8 @@ impl container::Renderer for IcedRenderer {
                             source_rect: None,
                         };
 
-                        // Is this worth it as opposed to using a giant image? (Probably)
+                        // Is this worth it as opposed to using a giant image?
+                        // (Probably)
                         vec![
                             center,
                             tl_corner,

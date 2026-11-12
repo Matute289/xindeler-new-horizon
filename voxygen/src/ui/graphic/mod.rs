@@ -192,8 +192,9 @@ impl TextureRequirements {
     fn from_graphic(graphic: &Graphic) -> Option<Self> {
         match graphic {
             Graphic::Image(image, border_color) => {
-                // Image sizes over u16::MAX are not supported (and we would probably not be
-                // able to create a texture large enough to hold them on the GPU anyway)!
+                // Image sizes over u16::MAX are not supported (and we would
+                // probably not be able to create a texture
+                // large enough to hold them on the GPU anyway)!
                 let image_dims = match (u16::try_from(image.width()), u16::try_from(image.height()))
                 {
                     (Ok(x), Ok(y)) if x != 0 && y != 0 => Vec2::new(x, y),
@@ -204,8 +205,9 @@ impl TextureRequirements {
                             image.width(),
                             image.height(),
                         );
-                        // TODO: reasonable to return None on this error case? We could potentially
-                        // validate images sizes on add_graphic/replace_graphic?
+                        // TODO: reasonable to return None on this error case?
+                        // We could potentially validate
+                        // images sizes on add_graphic/replace_graphic?
                         return None;
                     },
                 };
@@ -226,10 +228,10 @@ impl TextureRequirements {
         graphic_id: Id,
         requested_size: Vec2<u16>,
     ) -> (CacheKey, TextureParameters) {
-        // NOTE: Any external parameters which influence the value of the returned
-        // `TextureParameters` must be included in the `CacheKey`. Otherwise,
-        // invalidation and subsequent re-use of cache locations based on the
-        // value of `self` would be wrong.
+        // NOTE: Any external parameters which influence the value of the
+        // returned `TextureParameters` must be included in the
+        // `CacheKey`. Otherwise, invalidation and subsequent re-use of
+        // cache locations based on the value of `self` would be wrong.
         let (size, border_color, key_size) = match self {
             Self::Fixed { size, border_color } => (size, border_color, None),
             Self::Dependent => (requested_size, None, Some(requested_size)),
@@ -319,8 +321,8 @@ impl GraphicCache {
         // (especially since we should know the exact key for non-voxel
         // graphics).
         //
-        // NOTE: at the time of writing, replace_graphic is only used for voxel minimap
-        // updates and item image reloading.
+        // NOTE: at the time of writing, replace_graphic is only used for voxel
+        // minimap updates and item image reloading.
         if should_invalidate {
             self.cache_map.iter_mut().for_each(|(key, details)| {
                 if key.graphic_id == id {
@@ -367,9 +369,10 @@ impl GraphicCache {
                 Graphic::Voxel(segment, _, _) => {
                     use common::vol::SizedVol;
                     let size = segment.size();
-                    // TODO: HACK because they can be rotated arbitrarily, remove
-                    // (and they can be rasterized at arbitrary resolution)
-                    // (might need to return None here?)
+                    // TODO: HACK because they can be rotated arbitrarily,
+                    // remove (and they can be rasterized at
+                    // arbitrary resolution) (might need to
+                    // return None here?)
                     Some((size.x, size.z))
                 },
                 Graphic::Blank => None,
@@ -451,9 +454,10 @@ impl GraphicCache {
         // TODO: Verify rotation is being applied correctly.
         let transformed_aabr_and_scale = |aabr| {
             let scaled = scaled_aabr(aabr);
-            // Calculate how many displayed pixels there are for each pixel in the source
-            // image. We need this to calculate where to sample in the shader to
-            // retain crisp pixel borders when scaling the image.
+            // Calculate how many displayed pixels there are for each pixel in
+            // the source image. We need this to calculate where to
+            // sample in the shader to retain crisp pixel borders
+            // when scaling the image.
             let scale = requested_dims_upright.map2(
                 Vec2::from(scaled.size()),
                 |screen_pixels, sample_pixels: f64| screen_pixels as f32 / sample_pixels as f32,
@@ -490,8 +494,8 @@ impl GraphicCache {
                 let details = details.get_mut();
                 let (idx, valid, aabr) = details.info(atlases, textures);
 
-                // Check if the cached version has been invalidated by replacing the underlying
-                // graphic
+                // Check if the cached version has been invalidated by replacing
+                // the underlying graphic
                 if !valid {
                     // Create image
                     let (image, gpu_premul) = prepare_graphic(
@@ -501,8 +505,9 @@ impl GraphicCache {
                         &mut self.keyed_jobs,
                         pool,
                     )?;
-                    // Ensure we don't have any bugs causing the size used to determine if the
-                    // cached version is reusable to not match the size of the image produced by
+                    // Ensure we don't have any bugs causing the size used to
+                    // determine if the cached version is
+                    // reusable to not match the size of the image produced by
                     // prepare_graphic.
                     assert_eq!(
                         image.dimensions(),
@@ -541,12 +546,13 @@ impl GraphicCache {
             i32::from(texture_parameters.size.y),
         );
 
-        // Now we allocate space on the gpu (either in an atlas or an independent
-        // texture) and upload the image to that location.
+        // Now we allocate space on the gpu (either in an atlas or an
+        // independent texture) and upload the image to that location.
 
         let atlas_size = atlas_size(renderer);
-        // Graphics that request a border color or which are over a particular size
-        // compared to the atlas size are sent to their own textures.
+        // Graphics that request a border color or which are over a particular
+        // size compared to the atlas size are sent to their own
+        // textures.
         let can_place_in_atlas = texture_parameters.border_color.is_none()
             && atlas_size
                 .map2(texture_parameters.size, |a, d| {
@@ -579,7 +585,8 @@ impl GraphicCache {
                         .allocate(image_dims_size2d)
                         .map(aabr_from_alloc_rect)
                         .unwrap();
-                    // NOTE: All mutations happen only after the texture creation succeeds!
+                    // NOTE: All mutations happen only after the texture
+                    // creation succeeds!
                     let tex_idx = textures.insert((tex, bind, UiUploadBatchId::default()));
                     let atlas_idx = atlases.len();
                     atlases.push((atlas, tex_idx));
@@ -596,9 +603,9 @@ impl GraphicCache {
             // Create a texture just for this
             let (tex, bind, upload_batch) =
                 create_image(renderer, &image, texture_parameters, gpu_premul);
-            // NOTE: All mutations happen only after the texture creation and upload
-            // initiation succeeds! (completing the upload does not have any
-            // failure cases afaik)
+            // NOTE: All mutations happen only after the texture creation and
+            // upload initiation succeeds! (completing the upload
+            // does not have any failure cases afaik)
             let index = textures.insert((tex, bind, upload_batch));
             CachedDetails::Texture { index, valid: true }
         };
@@ -635,26 +642,29 @@ fn prepare_graphic<'graphic>(
     match graphic {
         Graphic::Blank => None,
         Graphic::Image(image, _border_color) => {
-            // Image will be rescaled when sampling from it on the GPU so we don't
-            // need to resize it here.
+            // Image will be rescaled when sampling from it on the GPU so we
+            // don't need to resize it here.
             //
-            // TODO: We could potentially push premultiplication even earlier (e.g. to the
-            // time of loading images or packaging veloren for distribution).
+            // TODO: We could potentially push premultiplication even earlier
+            // (e.g. to the time of loading images or packaging
+            // veloren for distribution).
             let mut rgba_cow = image.as_rgba8().map_or_else(
                 || {
-                    // TODO: we may want to require loading in as the rgba8 format so we don't have
-                    // to perform conversion here. On the other hand, we can take advantage of
-                    // certain formats to know that alpha premultiplication doesn't need to be
-                    // performed (but we would probably just want to store that with the loaded
-                    // rgba8 format).
+                    // TODO: we may want to require loading in as the rgba8
+                    // format so we don't have to perform
+                    // conversion here. On the other hand, we can take advantage
+                    // of certain formats to know that alpha
+                    // premultiplication doesn't need to be
+                    // performed (but we would probably just want to store that
+                    // with the loaded rgba8 format).
                     Cow::Owned(image.to_rgba8())
                 },
                 Cow::Borrowed,
             );
-            // NOTE: We do premultiplication on the main thread since if it would be
-            // expensive enough to do in the background we would just do it on
-            // the GPU. Could still use `rayon` to parallelize this work, if
-            // needed.
+            // NOTE: We do premultiplication on the main thread since if it
+            // would be expensive enough to do in the background we
+            // would just do it on the GPU. Could still use `rayon`
+            // to parallelize this work, if needed.
             let premultiply_strategy = PremultiplyStrategy::determine(&rgba_cow);
             let needs_gpu_premultiply = match premultiply_strategy {
                 PremultiplyStrategy::UseGpu => true,
@@ -673,9 +683,11 @@ fn prepare_graphic<'graphic>(
                 let segment = Arc::clone(segment);
                 let (trans, sample_strat) = (*trans, *sample_strat);
                 move |_| {
-                    // TODO: for now we always use CPU premultiplication for these, may want to
-                    // re-evaluate this after zoomy worldgen branch is merged (and it is more clear
-                    // when these jobs go to the background thread pool or not).
+                    // TODO: for now we always use CPU premultiplication for
+                    // these, may want to re-evaluate this
+                    // after zoomy worldgen branch is merged (and it is more
+                    // clear when these jobs go to the
+                    // background thread pool or not).
 
                     // Render voxel model at requested resolution
                     let mut image = renderer::draw_vox(&segment, dims, trans, sample_strat);
@@ -702,9 +714,10 @@ fn create_image_texture(
     size: Vec2<u32>,
     address_mode: Option<wgpu::AddressMode>,
 ) -> (Arc<Texture>, UiTextureBindGroup) {
-    // TODO: Right now we have to manually clear images to workaround AMD DX bug,
-    // for this we use Queue::write_texture which needs this usage. I think this
-    // may be fixed in newer wgpu versions that auto-clear the texture.
+    // TODO: Right now we have to manually clear images to workaround AMD DX
+    // bug, for this we use Queue::write_texture which needs this usage. I
+    // think this may be fixed in newer wgpu versions that auto-clear the
+    // texture.
     let workaround_usage = wgpu::TextureUsages::COPY_DST;
     let tex_info = wgpu::TextureDescriptor {
         label: None,
@@ -753,8 +766,8 @@ fn create_atlas_texture(
 
 fn aabr_from_alloc_rect(rect: guillotiere::Rectangle) -> Aabr<u16> {
     let (min, max) = (rect.min, rect.max);
-    // Note: here we assume the max texture size (and thus the maximum size of the
-    // atlas) is under `u16::MAX`.
+    // Note: here we assume the max texture size (and thus the maximum size of
+    // the atlas) is under `u16::MAX`.
     Aabr {
         min: Vec2::new(min.x as u16, min.y as u16),
         max: Vec2::new(max.x as u16, max.y as u16),
@@ -769,8 +782,8 @@ fn upload_image(
     aabr: Aabr<u16>,
     premultiply_on_gpu: bool,
 ) {
-    // Check that this image and the target aabr are the same size (otherwise there
-    // is a bug in this module).
+    // Check that this image and the target aabr are the same size (otherwise
+    // there is a bug in this module).
     debug_assert_eq!(aabr.map(u32::from).size().into_tuple(), image.dimensions());
     if premultiply_on_gpu {
         *upload_batch =
@@ -852,9 +865,10 @@ impl Default for PremultiplyLookupTable {
 
         use core::array;
         let alpha = array::from_fn(|alpha| {
-            // NOTE: u16::MAX + 1 here relies on the max alpha being short-circuited (and
-            // not using this table). We multiply by this factor since it is a
-            // power of 2, which means later demultiplying it will optimize to a
+            // NOTE: u16::MAX + 1 here relies on the max alpha being
+            // short-circuited (and not using this table). We
+            // multiply by this factor since it is a power of 2,
+            // which means later demultiplying it will optimize to a
             // bitshift.
             (((alpha as f32 / 255.0).powf(1.0 / 2.4) * (u16::MAX as f32 + 1.0)) + 0.5) as u16
         });
@@ -883,15 +897,16 @@ fn premultiply_alpha(image: &mut RgbaImage) {
         static ref LOOKUP: PremultiplyLookupTable = Default::default();
     }
     let lookup = &*LOOKUP;
-    // TODO: Apparently it is possible for ImageBuffer raw vec to have more pixels
-    // than the dimensions of the actual image (I don't think we actually have
-    // this occuring but we should probably fix other spots that use the raw
-    // buffer). See:
+    // TODO: Apparently it is possible for ImageBuffer raw vec to have more
+    // pixels than the dimensions of the actual image (I don't think we
+    // actually have this occuring but we should probably fix other spots
+    // that use the raw buffer). See:
     // https://github.com/image-rs/image/blob/a1ce569afd476e881acafdf9e7a5bce294d0db9a/src/buffer.rs#L664
     let dims = image.dimensions();
     let image_buffer_len = dims.0 as usize * dims.1 as usize * 4;
     let (arrays, end) = (&mut **image)[..image_buffer_len].as_chunks_mut::<{ 4 * 4 }>();
-    // Rgba8 has 4 bytes per pixel there should be no remainder when dividing by 4.
+    // Rgba8 has 4 bytes per pixel there should be no remainder when dividing by
+    // 4.
     let (end, _) = end.as_chunks_mut::<4>();
     end.iter_mut().for_each(|pixel| {
         let alpha = pixel[3];
@@ -937,7 +952,8 @@ fn premultiply_alpha(image: &mut RgbaImage) {
         for pixel_index in 0..4 {
             let alpha_factor = factors[pixel_index];
             let alpha = pixelx4[pixel_index * 4 + 3];
-            // Putting this code outside the loop makes things take ~25% less time.
+            // Putting this code outside the loop makes things take ~25% less
+            // time.
             let color_factors = [
                 lookup.color[pixelx4[pixel_index * 4 + 0] as usize] as u32 * alpha as u32 + 4096,
                 lookup.color[pixelx4[pixel_index * 4 + 1] as usize] as u32 * alpha as u32 + 4096,
@@ -945,22 +961,27 @@ fn premultiply_alpha(image: &mut RgbaImage) {
             ];
             for i in 0..3 {
                 let color = &mut pixelx4[pixel_index * 4 + i];
-                // Loosely based on transform to linear and back (above threshold) (this is
-                // where use of 14 comes from).
-                // `32433` selected via trial and error to reduce the number of mismatches.
-                // `/ (u16::MAX as u32 + 1)` transforms back to `u8` precision (we add 1 so it
-                // will be a division by a power of 2 which optimizes well).
+                // Loosely based on transform to linear and back (above
+                // threshold) (this is where use of 14 comes
+                // from). `32433` selected via trial and error
+                // to reduce the number of mismatches.
+                // `/ (u16::MAX as u32 + 1)` transforms back to `u8` precision
+                // (we add 1 so it will be a division by a power
+                // of 2 which optimizes well).
                 let predicted =
                     ((alpha_factor as u32) * (*color as u32 + 14) + 32328) / (u16::MAX as u32 + 1);
                 let multiplied_color = (if predicted < 9 + 14 {
                     // Here we handle two cases:
                     // 1. When the transform starts and ends as linear.
-                    // 2. When the color is over the linear threshold for the transform into linear
-                    //    space but below this threshold when transforming back out (due to being
-                    //    multiplied with a small alpha).
-                    // (in both cases the result is linearly related to alpha and we can encode how
-                    // it is related to the color in a lookup table)
-                    // NOTE: 212 is the largest color value used here (when alpha isn't 0)
+                    // 2. When the color is over the linear threshold for the
+                    //    transform into linear space but below this threshold
+                    //    when transforming back out (due to being multiplied
+                    //    with a small alpha).
+                    // (in both cases the result is linearly related to alpha
+                    // and we can encode how it is related
+                    // to the color in a lookup table) NOTE:
+                    // 212 is the largest color value used here (when alpha
+                    // isn't 0)
                     color_factors[i] >> 13
                 } else {
                     predicted - 14
@@ -980,7 +1001,8 @@ enum PremultiplyStrategy {
 }
 
 impl PremultiplyStrategy {
-    #[rustfmt::skip] // please don't format comment with 'ns/pixel' to a separate line from the value
+    #[rustfmt::skip] // please don't format comment with 'ns/pixel' to a
+                     // separate line from the value
     fn determine(image: &RgbaImage) -> Self {
         // TODO: Would be useful to re-time this after a wgpu update.
         //
@@ -1063,7 +1085,8 @@ fn fraction_shortcircuit_blocks(image: &RgbaImage) -> Option<f32> {
     let pixel_count = dims.0 as usize * dims.1 as usize;
     let (arrays, end) = (&**image)[..pixel_count * 4].as_chunks::<{ 4 * 4 }>();
 
-    // Rgba8 has 4 bytes per pixel there should be no remainder when dividing by 4.
+    // Rgba8 has 4 bytes per pixel there should be no remainder when dividing by
+    // 4.
     let (end, _) = end.as_chunks::<4>();
     let end_is_opaque = end.iter().all(|pixel| pixel[3] == 255);
 

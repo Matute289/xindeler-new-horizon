@@ -136,14 +136,18 @@ pub trait EditableSetting: Clone + Default {
                 }) {
                 Ok((version, mut settings)) => {
                     if matches!(version, Version::Old) {
-                        // Old version, which means we either performed a migration or there was
-                        // some needed update to the file.  If this is the case, we preemptively
-                        // overwrite the settings file (not strictly needed, but useful for
+                        // Old version, which means we either performed a
+                        // migration or there was
+                        // some needed update to the file.  If this is the case,
+                        // we preemptively overwrite the
+                        // settings file (not strictly needed, but useful for
                         // people who do manual editing).
                         info!("Settings were changed on load, updating file...");
-                        // We don't care if we encountered an error on saving updates to a
-                        // settings file that we just loaded (it's already logged and migrated).
-                        // However, we should crash if it reported an integrity failure, since we
+                        // We don't care if we encountered an error on saving
+                        // updates to a settings file
+                        // that we just loaded (it's already logged and
+                        // migrated). However, we should
+                        // crash if it reported an integrity failure, since we
                         // supposedly just validated it.
                         if let Err(Error::Integrity(err)) = settings
                             .edit(data_dir, |_| Some(()))
@@ -253,8 +257,8 @@ fn save_to_file<S: EditableSetting>(setting: S, path: &Path) -> Result<S, ErrorI
     let raw: <S as EditableSetting>::Setting = setting.into();
     let ron = ron::ser::to_string_pretty(&raw, ron::ser::PrettyConfig::default())
         .expect("RON does not throw any parse errors during serialization to string.");
-    // This has the side effect of validating the copy, meaning it's safe to save
-    // the file.
+    // This has the side effect of validating the copy, meaning it's safe to
+    // save the file.
     let (_, settings): (Version, S) = raw.try_into().map_err(ErrorInternal::Integrity)?;
     // Create dir if it doesn't exist
     if let Some(dir) = path.parent()

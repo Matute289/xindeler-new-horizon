@@ -147,7 +147,8 @@ impl<'a> System<'a> for Sys {
                 || (read_data.events.get_emitters(), Vec::new(), Vec::new()),
                 |(mut emitters, mut add_hit_entities, mut outcomes),
                  (entity, pos, ori, uid, beam)| {
-                    // Note: rayon makes it difficult to hold onto a thread-local RNG, if grabbing
+                    // Note: rayon makes it difficult to hold onto a
+                    // thread-local RNG, if grabbing
                     // this becomes a bottleneck we can look into alternatives.
                     let mut rng = rand::rng();
                     if rng.random_bool(0.005) {
@@ -161,10 +162,12 @@ impl<'a> System<'a> for Sys {
                     });
 
                     // Group to ignore collisions with
-                    // Might make this more nuanced if beams are used for non damage effects
+                    // Might make this more nuanced if beams are used for non
+                    // damage effects
                     let group = read_data.groups.get(entity);
 
-                    // Go through all affectable entities by querying the spatial grid
+                    // Go through all affectable entities by querying the
+                    // spatial grid
                     let target_iter = read_data
                         .cached_spatial_grid
                         .0
@@ -201,7 +204,8 @@ impl<'a> System<'a> for Sys {
                                 height_b,
                             );
 
-                        // Finally, ensure that a hit has actually occurred by performing a raycast.
+                        // Finally, ensure that a hit has actually occurred by
+                        // performing a raycast.
                         // We do this last because it's likely to be the
                         // most expensive operation.
                         let tgt_dist = beam.bezier.start.distance(pos_b.0);
@@ -376,10 +380,10 @@ fn conical_bezier_cylinder_collision(
     rad_b: f32,
     length_b: f32,
 ) -> bool {
-    // This algorithm first determines the nearest point on the bezier to the point
-    // in the middle of the cylinder. It then checks that the bezier cone's radius
-    // at this point could allow it to be in the z bounds of the cylinder and within
-    // the cylinder's radius.
+    // This algorithm first determines the nearest point on the bezier to the
+    // point in the middle of the cylinder. It then checks that the bezier
+    // cone's radius at this point could allow it to be in the z bounds of
+    // the cylinder and within the cylinder's radius.
     let center_pos_b = bottom_pos_b.with_z(bottom_pos_b.z + length_b / 2.0);
     let (t, closest_pos) =
         bezier.binary_search_point_by_steps(center_pos_b, (range * 5.0) as u16, 0.1);
@@ -395,8 +399,8 @@ fn conical_bezier_cylinder_collision(
     let endpoints_check = {
         let tangent = bezier.evaluate_derivative(t);
         let dir = center_pos_b - closest_pos;
-        // `rad_check` only makes sense if the angle from the nearest bezier point to
-        // the target is 90 degrees
+        // `rad_check` only makes sense if the angle from the nearest bezier
+        // point to the target is 90 degrees
         tangent.angle_between(dir) >= 0.45 * PI
     };
 

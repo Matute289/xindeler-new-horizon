@@ -4,7 +4,7 @@
     clippy::needless_pass_by_ref_mut // until we find a better way for specs
 )]
 #![deny(clippy::clone_on_ref_ptr)]
-#![feature(box_patterns, option_zip, const_type_name, slice_partition_dedup)]
+#![feature(option_zip, const_type_name, slice_partition_dedup)]
 
 // NH-79 Phase 2: `server-cli`'s `/player_api/v1` auth middleware needs
 // `authc::AuthClient`/`CharacterAccessToken` directly (via
@@ -408,8 +408,9 @@ impl Server {
 
         // Warms the in-memory suspension cache from the database, same as
         // `EditableSettings::load` above warms its own file-backed caches --
-        // done here, before `database_settings` moves behind the `Arc<RwLock<_>>`
-        // every other DB access after startup goes through.
+        // done here, before `database_settings` moves behind the
+        // `Arc<RwLock<_>>` every other DB access after startup goes
+        // through.
         let character_suspensions =
             character_suspension::CharacterSuspensions::load(&database_settings);
 
@@ -634,6 +635,19 @@ impl Server {
         );
         state.ecs_mut().insert(ability_map);
 
+        // Force the narrative manifest to load (and validate) here, at boot,
+        // where a failure is a refusal to start.
+        //
+        // 🔴 This is load-bearing, not a warm-up. Its only other caller is the
+        // character load path, which runs on the `persistence_loader` thread:
+        // a panic there unwinds that thread's receive loop and kills it, and
+        // because `CharacterLoader` still holds the sender, every subsequent
+        // login is then queued to a channel with no consumer -- players hang
+        // on the character screen forever while the server keeps running and
+        // logs nothing. A malformed manifest must stop the server instead.
+        let narrative_vars = comp::narrative_manifest().len();
+        debug!(narrative_vars, "Narrative manifest loaded and validated");
+
         let msm = comp::inventory::item::MaterialStatManifest::load().cloned();
         state.ecs_mut().insert(msm);
 
@@ -678,12 +692,13 @@ impl Server {
         #[cfg(feature = "worldgen")]
         let spawn_point = SpawnPoint({
             let index = index.as_index_ref();
-            // NOTE: all of these `.map(|e| e as [type])` calls should compile into no-ops,
-            // but are needed to be explicit about casting (and to make the compiler stop
-            // complaining)
+            // NOTE: all of these `.map(|e| e as [type])` calls should compile
+            // into no-ops, but are needed to be explicit about
+            // casting (and to make the compiler stop complaining)
 
-            // Search for town defined by spawn_town server setting. If this fails, or is
-            // None, set spawn to the nearest town to the centre of the world
+            // Search for town defined by spawn_town server setting. If this
+            // fails, or is None, set spawn to the nearest town to
+            // the centre of the world
             let center_chunk = world.sim().map_size_lg().chunks().map(i32::from) / 2;
             let spawn_chunk = world
                 .civs()
@@ -737,8 +752,8 @@ impl Server {
 
         state.ecs_mut().insert(DeletedEntities::default());
 
-        // Only allow clients to send us a maximum of 1 MB per uncompressed message, to
-        // reduce the effectiveness of a DoS attack
+        // Only allow clients to send us a maximum of 1 MB per uncompressed
+        // message, to reduce the effectiveness of a DoS attack
         let network = Network::new_with_registry(Pid::new(), &runtime, &registry, 1 << 20);
         let (chat_cache, chat_tracker) = ChatCache::new(Duration::from_secs(60), &runtime);
         state.ecs_mut().insert(chat_tracker);
@@ -754,7 +769,7 @@ impl Server {
                     cert_file_path,
                     key_file_path,
                 } => {
-                    use rustls_pemfile::Item;
+                    use rustls::pki_types::pem::PemObject;
                     use std::fs;
 
                     match || -> Result<_, Box<dyn std::error::Error>> {
@@ -763,28 +778,17 @@ impl Server {
                             PrivateKeyDer::try_from(key).map_err(|_| "No valid pem key in file")?
                         } else {
                             debug!("convert pem key to der");
-                            rustls_pemfile::read_all(&mut key.as_slice())
-                                .find_map(|item| match item {
-                                    Ok(Item::Pkcs1Key(v)) => Some(PrivateKeyDer::Pkcs1(v)),
-                                    Ok(Item::Pkcs8Key(v)) => Some(PrivateKeyDer::Pkcs8(v)),
-                                    Ok(Item::Sec1Key(v)) => Some(PrivateKeyDer::Sec1(v)),
-                                    Ok(Item::Crl(_)) => None,
-                                    Ok(Item::Csr(_)) => None,
-                                    Ok(Item::X509Certificate(_)) => None,
-                                    Ok(_) => None,
-                                    Err(e) => {
-                                        tracing::warn!(?e, "error while reading key_file");
-                                        None
-                                    },
-                                })
-                                .ok_or("No valid pem key in file")?
+                            PrivateKeyDer::from_pem_slice(&key).map_err(|e| {
+                                tracing::warn!(?e, "error while reading key_file");
+                                "No valid pem key in file"
+                            })?
                         };
                         let cert_chain = fs::read(cert_file_path)?;
                         let cert_chain = if cert_file_path.extension().is_some_and(|x| x == "der") {
                             vec![CertificateDer::from(cert_chain)]
                         } else {
                             debug!("convert pem cert to der");
-                            rustls_pemfile::certs(&mut cert_chain.as_slice())
+                            CertificateDer::pem_slice_iter(&cert_chain)
                                 .filter_map(|item| match item {
                                     Ok(cert) => Some(cert),
                                     Err(e) => {
@@ -1070,8 +1074,8 @@ impl Server {
         self.state.ecs().write_resource::<TickStart>().0 = Instant::now();
 
         // Update calendar events as time changes
-        // TODO: If a lot of calendar events get added, this might become expensive.
-        // Maybe don't do this every tick?
+        // TODO: If a lot of calendar events get added, this might become
+        // expensive. Maybe don't do this every tick?
         let new_calendar = self
             .state
             .ecs()
@@ -1098,28 +1102,32 @@ impl Server {
             }
         }
 
-        // This tick function is the centre of the Veloren universe. Most server-side
-        // things are managed from here, and as such it's important that it
-        // stays organised. Please consult the core developers before making
-        // significant changes to this code. Here is the approximate order of
-        // things. Please update it as this code changes.
+        // This tick function is the centre of the Veloren universe. Most
+        // server-side things are managed from here, and as such it's
+        // important that it stays organised. Please consult the core
+        // developers before making significant changes to this code.
+        // Here is the approximate order of things. Please update it as
+        // this code changes.
         //
-        // 1) Collect input from the frontend, apply input effects to the state of the
-        //    game
-        // 2) Go through any events (timer-driven or otherwise) that need handling and
-        //    apply them to the state of the game
-        // 3) Go through all incoming client network communications, apply them to the
-        //    game state
-        // 4) Perform a single LocalState tick (i.e: update the world and entities in
-        //    the world)
-        // 5) Go through the terrain update queue and apply all changes to the terrain
+        // 1) Collect input from the frontend, apply input effects to the state
+        //    of the game
+        // 2) Go through any events (timer-driven or otherwise) that need
+        //    handling and apply them to the state of the game
+        // 3) Go through all incoming client network communications, apply them
+        //    to the game state
+        // 4) Perform a single LocalState tick (i.e: update the world and
+        //    entities in the world)
+        // 5) Go through the terrain update queue and apply all changes to the
+        //    terrain
         // 6) Send relevant state updates to all clients
-        // 7) Check for persistence updates related to character data, and message the
-        //    relevant entities
+        // 7) Check for persistence updates related to character data, and
+        //    message the relevant entities
         // 8) Update Metrics with current data
-        // 9) Finish the tick, passing control of the main thread back to the frontend
+        // 9) Finish the tick, passing control of the main thread back to the
+        //    frontend
 
-        // 1) Build up a list of events for this frame, to be passed to the frontend.
+        // 1) Build up a list of events for this frame, to be passed to the
+        //    frontend.
         let mut frontend_events = Vec::new();
 
         // 2)
@@ -1146,7 +1154,8 @@ impl Server {
         }
 
         // 4) Tick the server's LocalState.
-        // 5) Fetch any generated `TerrainChunk`s and insert them into the terrain.
+        // 5) Fetch any generated `TerrainChunk`s and insert them into the
+        //    terrain.
         // in sys/terrain.rs
         let mut state_tick_metrics = Default::default();
         let server_constants = (*self.state.ecs().read_resource::<ServerConstants>()).clone();
@@ -1195,8 +1204,9 @@ impl Server {
 
         let before_handle_events = Instant::now();
 
-        // Process any pending request to disconnect all clients, the disconnections
-        // will be processed once handle_events() is called below
+        // Process any pending request to disconnect all clients, the
+        // disconnections will be processed once handle_events() is
+        // called below
         let disconnect_type = self.disconnect_all_clients_if_requested();
 
         // Handle entity links (such as mounting)
@@ -1215,13 +1225,13 @@ impl Server {
 
         let before_update_terrain_and_regions = Instant::now();
 
-        // Apply terrain changes and update the region map after processing server
-        // events so that changes made by server events will be immediately
-        // visible to client synchronization systems, minimizing the latency of
-        // `ServerEvent` mediated effects
+        // Apply terrain changes and update the region map after processing
+        // server events so that changes made by server events will be
+        // immediately visible to client synchronization systems,
+        // minimizing the latency of `ServerEvent` mediated effects
         self.update_region_map();
-        // NOTE: apply_terrain_changes sends the *new* value since it is not being
-        // synchronized during the tick.
+        // NOTE: apply_terrain_changes sends the *new* value since it is not
+        // being synchronized during the tick.
         self.state.apply_terrain_changes(on_block_update);
 
         let before_sync = Instant::now();
@@ -1236,10 +1246,11 @@ impl Server {
 
         let before_entity_cleanup = Instant::now();
 
-        // In the event of a request to disconnect all players without persistence, we
-        // must run the terrain system a second time after the messages to
-        // perform client disconnections have been processed. This ensures that any
-        // items on the ground are deleted.
+        // In the event of a request to disconnect all players without
+        // persistence, we must run the terrain system a second time
+        // after the messages to perform client disconnections have been
+        // processed. This ensures that any items on the ground are
+        // deleted.
         if let Some(DisconnectType::WithoutPersistence) = disconnect_type {
             run_now::<terrain::Sys>(self.state.ecs_mut());
         }
@@ -1254,10 +1265,11 @@ impl Server {
             }
         }
 
-        // Prevent anchor entity chains which are not currently supported due to:
+        // Prevent anchor entity chains which are not currently supported due
+        // to:
         // * potential cycles?
-        // * unloading a chain could occur across an unbounded number of ticks with the
-        //   current implementation.
+        // * unloading a chain could occur across an unbounded number of ticks
+        //   with the current implementation.
         // * in particular, we want to be able to unload all entities in a
         //   limited number of ticks when a database error occurs and kicks all
         //   players (not quiet sure on exact time frame, since it already
@@ -1327,7 +1339,8 @@ impl Server {
                     let chunk_key = terrain.pos_key(pos.map(|e| e.floor() as i32));
                     match anchor {
                         Some(Anchor::Chunk(hc)) => {
-                            // Check if both this chunk and the NPCs `home_chunk` is unloaded. If
+                            // Check if both this chunk and the NPCs
+                            // `home_chunk` is unloaded. If
                             // so, we delete them. We check for
                             // `home_chunk` in order to avoid duplicating
                             // the entity under some circumstances.
@@ -1379,7 +1392,8 @@ impl Server {
         let mut character_updater = self.state.ecs().write_resource::<CharacterUpdater>();
         let updater_messages: Vec<CharacterUpdaterMessage> = character_updater.messages().collect();
 
-        // Get character-related database responses and notify the requesting client
+        // Get character-related database responses and notify the requesting
+        // client
         character_loader
             .messages()
             .chain(updater_messages)
@@ -1454,6 +1468,7 @@ impl Server {
                                         pact,
                                         trigger_slots,
                                         spell_mastery,
+                                        narrative_state,
                                     } = character_data;
                                     let character_data = (
                                         body,
@@ -1471,8 +1486,10 @@ impl Server {
                                         pact,
                                         trigger_slots,
                                         spell_mastery,
+                                        narrative_state,
                                     );
-                                    // TODO: Does this need to be a server event? E.g. we could
+                                    // TODO: Does this need to be a server
+                                    // event? E.g. we could
                                     // just handle it here.
                                     self.state.emit_event_now(UpdateCharacterDataEvent {
                                         entity: response.target_entity,
@@ -1481,8 +1498,10 @@ impl Server {
                                     })
                                 },
                                 Err(error) => {
-                                    // We failed to load data for the character from the DB. Notify
-                                    // the client to push the state back to character selection,
+                                    // We failed to load data for the character
+                                    // from the DB. Notify
+                                    // the client to push the state back to
+                                    // character selection,
                                     // with the error to display
                                     self.notify_client(
                                         response.target_entity,
@@ -1506,9 +1525,10 @@ impl Server {
         drop(character_updater);
 
         {
-            // Check for new chunks; cancel and regenerate all chunks if the asset has been
-            // reloaded. Note that all of these assignments are no-ops, so the
-            // only work we do here on the fast path is perform a relaxed read on an atomic.
+            // Check for new chunks; cancel and regenerate all chunks if the
+            // asset has been reloaded. Note that all of these
+            // assignments are no-ops, so the only work we do here
+            // on the fast path is perform a relaxed read on an atomic.
             // boolean.
             let index = &mut self.index;
             let world = &mut self.world;
@@ -1850,8 +1870,8 @@ impl Server {
                 .map(|(e, _)| e)
         }) {
             drop((data_dir, login_provider, editable_settings));
-            // Add admin component if the player is ingame; if they are not, we can ignore
-            // the write failure.
+            // Add admin component if the player is ingame; if they are not, we
+            // can ignore the write failure.
             self.state
                 .write_component_ignore_entity_dead(entity, comp::Admin(role));
         };
@@ -1896,8 +1916,8 @@ impl Server {
         let world_dims_chunks = self.world.sim().get_size();
         let world_dims_blocks = TerrainChunkSize::blocks(world_dims_chunks);
         // NOTE: origin is in the corner of the map
-        // TODO: extend this function to have picking a random position or specifying a
-        // position as options
+        // TODO: extend this function to have picking a random position or
+        // specifying a position as options
         //let mut rng = rand::rng();
         // // Pick a random position but not to close to the edge
         // let rand_pos = world_dims_blocks.map(|e| e as i32).map(|e| e / 2 +
@@ -2047,14 +2067,16 @@ impl Server {
 
     /// Sends `msg` to exactly the connected players named by `target_uuids`,
     /// on behalf of `operator_uuid` (audit-log only, not role-checked).
-    /// Returns `(delivered_to, not_found)`. See `cmd::send_targeted_msg`.
+    /// `big_screen` is the ZG-80 rendering hint, forwarded verbatim. Returns
+    /// `(delivered_to, not_found)`. See `cmd::send_targeted_msg`.
     pub fn send_targeted_msg(
         &self,
         target_uuids: &[Uuid],
         operator_uuid: Uuid,
         msg: String,
+        big_screen: bool,
     ) -> (Vec<Uuid>, Vec<Uuid>) {
-        cmd::send_targeted_msg(self, target_uuids, operator_uuid, msg)
+        cmd::send_targeted_msg(self, target_uuids, operator_uuid, msg, big_screen)
     }
 
     /// Suspends a single character on behalf of `operator_uuid`, a registered
@@ -2097,15 +2119,16 @@ impl Server {
 
     /// Sets the SQL log mode at runtime
     pub fn set_sql_log_mode(&mut self, sql_log_mode: SqlLogMode) {
-        // Unwrap is safe here because we only perform a variable assignment with the
-        // RwLock taken meaning that no panic can occur that would cause the
-        // RwLock to become poisoned. This justification also means that calling
-        // unwrap() on the associated read() calls for this RwLock is also safe
-        // as long as no code that can panic is introduced here.
+        // Unwrap is safe here because we only perform a variable assignment
+        // with the RwLock taken meaning that no panic can occur that
+        // would cause the RwLock to become poisoned. This justification
+        // also means that calling unwrap() on the associated read()
+        // calls for this RwLock is also safe as long as no code that
+        // can panic is introduced here.
         let mut database_settings = self.database_settings.write().unwrap();
         database_settings.sql_log_mode = sql_log_mode;
-        // Drop the RwLockWriteGuard to avoid performing unnecessary actions (logging)
-        // with the lock taken.
+        // Drop the RwLockWriteGuard to avoid performing unnecessary actions
+        // (logging) with the lock taken.
         drop(database_settings);
         info!("SQL log mode changed to {:?}", sql_log_mode);
     }

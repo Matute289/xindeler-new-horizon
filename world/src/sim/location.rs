@@ -1,5 +1,5 @@
+use common::util::fx_hash::FxHasher64;
 use core::hash::BuildHasherDefault;
-use fxhash::FxHasher64;
 use hashbrown::HashSet;
 use rand::{RngExt, seq::IndexedRandom};
 use vek::*;

@@ -109,9 +109,9 @@ armor-misc-bag-knitted_red_pouch = Knitted Red Pouch
 armor-misc-bag-liana_kit = Liana Kit
     .desc = Woven from dried lianas.
 
-armor-misc-bag-mindflayer_spellbag = Mindflayer Spellbag
-    .desc = 
-        You can almost feel a mindflayer's
+armor-misc-bag-mindflayer_spellbag = Mind-Eater Spellbag
+    .desc =
+        You can almost feel a Mind-Eater's
         evil presence flowing through the fabric.
 
 armor-misc-bag-reliable_backpack = Reliable Backpack

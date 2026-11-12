@@ -30,6 +30,9 @@ pub struct Character {
     /// Per-`MagicSource` mastery progress as a small JSON object; `NULL` ->
     /// nothing accrued yet (every source at 0%).
     pub spell_mastery: Option<String>,
+    /// Sparse narrative state (variable id -> value) as a small JSON object;
+    /// `NULL` -> nothing deviates from the manifest defaults.
+    pub narrative_state: Option<String>,
     /// `NULL` -> `PactStanding::Bound` (only an explicit "severed" row
     /// suppresses casting).
     pub pact_standing: Option<String>,

@@ -2,7 +2,7 @@
 /// chunk range of the player and emits ambient sfx
 use crate::{
     AudioFrontend,
-    audio::sfx::{SFX_DIST_LIMIT_SQR, SfxEvent, SfxTriggerItem, SfxTriggers},
+    audio::sfx::{SFX_DIST_LIMIT_SQR, SfxEvent, SfxTag, SfxTriggerItem, SfxTriggers},
     scene::{Camera, FigureMgr, Terrain, terrain::BlocksOfInterest},
 };
 
@@ -193,7 +193,8 @@ impl EventMapper for BlockEventMapper {
                         let absolute_pos: Vec3<i32> =
                             Vec3::from(chunk_pos * TerrainChunk::RECT_SIZE.map(|e| e as i32));
 
-                        // Replace all RunningWater blocks with just one random one per tick
+                        // Replace all RunningWater blocks with just one random
+                        // one per tick
                         let blocks = if sounds.sfx == SfxEvent::RunningWaterSlow
                             || sounds.sfx == SfxEvent::Lavapool
                         {
@@ -207,9 +208,11 @@ impl EventMapper for BlockEventMapper {
 
                         // Iterate through each individual block
                         for block in blocks {
-                            // TODO Address this hack properly, potentially by making a new
-                            // block of interest type which picks fewer leaf blocks
-                            // Hack to reduce the number of bird, frog, and water sounds
+                            // TODO Address this hack properly, potentially by
+                            // making a new block of
+                            // interest type which picks fewer leaf blocks
+                            // Hack to reduce the number of bird, frog, and
+                            // water sounds
                             if ((sounds.sfx == SfxEvent::Birdcall || sounds.sfx == SfxEvent::Owl)
                                 && rng.random_bool(0.9995))
                                 || (sounds.sfx == SfxEvent::Frog && rng.random_bool(0.75))
@@ -231,6 +234,13 @@ impl EventMapper for BlockEventMapper {
                                 triggers.0.get_key_value(&sounds.sfx),
                                 temp,
                             ) {
+                                let tag = match sounds.sfx {
+                                    SfxEvent::Bees => SfxTag::Looping,
+                                    SfxEvent::RunningWaterSlow | SfxEvent::Lavapool => {
+                                        SfxTag::Ambient
+                                    },
+                                    _ => SfxTag::Blocksound,
+                                };
                                 // If the camera is within SFX distance
                                 if (block_pos.distance_squared(cam_pos)) < SFX_DIST_LIMIT_SQR {
                                     let sfx_trigger_item = triggers.0.get_key_value(&sounds.sfx);
@@ -238,6 +248,7 @@ impl EventMapper for BlockEventMapper {
                                         sfx_trigger_item,
                                         block_pos,
                                         Some(sounds.volume),
+                                        tag,
                                     );
                                 }
                                 internal_state.time = Instant::now();
@@ -274,9 +285,10 @@ impl BlockEventMapper {
         let mut rng = ChaCha8Rng::from_seed(rand::rng().random());
 
         if let Some((event, item)) = sfx_trigger_item {
-            //The interval between cricket chirps calculated by converting chunk
-            // temperature to centigrade (we should create a function for this) and applying
-            // the "cricket formula" to it
+            //The interval between cricket chirps calculated by converting
+            // chunk temperature to centigrade (we should create a
+            // function for this) and applying the "cricket formula"
+            // to it
             let cricket_interval = (25.0 / (3.0 * ((temp * 30.0) + 15.0))).max(0.5);
             if &previous_state.event == event {
                 //In case certain sounds need modification to their threshold,
@@ -287,7 +299,8 @@ impl BlockEventMapper {
                             >= cricket_interval + rng.random_range(-0.1..0.1)
                     },
                     SfxEvent::Cricket2 => {
-                        //the length and manner of this sound is quite different
+                        //the length and manner of this sound is quite
+                        // different
                         if cricket_interval < 0.75 {
                             previous_state.time.elapsed().as_secs_f32() >= 0.75
                         } else {

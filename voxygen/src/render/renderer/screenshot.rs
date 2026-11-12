@@ -185,8 +185,8 @@ impl TakeScreenshot {
             },
         };
 
-        // Note: we don't use bytes_per_pixel here since we expect only certain formats
-        // below.
+        // Note: we don't use bytes_per_pixel here since we expect only certain
+        // formats below.
         let bytes_per_rgb = 3;
         let mut pixel_bytes =
             Vec::with_capacity(self.width as usize * self.height as usize * bytes_per_rgb);
@@ -200,7 +200,8 @@ impl TakeScreenshot {
                         rest.is_empty(),
                         "Always valid because each pixel uses four bytes"
                     );
-                    // Swap blue and red components and drop alpha to get a RGB texture.
+                    // Swap blue and red components and drop alpha to get a RGB
+                    // texture.
                     for &[b, g, r, _a] in pixels {
                         pixel_bytes.extend_from_slice(&[r, g, b])
                     }

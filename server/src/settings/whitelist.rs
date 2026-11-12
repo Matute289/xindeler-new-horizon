@@ -226,12 +226,13 @@ mod v1 {
         /// guaranteed to produce a valid settings file as long as it is
         /// called with a valid settings file from the previous version.
         pub(super) fn migrate(prev: prev::Whitelist) -> Self {
-            // The whitelist start date for migrations from legacy is the current one; we
-            // could record that they actually have an unknown start date, but
-            // this would just complicate the format.
+            // The whitelist start date for migrations from legacy is the
+            // current one; we could record that they actually have
+            // an unknown start date, but this would just complicate
+            // the format.
             let date = Utc::now();
-            // We don't have any of the information we need for the whitelist for legacy
-            // records.
+            // We don't have any of the information we need for the whitelist
+            // for legacy records.
             Whitelist(
                 prev.0
                     .into_iter()

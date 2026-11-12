@@ -164,40 +164,47 @@ impl Body {
                         )
                     };
                     let ar = aspect_ratio.min(24.0);
-                    // We have an elliptical wing; proceed to calculate its lift and drag
+                    // We have an elliptical wing; proceed to calculate its lift
+                    // and drag
 
-                    // aoa will be positive when we're pitched up and negative otherwise
+                    // aoa will be positive when we're pitched up and negative
+                    // otherwise
                     let aoa = angle_of_attack(&ori, &rel_flow_dir);
-                    // c_l will be positive when aoa is positive (we have positive lift,
-                    // producing an upward force) and negative otherwise
+                    // c_l will be positive when aoa is positive (we have
+                    // positive lift, producing an upward
+                    // force) and negative otherwise
                     let c_l = lift_coefficient(ar, aoa);
 
-                    // lift dir will be orthogonal to the local relative flow vector.
-                    // Local relative flow is the resulting vector of (relative) freestream
+                    // lift dir will be orthogonal to the local relative flow
+                    // vector. Local relative flow is the
+                    // resulting vector of (relative) freestream
                     // flow + downwash (created by the vortices
                     // of the wing tips)
                     let lift_dir: Dir = {
                         // induced angle of attack
                         let aoa_i = c_l / (PI * ar);
-                        // effective angle of attack; the aoa as seen by aerofoil after
-                        // downwash
+                        // effective angle of attack; the aoa as seen by
+                        // aerofoil after downwash
                         let aoa_eff = aoa - aoa_i;
-                        // Angle between chord line and local relative wind is aoa_eff
-                        // radians. Direction of lift is
-                        // perpendicular to local relative wind.
-                        // At positive lift, local relative wind will be below our cord line
-                        // at an angle of aoa_eff. Thus if
+                        // Angle between chord line and local relative wind is
+                        // aoa_eff radians. Direction of
+                        // lift is perpendicular to
+                        // local relative wind.
+                        // At positive lift, local relative wind will be below
+                        // our cord line at an angle of
+                        // aoa_eff. Thus if
                         // we pitch down by aoa_eff radians then
-                        // our chord line will be colinear with local relative wind vector
-                        // and our up will be the direction
-                        // of lift.
+                        // our chord line will be colinear with local relative
+                        // wind vector and our up will
+                        // be the direction of lift.
                         ori.pitched_down(aoa_eff).up()
                     };
 
                     // induced drag coefficient (drag due to lift)
                     let cdi = {
-                        // Oswald's efficiency factor (empirically derived--very magical)
-                        // (this definition should not be used for aspect ratios > 25)
+                        // Oswald's efficiency factor (empirically derived--very
+                        // magical) (this definition
+                        // should not be used for aspect ratios > 25)
                         let e = 1.78 * (1.0 - 0.045 * ar.powf(0.68)) - 0.64;
                         c_l.powi(2) / (PI * e * ar)
                     };
@@ -216,20 +223,23 @@ impl Body {
 
             // This is the drag equation for a body in a fluid.
             // F_d = 0.5 * rho * velocity^2 * drag_coefficient * reference_area,
-            // where rho is the fluid density, velocity is the velocity of the body
-            // relative to the fluid, drag_coefficient is a dimensionless coefficient
-            // that we assume is 1.0, and reference_area is related to the cross-section
-            // of the body in the direction of the flow. power_vec is the "reference area"
-            // in 3D, accounting for the flow direction. If the body has wings,
-            // this accounts for both lift and parasite drag. If the body
-            // does not have wings, this is for parasite drag only.
+            // where rho is the fluid density, velocity is the velocity of the
+            // body relative to the fluid, drag_coefficient is a
+            // dimensionless coefficient that we assume is 1.0, and
+            // reference_area is related to the cross-section of the
+            // body in the direction of the flow. power_vec is the "reference
+            // area" in 3D, accounting for the flow direction. If
+            // the body has wings, this accounts for both lift and
+            // parasite drag. If the body does not have wings, this
+            // is for parasite drag only.
             0.5 * fluid_density * v_sq * power_vec
         }
     }
 
     /// Physically incorrect (but relatively dt-independent) way to calculate
     /// drag coefficients for liquids.
-    // TODO: Remove this in favour of `aerodynamic_forces` (see: `integrate_forces`)
+    // TODO: Remove this in favour of `aerodynamic_forces` (see:
+    // `integrate_forces`)
     pub fn drag_coefficient_liquid(&self, fluid_density: f32, scale: f32) -> f32 {
         fluid_density * self.parasite_drag(scale)
     }
@@ -329,8 +339,8 @@ impl Body {
             },
 
             Body::Ship(_) => {
-                // Airships tend to use the square of the cube root of its volume for
-                // reference area
+                // Airships tend to use the square of the cube root of its
+                // volume for reference area
                 let dim = self.dimensions().map(|a| a * scale);
                 (PI / 6.0 * dim.x * dim.y * dim.z).powf(2.0 / 3.0)
             },
@@ -362,8 +372,8 @@ pub fn lift_coefficient(aspect_ratio: f32, aoa: f32) -> f32 {
         lift_slope(aspect_ratio, None) * aoa
     } else {
         // This is when flow separation and turbulence starts to kick in.
-        // Going to just make something up (based on some data), as the alternative is
-        // to just throw your hands up and return 0
+        // Going to just make something up (based on some data), as the
+        // alternative is to just throw your hands up and return 0
         let aoa_s = aoa.signum();
         let c_l_max = lift_slope(aspect_ratio, None) * stall_angle;
         let deg_45 = PI / 4.0;

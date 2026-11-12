@@ -108,16 +108,16 @@ impl<'a> System<'a> for Sys {
         // To send entity updates
         // 1. Iterate through regions
         // 2. Iterate through region subscribers (ie clients)
-        //     - Collect a list of entity ids for clients who are subscribed to this
-        //       region (hash calc to check each)
+        //     - Collect a list of entity ids for clients who are subscribed to
+        //       this region (hash calc to check each)
         // 3. Iterate through events from that region
-        //     - For each entity entered event, iterate through the client list and
-        //       check if they are subscribed to the source (hash calc per subscribed
-        //       client per entity event), if not subscribed to the source send a entity
-        //       creation message to that client
-        //     - For each entity left event, iterate through the client list and check
-        //       if they are subscribed to the destination (hash calc per subscribed
-        //       client per entity event)
+        //     - For each entity entered event, iterate through the client list
+        //       and check if they are subscribed to the source (hash calc per
+        //       subscribed client per entity event), if not subscribed to the
+        //       source send a entity creation message to that client
+        //     - For each entity left event, iterate through the client list and
+        //       check if they are subscribed to the destination (hash calc per
+        //       subscribed client per entity event)
         // 4. Iterate through entities in that region
         // 5. Inform clients of the component changes for that entity
         //     - Throttle update rate base on distance to each client
@@ -125,8 +125,8 @@ impl<'a> System<'a> for Sys {
         // Sync physics and other components
         // via iterating through regions (in parallel)
 
-        // Pre-collect regions paired with deleted entity list so we can iterate over
-        // them in parallel below
+        // Pre-collect regions paired with deleted entity list so we can iterate
+        // over them in parallel below
         let regions_and_deleted_entities = region_map
             .iter()
             .map(|(key, region)| (key, region, deleted_entities.take_deleted_in_region(key)))
@@ -141,8 +141,9 @@ impl<'a> System<'a> for Sys {
                 guard
             },
             |_guard, (key, region, deleted_entities_in_region)| {
-                // Assemble subscriber list for this region by iterating through clients and
-                // checking if they are subscribed to this region
+                // Assemble subscriber list for this region by iterating through
+                // clients and checking if they are subscribed
+                // to this region
                 let mut subscribers = (
                     &clients,
                     &entities,
@@ -163,7 +164,8 @@ impl<'a> System<'a> for Sys {
                 for event in region.events() {
                     match event {
                         RegionEvent::Entered(id, maybe_key) => {
-                            // Don't process newly created entities here (redundant network
+                            // Don't process newly created entities here
+                            // (redundant network
                             // messages)
                             if trackers.uid.inserted().contains(*id) {
                                 continue;
@@ -204,8 +206,10 @@ impl<'a> System<'a> for Sys {
                                         .map(|key| !regions.contains(key))
                                         .unwrap_or(true)
                                     {
-                                        // TODO: I suspect it would be more efficient (in terms of
-                                        // bandwidth) to batch messages like this (same in
+                                        // TODO: I suspect it would be more
+                                        // efficient (in terms of
+                                        // bandwidth) to batch messages like
+                                        // this (same in
                                         // subscription.rs).
                                         client.send_fallible(ServerGeneral::DeleteEntity(uid));
                                     }
@@ -222,8 +226,8 @@ impl<'a> System<'a> for Sys {
                     region.entities(),
                     deleted_entities_in_region,
                 );
-                // We lazily initialize the the synchronization messages in case there are no
-                // clients.
+                // We lazily initialize the the synchronization messages in case
+                // there are no clients.
                 let mut entity_comp_sync = Either::Left((entity_sync_package, comp_sync_package));
                 for (client, _, client_entity, _) in &mut subscribers {
                     let msg = entity_comp_sync.right_or_else(
@@ -237,7 +241,8 @@ impl<'a> System<'a> for Sys {
                             )
                         },
                     );
-                    // We don't care much about stream errors here since they could just represent
+                    // We don't care much about stream errors here since they
+                    // could just represent
                     // network disconnection, which is handled elsewhere.
                     let _ = client.send_prepared(&msg.0);
                     let _ = client.send_prepared(&msg.1);
@@ -269,12 +274,14 @@ impl<'a> System<'a> for Sys {
                                 &editable_settings,
                             )
                         } else if matches!(collider, Some(Collider::Voxel { .. })) {
-                            // Things with a voxel collider (airships, etc.) need to have very
+                            // Things with a voxel collider (airships, etc.)
+                            // need to have very
                             // stable physics so we always send updated
                             // for these where we can.
                             true
                         } else {
-                            // Throttle update rates for all other entities based on distance to
+                            // Throttle update rates for all other entities
+                            // based on distance to
                             // client
                             let distance_sq = client_pos.0.distance_squared(pos.0);
                             let id_staggered_tick = tick + entity.id() as u64;
@@ -308,11 +315,14 @@ impl<'a> System<'a> for Sys {
                         );
                     }
 
-                    // TODO: force update counter only needs to be sent once per frame (and only if
-                    // it changed, although it might not be worth having a separate message for
-                    // optionally sending it since individual messages may have a bandwidth
-                    // overhead), however, here we send it potentially 2 times per subscribed
-                    // region by including it in the `CompSync` message.
+                    // TODO: force update counter only needs to be sent once per
+                    // frame (and only if it changed,
+                    // although it might not be worth having a separate message
+                    // for optionally sending it since
+                    // individual messages may have a bandwidth
+                    // overhead), however, here we send it potentially 2 times
+                    // per subscribed region by including it
+                    // in the `CompSync` message.
                     client.send_fallible(ServerGeneral::CompSync(
                         comp_sync_package,
                         force_updates.get(*client_entity).map_or(0, |f| f.counter()),
@@ -334,9 +344,9 @@ impl<'a> System<'a> for Sys {
         )
             .join()
         {
-            // Include additional components for clients that aren't in a region (e.g. due
-            // to having no position or have sync_me as `false`) since those
-            // won't be synced above.
+            // Include additional components for clients that aren't in a region
+            // (e.g. due to having no position or have sync_me as
+            // `false`) since those won't be synced above.
             let include_all_comps = region_map.in_region_map(entity);
 
             let mut comp_sync_package = trackers.create_sync_from_client_package(
@@ -376,16 +386,18 @@ impl<'a> System<'a> for Sys {
         for (entity, client, spectating_entity) in
             (&entities, &clients, &spectating_entities).join()
         {
-            // TODO: If the spectated entity is out of range while a change occurs it will
-            // cause the client to log errors, and those changes will be missed
-            // by the spectating entity.
+            // TODO: If the spectated entity is out of range while a change
+            // occurs it will cause the client to log errors, and
+            // those changes will be missed by the spectating
+            // entity.
             //
             // Note: this server never sends a removal package for the
             // components it additionally syncs while spectating (`Combo`,
             // `ActiveAbilities`, `IsInteractor`, `Interactors`) when
             // spectating stops. That's handled client-side instead —
-            // `clear_stale_spectator_components` in `voxygen/src/session/mod.rs`
-            // drops the client's local copies at every point spectating ends.
+            // `clear_stale_spectator_components` in
+            // `voxygen/src/session/mod.rs` drops the client's local
+            // copies at every point spectating ends.
             let comp_sync_package = trackers.create_sync_from_spectated_entity_package(
                 &tracked_storages,
                 entity,
@@ -473,8 +485,9 @@ impl<'a> System<'a> for Sys {
             }
         }
 
-        // In optimized builds, remove InventoryUpdateBuffer component from entities
-        // that shouldn't have it (builds with debug assertions will panic)
+        // In optimized builds, remove InventoryUpdateBuffer component from
+        // entities that shouldn't have it (builds with debug assertions
+        // will panic)
         for entity in entities_to_remove_buf {
             inventory_update_buffers.remove(entity);
         }
@@ -510,8 +523,8 @@ impl<'a> System<'a> for Sys {
         }
 
         // Sync resources
-        // TODO: doesn't really belong in this system (rename system or create another
-        // system?)
+        // TODO: doesn't really belong in this system (rename system or create
+        // another system?)
         const TOD_SYNC_FREQ: u64 = 100;
         if tick % TOD_SYNC_FREQ == 0 {
             let mut tod_lazymsg = None;
@@ -524,8 +537,9 @@ impl<'a> System<'a> for Sys {
                         *time_scale,
                     ))
                 });
-                // We don't care much about stream errors here since they could just represent
-                // network disconnection, which is handled elsewhere.
+                // We don't care much about stream errors here since they could
+                // just represent network disconnection, which
+                // is handled elsewhere.
                 let _ = client.send_prepared(&msg);
                 tod_lazymsg = Some(msg);
             }

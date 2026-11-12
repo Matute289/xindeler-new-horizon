@@ -185,8 +185,8 @@ async fn client(cmd_sender: mpsc::UnboundedSender<LocalCommand>) {
                 unreachable!("this subcommand isn't yet handled");
             },
         }
-        // this 100 ms is because i am super lazy, and i want to appear the logs before
-        // the next '==>' appears...
+        // this 100 ms is because i am super lazy, and i want to appear the logs
+        // before the next '==>' appears...
         thread::sleep(Duration::from_millis(100));
         println!();
     }

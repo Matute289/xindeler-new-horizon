@@ -2,7 +2,8 @@ use crate::{persistence::character_updater, sys::SysScheduler};
 use common::{
     comp::{
         ActiveAbilities, Alignment, Background, Body, CharacterClass, Ethos, Inventory, MapMarker,
-        Pact, Presence, PresenceKind, SkillSet, SpellMastery, Stats, TriggerSlots, Waypoint,
+        NarrativeState, Pact, Presence, PresenceKind, SkillSet, SpellMastery, Stats, TriggerSlots,
+        Waypoint,
         ability::AbilityPool,
         pet::{Pet, is_tameable},
     },
@@ -37,6 +38,7 @@ impl<'a> System<'a> for Sys {
         ReadStorage<'a, Pact>,
         ReadStorage<'a, TriggerSlots>,
         ReadStorage<'a, SpellMastery>,
+        ReadStorage<'a, NarrativeState>,
         WriteExpect<'a, character_updater::CharacterUpdater>,
         Write<'a, SysScheduler<Self>>,
     );
@@ -66,6 +68,7 @@ impl<'a> System<'a> for Sys {
             pacts,
             trigger_slots,
             spell_masteries,
+            narrative_states,
             mut updater,
             mut scheduler,
         ): Self::SystemData,
@@ -87,6 +90,7 @@ impl<'a> System<'a> for Sys {
                     pacts.maybe(),
                     trigger_slots.maybe(),
                     spell_masteries.maybe(),
+                    narrative_states.maybe(),
                 )
                     .join()
                     .filter_map(
@@ -105,6 +109,7 @@ impl<'a> System<'a> for Sys {
                             pact,
                             trigger_slots,
                             spell_mastery,
+                            narrative_state,
                         )| match presence.kind {
                             PresenceKind::LoadingCharacter(_char_id) => {
                                 error!(
@@ -130,22 +135,23 @@ impl<'a> System<'a> for Sys {
                                     })
                                     .collect();
 
-                                Some((
-                                    id,
-                                    skill_set.clone(),
-                                    inventory.clone(),
+                                Some(character_updater::CharacterUpdateData {
+                                    character_id: id,
+                                    skill_set: skill_set.clone(),
+                                    inventory: inventory.clone(),
                                     pets,
-                                    waypoint.cloned(),
-                                    active_abilities.clone(),
-                                    ability_pool.cloned().unwrap_or_default(),
-                                    map_marker.cloned(),
-                                    character_class.copied().unwrap_or_default(),
-                                    ethos.copied().unwrap_or_default(),
-                                    background.cloned().unwrap_or_default(),
-                                    pact.cloned().unwrap_or_default(),
-                                    trigger_slots.cloned().unwrap_or_default(),
-                                    spell_mastery.copied().unwrap_or_default(),
-                                ))
+                                    waypoint: waypoint.cloned(),
+                                    active_abilities: active_abilities.clone(),
+                                    ability_pool: ability_pool.cloned().unwrap_or_default(),
+                                    map_marker: map_marker.cloned(),
+                                    character_class: character_class.copied().unwrap_or_default(),
+                                    ethos: ethos.copied().unwrap_or_default(),
+                                    background: background.cloned().unwrap_or_default(),
+                                    pact: pact.cloned().unwrap_or_default(),
+                                    trigger_slots: trigger_slots.cloned().unwrap_or_default(),
+                                    spell_mastery: spell_mastery.copied().unwrap_or_default(),
+                                    narrative_state: narrative_state.cloned().unwrap_or_default(),
+                                })
                             },
                             PresenceKind::Spectator | PresenceKind::Possessor => None,
                         },

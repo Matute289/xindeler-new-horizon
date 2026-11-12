@@ -394,8 +394,9 @@ impl AbilityPool {
         for key in Self::class_ability_keys(character_class.primary) {
             push_key(&mut abilities, &mut spell_gates, key.to_string(), None);
         }
-        // 2. The racial innate (delegated to `for_body` so the species->key logic lives
-        //    in exactly one place). Its index MUST stay put across a multiclass grant.
+        // 2. The racial innate (delegated to `for_body` so the species->key
+        //    logic lives in exactly one place). Its index MUST stay put across
+        //    a multiclass grant.
         for key in Self::for_body(body).abilities {
             push_key(&mut abilities, &mut spell_gates, key, None);
         }
@@ -425,10 +426,10 @@ impl AbilityPool {
             push_spells(&mut abilities, &mut spell_gates, secondary);
         }
 
-        // 6. Learned spellbook keys, last and sorted. Sorting matters: the spellbook
-        //    hands over a `HashSet`, whose iteration order varies between processes,
-        //    and an order that varied between logins would silently re-point every
-        //    legacy positional hotbar slot.
+        // 6. Learned spellbook keys, last and sorted. Sorting matters: the
+        //    spellbook hands over a `HashSet`, whose iteration order varies
+        //    between processes, and an order that varied between logins would
+        //    silently re-point every legacy positional hotbar slot.
         let mut learned: Vec<&String> = learned_spells.iter().collect();
         learned.sort_unstable();
         for key in learned {
@@ -876,8 +877,8 @@ impl ActiveAbilities {
         let ability =
             self.get_ability_with_triggers(input, inv, Some(skill_set), stats, trigger_slots);
 
-        // ENG-D2c: a weapon that RequiresAttunement grants no abilities until its
-        // slot is attuned (the item is inert).
+        // ENG-D2c: a weapon that RequiresAttunement grants no abilities until
+        // its slot is attuned (the item is inert).
         let ability_set = |equip_slot| {
             inv.and_then(|inv| inv.equipped(equip_slot))
                 .filter(|item| {
@@ -2313,11 +2314,12 @@ impl CharacterAbility {
                     energy_cost,
                     ..
                 } => {
-                    // If either in the air or is on ground and able to be activated from
-                    // ground.
+                    // If either in the air or is on ground and able to be
+                    // activated from ground.
                     //
-                    // NOTE: there is a check in CharacterState::try_from below that must be kept in
-                    // sync with the conditions here (it determines whether this starts in a
+                    // NOTE: there is a check in CharacterState::try_from below
+                    // that must be kept in sync with the
+                    // conditions here (it determines whether this starts in a
                     // movement or buildup stage).
                     (data.physics.on_ground.is_none() || buildup_duration.is_some())
                         && update.energy.try_change_by(-*energy_cost).is_ok()
@@ -5069,8 +5071,8 @@ mod ability_cooldown_tests {
 mod ability_meta_tag_tests {
     use super::*;
 
-    // M1 (ENG-A1): the composite meta-school tag. Axiomancy(Subschool · Form) and
-    // Hemomancy(Form) need `form` + `subschool` on AbilityMeta.
+    // M1 (ENG-A1): the composite meta-school tag. Axiomancy(Subschool · Form)
+    // and Hemomancy(Form) need `form` + `subschool` on AbilityMeta.
     // `deny_unknown_fields` means the RON must be accepted explicitly; the 542
     // classic spells leave both None.
     #[test]
@@ -5094,8 +5096,8 @@ mod ability_meta_tag_tests {
         assert_eq!(meta.subschool, None);
     }
 
-    // M4 (ENG-C1): Hemomancy's per-spell HP cost (the "blood price"); serde-default
-    // so non-Hemomancy abilities omit it.
+    // M4 (ENG-C1): Hemomancy's per-spell HP cost (the "blood price");
+    // serde-default so non-Hemomancy abilities omit it.
     #[test]
     fn meta_parses_hp_cost() {
         let meta: AbilityMeta =
@@ -5372,8 +5374,8 @@ mod innate_tests {
         comp::{CharacterAbility, item::tool::AbilitySpec},
     };
 
-    // The six racial innate RONs parse as their expected CharacterAbility variant
-    // (magic-abilities plan Task 14).
+    // The six racial innate RONs parse as their expected CharacterAbility
+    // variant (magic-abilities plan Task 14).
     #[test]
     fn innate_ability_rons_load() {
         let cases: [(&str, fn(&CharacterAbility) -> bool); 6] = [
@@ -5399,9 +5401,10 @@ mod innate_tests {
         }
     }
 
-    // Every humanoid species' innate set-key (from the grant logic itself) resolves
-    // to a real manifest set. Ties AbilityPool::innate_set_key to the manifest, so
-    // a typo'd key or a new species left unmapped is caught here, not in-game.
+    // Every humanoid species' innate set-key (from the grant logic itself)
+    // resolves to a real manifest set. Ties AbilityPool::innate_set_key to
+    // the manifest, so a typo'd key or a new species left unmapped is
+    // caught here, not in-game.
     #[test]
     fn innate_set_key_matches_manifest() {
         use crate::comp::{ability::AbilityPool, humanoid::ALL_SPECIES};
@@ -5542,7 +5545,8 @@ mod class_ability_pool_tests {
                 AbilityPool::no_learned_spells(),
             );
             for key in &pool.abilities {
-                // Skip the trailing racial innate (already covered by innate tests).
+                // Skip the trailing racial innate (already covered by innate
+                // tests).
                 if key.starts_with("innate.") {
                     continue;
                 }
@@ -5648,7 +5652,8 @@ mod spell_gate_tests {
             AbilityPool::no_learned_spells(),
         );
 
-        // Class signature + capstone first, then the racial innate, then spells.
+        // Class signature + capstone first, then the racial innate, then
+        // spells.
         assert_eq!(pool.abilities[0], "class.mage.arcanesurge");
         assert_eq!(pool.abilities[1], "class.mage.arcanemastery");
         assert_eq!(pool.abilities[2], "innate.human");
@@ -6748,7 +6753,8 @@ mod pact_blade_pool_tests {
         assert!(out.has_blade_bond());
 
         // `blade_summoned` alone is not enough: a severed pact, or one whose
-        // boon is no longer Blade, has no blade out (`Pact::blade_is_manifest`).
+        // boon is no longer Blade, has no blade out
+        // (`Pact::blade_is_manifest`).
         for stale in [
             Pact {
                 standing: PactStanding::Severed,

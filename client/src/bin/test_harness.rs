@@ -22,7 +22,9 @@ use common::{ViewDistances, clock::Clock, comp};
 use serde::Deserialize;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::runtime::Runtime;
-use xindeler_client::{Client, ClientType, addr::ConnectionArgs};
+use xindeler_client::{
+    Client, ClientType, Credentials, StaticCredentialProvider, addr::ConnectionArgs,
+};
 
 /// Safety cap on ticks spent waiting for any single step (~20 s at 30 Hz).
 const STEP_TICK_LIMIT: u32 = 600;
@@ -168,17 +170,20 @@ fn apply_spec(spec: &TestCharSpec, opt: &Opt, runtime: &Arc<Runtime>) -> Result<
         prefer_ipv6: false,
         hostname: opt.server.clone(),
     };
+    // Servers without an auth server only (no auth server is trusted).
+    let provider = StaticCredentialProvider {
+        credentials_by_auth: [(
+            None,
+            Credentials::UsernamePassword(opt.username.clone(), opt.password.clone()),
+        )]
+        .into(),
+    };
     let mut client = runtime
         .block_on(Client::new(
             addr,
             Arc::clone(runtime),
-            &mut None,
-            &opt.username,
-            &opt.password,
             None,
-            |_| false,
-            || None,
-            None,
+            &provider,
             &|_| {},
             |_| {},
             PathBuf::new(),
@@ -224,8 +229,8 @@ fn apply_spec(spec: &TestCharSpec, opt: &Opt, runtime: &Arc<Runtime>) -> Result<
     };
 
     // Find the character by name, or create it (race → species at creation; the
-    // real class is applied by /make_test_char, so we always create a Warrior with
-    // the always-valid sword starter).
+    // real class is applied by /make_test_char, so we always create a Warrior
+    // with the always-valid sword starter).
     let char_id = if let Some(id) = find_id(&client) {
         id
     } else {
@@ -270,7 +275,8 @@ fn apply_spec(spec: &TestCharSpec, opt: &Opt, runtime: &Arc<Runtime>) -> Result<
         }
     }
 
-    // Configure via the admin command, then keep ticking so the server applies it.
+    // Configure via the admin command, then keep ticking so the server applies
+    // it.
     client.send_command("make_test_char".to_owned(), make_test_char_args(spec));
     for _ in 0..FLUSH_TICKS {
         tick(&mut client)?;

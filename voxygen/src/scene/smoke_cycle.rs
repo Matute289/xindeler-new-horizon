@@ -88,7 +88,8 @@ fn create_climate(temperature: f32) -> FireplaceClimate {
         (SMOKE_MAX_TEMPERATURE - temperature).min(SMOKE_MAX_TEMP_VALUE) * SMOKE_TEMP_MULTIPLIER;
     // when is breakfast down to daily strength
     // daily_strength ==
-    // SMOKE_BREAKFAST_STRENGTH*(1.0-(t-breakfast)/SMOKE_BREAKFAST_HALF_DURATION)
+    // SMOKE_BREAKFAST_STRENGTH*(1.0-(t-breakfast)/
+    // SMOKE_BREAKFAST_HALF_DURATION)
     //
     // (t-breakfast) = (1.0 -
     // daily_strength/SMOKE_BREAKFAST_STRENGTH)*SMOKE_BREAKFAST_HALF_DURATION

@@ -141,7 +141,8 @@ impl CharacterBehavior for Data {
                             .required_item
                             .as_ref()
                             .map_or((true, None), |&(ref item_def_id, slot, consume)| {
-                                // Check that required item is still in expected slot
+                                // Check that required item is still in expected
+                                // slot
                                 let has_item = data
                                     .inventory
                                     .and_then(|inv| inv.get(slot))

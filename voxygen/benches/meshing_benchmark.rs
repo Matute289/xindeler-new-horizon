@@ -50,17 +50,18 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     let sample = |chunk_pos: Vec2<i32>| {
         let chunk_pos = chunk_pos + CENTER;
-        // Find the area of the terrain we want. Because meshing needs to compute things
-        // like ambient occlusion and edge elision, we also need the borders of
-        // the chunk's neighbours too (hence the `- 1` and `+ 1`).
+        // Find the area of the terrain we want. Because meshing needs to
+        // compute things like ambient occlusion and edge elision, we
+        // also need the borders of the chunk's neighbours too (hence
+        // the `- 1` and `+ 1`).
         let aabr = Aabr {
             min: chunk_pos.map2(TerrainGrid::chunk_size(), |e, sz| e * sz as i32 - 1),
             max: chunk_pos.map2(TerrainGrid::chunk_size(), |e, sz| (e + 1) * sz as i32 + 1),
         };
 
-        // Copy out the chunk data we need to perform the meshing. We do this by taking
-        // a sample of the terrain that includes both the chunk we want and its
-        // neighbours.
+        // Copy out the chunk data we need to perform the meshing. We do this by
+        // taking a sample of the terrain that includes both the chunk
+        // we want and its neighbours.
         let volume = terrain.sample(aabr).unwrap();
 
         // The region to actually mesh

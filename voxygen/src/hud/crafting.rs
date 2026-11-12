@@ -308,8 +308,8 @@ impl CraftingTab {
         }
     }
 
-    // Tells UI whether tab is an adhoc tab that should only sometimes be present
-    // depending on what station is accessed
+    // Tells UI whether tab is an adhoc tab that should only sometimes be
+    // present depending on what station is accessed
     fn is_adhoc(self) -> bool { matches!(self, CraftingTab::Dismantle) }
 }
 
@@ -362,8 +362,8 @@ impl Widget for Crafting<'_> {
         let mut events = Vec::new();
 
         // Handle any initialization
-        // TODO: Replace with struct instead of making assorted booleans once there is
-        // more than 1 field.
+        // TODO: Replace with struct instead of making assorted booleans once
+        // there is more than 1 field.
         if self.show.crafting_fields.initialize_repair {
             state.update(|s| {
                 s.selected_recipe = Some(String::from("veloren.core.pseudo_recipe.repair"))
@@ -552,8 +552,8 @@ impl Widget for Crafting<'_> {
                 .set(state.ids.category_imgs[i], ui);
         }
 
-        // TODO: Consider UX for filtering searches, maybe a checkbox or a dropdown if
-        // more filters gets added
+        // TODO: Consider UX for filtering searches, maybe a checkbox or a
+        // dropdown if more filters gets added
         let mut _lower_case_search = String::new();
         let (search_filter, search_keys) = {
             if let Some(key) = &self.show.crafting_fields.crafting_search_key {
@@ -589,9 +589,9 @@ impl Widget for Crafting<'_> {
         let wood_comp_recipe = make_pseudo_recipe(SpriteKind::CraftingBench);
         let repair_recipe = make_pseudo_recipe(SpriteKind::RepairBench);
 
-        // A BTreeMap is used over a HashMap as when a HashMap is used, the UI shuffles
-        // the positions of these every tick, so a BTreeMap is necessary to keep it
-        // ordered.
+        // A BTreeMap is used over a HashMap as when a HashMap is used, the UI
+        // shuffles the positions of these every tick, so a BTreeMap is
+        // necessary to keep it ordered.
         let pseudo_entries = {
             let mut pseudo_entries = BTreeMap::new();
             pseudo_entries.insert(
@@ -679,8 +679,9 @@ impl Widget for Crafting<'_> {
 
         // First available recipes, then ones with available materials,
         // then unavailable ones, each sorted by quality and then alphabetically
-        // In the tuple, "name" is the recipe book key, and "recipe.output.0.name()"
-        // is the display name (as stored in the item descriptors)
+        // In the tuple, "name" is the recipe book key, and
+        // "recipe.output.0.name()" is the display name (as stored in
+        // the item descriptors)
         let search = |item: &Arc<ItemDef>| {
             let (name_key, _) = item.i18n(self.item_i18n);
             let fallback_name = self
@@ -793,38 +794,42 @@ impl Widget for Crafting<'_> {
             )
         });
 
-        // MENU INPUTS: crafting window navigation, mirroring the SlotGrid/menu_events
-        // pattern the bag already uses (see hud/slot_grid.rs, hud/bag.rs).
+        // MENU INPUTS: crafting window navigation, mirroring the
+        // SlotGrid/menu_events pattern the bag already uses (see
+        // hud/slot_grid.rs, hud/bag.rs).
         //
         // Local focus areas (LocalFocus cycles through them):
-        // - Area 0, recipe list: Up/Down highlights an entry, Apply selects/deselects
-        //   it (same as clicking `recipe_list_btns[i]`).
-        // - Area 1, ingredient slots: Left/Right highlights a slot, Apply selects the
-        //   highlighted slot via the shared SlotManager, same as the bag's own
-        //   inventory grid. Only meaningful for modular-weapon/component/repair
-        //   recipes; a no-op for simple recipes, which have none. Placing a new item
-        //   into the slot still requires a mouse drag from the inventory — see the note
-        //   below.
+        // - Area 0, recipe list: Up/Down highlights an entry, Apply
+        //   selects/deselects it (same as clicking `recipe_list_btns[i]`).
+        // - Area 1, ingredient slots: Left/Right highlights a slot, Apply
+        //   selects the highlighted slot via the shared SlotManager, same as
+        //   the bag's own inventory grid. Only meaningful for
+        //   modular-weapon/component/repair recipes; a no-op for simple
+        //   recipes, which have none. Placing a new item into the slot still
+        //   requires a mouse drag from the inventory — see the note below.
         // - Area 2, craft button: Apply crafts, same as clicking it.
         //
         // Back always closes the window, from any local focus.
         //
-        // Note: like the bag's own SlotGrid, this reads `self.menu_events` whenever
-        // the crafting window is open, with no cross-window arbitration against Bag
-        // (which can be open at the same time, e.g. to browse ingredients).
-        // `Show::focus` (`hud/mod.rs`) tracks which windows are open but does not yet
-        // gate which one consumes `menu_events` per frame. Selecting a slot is
-        // therefore best-effort when multiple windows are open: whichever window
-        // renders last in a given frame "wins" the shared SlotManager's selection.
-        // This is a pre-existing gap in how `menu_events` is dispatched, not
-        // something introduced here — it's also why cross-window item placement
-        // (e.g. dragging a bag item into one of these slots) is deliberately left
-        // mouse-only rather than wired through a menu-driven select-to-swap, which
-        // would let one stray keypress fire a real inventory move against whatever
-        // slot happened to be selected in another window.
-        // Filtered once and reused for both the dpad-nav clamp below and the
-        // render loop further down, rather than re-running `satisfies()` over
-        // the full recipe list twice per frame.
+        // Note: like the bag's own SlotGrid, this reads `self.menu_events`
+        // whenever the crafting window is open, with no cross-window
+        // arbitration against Bag (which can be open at the same time,
+        // e.g. to browse ingredients). `Show::focus` (`hud/mod.rs`)
+        // tracks which windows are open but does not yet gate which one
+        // consumes `menu_events` per frame. Selecting a slot is
+        // therefore best-effort when multiple windows are open: whichever
+        // window renders last in a given frame "wins" the shared
+        // SlotManager's selection. This is a pre-existing gap in how
+        // `menu_events` is dispatched, not something introduced here —
+        // it's also why cross-window item placement (e.g. dragging a
+        // bag item into one of these slots) is deliberately left
+        // mouse-only rather than wired through a menu-driven select-to-swap,
+        // which would let one stray keypress fire a real inventory move
+        // against whatever slot happened to be selected in another
+        // window. Filtered once and reused for both the dpad-nav clamp
+        // below and the render loop further down, rather than
+        // re-running `satisfies()` over the full recipe list twice per
+        // frame.
         let visible_recipes: Vec<_> = ordered_recipes
             .into_iter()
             .filter(|(_, recipe, _, _, _)| self.show.crafting_fields.crafting_tab.satisfies(recipe))
@@ -977,7 +982,8 @@ impl Widget for Crafting<'_> {
                     state.update(|s| s.selected_recipe = None);
                 } else {
                     if self.show.crafting_fields.crafting_tab.is_adhoc() {
-                        // If current tab is an adhoc tab, and recipe is selected, change to general
+                        // If current tab is an adhoc tab, and recipe is
+                        // selected, change to general
                         // tab
                         events.push(Event::ChangeCraftingTab(CraftingTab::All));
                     }
@@ -985,16 +991,17 @@ impl Widget for Crafting<'_> {
                 }
                 events.push(Event::ClearRecipeInputs);
             }
-            // set the text here so that the correct position of the button is retrieved
+            // set the text here so that the correct position of the button is
+            // retrieved
             text.set(state.ids.recipe_list_labels[i], ui);
 
             // Sidebar color
             let color::Hsla(h, s, l, _) = get_quality_col(recipe.output.0.quality()).to_hsl();
             let val_multiplier = if is_craftable { 0.7 } else { 0.5 };
-            // Apply conversion to hsv, multiply v by the desired amount, then revert to
-            // hsl. Conversion formulae: https://en.wikipedia.org/wiki/HSL_and_HSV#Interconversion
-            // Note that division by 0 is not possible since none of the colours are black
-            // or white
+            // Apply conversion to hsv, multiply v by the desired amount, then
+            // revert to hsl. Conversion formulae: https://en.wikipedia.org/wiki/HSL_and_HSV#Interconversion
+            // Note that division by 0 is not possible since none of the colours
+            // are black or white
             let quality_col = color::hsl(
                 h,
                 s * val_multiplier * f32::min(l, 1.0 - l)
@@ -1055,8 +1062,8 @@ impl Widget for Crafting<'_> {
             }
         }
 
-        // Deselect recipe if current tab is an adhoc tab, elsewhere if recipe selected
-        // while in an adhoc tab, tab is changed to general
+        // Deselect recipe if current tab is an adhoc tab, elsewhere if recipe
+        // selected while in an adhoc tab, tab is changed to general
         if self.show.crafting_fields.crafting_tab.is_adhoc() {
             state.update(|s| s.selected_recipe = None);
         }
@@ -1702,7 +1709,8 @@ impl Widget for Crafting<'_> {
                     }
 
                     let can_repair = |item: &Item| {
-                        // Check that item needs to be repaired, and that inventory has sufficient
+                        // Check that item needs to be repaired, and that
+                        // inventory has sufficient
                         // materials to repair
                         item.durability_lost().is_some_and(|d| d > 0)
                     };
@@ -2209,8 +2217,8 @@ impl Widget for Crafting<'_> {
                         continue;
                     };
 
-                    // Grey color for images and text if their amount is too low to craft the
-                    // item
+                    // Grey color for images and text if their amount is too low
+                    // to craft the item
                     let item_count_in_inventory = self.inventory.item_count(&item_def);
                     let col = if item_count_in_inventory >= u64::from(amount.max(1)) {
                         TEXT_COLOR
@@ -2287,7 +2295,8 @@ impl Widget for Crafting<'_> {
                     .set(state.ids.ingredient_img[i], ui);
 
                     // Ingredients text and amount
-                    // Don't show inventory amounts above 999 to avoid the widget clipping
+                    // Don't show inventory amounts above 999 to avoid the
+                    // widget clipping
                     let over9k = "99+";
                     let in_inv: &str = &item_count_in_inventory.to_string();
                     // Show Ingredients

@@ -92,8 +92,9 @@ impl Client {
     pub(crate) fn connected_from_addr(&self) -> &ConnectAddr { &self.connected_from_addr }
 
     pub(crate) fn send<M: Into<ServerMsg>>(&self, msg: M) -> Result<(), StreamError> {
-        // TODO: hack to avoid locking stream mutex while serializing the message,
-        // remove this when the mutexes on the Streams are removed
+        // TODO: hack to avoid locking stream mutex while serializing the
+        // message, remove this when the mutexes on the Streams are
+        // removed
         let prepared = self.prepare(msg);
         self.send_prepared(&prepared)
         /*match msg.into() {
@@ -256,7 +257,8 @@ impl Client {
         &mut self,
         stream_id: u8,
     ) -> Result<Option<M>, StreamError> {
-        // TODO: are two systems using the same stream?? why is there contention here?
+        // TODO: are two systems using the same stream?? why is there contention
+        // here?
         match stream_id {
             0 => self.register_stream.try_recv(),
             1 => self.character_screen_stream.try_recv(),

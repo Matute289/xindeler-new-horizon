@@ -194,9 +194,9 @@ where
     ) -> R::Output {
         let bounds = layout.bounds();
         if bounds.contains(cursor_position) {
-            // TODO: these bounds aren't actually global (for example see how the Scrollable
-            // widget handles its content) so it's not actually a good key to
-            // use here
+            // TODO: these bounds aren't actually global (for example see how
+            // the Scrollable widget handles its content) so it's
+            // not actually a good key to use here
             let aabr = aabr_from_bounds(bounds);
             let m_pos = Vec2::new(
                 cursor_position.x.trunc() as i32,

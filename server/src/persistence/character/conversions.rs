@@ -110,8 +110,8 @@ pub fn convert_items_to_database_items(
         )
     });
 
-    // Use Breadth-first search to recurse into containers/modular weapons to store
-    // their parts
+    // Use Breadth-first search to recurse into containers/modular weapons to
+    // store their parts
     let mut bfs_queue: VecDeque<_> = inventory
         .chain(loadout)
         .chain(overflow_items)
@@ -128,15 +128,16 @@ pub fn convert_items_to_database_items(
     while let Some((position, item, parent_container_item_id)) = bfs_queue.pop_front() {
         // Construct new items.
         if let Some(item) = item {
-            // Try using the next available id in the sequence as the default for new items.
+            // Try using the next available id in the sequence as the default
+            // for new items.
             let new_item_id = NonZeroU64::new(u64::try_from(*next_id).expect(
                 "We are willing to crash if the next entity id overflows (or is otherwise \
                  negative).",
             ))
             .expect("next_id should not be zero, either");
 
-            // Fast (kinda) path: acquire read for the common case where an id has
-            // already been assigned.
+            // Fast (kinda) path: acquire read for the common case where an id
+            // has already been assigned.
             let comp = item.get_item_id_for_database();
             let item_id = comp.load()
                 // First, we filter out "impossible" entity IDs--IDs that are larger
@@ -208,10 +209,12 @@ pub fn convert_items_to_database_items(
             depth.insert(item_id, depth[&parent_container_item_id] + 1);
 
             for (i, component) in item.components().iter().enumerate() {
-                // recursive items' children have the same position as their parents, and since
-                // they occur afterwards in the topological sort of the parent graph (which
+                // recursive items' children have the same position as their
+                // parents, and since they occur afterwards in
+                // the topological sort of the parent graph (which
                 // should still always be a tree, even with recursive items), we
-                // have enough information to put them back into their parents on load
+                // have enough information to put them back into their parents
+                // on load
                 bfs_queue.push_back((format!("component_{}", i), Some(component), item_id));
             }
 
@@ -336,8 +339,8 @@ where
     'b: 'a,
 {
     // First checks if item is a component, if it is, tries to get a mutable
-    // reference to itself by getting a mutable reference to the item that is its
-    // parent
+    // reference to itself by getting a mutable reference to the item that is
+    // its parent
     //
     // It is safe to directly index into `inventory_items` with `index` as the
     // parent item of a component is loaded before its components, therefore the
@@ -365,8 +368,8 @@ where
                         "Failed to parse position stored in database: {position}."
                     ))
                 })?;
-            // Returns mutable reference to component item by accessing the component
-            // through its parent item item
+            // Returns mutable reference to component item by accessing the
+            // component through its parent item item
             parent?
                 .persistence_access_mutable_component(component_index)
                 .ok_or_else(|| {
@@ -406,9 +409,9 @@ pub fn convert_inventory_from_database_items(
 ) -> Result<Inventory, PersistenceError> {
     // Loadout items must be loaded before inventory items since loadout items
     // provide inventory slots. Since items stored inside loadout items actually
-    // have their parent_container_item_id as the loadout pseudo-container we rely
-    // on populating the loadout items first, and then inserting the items into the
-    // inventory at the correct position.
+    // have their parent_container_item_id as the loadout pseudo-container we
+    // rely on populating the loadout items first, and then inserting the
+    // items into the inventory at the correct position.
     //
     let loadout = convert_loadout_from_database_items(loadout_container_id, loadout_items)?;
     let mut overflow_items =
@@ -429,9 +432,9 @@ pub fn convert_inventory_from_database_items(
 
     let mut failed_inserts = HashMap::new();
 
-    // In order to items with components to properly load, it is important that this
-    // item iteration occurs in order so that any modular items are loaded before
-    // its components.
+    // In order to items with components to properly load, it is important that
+    // this item iteration occurs in order so that any modular items are
+    // loaded before its components.
     for (i, db_item) in inventory_items.iter().enumerate() {
         item_indices.insert(db_item.item_id, i);
 
@@ -450,9 +453,10 @@ pub fn convert_inventory_from_database_items(
 
         // Stack Size
         if db_item.stack_size == 1 || item.is_stackable() {
-            // FIXME: On failure, collect the set of items that don't fit and return them
-            // (to be dropped next to the player) as this could be the result of
-            // a change in the max amount for that item.
+            // FIXME: On failure, collect the set of items that don't fit and
+            // return them (to be dropped next to the player) as
+            // this could be the result of a change in the max
+            // amount for that item.
             item.set_amount(u32::try_from(db_item.stack_size).map_err(|_| {
                 PersistenceError::ConversionError(format!(
                     "Invalid item stack size for stackable={}: {}",
@@ -487,7 +491,8 @@ pub fn convert_inventory_from_database_items(
                             // Insert successful
                         },
                         Ok(Some(_item)) => {
-                            // If inventory.insert returns an item, it means it was swapped for
+                            // If inventory.insert returns an item, it means it
+                            // was swapped for
                             // an item that already occupied the
                             // slot. Multiple items being stored
                             // in the database for the same slot is
@@ -497,7 +502,8 @@ pub fn convert_inventory_from_database_items(
                             ));
                         },
                         Err(item) => {
-                            // If this happens there were too many items in the database for the
+                            // If this happens there were too many items in the
+                            // database for the
                             // current inventory size
                             failed_inserts.insert(db_item.position.clone(), item);
                         },
@@ -514,8 +520,9 @@ pub fn convert_inventory_from_database_items(
                 &item_indices,
                 &mut (&mut inventory, &mut failed_inserts),
                 &|(inv, f_i): &mut (&mut Inventory, &mut HashMap<String, VelorenItem>), s| {
-                    // Attempts first to access inventory if that slot exists there. If it does not
-                    // it instead attempts to access failed inserts list.
+                    // Attempts first to access inventory if that slot exists
+                    // there. If it does not it instead
+                    // attempts to access failed inserts list.
                     slot(s)
                         .ok()
                         .and_then(|slot| inv.slot_mut(slot))
@@ -532,8 +539,8 @@ pub fn convert_inventory_from_database_items(
         }
     }
 
-    // For overflow items and failed inserts, attempt to push to inventory. If push
-    // fails, move to overflow slots.
+    // For overflow items and failed inserts, attempt to push to inventory. If
+    // push fails, move to overflow slots.
     if let Err(inv_error) = inventory.push_all(
         overflow_items
             .into_iter()
@@ -542,8 +549,9 @@ pub fn convert_inventory_from_database_items(
         inventory.persistence_push_overflow_items(inv_error.returned_items());
     }
 
-    // Some items may have had components added, so update the item config of each
-    // item to ensure that it correctly accounts for components that were added
+    // Some items may have had components added, so update the item config of
+    // each item to ensure that it correctly accounts for components that
+    // were added
     inventory.persistence_update_all_item_states(&ABILITY_MAP, &MATERIAL_STATS_MANIFEST);
 
     Ok(inventory)
@@ -557,9 +565,9 @@ pub fn convert_loadout_from_database_items(
     let mut loadout = loadout_builder.build();
     let mut item_indices = HashMap::new();
 
-    // In order to items with components to properly load, it is important that this
-    // item iteration occurs in order so that any modular items are loaded before
-    // its components.
+    // In order to items with components to properly load, it is important that
+    // this item iteration occurs in order so that any modular items are
+    // loaded before its components.
     for (i, db_item) in database_items.iter().enumerate() {
         item_indices.insert(db_item.item_id, i);
 
@@ -602,8 +610,9 @@ pub fn convert_loadout_from_database_items(
         }
     }
 
-    // Some items may have had components added, so update the item config of each
-    // item to ensure that it correctly accounts for components that were added
+    // Some items may have had components added, so update the item config of
+    // each item to ensure that it correctly accounts for components that
+    // were added
     loadout.persistence_update_all_item_states(&ABILITY_MAP, &MATERIAL_STATS_MANIFEST);
 
     Ok(loadout)
@@ -616,9 +625,9 @@ pub fn convert_overflow_items_from_database_items(
     let mut overflow_items_with_database_position = HashMap::new();
     let mut item_indices = HashMap::new();
 
-    // In order to items with components to properly load, it is important that this
-    // item iteration occurs in order so that any modular items are loaded before
-    // its components.
+    // In order to items with components to properly load, it is important that
+    // this item iteration occurs in order so that any modular items are
+    // loaded before its components.
     for (i, db_item) in database_items.iter().enumerate() {
         item_indices.insert(db_item.item_id, i);
 
@@ -637,9 +646,10 @@ pub fn convert_overflow_items_from_database_items(
 
         // Stack Size
         if db_item.stack_size == 1 || item.is_stackable() {
-            // FIXME: On failure, collect the set of items that don't fit and return them
-            // (to be dropped next to the player) as this could be the result of
-            // a change in the max amount for that item.
+            // FIXME: On failure, collect the set of items that don't fit and
+            // return them (to be dropped next to the player) as
+            // this could be the result of a change in the max
+            // amount for that item.
             item.set_amount(u32::try_from(db_item.stack_size).map_err(|_| {
                 PersistenceError::ConversionError(format!(
                     "Invalid item stack size for stackable={}: {}",
@@ -658,8 +668,9 @@ pub fn convert_overflow_items_from_database_items(
                     // Insert successful
                 },
                 Some(_item) => {
-                    // If insert returns a value, database had two items stored with the same
-                    // position which is an error.
+                    // If insert returns a value, database had two items stored
+                    // with the same position which is an
+                    // error.
                     return Err(PersistenceError::ConversionError(
                         "Inserted an item into the same overflow slot twice".to_string(),
                     ));
@@ -1011,13 +1022,13 @@ fn convert_skill_groups_from_database(
         use skillset::SkillsPersistenceError;
 
         let skills_result = if skill_group.spent_exp != i64::from(new_skill_group.spent_exp()) {
-            // If persisted spent exp does not equal the spent exp after reacquiring skill
-            // points, force a respec
+            // If persisted spent exp does not equal the spent exp after
+            // reacquiring skill points, force a respec
             Err(SkillsPersistenceError::SpentExpMismatch)
         } else if Some(&skill_group.hash_val) != skillset::SKILL_GROUP_HASHES.get(&skill_group_kind)
         {
-            // Else if persisted hash for skill group does not match current hash for skill
-            // group, force a respec
+            // Else if persisted hash for skill group does not match current
+            // hash for skill group, force a respec
             Err(SkillsPersistenceError::HashMismatch)
         } else {
             // Else attempt to deserialize skills from a json string

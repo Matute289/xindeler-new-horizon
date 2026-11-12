@@ -1,0 +1,21 @@
+-- Per-character narrative state: the sparse set of narrative variables this
+-- character has deviated from their manifest default on, as a small JSON
+-- object of variable id -> value.
+--
+-- Nullable on purpose: every existing character loads as "no narrative state",
+-- with no forced choice and no data loss -- every read falls back to the
+-- manifest default, exactly as it would for a brand-new character.
+--
+-- Only deviations are stored, and only as content ids and plain integers: a
+-- row is ("quest.the_kind_work.commissions", 2). Nothing about engine
+-- semantics is persisted -- no enum indices, no quest handles, no dialogue
+-- ids -- so a content mistake is fixable by editing the manifest asset rather
+-- than by shipping a save-repair pass over every character.
+--
+-- A column rather than a side table, matching trigger_slots and spell_mastery:
+-- the state rides the existing single SELECT at login and the existing single
+-- UPDATE on the save tick, instead of adding a query per login and a second
+-- write path. Promote it to a side table if the serialized payload starts
+-- running to tens of kilobytes or the manifest grows past a few hundred
+-- variables.
+ALTER TABLE "character" ADD COLUMN narrative_state TEXT;

@@ -75,7 +75,8 @@ impl ChangeNotification {
             // Lifetime expired, start to fade
             } else if !self.fadetime.is_zero() {
                 self.fadetime = self.fadetime.saturating_sub(dt);
-                // alpha as elapsed duration fraction, multiply with this for nice fade curve
+                // alpha as elapsed duration fraction, multiply with this for
+                // nice fade curve
                 self.alpha = self.fadetime.as_secs_f32() / self.initial_fadetime.as_secs_f32();
             // Done fading
             } else {

@@ -39,7 +39,8 @@ pub fn localize_chat_message(
     // This is a hack, kind of.
     //
     // Current implementation just checks if our player is humanoid, and if so,
-    // we take the body_type of its character and assume it as grammatical gender.
+    // we take the body_type of its character and assume it as grammatical
+    // gender.
     //
     // In short,
     //  body_type of character

@@ -69,8 +69,8 @@ fn on_setup(ctx: EventCtx<SyncNpcs, OnSetup>) {
 fn on_health_change(ctx: EventCtx<SyncNpcs, OnHealthChange>) {
     let data = &mut *ctx.state.data_mut();
 
-    // As this handler does not correctly handle death, ignore events that set the
-    // health fraction to 0 (dead)
+    // As this handler does not correctly handle death, ignore events that set
+    // the health fraction to 0 (dead)
     if ctx.event.new_health_fraction != 0.0
         && let Some(actor) = data.actors.get_mut(ctx.event.actor)
         && let Some(presence) = &mut actor.presence
@@ -145,10 +145,10 @@ fn on_tick(ctx: EventCtx<SyncNpcs, OnTick>) {
             }
         }
 
-        // Make characters that haven't been seen since the penultimate tick be no
-        // longer present (likely because the player they represent has logged
-        // off) TODO: Prune characters that we've not seen for a *long* time
-        // once we hit some arbitrary cap
+        // Make characters that haven't been seen since the penultimate tick be
+        // no longer present (likely because the player they represent
+        // has logged off) TODO: Prune characters that we've not seen
+        // for a *long* time once we hit some arbitrary cap
         if let Some(character) = actor.character()
             && let Some(last_present_at) = character.last_present_at
             && data.tick > last_present_at + 1

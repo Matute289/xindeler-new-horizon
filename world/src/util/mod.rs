@@ -23,7 +23,7 @@ pub use self::{
 
 pub use common::grid::Grid;
 
-use fxhash::{FxHasher32, FxHasher64};
+use common::util::fx_hash::{FxHasher32, FxHasher64};
 use hashbrown::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
 use vek::*;

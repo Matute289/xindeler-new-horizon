@@ -139,7 +139,8 @@ impl Structure for GiantTree {
                     let branch_end = branch.get_line().end;
                     let branch_direction = (branch_end - branch_start).normalized();
 
-                    // Generate a sprite at the surface of the leafy part of the branch
+                    // Generate a sprite at the surface of the leafy part of the
+                    // branch
                     let displacement =
                         (branch_direction * branch.get_leaf_radius()).map(|e| e.round() as i32);
                     let pos = self.wpos + branch_end.as_() + displacement;

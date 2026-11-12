@@ -17,7 +17,30 @@ use common::{
 };
 use conrod_core::image;
 use i18n::{FluentValue, Localization, fluent_args};
-use std::{borrow::Cow, fmt::Write};
+use std::{
+    borrow::Cow,
+    fmt::{Display, Write},
+};
+use vek::num_traits;
+
+/// Converts a float type to a [String], rounds it and trims trailing zeros. The
+/// sign is displayed only for negative values. See [formatted_float_signed].
+///
+/// * `dec`: The number of decimals to use when rounding the number.
+pub fn formatted_float<F: num_traits::Float + Display>(f: F, dec: usize) -> String {
+    format!("{:.dec$}", f)
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+/// Same as [formatted_float], but the sign is always printed.
+pub fn formatted_float_signed<F: num_traits::Float + Display>(f: F, dec: usize) -> String {
+    format!("{:+.dec$}", f)
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
 
 pub fn price_desc<'a>(
     prices: &Option<SitePrices>,
@@ -992,8 +1015,8 @@ pub fn ability_description<'a>(
         | "common-abilities-axe-capsize" => (
             loc.get_msg(&ability_i18n_key),
             loc.get_attr_ctx(&ability_i18n_key, "desc", &i18n::fluent_args! {
-                "min_combo" => 25,
-                "min_combo_upg" => 40,
+                "min_combo" => 20,
+                "min_combo_upg" => 30,
             }),
         ),
         "common-abilities-hammer-earthshaker"
@@ -1014,7 +1037,7 @@ pub fn ability_description<'a>(
         "common-abilities-hammer-helm_crusher" => (
             loc.get_msg(&ability_i18n_key),
             loc.get_attr_ctx(&ability_i18n_key, "desc", &i18n::fluent_args! {
-                "min_combo" => 10,
+                "min_combo" => 12,
             }),
         ),
         // Default case, no input values

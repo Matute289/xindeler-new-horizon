@@ -483,8 +483,8 @@ fn find_alias(ecs: &specs::World, alias: &str, find_hidden: bool) -> CmdResult<(
     )
         .join()
         .find(|(_, player, client)| {
-            // If `find_hidden` is set to false, disallow discovering this player using ie.
-            // /tell or /group_invite
+            // If `find_hidden` is set to false, disallow discovering this
+            // player using ie. /tell or /group_invite
             player.alias == alias && (client.client_type.emit_login_events() || find_hidden)
         })
         .map(|(entity, player, _)| (entity, player.uuid()))
@@ -703,7 +703,8 @@ fn handle_give_item(
                     .write_storage::<Inventory>()
                     .get_mut(target)
                     .map(|mut inv| {
-                        // NOTE: Deliberately ignores items that couldn't be pushed.
+                        // NOTE: Deliberately ignores items that couldn't be
+                        // pushed.
                         if inv.push(item).is_err() {
                             res = Err(Content::localized_with_args(
                                 "command-give-inventory-full",
@@ -722,7 +723,8 @@ fn handle_give_item(
                     .get_mut(target)
                     .map(|mut inv| {
                         for i in 0..give_amount {
-                            // NOTE: Deliberately ignores items that couldn't be pushed.
+                            // NOTE: Deliberately ignores items that couldn't be
+                            // pushed.
                             if inv.push(item.duplicate(&ability_map, &msm)).is_err() {
                                 res = Err(Content::localized_with_args(
                                     "command-give-inventory-full",
@@ -838,7 +840,8 @@ fn handle_give_item_quality(
                     .write_storage::<Inventory>()
                     .get_mut(target)
                     .map(|mut inv| {
-                        // NOTE: Deliberately ignores items that couldn't be pushed.
+                        // NOTE: Deliberately ignores items that couldn't be
+                        // pushed.
                         if inv.push(item).is_err() {
                             res = Err(Content::localized_with_args(
                                 "command-give-inventory-full",
@@ -858,7 +861,8 @@ fn handle_give_item_quality(
                     .get_mut(target)
                     .map(|mut inv| {
                         for i in 0..give_amount {
-                            // NOTE: Deliberately ignores items that couldn't be pushed.
+                            // NOTE: Deliberately ignores items that couldn't be
+                            // pushed.
                             if inv.push(item.duplicate(&ability_map, &msm)).is_err() {
                                 res = Err(Content::localized_with_args(
                                     "command-give-inventory-full",
@@ -1677,7 +1681,7 @@ fn handle_make_sprite(
                 terrain_persistence.set_block(pos, block);
             }
         };
-        if let Ok(sk) = SpriteKind::try_from(sprite_name.as_str()) {
+        if let Ok(sk) = SpriteKind::from_str(sprite_name.as_str()) {
             set_block(old_block.with_sprite(sk));
 
             Ok(())
@@ -1736,8 +1740,8 @@ fn handle_set_motd(
 ) -> CmdResult<()> {
     let data_dir = server.data_dir();
     let client_uuid = uuid(server, client, "client")?;
-    // Ensure the person setting this has a real role in the settings file, since
-    // it's persistent.
+    // Ensure the person setting this has a real role in the settings file,
+    // since it's persistent.
     let _client_real_role = real_role(server, client_uuid, "client")?;
     match parse_cmd_args!(args, String, String) {
         (Some(locale), Some(msg)) => {
@@ -2787,43 +2791,52 @@ fn handle_time(
             },
         },
         None => {
-            // Would this ever change? Perhaps in a few hundred thousand years some
-            // game archeologists of the future will resurrect the best game of all
-            // time which, obviously, would be Veloren. By that time, the inescapable
+            // Would this ever change? Perhaps in a few hundred thousand years
+            // some game archeologists of the future will resurrect
+            // the best game of all time which, obviously, would be
+            // Veloren. By that time, the inescapable
             // laws of thermodynamics will mean that the earth's rotation period
-            // would be slower. Of course, a few hundred thousand years is enough
-            // for the circadian rhythm of human biology to have shifted to account
-            // accordingly. When booting up Veloren for the first time in 337,241
-            // years, they might feel a touch of anguish at the fact that their
+            // would be slower. Of course, a few hundred thousand years is
+            // enough for the circadian rhythm of human biology to
+            // have shifted to account accordingly. When booting up
+            // Veloren for the first time in 337,241 years, they
+            // might feel a touch of anguish at the fact that their
             // earth days and the days within the game do not neatly divide into
             // one-another. Understandably, they'll want to change this. Who
-            // wouldn't? It would be like turning the TV volume up to an odd number
-            // or having a slightly untuned radio (assuming they haven't begun
-            // broadcasting information directly into their brains). Totally
-            // unacceptable. No, the correct and proper thing to do would be to
-            // release a retroactive definitive edition DLC for $99 with the very
-            // welcome addition of shorter day periods and a complementary
-            // 'developer commentary' mode created by digging up the long-decayed
-            // skeletons of the Veloren team, measuring various attributes of their
-            // jawlines, and using them to recreate their voices. But how to go about
-            // this Herculean task? This code is gibberish! The last of the core Rust
-            // dev team died exactly 337,194 years ago! Rust is now a long-forgotten
-            // dialect of the ancient ones, lost to the sands of time. Ashes to ashes,
+            // wouldn't? It would be like turning the TV volume up to an odd
+            // number or having a slightly untuned radio (assuming
+            // they haven't begun broadcasting information directly
+            // into their brains). Totally unacceptable. No, the
+            // correct and proper thing to do would be to
+            // release a retroactive definitive edition DLC for $99 with the
+            // very welcome addition of shorter day periods and a
+            // complementary 'developer commentary' mode created by
+            // digging up the long-decayed skeletons of the Veloren
+            // team, measuring various attributes of their jawlines,
+            // and using them to recreate their voices. But how to go about
+            // this Herculean task? This code is gibberish! The last of the core
+            // Rust dev team died exactly 337,194 years ago! Rust is
+            // now a long-forgotten dialect of the ancient ones,
+            // lost to the sands of time. Ashes to ashes,
             // dust to dust. When all hope is lost, one particularly intrepid
-            // post-human hominid exployed by the 'Veloren Revival Corp' (no doubt we
-            // still won't have gotten rid of this blasted 'capitalism' thing by then)
-            // might notice, after years of searching, a particularly curious
-            // inscription within the code. The letters `D`, `A`, `Y`. Curious! She
-            // consults the post-human hominid scholars of the old. Care to empathise
-            // with her shock when she discovers that these symbols, as alien as they
-            // may seem, correspond exactly to the word `ⓕя𝐢ᵇᵇ𝔩Ｅ`, the word for
-            // 'day' in the post-human hominid language, which is of course universal.
-            // Imagine also her surprise when, after much further translating, she
-            // finds a comment predicting her very existence and her struggle to
-            // decode this great mystery. Rejoice! The Veloren Revival Corp. may now
-            // persist with their great Ultimate Edition DLC because the day period
-            // might now be changed because they have found the constant that controls
-            // it! Everybody was henceforth happy until the end of time.
+            // post-human hominid exployed by the 'Veloren Revival Corp' (no
+            // doubt we still won't have gotten rid of this blasted
+            // 'capitalism' thing by then) might notice, after years
+            // of searching, a particularly curious inscription
+            // within the code. The letters `D`, `A`, `Y`. Curious! She
+            // consults the post-human hominid scholars of the old. Care to
+            // empathise with her shock when she discovers that
+            // these symbols, as alien as they may seem, correspond
+            // exactly to the word `ⓕя𝐢ᵇᵇ𝔩Ｅ`, the word for 'day' in
+            // the post-human hominid language, which is of course universal.
+            // Imagine also her surprise when, after much further translating,
+            // she finds a comment predicting her very existence and
+            // her struggle to decode this great mystery. Rejoice!
+            // The Veloren Revival Corp. may now persist with their
+            // great Ultimate Edition DLC because the day period
+            // might now be changed because they have found the constant that
+            // controls it! Everybody was henceforth happy until the
+            // end of time.
             //
             // This one's for you, xMac ;)
             let current_time = NaiveTime::from_num_seconds_from_midnight_opt(
@@ -2849,8 +2862,8 @@ fn handle_time(
     server.state.mut_resource::<TimeOfDay>().0 = new_time;
     let time = server.state.ecs().read_resource::<Time>();
 
-    // Update all clients with the new TimeOfDay (without this they would have to
-    // wait for the next 100th tick to receive the update).
+    // Update all clients with the new TimeOfDay (without this they would have
+    // to wait for the next 100th tick to receive the update).
     let mut tod_lazymsg = None;
     let clients = server.state.ecs().read_storage::<Client>();
     let calendar = server.state.ecs().read_resource::<Calendar>();
@@ -2918,8 +2931,8 @@ fn handle_time_scale(
                 )]),
             ),
         );
-        // Update all clients with the new TimeOfDay (without this they would have to
-        // wait for the next 100th tick to receive the update).
+        // Update all clients with the new TimeOfDay (without this they would
+        // have to wait for the next 100th tick to receive the update).
         let mut tod_lazymsg = None;
         let clients = server.state.ecs().read_storage::<Client>();
         let time = server.state.ecs().read_resource::<Time>();
@@ -4373,7 +4386,8 @@ fn handle_kill_npcs(
     };
     let count = to_kill.len();
     for entity in to_kill {
-        // Directly remove entities instead of modifying health to avoid loot drops.
+        // Directly remove entities instead of modifying health to avoid loot
+        // drops.
         if let Err(e) = server.state.delete_entity_recorded(entity) {
             error!(?e, ?entity, "Failed to delete entity");
         }
@@ -4862,7 +4876,7 @@ fn handle_outcome(
         "SpriteDelete" => Outcome::SpriteDelete {
             pos: pos_arg!(),
             sprite: parse!("command-outcome-expected_sprite_kind", |arg| {
-                SpriteKind::try_from(arg.as_str()).ok()
+                SpriteKind::from_str(arg.as_str()).ok()
             })?,
         },
         "SpriteUnlocked" => Outcome::SpriteUnlocked { pos: pos_arg!() },
@@ -5127,11 +5141,11 @@ fn handle_spawn_wiring(
 
     // Create the first element of the circuit.
     // This is a coin body. This element does not have any inputs or actions.
-    // Instead there is one output. When there is a collision with this element the
-    // value of 1.0 will be sent as an input with the "button" label. Any
-    // element with an `Input` for the name "button" can use this value as an
-    // input. The threshold does not matter as there are no effects for this
-    // element.
+    // Instead there is one output. When there is a collision with this element
+    // the value of 1.0 will be sent as an input with the "button" label.
+    // Any element with an `Input` for the name "button" can use this value
+    // as an input. The threshold does not matter as there are no effects
+    // for this element.
     let builder1 = server
         .state
         .create_wiring(pos, comp::object::Body::Pebble, WiringElement {
@@ -5143,10 +5157,10 @@ fn handle_spawn_wiring(
     let ent1 = builder1.build();
 
     pos.0.x += 3.0;
-    // The second element has no elements in the `inputs` field to start with. When
-    // the circuit runs, the input as specified by the `Input` OutputFormula is
-    // added to the inputs. The next tick the effect(s) are applied based on the
-    // input value.
+    // The second element has no elements in the `inputs` field to start with.
+    // When the circuit runs, the input as specified by the `Input`
+    // OutputFormula is added to the inputs. The next tick the effect(s) are
+    // applied based on the input value.
     let builder2 = server
         .state
         .create_wiring(pos, comp::object::Body::Pebble, WiringElement {
@@ -5219,14 +5233,14 @@ fn handle_adminify(
         let client_uuid = uuid(server, client, "client")?;
         let uid = uid(server, player, "player")?;
 
-        // Your permanent role, not your temporary role, is what's used to determine
-        // what temporary roles you can grant.
+        // Your permanent role, not your temporary role, is what's used to
+        // determine what temporary roles you can grant.
         let client_real_role = real_role(server, client_uuid, "client")?;
 
-        // This appears to prevent de-mod / de-admin for mods / admins with access to
-        // this command, but it does not in the case where the target is
-        // temporary, because `verify_above_role` always values permanent roles
-        // above temporary ones.
+        // This appears to prevent de-mod / de-admin for mods / admins with
+        // access to this command, but it does not in the case where the
+        // target is temporary, because `verify_above_role` always
+        // values permanent roles above temporary ones.
         verify_above_role(
             server,
             (client, client_uuid),
@@ -5234,19 +5248,21 @@ fn handle_adminify(
             Content::localized("command-adminify-reassign-to-above"),
         )?;
 
-        // Ensure that it's not possible to assign someone a higher role than your own
-        // (i.e. even if mods had the ability to create temporary mods, they
-        // wouldn't be able to create temporary admins).
+        // Ensure that it's not possible to assign someone a higher role than
+        // your own (i.e. even if mods had the ability to create
+        // temporary mods, they wouldn't be able to create temporary
+        // admins).
         //
-        // Also note that we perform no more permissions checks after this point based
-        // on the assignee's temporary role--even if the player's temporary role
-        // is higher than the client's, we still allow the role to be reduced to
-        // the selected role, as long as they would have permission to assign it
-        // in the first place.  This is consistent with our
-        // policy on bans--banning or lengthening a ban (decreasing player permissions)
-        // can be done even after an unban or ban shortening (increasing player
-        // permissions) by someone with a higher role than the person doing the
-        // ban.  So if we change how bans work, we should change how things work
+        // Also note that we perform no more permissions checks after this point
+        // based on the assignee's temporary role--even if the player's
+        // temporary role is higher than the client's, we still allow
+        // the role to be reduced to the selected role, as long as they
+        // would have permission to assign it in the first place.  This
+        // is consistent with our policy on bans--banning or lengthening
+        // a ban (decreasing player permissions) can be done even after
+        // an unban or ban shortening (increasing player permissions) by
+        // someone with a higher role than the person doing the ban.  So
+        // if we change how bans work, we should change how things work
         // here, too, for consistency.
         if desired_role > Some(client_real_role) {
             return Err(Content::localized(
@@ -5309,10 +5325,11 @@ fn handle_adminify(
             .get(player)
             .is_some_and(|client| client.client_type.emit_login_events())
         {
-            // Update player list so the player shows up as moderator in client chat.
+            // Update player list so the player shows up as moderator in client
+            // chat.
             //
-            // NOTE: We deliberately choose not to differentiate between moderators and
-            // administrators in the player list.
+            // NOTE: We deliberately choose not to differentiate between
+            // moderators and administrators in the player list.
             let is_moderator = desired_role.is_some();
             let msg =
                 ServerGeneral::PlayerListUpdate(PlayerListUpdate::Moderator(uid, is_moderator));
@@ -5896,8 +5913,8 @@ fn handle_death_effect(
         "transform" => {
             let entity_config = args.next().ok_or(action.help_content())?;
 
-            // We don't actually use this loaded config for anything, this is just a check
-            // to ensure loading succeeds later on.
+            // We don't actually use this loaded config for anything, this is
+            // just a check to ensure loading succeeds later on.
             if Ron::<EntityConfig>::load(&entity_config).is_err() {
                 return Err(Content::localized_with_args(
                     "command-entity-load-failed",
@@ -6099,8 +6116,9 @@ fn handle_disconnect_all_players(
     let ecs = server.state.ecs();
     let players = &ecs.read_storage::<comp::Player>();
 
-    // TODO: This logging and verification of admin commands would be better moved
-    // to a more generic method used for auditing -all- admin commands.
+    // TODO: This logging and verification of admin commands would be better
+    // moved to a more generic method used for auditing -all- admin
+    // commands.
 
     let player_name = if let Some(player) = players.get(client) {
         &*player.alias
@@ -6386,7 +6404,8 @@ fn handle_sudo(
             let entity = get_entity_target(entity_target, server)?;
             let client_uuid = uuid(server, client, "client")?;
 
-            // If the entity target is a player check if client has authority to sudo it.
+            // If the entity target is a player check if client has authority to
+            // sudo it.
             {
                 let players = server.state.ecs().read_storage::<comp::Player>();
                 if let Some(player) = players.get(entity) {
@@ -6405,9 +6424,9 @@ fn handle_sudo(
                 }
             }
 
-            // TODO: consider making this into a tail call or loop (to avoid the potential
-            // stack overflow, although it's less of a risk coming from only mods and
-            // admins).
+            // TODO: consider making this into a tail call or loop (to avoid the
+            // potential stack overflow, although it's less of a
+            // risk coming from only mods and admins).
             do_command(server, client, entity, cmd_args, &action)
         } else {
             Err(Content::localized("command-unknown"))
@@ -6874,23 +6893,31 @@ pub(crate) fn admin_unban_player(
 /// verified harmless: `ChatType::Meta` already skips both in that path today
 /// (`uid()` is `None`, `ChatExporter::generate` falls through to `None` for
 /// `Meta`), so nothing is lost by sending directly. See
-/// `Message::SendTargetedMsg`.
+/// `Message::SendTargetedMsg`. `big_screen` is the ZG-80 rendering hint,
+/// carried on the `comp::ChatMsg` itself -- see
+/// `GenericChatMsg::with_big_screen`.
 pub(crate) fn send_targeted_msg(
     server: &Server,
     target_uuids: &[Uuid],
     operator_uuid: Uuid,
     msg: String,
+    big_screen: bool,
 ) -> (Vec<Uuid>, Vec<Uuid>) {
     // Nothing to resolve, so don't pay for the index below. Not a hypothetical
-    // shape: the HTTP layer accepts an empty `target_uuids`, and without this an
-    // empty body would still cost a full pass over every connected player.
+    // shape: the HTTP layer accepts an empty `target_uuids`, and without this
+    // an empty body would still cost a full pass over every connected
+    // player.
     if target_uuids.is_empty() {
         return (Vec::new(), Vec::new());
     }
 
     let ecs = server.state.ecs();
     let clients = ecs.read_storage::<Client>();
-    let resolved_msg = ServerGeneral::server_msg(ChatType::Meta, Content::Plain(msg));
+    let resolved_msg = ServerGeneral::ChatMsg(
+        ChatType::Meta
+            .into_plain_msg(msg)
+            .with_big_screen(big_screen),
+    );
 
     // One pass over the player storage to build a uuid -> entity index, then an
     // O(1) lookup per requested uuid. This used to call `find_uuid` per target,
@@ -7174,9 +7201,9 @@ fn handle_ban(
             )])
         },
     )?;
-    // If the player is online kick them (this may fail if the player is a hardcoded
-    // admin; we don't care about that case because hardcoded admins can log on even
-    // if they're on the ban list).
+    // If the player is online kick them (this may fail if the player is a
+    // hardcoded admin; we don't care about that case because hardcoded
+    // admins can log on even if they're on the ban list).
     let ecs = server.state.ecs();
     if let Ok(target_player) = find_uuid(ecs, player_uuid) {
         let _ = kick_player(
@@ -7382,9 +7409,10 @@ fn handle_ban_ip(
             },
         )?;
 
-        // Kick all online players with this IP address them (this may fail if the
-        // player is a hardcoded admin; we don't care about that case because
-        // hardcoded admins can log on even if they're on the ban list).
+        // Kick all online players with this IP address them (this may fail if
+        // the player is a hardcoded admin; we don't care about that
+        // case because hardcoded admins can log on even if they're on
+        // the ban list).
         let ecs = server.state.ecs();
         players_to_kick = (
             &ecs.entities(),
@@ -7829,11 +7857,12 @@ fn handle_multiclass(
             .unwrap_or_default();
         // `for_character_with_pact`, not `for_character`: a Warlock with the
         // blade out must not lose its three attack keys (and the hotbar slots
-        // bound to them) just because they multiclassed. `.with_talisman_bond(..)`
-        // chained for the same reason: a bonded talisman bearer's recall key
-        // is keyed on the BEARER's pool, not derivable from `target`'s own
-        // `Pact`, so it has to be re-asserted from `old_pool` or this rebuild
-        // silently drops it.
+        // bound to them) just because they multiclassed.
+        // `.with_talisman_bond(..)` chained for the same reason: a
+        // bonded talisman bearer's recall key is keyed on the BEARER's
+        // pool, not derivable from `target`'s own `Pact`, so it has to
+        // be re-asserted from `old_pool` or this rebuild silently drops
+        // it.
         let pool = comp::AbilityPool::for_character_with_pact(
             &body,
             &character_class,
@@ -8495,12 +8524,12 @@ fn handle_make_test_char(
     }
 
     // 2. Class (optional) — force-set for testing (no one-time legacy guard, no
-    //    multiclass level/cap guards) and unlock its skill tree. A second call with
-    //    a different class becomes the SECONDARY (not a silent single-class
-    //    overwrite) so this doubles as the manual multiclass repro: two calls in a
-    //    row leave both CharacterClass and the two unlocked skill groups mutually
-    //    consistent, instead of the skill set silently accumulating a class the
-    //    component itself forgot about.
+    //    multiclass level/cap guards) and unlock its skill tree. A second call
+    //    with a different class becomes the SECONDARY (not a silent
+    //    single-class overwrite) so this doubles as the manual multiclass
+    //    repro: two calls in a row leave both CharacterClass and the two
+    //    unlocked skill groups mutually consistent, instead of the skill set
+    //    silently accumulating a class the component itself forgot about.
     let class = if let Some(class_arg) = class_arg {
         let class =
             ClassKind::from_keyword(class_arg.to_lowercase().as_str()).ok_or_else(|| {

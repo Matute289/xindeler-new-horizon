@@ -44,8 +44,9 @@ impl<'a> System<'a> for Sys {
         for (entity, _presence, inventory, skill_set) in
             (&entities, &presences, &inventories, &skill_sets).join()
         {
-            // Cheap early-out: nothing to do for a player with no attunement item
-            // equipped and no attunement state in flight (the common case).
+            // Cheap early-out: nothing to do for a player with no attunement
+            // item equipped and no attunement state in flight (the
+            // common case).
             let has_item = inventory
                 .equipped_items_with_slot()
                 .any(|(_, item)| item.has_tag(&ItemTag::RequiresAttunement));

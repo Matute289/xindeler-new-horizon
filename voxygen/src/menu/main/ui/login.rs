@@ -54,8 +54,8 @@ impl Screen {
         multiplayer_button_focused: bool,
     ) -> Element<'_, Message> {
         let mut buttons = Vec::new();
-        // If the server field is locked, we don't want to show the server selection
-        // list!
+        // If the server field is locked, we don't want to show the server
+        // selection list!
         if !server_field_locked {
             buttons.push(neat_button(
                 &mut self.servers_button,

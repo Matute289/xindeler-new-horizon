@@ -1,0 +1,16 @@
+[Unit]
+Description=Xindeler VPS retention cleanup (keep deployed + previous build only)
+Documentation=https://github.com/Matute289/xindeler-new-horizon/blob/development/deploy/README-retention.md
+# The script lives in the live source checkout; skip quietly if it isn't there yet.
+ConditionPathExists=/opt/xindeler-server/src/deploy/prune-old-builds.sh
+
+[Service]
+Type=oneshot
+# mgrinberg owns the files being pruned and is in the `docker` group (no sudo needed).
+User=mgrinberg
+Group=mgrinberg
+SupplementaryGroups=docker
+ExecStart=/opt/xindeler-server/src/deploy/prune-old-builds.sh --apply
+# Be gentle on a 2 vCPU / 4 GB box that also serves the game.
+Nice=19
+IOSchedulingClass=idle

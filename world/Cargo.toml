@@ -42,7 +42,6 @@ bincode = { workspace = true }
 bitvec = "1.0.1"
 enum-map = { workspace = true }
 enumset = { workspace = true }
-fxhash = { workspace = true }
 image = { workspace = true }
 itertools = { workspace = true }
 vek = { workspace = true }
@@ -60,7 +59,6 @@ serde = { workspace = true }
 ron = { workspace = true }
 # inline_tweak = { workspace = true, features = ["derive"] }
 kiddo = { workspace = true }
-fixed = "1"
 strum = { workspace = true }
 delaunator = "1.0.2"
 tiny-skia = { version = "0.12", optional = true }

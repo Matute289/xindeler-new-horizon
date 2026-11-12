@@ -375,7 +375,8 @@ pub fn quest_request<S: State>(session: DialogueSession) -> impl Action<S> {
                                         now(move |_ctx, _| {
                                             if let Some(chunk_pos) = courier_quest.spot {
                                                 let chunk_wpos = chunk_pos.cpos_to_wpos();
-                                                // provide a map marker that points to the
+                                                // provide a map marker that
+                                                // points to the
                                                 // nearest spot
                                                 session.give_marker(
                                                     Marker::at(Vec2::new(
@@ -390,7 +391,8 @@ pub fn quest_request<S: State>(session: DialogueSession) -> impl Action<S> {
                                                     .with_quest_flag(true),
                                                 )
                                             } else {
-                                                // provide a map marker that points to the
+                                                // provide a map marker that
+                                                // points to the
                                                 // courier target
                                                 session.give_marker(
                                                     Marker::at(tgt_actor_wpos)

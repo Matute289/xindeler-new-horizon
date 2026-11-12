@@ -21,6 +21,7 @@ pub mod quadruped_small;
 pub mod ship;
 pub mod stats;
 pub mod theropod;
+pub mod traversal;
 
 use self::stats::Rowless;
 use crate::{
@@ -715,9 +716,9 @@ impl Body {
         }
     }
 
-    // Note: This is used for collisions, but it's not very accurate for shapes that
-    // are very much not cylindrical. Eventually this ought to be replaced by more
-    // accurate collision shapes.
+    // Note: This is used for collisions, but it's not very accurate for shapes
+    // that are very much not cylindrical. Eventually this ought to be
+    // replaced by more accurate collision shapes.
     pub fn max_radius(&self) -> f32 {
         let dim = self.dimensions();
         let (x, y) = (dim.x, dim.y);
@@ -2416,11 +2417,12 @@ mod magic_resist_tests {
 
     #[test]
     fn a_reskinned_entity_stays_charmable_via_its_actual_body() {
-        // A content-authored override can give an entity's `Stats.creature_kind`
-        // a different kind than the body it actually spawns on (e.g. a fiend
-        // wearing a humanoid body). `Body::immune_to` only ever consults the
-        // body, never `Stats`, so the override must not grant charm immunity
-        // it wouldn't otherwise have.
+        // A content-authored override can give an entity's
+        // `Stats.creature_kind` a different kind than the body it
+        // actually spawns on (e.g. a fiend wearing a humanoid body).
+        // `Body::immune_to` only ever consults the body, never `Stats`,
+        // so the override must not grant charm immunity it wouldn't
+        // otherwise have.
         let body = humanoid_body();
         let mut stats = Stats::new(Content::dummy(), body);
         stats.creature_kind = Some(CreatureKind::Fiend);

@@ -503,8 +503,9 @@ pub fn river_spline_coeffs(
     downhill_pos: Vec2<f64>,
 ) -> Vec3<Vec2<f64>> {
     let dxy = downhill_pos - chunk_pos;
-    // Since all splines have been precomputed, we don't have to do that much work
-    // to evaluate the spline.  The spline is just ax^2 + bx + c = 0, where
+    // Since all splines have been precomputed, we don't have to do that much
+    // work to evaluate the spline.  The spline is just ax^2 + bx + c = 0,
+    // where
     //
     // a = dxy - chunk.river.spline_derivative
     // b = chunk.river.spline_derivative
@@ -577,8 +578,8 @@ pub fn quadratic_nearest_point(
     let f = spline.y.y;
     let g = spline.x.y;
     let h = point.y;
-    // This is equivalent to solving the following cubic equation (derivation is a
-    // bit annoying):
+    // This is equivalent to solving the following cubic equation (derivation is
+    // a bit annoying):
     //
     // A = 2(c^2 + g^2)
     // B = 3(b * c + g * f)
@@ -587,10 +588,10 @@ pub fn quadratic_nearest_point(
     //
     // Ax³ + Bx² + Cx + D = 0
     //
-    // Once solved, this yield up to three possible values for t (reflecting minimal
-    // and maximal values).  We should choose the minimal such real value with t
-    // between 0.0 and 1.0.  If we fall outside those bounds, then we are
-    // outside the spline and return None.
+    // Once solved, this yield up to three possible values for t (reflecting
+    // minimal and maximal values).  We should choose the minimal such real
+    // value with t between 0.0 and 1.0.  If we fall outside those bounds,
+    // then we are outside the spline and return None.
     let a_ = (c * c + g * g) * 2.0;
     let b_ = (b * c + g * f) * 3.0;
     let a_d = a - d;

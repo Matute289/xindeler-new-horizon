@@ -334,9 +334,11 @@ impl Protocols {
                 let metrics = ProtocolMetricCache::new(&cid.to_string(), Arc::clone(&metrics));
                 match Protocols::new_quic(connection, true, metrics).await {
                     Ok(quic) => {
-                        // TODO: we cannot guess the client hostname in quic server here.
-                        // though we need it for the certificate to be validated, in the future
-                        // this will either go away with new auth, or we have to do something like
+                        // TODO: we cannot guess the client hostname in quic
+                        // server here. though we need
+                        // it for the certificate to be validated, in the future
+                        // this will either go away with new auth, or we have to
+                        // do something like
                         // a reverse DNS lookup
                         let connect_addr = ConnectAddr::Quic(
                             addr,
@@ -644,8 +646,9 @@ impl UnreliableDrain for QuicDrain {
                 match self.reliables.entry(sid) {
                     Entry::Occupied(mut occupied) => occupied.get_mut().write_all(&data.data).await,
                     Entry::Vacant(vacant) => {
-                        // IF the buffer is empty this was created locally and WE are allowed to
-                        // open_bi(), if not, we NEED to block on sendstreams_r
+                        // IF the buffer is empty this was created locally and
+                        // WE are allowed to open_bi(),
+                        // if not, we NEED to block on sendstreams_r
                         if data.data.is_empty() {
                             let (mut sendstream, recvstream) =
                                 self.con.open_bi().await.map_err(|e| {

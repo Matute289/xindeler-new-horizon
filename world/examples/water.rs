@@ -31,9 +31,10 @@ fn main() {
         .init();
     let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
 
-    // To load a map file of your choice, replace map_file with the name of your map
-    // (stored locally in the map directory of your Veloren root), and swap the
-    // sim::FileOpts::Save line below for the sim::FileOpts::Load one.
+    // To load a map file of your choice, replace map_file with the name of your
+    // map (stored locally in the map directory of your Veloren root), and
+    // swap the sim::FileOpts::Save line below for the sim::FileOpts::Load
+    // one.
     let map_file =
         // "map_1575990726223.bin";
         // "map_1575987666972.bin";
@@ -149,11 +150,12 @@ fn main() {
     let mut scale =
         (map_size_lg.chunks().x as f64 / W as f64).max(map_size_lg.chunks().y as f64 / H as f64);
 
-    // Right-handed coordinate system: light is going left, down, and "backwards"
-    // (i.e. on the map, where we translate the y coordinate on the world map to
-    // z in the coordinate system, the light comes from -y on the map and points
-    // towards +y on the map).  In a right handed coordinate system, the
-    // "camera" points towards -z, so positive z is backwards "into" the camera.
+    // Right-handed coordinate system: light is going left, down, and
+    // "backwards" (i.e. on the map, where we translate the y coordinate on
+    // the world map to z in the coordinate system, the light comes from -y
+    // on the map and points towards +y on the map).  In a right handed
+    // coordinate system, the "camera" points towards -z, so positive z is
+    // backwards "into" the camera.
     //
     // "In world space the x-axis will be pointing east, the y-axis up and the
     // z-axis will be pointing south"
@@ -214,8 +216,8 @@ fn main() {
         );
 
         if win.is_key_down(minifb::Key::F4) {
-            // Feedback is important since on large maps it can be hard to tell if the
-            // keypress registered or not.
+            // Feedback is important since on large maps it can be hard to tell
+            // if the keypress registered or not.
             println!("Taking screenshot...");
             if let Some(len) = (W * H)
                 .checked_mul(scale as usize)

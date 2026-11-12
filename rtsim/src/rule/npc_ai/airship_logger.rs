@@ -132,8 +132,9 @@ impl AirshipLogger {
                 }
             });
 
-            // The current positions were cloned and passed to the background thread,
-            // clear the current positions and reset the start time.
+            // The current positions were cloned and passed to the background
+            // thread, clear the current positions and reset the
+            // start time.
             self.clear();
             self.start_time = time;
         }

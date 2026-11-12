@@ -270,9 +270,10 @@ impl Link for Interaction {
             && state_target == this.target
             && state_kind == this.kind
         {
-            // If the character state we created with this link still persists, the target
-            // has become invalid so we set it to that. And the character state decides how
-            // it handles that, be it ending or something else.
+            // If the character state we created with this link still persists,
+            // the target has become invalid so we set it to that.
+            // And the character state decides how it handles that,
+            // be it ending or something else.
             *interact = crate::states::interact::InteractKind::Invalid;
         }
     }

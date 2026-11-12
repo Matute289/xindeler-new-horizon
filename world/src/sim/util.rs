@@ -80,8 +80,8 @@ pub fn cdf_irwin_hall<const N: usize>(weights: &[f32; N], samples: [f32; N]) -> 
     //
     // which is also equivalent to
     //
-    //   (letting B_k = { a in Subsets[A, {k}] : sum {l in a} l }, B_(0,1) = 0 and
-    //            H_k = { i : 1 ≤ 1 ≤ N! / (k! * (N - k)!) })
+    //   (letting B_k = { a in Subsets[A, {k}] : sum {l in a} l }, B_(0,1) = 0
+    // and            H_k = { i : 1 ≤ 1 ≤ N! / (k! * (N - k)!) })
     //
     //   1/(product{k in A}(k) * N!) * sum(k in 0 to N)((-1)^k *
     //   sum{l in H_k}(max(0, x - B_(k,l))^N))
@@ -192,9 +192,9 @@ pub fn uniform_noise<F: Float + Send>(
     noise.par_sort_unstable_by(|f, g| (f.1, f.0).partial_cmp(&(g.1, g.0)).unwrap());
 
     // Construct a vector that associates each chunk position with the 1-indexed
-    // position of the noise in the sorted vector (divided by the vector length).
-    // This guarantees a uniform distribution among the samples (excluding those
-    // that returned None, which will remain at zero).
+    // position of the noise in the sorted vector (divided by the vector
+    // length). This guarantees a uniform distribution among the samples
+    // (excluding those that returned None, which will remain at zero).
     let mut uniform_noise = vec![(0.0, F::nan()); map_size_lg.chunks_len()].into_boxed_slice();
     // NOTE: Consider using try_into here and elsewhere in this function, since
     // i32::MAX technically doesn't fit in an f32 (even if we should never reach
@@ -253,8 +253,8 @@ pub fn downhill<F: Float>(
     h: impl Fn(usize) -> F + Sync,
     is_ocean: impl Fn(usize) -> bool + Sync,
 ) -> Box<[isize]> {
-    // Constructs not only the list of downhill nodes, but also computes an ordering
-    // (visiting nodes in order from roots to leaves).
+    // Constructs not only the list of downhill nodes, but also computes an
+    // ordering (visiting nodes in order from roots to leaves).
     (0..map_size_lg.chunks_len())
         .into_par_iter()
         .map(|posi| {
@@ -330,9 +330,9 @@ fn get_interpolated_bilinear<T, F>(&self, pos: Vec2<i32>, mut f: F) -> Option<T>
 /// - posi has a neighboring ocean tile, and has a height below sea level
 ///   (oldh(posi) <= 0.0).
 pub fn get_oceans<F: Float>(map_size_lg: MapSizeLg, oldh: impl Fn(usize) -> F + Sync) -> BitBox {
-    // We can mark tiles as ocean candidates by scanning row by row, since the top
-    // edge is ocean, the sides are connected to it, and any subsequent ocean
-    // tiles must be connected to it.
+    // We can mark tiles as ocean candidates by scanning row by row, since the
+    // top edge is ocean, the sides are connected to it, and any subsequent
+    // ocean tiles must be connected to it.
     let mut is_ocean = bitbox![0; map_size_lg.chunks_len()];
     let mut stack = Vec::new();
     let mut do_push = |pos| {
@@ -358,8 +358,9 @@ pub fn get_oceans<F: Float>(map_size_lg: MapSizeLg, oldh: impl Fn(usize) -> F + 
         }
         *is_ocean = true;
         stack.extend(neighbors(map_size_lg, chunk_idx).filter(|&neighbor_idx| {
-            // println!("Ocean neighbor: {:?}: {:?}", uniform_idx_as_vec2(map_size_lg,
-            // neighbor_idx), oldh(neighbor_idx));
+            // println!("Ocean neighbor: {:?}: {:?}",
+            // uniform_idx_as_vec2(map_size_lg, neighbor_idx),
+            // oldh(neighbor_idx));
             oldh(neighbor_idx) <= F::zero()
         }));
     }
@@ -863,7 +864,8 @@ where
             // Raise the spatial frequency.
             point *= self.lacunarity;
 
-            // Get noise value, and scale it to the [offset - 1.0, 1.0 + offset] range.
+            // Get noise value, and scale it to the [offset - 1.0, 1.0 + offset]
+            // range.
             let mut signal = (self.sources[x].get(point.into_array()) + self.offset) * bias;
 
             // Scale the amplitude appropriately for this frequency.
@@ -871,7 +873,8 @@ where
 
             scale += attenuation;
 
-            // Increase the attenuation for the next octave, to be equal to persistence ^ (x
+            // Increase the attenuation for the next octave, to be equal to
+            // persistence ^ (x
             // + 1)
             attenuation *= self.persistence;
 
@@ -923,7 +926,8 @@ where
 
             scale += attenuation;
 
-            // Increase the attenuation for the next octave, to be equal to persistence ^ (x
+            // Increase the attenuation for the next octave, to be equal to
+            // persistence ^ (x
             // + 1)
             attenuation *= self.persistence;
 
@@ -975,7 +979,8 @@ where
 
             scale += attenuation;
 
-            // Increase the attenuation for the next octave, to be equal to persistence ^ (x
+            // Increase the attenuation for the next octave, to be equal to
+            // persistence ^ (x
             // + 1)
             attenuation *= self.persistence;
 

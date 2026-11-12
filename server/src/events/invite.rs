@@ -128,7 +128,8 @@ impl ServerEvent for InitiateInviteEvent {
                     continue;
                 }
             } else {
-                // cancel current trades for inviter before inviting someone else to trade
+                // cancel current trades for inviter before inviting someone
+                // else to trade
                 if let Some(inviter_uid) = uids.get(inviter).copied()
                     && let Some(active_trade) = trades.entity_trades.get(&inviter_uid).copied()
                 {
@@ -291,8 +292,8 @@ pub fn handle_invite_accept(data: &mut InviteResponseData, entity: Entity) {
                     data.uids.get(inviter).copied(),
                     data.uids.get(entity).copied(),
                 ) {
-                    // check if the person that invited me has started a new trade since the
-                    // invitation was sent
+                    // check if the person that invited me has started a new
+                    // trade since the invitation was sent
                     if data
                         .trades
                         .entity_trades
@@ -386,7 +387,8 @@ fn handle_invite_answer(
     kind: InviteKind,
 ) {
     if matches!(kind, InviteKind::Trade) && matches!(invite_answer, InviteAnswer::Accepted) {
-        // invitee must close current trade if one exists before accepting new one
+        // invitee must close current trade if one exists before accepting new
+        // one
         if let Some(invitee_uid) = data.uids.get(entity).copied()
             && let Some(active_trade) = data.trades.entity_trades.get(&invitee_uid).copied()
         {

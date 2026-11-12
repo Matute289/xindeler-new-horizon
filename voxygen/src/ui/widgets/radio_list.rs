@@ -155,9 +155,9 @@ impl<'a, T> Widget for RadioList<'a, T> {
         }
 
         // Check if the button was clicked.
-        // (Can't use `.set().was_clicked()` because we are changing the image after
-        // setting the widget, which causes flickering since it takes a frame to
-        // change after the mouse button is lifted).
+        // (Can't use `.set().was_clicked()` because we are changing the image
+        // after setting the widget, which causes flickering since it
+        // takes a frame to change after the mouse button is lifted).
         let current_selection = (0..num_items)
             .find(|i| {
                 ui.widget_input(state.ids.buttons[*i])

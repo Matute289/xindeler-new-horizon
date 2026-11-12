@@ -254,8 +254,8 @@ pub fn perspective_lh_zo_general<T>(
 where
     T: Real + FloatConst + Debug,
 {
-    // Per comments, we only need these two assertions to make sure our calculations
-    // make sense.
+    // Per comments, we only need these two assertions to make sure our
+    // calculations make sense.
     debug_assert_ne!(
         inv_n, inv_f,
         "The near and far plane distances cannot be equal, found: {:?} = {:?}",
@@ -383,12 +383,13 @@ impl Camera {
             Vec3::new(0.0, 0.0, -1.0),
             Vec3::new(0.0, 0.0, 1.0),
         ];
-        // Calculate new frustum location as there may have been lerp towards tgt_dist
-        // Without this, there will be camera jumping back and forth in some scenarios
-        // TODO: Optimize and fix clipping still happening if self.dist << self.tgt_dist
+        // Calculate new frustum location as there may have been lerp towards
+        // tgt_dist Without this, there will be camera jumping back and
+        // forth in some scenarios TODO: Optimize and fix clipping still
+        // happening if self.dist << self.tgt_dist
 
-        // Use tgt_dist, as otherwise we end up in loop due to dist depending on frustum
-        // and vice versa
+        // Use tgt_dist, as otherwise we end up in loop due to dist depending on
+        // frustum and vice versa
         let local_dependents = self.compute_dependents_helper(self.tgt_dist);
         let frustum = self.compute_frustum(&local_dependents);
         let dist = {
@@ -422,7 +423,8 @@ impl Camera {
                 .unwrap_or(0.0)
         };
 
-        // If the camera ends up being too close to the focus point, switch policies.
+        // If the camera ends up being too close to the focus point, switch
+        // policies.
         if dist < CLIPPING_MODE_RANGE.start {
             self.compute_dependents_far(terrain, is_transparent);
         } else {
@@ -736,8 +738,8 @@ impl Camera {
 
     /// Get the mode of the camera
     pub fn get_mode(&self) -> CameraMode {
-        // Perform a bit of a trick... don't report first-person until the camera has
-        // lerped close enough to the player.
+        // Perform a bit of a trick... don't report first-person until the
+        // camera has lerped close enough to the player.
         match self.mode {
             CameraMode::FirstPerson if self.dist < 0.5 => CameraMode::FirstPerson,
             CameraMode::FirstPerson => CameraMode::ThirdPerson,

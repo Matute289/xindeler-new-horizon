@@ -239,8 +239,9 @@ impl RtSim {
         }
     }
 
-    // Note that this hook only needs to be invoked if the block change results in a
-    // change to the rtsim resource produced by [`Block::get_rtsim_resource`].
+    // Note that this hook only needs to be invoked if the block change results
+    // in a change to the rtsim resource produced by
+    // [`Block::get_rtsim_resource`].
     pub fn hook_block_update(&mut self, world: &World, index: IndexRef, changes: Vec<BlockDiff>) {
         self.state
             .emit(event::OnBlockChange { changes }, &mut (), world, index);
@@ -316,7 +317,8 @@ impl RtSim {
         // Create the save thread if it doesn't already exist
         // We're not using the slow job pool here for two reasons:
         // 1) The thread is mostly blocked on IO, not compute
-        // 2) We need to synchronise saves to ensure monotonicity, which slow jobs
+        // 2) We need to synchronise saves to ensure monotonicity, which slow
+        //    jobs
         // aren't designed to allow
         let (tx, _) = self.save_thread.get_or_insert_with(|| {
             trace!("Starting rtsim data save thread...");
@@ -330,8 +332,8 @@ impl RtSim {
             error!("Failed to perform rtsim save: {}", err);
         }
 
-        // If we need to wait until the save thread has done its work (due to, for
-        // example, server shutdown) then do that.
+        // If we need to wait until the save thread has done its work (due to,
+        // for example, server shutdown) then do that.
         if wait_until_finished && let Some((tx, handle)) = self.save_thread.take() {
             drop(tx);
             info!("Waiting for rtsim save thread to finish...");

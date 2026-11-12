@@ -66,6 +66,8 @@ pub struct InterfaceSettings {
     /// instead, regardless of whether the player is inside the affected
     /// region.
     pub toggle_terrain_transitions: bool,
+    pub toggle_hotkey_hints: bool,
+    pub pause_menu_overlay_opacity: f32,
 }
 
 impl Default for InterfaceSettings {
@@ -119,10 +121,12 @@ impl Default for InterfaceSettings {
             accum_experience: true,
             xp_bar_skillgroup: Some(SkillGroupKind::General),
             row_background_opacity: 0.025,
+            pause_menu_overlay_opacity: 0.6,
             toggle_draggable_windows: true,
             toggle_biome_change_popups: true,
             toggle_compact_item_slots: false,
             toggle_terrain_transitions: true,
+            toggle_hotkey_hints: true,
         }
     }
 }

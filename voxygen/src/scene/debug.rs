@@ -283,7 +283,8 @@ impl DebugShape {
                     };
                     box_along_line(left, *rail_width, *rail_width, STEEL_COLOR, &mut mesh);
                     box_along_line(right, *rail_width, *rail_width, STEEL_COLOR, &mut mesh);
-                    //box_along_line(center, 0.1, 0.1, [1.0, 0.0, 0.0, 1.0], &mut mesh);
+                    //box_along_line(center, 0.1, 0.1, [1.0, 0.0, 0.0, 1.0],
+                    // &mut mesh);
                     if i % SUBPLANK_LENGTH == 0 {
                         let across = LineSegment3 {
                             start: center.start - 1.5 * dx - *rail_width * dz,

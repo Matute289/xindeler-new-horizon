@@ -1,12 +1,12 @@
 BasicMelee(
-    energy_cost: 10,
+    energy_cost: 15,
     buildup_duration: 0.4,
     swing_duration: 0.1,
     hit_timing: 0.5,
     recover_duration: 0.2,
     melee_constructor: (
         kind: Bash(
-            damage: 15,
+            damage: 13,
             poise: 20,
             knockback: 0,
             energy_regen: 0,
@@ -15,7 +15,6 @@ BasicMelee(
         angle: 15.0,
         blockable: false,
         attack_effect: Some((Poise(40), TargetBlocking)),
-        precision_flank_multipliers: (back: 1.0, side: 1.0, front: 1.5),
         precision_flank_invert: true,
     ),
     ori_modifier: (

@@ -1295,6 +1295,7 @@ mod service_tests {
                 pact: comp::Pact::default(),
                 trigger_slots: comp::TriggerSlots::default(),
                 spell_mastery: comp::SpellMastery::default(),
+                narrative_state: comp::NarrativeState::default(),
             };
 
             crate::persistence::create_character_for_test(
