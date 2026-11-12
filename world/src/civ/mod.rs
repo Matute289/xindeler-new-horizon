@@ -4084,8 +4084,9 @@ impl Civs {
                     // authored chunks is the early return at the top of this
                     // function (`authored_cromatolis_v0`), which is therefore
                     // load-bearing: do not move or weaken it without guarding
-                    // here instead. See the authored-void and region-scoping work -- that early
-                    // return also only holds while authored regions are
+                    // here instead. See the authored-void and region-scoping
+                    // work -- that early return also only
+                    // holds while authored regions are
                     // map-global, since it tests the *site's* chunk rather than
                     // each chunk the path writes through.
                     self.carve_track_into_terrain(ctx, &path);
@@ -6402,8 +6403,8 @@ mod tests {
             .find(|bridge| bridge.id == "bridge.kalthis_duren")
             .expect("the named Kalthis-Duren crossing must be present in the real export");
 
-        // Trust the RON over any prior markdown draft: the real export uses 17m width /
-        // 12m clearance.
+        // Trust the RON over any prior markdown draft: the real export uses 17m
+        // width / 12m clearance.
         assert_eq!(kalthis_duren.deck_width_m, 17.0);
         assert_eq!(kalthis_duren.deck_clearance_m, 12.0);
         assert!(matches!(

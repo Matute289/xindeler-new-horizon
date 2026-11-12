@@ -934,8 +934,8 @@ fn aw_read(
         }
         std::fs::write(out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     }
-    // The loader's own limits, so an exporter that mirrors them can assert it has
-    // not drifted.
+    // The loader's own limits, so an exporter that mirrors them can assert it
+    // has not drifted.
     let constants = serde_json::json!({
         "manifest_schema": authored_raster::MANIFEST_SCHEMA,
         "tile_size": authored_raster::format::TILE_SIZE,
@@ -1316,7 +1316,8 @@ mod aw_read_tests {
     #[test]
     fn aw_read_fails_with_the_loaders_verdict() {
         let dir = scratch("bad");
-        // water beside nothing: the loader refuses "water next to unauthored column"
+        // water beside nothing: the loader refuses "water next to unauthored
+        // column"
         let spec = RegionSpec::new("arena", (2048, 2048), (2560, 2560), 32, vec![
             PaintOp::Water {
                 shape: Shape::Rect {

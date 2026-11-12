@@ -99,7 +99,8 @@ pub(crate) fn surface_descents<'a>(
         .flat_map(move |x| (0..sz_cells.y + 1).map(move |y| Vec2::new(x, y)))
         .filter_map(move |cell| {
             let tunnel = tunnel_below_from_cell(cell, 0, land)?;
-            // If there is water here there most likely isn't an accessible entrance.
+            // If there is water here there most likely isn't an accessible
+            // entrance.
             //
             // XINDELER: nor is there one under exact authored ground: the
             // guard in `tunnel_bounds_at_col_guarded_by` keeps a tunnel from
@@ -227,8 +228,8 @@ impl Tunnel {
         let depth = (col.alt - wpos.z as f32) / (AVG_LEVEL_DEPTH as f32 * LAYERS as f32);
         let underground = ((col.alt - wpos.z as f32) / 80.0 - 1.0).clamped(0.0, 1.0);
 
-        // TODO think about making rate of change of humidity and temp noise higher to
-        // effectively increase biome size
+        // TODO think about making rate of change of humidity and temp noise
+        // higher to effectively increase biome size
         let humidity = Lerp::lerp_unclamped(
             col.humidity,
             FastNoise2d::new(41)
@@ -273,8 +274,8 @@ impl Tunnel {
         ] = {
             // Default biome, no other conditions apply
             let barren = 0.01;
-            // Mushrooms grow underground and thrive in a humid environment with moderate
-            // temperatures
+            // Mushrooms grow underground and thrive in a humid environment with
+            // moderate temperatures
             let mushroom = underground
                 * close(humidity, 1.0, 0.7, 4)
                 * close(temp, 2.0, 1.8, 4)
@@ -300,8 +301,9 @@ impl Tunnel {
                 * close(humidity, 1.0, 0.85, 4);
             // Rocky cold cave that appear near the surface
             let snowy = close(temp, -1.8, 1.3, 4) * close(depth, 0.0, 0.6, 4);
-            // Crystals grow deep underground in areas rich with minerals. They are present
-            // in areas with colder temperatures and low humidity
+            // Crystals grow deep underground in areas rich with minerals. They
+            // are present in areas with colder temperatures and low
+            // humidity
             let crystal = underground
                 * close(humidity, 0.0, 0.6, 4)
                 * close(temp, -1.6, 1.3, 4)
@@ -831,8 +833,8 @@ pub fn apply_caves_to(canvas: &mut Canvas, rng: &mut impl Rng) {
                 .collect_vec();
 
             // Compute structure samples only once for each column.
-            // TODO Use iter function in StructureGen2d to compute samples for the whole
-            // chunk once
+            // TODO Use iter function in StructureGen2d to compute samples for
+            // the whole chunk once
             let structure_seeds = StructureGen2d::new(34537, 24, 8).get(wpos2d);
             for (level, z_range, horizontal, vertical, dist, tunnel) in tunnel_bounds {
                 write_column(
@@ -971,7 +973,8 @@ fn tunnel_column(
         || biome.fire > 0.4
         || biome.crystal > 0.75
     {
-        // 1.0 because at some point we maybe want to use some noise value here instead
+        // 1.0 because at some point we maybe want to use some noise value here
+        // instead
         1.0.mul(((col.alt - z_range.end as f32) / 32.0).clamped(0.0, 1.0))
             .mul(max_height * (dist_cave_center / cave_width).powf(3.33))
             .max(1.0)
@@ -1104,9 +1107,9 @@ fn write_column<R: Rng>(
     let cavern_height = (z_range.end - z_range.start) as f32;
     let (cave_width, max_height, _dist_cave_center) = dimensions;
 
-    // Get the range, if there is any, where the current cave overlaps with other
-    // caves. Right now this is only used to prevent ceiling cover from being
-    // place
+    // Get the range, if there is any, where the current cave overlaps with
+    // other caves. Right now this is only used to prevent ceiling cover
+    // from being place
     let overlap = z_ranges.iter().find_map(|other_z_range| {
         if *other_z_range == z_range {
             return None;
@@ -1970,8 +1973,8 @@ fn write_column<R: Rng>(
                     } else if rand.chance(wpos2d.with_z(7), 0.007) {
                         let shallow = close(biome.depth, 0.0, 0.4, 3);
                         let middle = close(biome.depth, 0.5, 0.4, 3);
-                        //let deep = close(biome.depth, 1.0, 0.4); // TODO: Use this for deep only
-                        // things
+                        //let deep = close(biome.depth, 1.0, 0.4); // TODO: Use
+                        // this for deep only things
                         [
                             (Some(SpriteKind::Stones), 1.5),
                             (Some(SpriteKind::Copper), shallow),
@@ -2445,8 +2448,9 @@ pub(crate) mod measure {
             travelled += point.distance(previous);
             previous = point;
             let wpos2d = point.map(|e| e.round() as i32);
-            // Consecutive samples land in the same column more often than not at
-            // this density; sampling a column twice would double-count it.
+            // Consecutive samples land in the same column more often than not
+            // at this density; sampling a column twice would
+            // double-count it.
             if last_sampled == Some(wpos2d) {
                 continue;
             }
@@ -2495,16 +2499,18 @@ pub(crate) mod measure {
             }
             let contact =
                 voids.and_then(|voids| voids.contact_at_column(wpos2d, col.alt, &z_range));
-            // The plug count is read off the production guard, not re-derived from
-            // the contact: a column the guard drops is a column the corridor loses,
-            // whatever the reason. The two can only differ if the guard grows a
-            // second reason to drop an entry, and then this is the assertion that
-            // says so rather than the count quietly drifting.
+            // The plug count is read off the production guard, not re-derived
+            // from the contact: a column the guard drops is a
+            // column the corridor loses, whatever the reason. The
+            // two can only differ if the guard grows a
+            // second reason to drop an entry, and then this is the assertion
+            // that says so rather than the count quietly drifting.
             let plugged = bounds(chunk_voids).is_none();
-            // A plain `assert_eq!`, not `debug_assert_eq!`: every caller documents
-            // itself as `cargo test --release`, and the workspace release profile
-            // sets `debug-assertions = false` -- so a debug assertion here would be
-            // compiled out of precisely the run it is meant to guard, and the
+            // A plain `assert_eq!`, not `debug_assert_eq!`: every caller
+            // documents itself as `cargo test --release`, and the
+            // workspace release profile sets `debug-assertions =
+            // false` -- so a debug assertion here would be compiled
+            // out of precisely the run it is meant to guard, and the
             // counts really would drift quietly. One comparison per column is
             // nothing next to the `col_or_gen` above it.
             assert_eq!(
@@ -2602,15 +2608,17 @@ pub(crate) mod measure {
         let mut seen: hashbrown::HashSet<LatticeNode> = hashbrown::HashSet::new();
         let mut queue: std::collections::VecDeque<LatticeNode> =
             [lattice_node(&from.a), lattice_node(&from.b)].into();
-        // A cap, so a characterisation over a lattice that turns out to percolate
-        // cannot become a hang. Reaching it reports `false`, which understates
-        // reachability rather than overstating it -- the safe direction for a
-        // number whose only use is deciding there is nothing to fix.
+        // A cap, so a characterisation over a lattice that turns out to
+        // percolate cannot become a hang. Reaching it reports `false`,
+        // which understates reachability rather than overstating it --
+        // the safe direction for a number whose only use is deciding
+        // there is nothing to fix.
         //
-        // It binds: the lattice is ~21x21 cells over 5 levels. That is exactly why
-        // the traversal below must be breadth-first -- a depth-first walk spends
-        // the budget wandering to the far side of the map before it tries the
-        // level-1 node two hops away, so the cap would start deciding the answer.
+        // It binds: the lattice is ~21x21 cells over 5 levels. That is exactly
+        // why the traversal below must be breadth-first -- a
+        // depth-first walk spends the budget wandering to the far side
+        // of the map before it tries the level-1 node two hops away, so
+        // the cap would start deciding the answer.
         const MAX_NODES: usize = 512;
 
         while let Some(node) = queue.pop_front() {
@@ -2625,18 +2633,20 @@ pub(crate) mod measure {
                 continue;
             };
             // `lattice_node` recovers a node's level by inverting `node_at`'s
-            // `depth = AVG_LEVEL_DEPTH * level - 6`. Checked here, against a real
-            // node, rather than asserted in a doc comment: if that formula ever
-            // changes, the whole walk would otherwise keep running and silently
-            // classify every node onto the wrong level.
+            // `depth = AVG_LEVEL_DEPTH * level - 6`. Checked here, against a
+            // real node, rather than asserted in a doc comment: if
+            // that formula ever changes, the whole walk would
+            // otherwise keep running and silently classify every
+            // node onto the wrong level.
             assert_eq!(
                 node_level(&here),
                 level_here,
                 "a node's depth no longer encodes the level it was drawn on"
             );
 
-            // Daylight: this node's own cell has a marked, unplugged descent from
-            // the surface. Only cells one level below the surface have one.
+            // Daylight: this node's own cell has a marked, unplugged descent
+            // from the surface. Only cells one level below the
+            // surface have one.
             if level_here == 1
                 && let Some(descent) = tunnel_below_from_cell(cell, 0, land)
                 && land
@@ -2647,22 +2657,26 @@ pub(crate) mod measure {
                 return (true, seen.len());
             }
 
-            // Every edge below is one `all_tunnels_at` actually carves, and only
-            // those. An edge this walk can cross that the world never digs would
-            // let a breach "reach" daylight by a route no player can take, and
-            // would bias the reported fraction *upwards* -- the opposite direction
-            // from `MAX_NODES`, so the two would not even cancel into a known sign.
+            // Every edge below is one `all_tunnels_at` actually carves, and
+            // only those. An edge this walk can cross that the
+            // world never digs would let a breach "reach" daylight
+            // by a route no player can take, and would bias the
+            // reported fraction *upwards* -- the opposite direction
+            // from `MAX_NODES`, so the two would not even cancel into a known
+            // sign.
             //
             // Lateral edges. `all_tunnels_at` asks `tunnels_at` for levels
-            // `1..=LAYERS` only, so **level 0 has no laterals**: the surface nodes
-            // are joined to the world by their descents alone. `tunnels_at(_, 0, _)`
-            // would happily invent some, and level-0 nodes are dense (`node_at`
+            // `1..=LAYERS` only, so **level 0 has no laterals**: the surface
+            // nodes are joined to the world by their descents
+            // alone. `tunnels_at(_, 0, _)` would happily invent
+            // some, and level-0 nodes are dense (`node_at`
             // skips the chance roll at level 0), so this gate is load-bearing
             // rather than tidy.
             //
-            // For the levels that do have them, `tunnels_at` enumerates every edge
-            // whose upper node lies in the 3x3 cell neighbourhood -- a superset of
-            // this node's own incident edges in both directions; filtering on the
+            // For the levels that do have them, `tunnels_at` enumerates every
+            // edge whose upper node lies in the 3x3 cell
+            // neighbourhood -- a superset of this node's own
+            // incident edges in both directions; filtering on the
             // node position is what narrows it back down.
             let lateral = (level_here >= 1)
                 .then(|| {
@@ -2679,18 +2693,20 @@ pub(crate) mod measure {
                 })
                 .into_iter()
                 .flatten();
-            // Descents: the one leaving this node downwards, and the one arriving
-            // from the level above.
+            // Descents: the one leaving this node downwards, and the one
+            // arriving from the level above.
             //
             // Both are single edges, because a descent always lands back on the
-            // cell index it left: `tunnel_below_from_cell` offsets by half a cell
-            // and `to_cell` shifts by a quarter on odd levels, which together stay
-            // inside the same cell whichever parity the level has. So the node
-            // above `(L, cell)` is exactly `(L - 1, cell)` -- no neighbourhood
-            // search, and the same arithmetic this function's own doc describes.
+            // cell index it left: `tunnel_below_from_cell` offsets by half a
+            // cell and `to_cell` shifts by a quarter on odd levels,
+            // which together stay inside the same cell whichever
+            // parity the level has. So the node above `(L, cell)`
+            // is exactly `(L - 1, cell)` -- no neighbourhood
+            // search, and the same arithmetic this function's own doc
+            // describes.
             //
-            // `all_tunnels_at` carves descents for source levels `0..LAYERS` only,
-            // so the bottom level has no down-edge.
+            // `all_tunnels_at` carves descents for source levels `0..LAYERS`
+            // only, so the bottom level has no down-edge.
             let down = (level_here < LAYERS)
                 .then(|| tunnel_below_from_cell(cell, level_here, land))
                 .flatten()

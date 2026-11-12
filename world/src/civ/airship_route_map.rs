@@ -225,7 +225,8 @@ impl TinySkiaSpriteMap {
                                 sprite_meta.height,
                             ) && let Some(sprite) = packed_sprites.copy_region(sprite_frame)
                             {
-                                // sprite.set_transform(Transform::from_scale(1.0, -1.0));
+                                // sprite.set_transform(Transform::from_scale(1.
+                                // 0, -1.0));
                                 sprites.push(sprite);
                                 sprite_ids.insert(sprite_meta.id.clone(), sprites.len() - 1);
                             }
@@ -429,10 +430,10 @@ fn dock_sites_triangulation_map(
         };
     }
 
-    // the triangles are triplets in a Vec<usize> so we need to iterate over them in
-    // groups of 3. The macros are used to convert the points from world blocks
-    // to map pixels and flip the y axis. map_triangles is a Vec of arrays of 3
-    // Vec2s representing the 3 points of each triangle.
+    // the triangles are triplets in a Vec<usize> so we need to iterate over
+    // them in groups of 3. The macros are used to convert the points from
+    // world blocks to map pixels and flip the y axis. map_triangles is a
+    // Vec of arrays of 3 Vec2s representing the 3 points of each triangle.
     let map_triangles = triangulation
         .triangles
         .chunks(3)
@@ -480,8 +481,8 @@ fn dock_sites_triangulation_map(
             let p1i32 = Vec2::new(p1.x as i32, p1.y as i32);
             let p2i32 = Vec2::new(p2.x as i32, p2.y as i32);
             if !lines_drawn.contains(&(p1i32, p2i32)) {
-                // calculate where the triangle edge intersects a circle of radius 10 around
-                // each point
+                // calculate where the triangle edge intersects a circle of
+                // radius 10 around each point
                 let dir = (p2 - p1).normalized();
                 let start_edge_center = p1 + dir * 10.0;
                 let end_edge_center = p2 - dir * 10.0;
@@ -592,8 +593,8 @@ fn dock_sites_optimized_tesselation_map(
                 if let Some(dp2) = map_points.get(*cpid)
                     && !lines_drawn.contains(&(dock_node.node_id, *cpid))
                 {
-                    // calculate where the line intersects a circle of radius 10 around
-                    // each point
+                    // calculate where the line intersects a circle of radius 10
+                    // around each point
                     let dir = (dp2 - dp1).normalized();
                     let ep1 = dp1 + dir * 10.0;
                     let ep2 = dp2 - dir * 10.0;
@@ -665,8 +666,8 @@ fn draw_airship_routes(
     pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
 
     // Red, Green, Blue, Yellow
-    // Segment lines are drawn in these colors in the order they are found in the
-    // segments vector (i.e. the outer segments vector).
+    // Segment lines are drawn in these colors in the order they are found in
+    // the segments vector (i.e. the outer segments vector).
     let segment_colors = [[255u8, 0u8, 0u8], [0u8, 255u8, 0u8], [6u8, 218u8, 253u8], [
         255u8, 255u8, 0u8,
     ]];
@@ -707,10 +708,10 @@ fn draw_airship_routes(
         }
     }
 
-    // The map is hard to read without an indication of which direction the lines
-    // are traversed and in which order, so we draw the route line numbers on
-    // the map with the line numbers drawn at the destination end of the line to
-    // orient the reader.
+    // The map is hard to read without an indication of which direction the
+    // lines are traversed and in which order, so we draw the route line
+    // numbers on the map with the line numbers drawn at the destination end
+    // of the line to orient the reader.
     let route_color_ids = ["RED", "GREEN", "BLUE", "YELLOW"];
     let digits_sprite_map = TinySkiaSpriteMap::new(
         "world.module.airship.airship_route_map_digits",
@@ -724,7 +725,8 @@ fn draw_airship_routes(
         if route.legs.len() > 1 {
             let mut prev_leg = &route.legs[route.legs.len() - 1];
 
-            // The leg line numbers are drawn at the destination end of the line.
+            // The leg line numbers are drawn at the destination end of the
+            // line.
             for (leg_line_number, route_leg) in (1..).zip(route.legs.iter()) {
                 // for j in 0..segment.len() - 1 {
                 let from_loc = loc_fn(&points[prev_leg.dest_index], &prev_leg.platform);
@@ -733,15 +735,18 @@ fn draw_airship_routes(
                 let p2 = Vec2::new(to_loc.0, to_loc.1);
                 let dir = (p2 - p1).normalized();
 
-                // Turn the number into a string with leading zeros for single digit numbers.
+                // Turn the number into a string with leading zeros for single
+                // digit numbers.
                 let rln_str = format!("{:03}", leg_line_number);
 
-                // Draw the digits so they are aligned with the direction the segment line
-                // will be traversed. Y axis is inverted in the image.
+                // Draw the digits so they are aligned with the direction the
+                // segment line will be traversed. Y axis is
+                // inverted in the image.
                 let angle = Airships::angle_between_vectors_cw(dir, -Vec2::unit_y());
 
-                // Draw the digits 80% of the way along the segment line or one digit height
-                // away from the circle at the end of the segment line, whichever is greater.
+                // Draw the digits 80% of the way along the segment line or one
+                // digit height away from the circle at the end
+                // of the segment line, whichever is greater.
                 let p1p2dist = p1.distance(p2) - 20.0; // subtract the radius of the circles
                 let seg_num_offset = (p1p2dist * 0.20).max(digit_size.height());
                 let seg_num_center = p2 - dir * seg_num_offset;

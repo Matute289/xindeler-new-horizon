@@ -593,7 +593,8 @@ mod tests {
             for (from, to, nodes) in [("site.a", "site.b", road_a_nodes), ("site.c", "site.d", 10)]
             {
                 let mut road = ctx.with_rng(ChaChaRng::from_seed(road_seed(0, from, to)));
-                // The 2 draws per interior node `carve_track_into_terrain` makes.
+                // The 2 draws per interior node `carve_track_into_terrain`
+                // makes.
                 let drawn: Vec<(i32, i32)> = (0..nodes)
                     .map(|_| {
                         (

@@ -881,9 +881,10 @@ impl Site {
                     max: center_tile + Vec2::broadcast(plaza_radius + 1),
                 })
                 .filter(|&aabr| {
-                    // XINDELER: an authored footprint replaces the soft reach lottery
-                    // (a plaza is less likely the further it is from the
-                    // origin) with its own extent.
+                    // XINDELER: an authored footprint replaces the soft reach
+                    // lottery (a plaza is less likely the
+                    // further it is from the origin) with
+                    // its own extent.
                     let within_reach = match self.footprint.as_deref() {
                         None => {
                             rng.random_range(0..48) > aabr.center().map(|e| e.abs()).reduce_max()
@@ -920,10 +921,11 @@ impl Site {
                 })
         })
         .or_else(|| {
-            // XINDELER: with an authored footprint, a plaza the random walk could not
-            // place is placed deterministically on the network's frontier
-            // instead, so a city boxed in by water, hills and routes still
-            // grows through its footprint.
+            // XINDELER: with an authored footprint, a plaza the random walk
+            // could not place is placed deterministically on the
+            // network's frontier instead, so a city boxed in by
+            // water, hills and routes still grows through its
+            // footprint.
             let tiles = &self.tiles;
             let footprint = self.footprint.as_deref_mut()?;
             if self.plazas.is_empty() {
@@ -1018,9 +1020,9 @@ impl Site {
         road_kind: plot::RoadKind,
     ) -> Option<Id<Plot>> {
         generator_stats.attempt(site_name, GenStatPlotKind::InitialPlaza);
-        // XINDELER: an authored footprint puts the main plaza by its anchor instead of
-        // nearest the origin: the clear patch nearest the anchor anywhere in
-        // the footprint.
+        // XINDELER: an authored footprint puts the main plaza by its anchor
+        // instead of nearest the origin: the clear patch nearest the
+        // anchor anywhere in the footprint.
         if let Some(footprint) = self.footprint.as_deref() {
             let tiles = &self.tiles;
             return match footprint
@@ -1098,7 +1100,8 @@ impl Site {
     ) -> Option<Id<Plot>> {
         // The plaza radius can be 1, 2, or 3.
         let plaza_radius = rng.random_range(1..3);
-        // XINDELER: an authored footprint may fix it (the draw above still happens).
+        // XINDELER: an authored footprint may fix it (the draw above still
+        // happens).
         let plaza_radius = self
             .footprint
             .as_deref()

@@ -590,8 +590,8 @@ fn region_edge_on_the_natural_sea_is_a_dry_strip_beside_a_water_face() {
     let (cmin, cmax) = (centre - 2, centre + 3);
     let bmin = (cmin.x * 32, cmin.y * 32);
     let bmax = (cmax.x * 32, cmax.y * 32);
-    // Only a strip well inside the west side is authored (a dry mound); the rest of
-    // the region, and its whole shore, is not.
+    // Only a strip well inside the west side is authored (a dry mound); the
+    // rest of the region, and its whole shore, is not.
     let mut s = RegionSpec::new("sea_edge", bmin, bmax, 32, vec![PaintOp::Ground {
         shape: rect((bmin.0 + 32, bmin.1 + 32, bmin.0 + 64, bmax.1 - 32)),
         ground_cm: 8_000,

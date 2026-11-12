@@ -259,7 +259,8 @@ fn respawn_queued(
             > data.architect.wanted_population.of_death(&death)
         {
             data.architect.population.on_death(&death);
-            // If we have more than enough of this npc, we skip spawning a new one.
+            // If we have more than enough of this npc, we skip spawning a new
+            // one.
             continue;
         }
 
@@ -690,8 +691,9 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                         .chunks()
                         .map(|s| rng.random_range(0..s as i32));
 
-                    // TODO: If we had access to `ChunkStates` here we could make sure
-                    // these aren't getting respawned in loaded chunks.
+                    // TODO: If we had access to `ChunkStates` here we could
+                    // make sure these aren't getting
+                    // respawned in loaded chunks.
                     let center = cpos.cpos_to_wpos_center();
                     // Authored-aware, as in `spawn_anywhere`.
                     if world

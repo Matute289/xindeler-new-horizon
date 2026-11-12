@@ -220,8 +220,9 @@ impl GnarlingFortification {
                     + corner_2.as_() * corner_2_weight)
                     .as_();
 
-                // Check that structure not in the water or too close to another structure
-                // XINDELER: authored-aware (authored water regions).
+                // Check that structure not in the water or too close to another
+                // structure XINDELER: authored-aware (authored
+                // water regions).
                 if land
                     .chunk_water_wpos(structure_center + origin)
                     .is_some_and(|w| w.underwater)

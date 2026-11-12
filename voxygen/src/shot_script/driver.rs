@@ -1511,7 +1511,8 @@ impl SessionDriver {
                 },
                 Err(super::capture::ShotError::Dropped { .. }) => ShotOutcome::Dropped,
                 Err(e) => {
-                    // Full paths go to the log only; the report gets file names.
+                    // Full paths go to the log only; the report gets file
+                    // names.
                     warn!(error = %e, "Shot screenshot failed");
                     ShotOutcome::Failed(e.report_reason())
                 },

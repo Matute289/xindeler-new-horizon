@@ -98,9 +98,10 @@ impl<'a> BlockGen<'a> {
         // Authored ground lowered below the sim's basement (`alt < basement`,
         // so `grass_depth` is negative and the column is filled up to the
         // basement): the filled blocks are unchanged, but they are coloured
-        // like real ground -- a grass/earth surface layer under `alt`, then the natural
-        // earth-and-stone strata -- instead of the engine's blue deep-rock
-        // ramp, which a negative depth reaches already next to the surface.
+        // like real ground -- a grass/earth surface layer under `alt`, then the
+        // natural earth-and-stone strata -- instead of the engine's
+        // blue deep-rock ramp, which a negative depth reaches already
+        // next to the surface.
         let below_basement = sample.lowered_below_basement();
         let layer = 1.5 + 2.0 * chaos;
         if below_basement && (wposf.z as f32) >= alt - layer && (wposf.z as f32) < basement {

@@ -798,8 +798,8 @@ pub(crate) fn sample_pos_opts(
     // `sea_fill: AuthoredOnly` region, below sea level or on table land) is
     // coloured as the water `chunk_water` reports, with its depth shade.
     // Chunks the table already paints as water (a river kind, or a table
-    // altitude below sea level), and every world without such a region, keep the
-    // table's colour byte for byte.
+    // altitude below sea level), and every world without such a region, keep
+    // the table's colour byte for byte.
     if authored_ground
         && river_kind.is_none()
         && table_true_alt >= true_sea_level

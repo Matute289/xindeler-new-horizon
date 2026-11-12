@@ -341,8 +341,8 @@ impl<'a> System<'a> for Sys {
             }
         }
 
-        // TODO: Consider putting this in another system since this forces us to take
-        // positions by write rather than read access.
+        // TODO: Consider putting this in another system since this forces us to
+        // take positions by write rather than read access.
         #[cfg(feature = "worldgen")]
         let avoid_liquid = data.world.sim().authored_rasters().is_some();
         #[cfg(not(feature = "worldgen"))]

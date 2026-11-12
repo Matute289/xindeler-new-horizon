@@ -368,7 +368,8 @@ fn z_limit_covers_every_flooded_authored_water_voxel() {
             // The caller fills `min_z..max_z as i32`; the ground bound is below
             // the drawn surface here.
             let max = crate::block::z_max(240.0, wl, half);
-            // The original form of the bound, unaffected by the ice band's centre.
+            // The original form of the bound, unaffected by the ice band's
+            // centre.
             assert_eq!(max, (wl + 2.0 + half).max(240.0));
             assert!(max >= wl + 2.0, "bound below the water column: {max}");
             let max_z = max as i32;
@@ -646,8 +647,8 @@ fn a_small_edit_inside_a_natural_river_chunk() {
         vec![build_region(&pond(vec![], false)).unwrap()],
         "declare its chunk partial",
     );
-    // 2. Owned box, pond walled by banks: loads, but the river chunk is table-wet
-    //    and not fully authored -> the hard budget refuses it.
+    // 2. Owned box, pond walled by banks: loads, but the river chunk is
+    //    table-wet and not fully authored -> the hard budget refuses it.
     let ar = load(&[build_region(&pond(vec![], true)).unwrap()]).unwrap();
     let e = ar.check_consistency("t", table).unwrap_err();
     assert!(
@@ -655,9 +656,9 @@ fn a_small_edit_inside_a_natural_river_chunk() {
         "{}",
         e.0
     );
-    // 3. The chunk declared partial: loads (the pond meets the natural columns: 12
-    //    seam sides), passes the budget, and every other column of that chunk is
-    //    the natural engine column, untouched.
+    // 3. The chunk declared partial: loads (the pond meets the natural columns:
+    //    12 seam sides), passes the budget, and every other column of that
+    //    chunk is the natural engine column, untouched.
     let ar = load(&[build_region(&pond(vec![(34, 34)], false)).unwrap()]).unwrap();
     let r = ar.check_consistency("t", table).unwrap();
     assert_eq!(r[0].partial_table_wet, vec![Vec2::new(34, 34)]);
@@ -2990,7 +2991,8 @@ fn land_on_the_map_never_has_a_zero_red_channel() {
             for presented in [false, true] {
                 let rgb =
                     sample_pos_with(&config, &sim, index.as_index_ref(), None, c, presented).rgb;
-                // The table paints the pit (below sea level, no river) as water.
+                // The table paints the pit (below sea level, no river) as
+                // water.
                 let table_water = sim.chunks[idx].river.river_kind.is_some() || idx == pit;
                 let dry = presented && sim.chunk_is_authored_dry(c);
                 // An authored lake over table land is water once presented.

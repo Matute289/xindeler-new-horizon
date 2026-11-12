@@ -265,7 +265,8 @@ impl PlayState for CharSelectionState {
                 );
             }
 
-            // Unattended shot script: create/select its character, enter the world.
+            // Unattended shot script: create/select its character, enter the
+            // world.
             #[cfg(feature = "shot-script")]
             if self.shot_login.tick(
                 &mut self.client.borrow_mut(),

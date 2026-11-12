@@ -530,9 +530,10 @@ mod tests {
                 targets: HashMap::new(),
                 names: HashMap::new(),
             };
-            // Target was 5000 upstream, but the simulated population has settled at
-            // ~4862 since long before the fork (measured identical on upstream master
-            // and before the 2026-02 merchant change, commit edb0fc0792); 4800 keeps
+            // Target was 5000 upstream, but the simulated population has
+            // settled at ~4862 since long before the fork (measured
+            // identical on upstream master and before the 2026-02
+            // merchant change, commit edb0fc0792); 4800 keeps
             // the "economy shrank" guard.
             add_settlement(&mut env, "Forest", 4800.0, &[(
                 Good::Terrain(BiomeKind::Forest),

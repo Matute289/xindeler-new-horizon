@@ -1092,7 +1092,8 @@ mod tests {
     #[test]
     fn rle_and_summary() {
         use class::*;
-        // z 10..12 ground, 12 air (cave), 13..15 ground, 15..17 water, air, structure.
+        // z 10..12 ground, 12 air (cave), 13..15 ground, 15..17 water, air,
+        // structure.
         let cls = [
             GROUND, GROUND, AIR, GROUND, GROUND, LIQUID, LIQUID, AIR, AIR, STRUCTURE,
         ];

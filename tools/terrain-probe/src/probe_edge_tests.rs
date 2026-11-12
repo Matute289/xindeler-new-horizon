@@ -890,8 +890,8 @@ fn ec_d48_auto_z_range_covers_the_surface() {
     for (step, c) in cand.into_iter().take(400) {
         let b = bx(c.x * 32, c.y * 32, c.x * 32 + 32, c.y * 32 + 32);
         // Only wilderness: nothing authored or generated within 600 m, and no
-        // authored polyline segment either (the vertex-only guard is the fortifications
-        // guard).
+        // authored polyline segment either (the vertex-only guard is the
+        // fortifications guard).
         if !world_sites(&ir, b, 600).is_empty()
             || !authored_points(&p.assets_root, world_size(sim), b, 600).is_empty()
             || segments

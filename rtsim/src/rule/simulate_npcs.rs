@@ -277,7 +277,8 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                                     )
                                     | Body::FishMedium(_)
                                     | Body::FishSmall(_) => {
-                                        // Authored-aware (authored water regions).
+                                        // Authored-aware (authored water
+                                        // regions).
                                         ctx.world
                                             .is_wet_at(new_wpos.xy().as_())
                                             .is_none_or(|wet| wet)

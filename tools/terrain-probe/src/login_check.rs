@@ -130,8 +130,8 @@ pub fn run(p: &Probe, o: &LoginCheckOpts) -> Res<bool> {
     };
     eprintln!("client-side search from the saved position: plain ground {plain:?}, dry {dry:?}");
 
-    // 2. Back to the character list (saves the character), then select it again:
-    //    the server loads it from its database and repositions it.
+    // 2. Back to the character list (saves the character), then select it
+    //    again: the server loads it from its database and repositions it.
     let id = client
         .character_list()
         .characters
