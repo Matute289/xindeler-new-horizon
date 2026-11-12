@@ -47,6 +47,7 @@ pub enum ObjectKind {
     CoastalAirshipDock,
     DesertCityAirshipDock,
     CliffTownAirshipDock,
+    NavalPort,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

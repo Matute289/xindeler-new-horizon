@@ -128,3 +128,7 @@ docs/lore/
 # Admin test-harness rosters (real ones are local; example is committed)
 roster.ron
 client/roster.ron
+
+# Python bytecode from the repo tooling under tools/ and scripts/
+__pycache__/
+*.pyc

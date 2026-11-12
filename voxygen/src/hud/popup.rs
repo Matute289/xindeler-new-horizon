@@ -141,6 +141,17 @@ impl Widget for Popup<'_> {
                         s.infos.push_back(text.to_string());
                     });
                 },
+                // Only reaches here when the sender chose the toast path over
+                // the full-screen takeover (out-of-view transitions, the
+                // takeover cooldown, or the setting disabling it outright).
+                UserNotification::TerrainTransition { text, .. } => {
+                    state.update(|s| {
+                        if s.infos.is_empty() {
+                            s.last_info_update = Instant::now();
+                        }
+                        s.infos.push_back(self.i18n.get_content(text));
+                    });
+                },
             }
         }
 

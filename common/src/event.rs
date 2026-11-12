@@ -19,7 +19,7 @@ use crate::{
     resources::{BattleMode, Secs},
     rtsim,
     states::basic_summon::BeamPillarIndicatorSpecifier,
-    terrain::SpriteKind,
+    terrain::{RegionalTerrainOverride, SpriteKind, TerrainOverrideId},
     trade::{TradeAction, TradeId},
     uid::Uid,
     util::Dir,
@@ -790,6 +790,42 @@ pub struct ToggleSpriteLightEvent {
     pub entity: EcsEntity,
     pub pos: Vec3<i32>,
     pub enable: bool,
+}
+
+/// COW-7b: a player pulled one of the Undercompact gate antechamber's two
+/// vault levers. Mirrors [`ToggleSpriteLightEvent`]'s shape exactly; see
+/// `server/src/events/undercompact_gate.rs` for the handler.
+pub struct ActivateVaultLeverEvent {
+    pub entity: EcsEntity,
+    pub pos: Vec3<i32>,
+    pub enable: bool,
+}
+
+/// Activates or deactivates one region's terrain-generation-input override
+/// (see `common::terrain::regional_override`). Mirrors
+/// `ActivateVaultLeverEvent`'s shape (a plain data struct here, handled by a
+/// `worldgen`-feature-gated `ServerEvent` impl); see
+/// `server/src/events/terrain_override.rs` for the handler, and
+/// `server/src/terrain_override.rs::apply` for the actual activate/deactivate
+/// logic it's a thin wrapper around.
+#[derive(Debug)]
+pub enum TerrainOverrideOp {
+    Activate(RegionalTerrainOverride),
+    Deactivate(TerrainOverrideId),
+    /// Replaces the active override matching `RegionalTerrainOverride::id`
+    /// in place (its region and/or payload may differ from what's currently
+    /// active) -- e.g. the terrain-damage healing scheduler
+    /// (`server/src/sys/terrain_damage_heal.rs`) advancing a `Damage`
+    /// override's `heal_progress`. A no-op if no active override has that
+    /// id (mirrors `Deactivate`'s own not-found handling). Regenerates the
+    /// UNION of the old and new override's bounds exactly once, never a
+    /// deactivate-then-activate pair -- see
+    /// `server/src/terrain_override.rs::apply`.
+    Replace(RegionalTerrainOverride),
+}
+
+pub struct SetRegionalTerrainOverrideEvent {
+    pub op: TerrainOverrideOp,
 }
 
 pub struct RegrowHeadEvent {

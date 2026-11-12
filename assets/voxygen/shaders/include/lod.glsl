@@ -11,6 +11,13 @@ layout(set = 0, binding = 8) uniform sampler s_horizon;
 
 const float MIN_SHADOW = 0.33;
 
+// See `lod_pos()`: caps each iteration of its vertex-relaxation loop to this
+// fraction of the vertex's own un-relaxed distance from the camera, and the
+// minimum distance (in blocks) that fraction is taken of, so the cap never
+// collapses to ~0 for a vertex very close to `focus_pos`.
+const float LOD_RELAX_MAX_STEP_FRACTION = 0.1;
+const float LOD_RELAX_MIN_DISTANCE = 1.0;
+
 vec2 pos_to_tex(vec2 pos) {
     // Want: (pixel + 0.5)
     vec2 uv_pos = (focus_off.xy + pos + 16) / 32.0;
@@ -187,8 +194,38 @@ vec3 lod_pos(vec2 pos, vec2 focus_pos) {
 
     vec2 dir = normalize(pos);
     float shift = 150.0 * pow(length(pos), 3.0);
+    // Cap how far a single relaxation step may move the vertex. Each
+    // iteration below nudges `hpos` towards a nearby local optimum based on
+    // the terrain slope sampled at its current position; on ordinary terrain
+    // that slope (and so the push) is small. But the push is otherwise
+    // unbounded, and a genuinely steep real cliff can make a single step
+    // displace the vertex far more than its neighbours -- which are relaxed
+    // independently, and not by anywhere near as much. The result is a
+    // hugely elongated/near-degenerate LoD triangle: visible as a sharp,
+    // high-contrast wedge with badly stretched texturing, and (via
+    // `pull_down` in lod-terrain-vert.glsl, which keys off distance to
+    // focus_pos) sometimes shaded black because the runaway vertex reads as
+    // much closer to the camera than where it is actually drawn.
+    //
+    // Bounding each step to a fraction of the vertex's own (un-relaxed)
+    // splay distance from the camera keeps the intended "settle near a
+    // local optimum" behaviour on normal terrain while preventing a steep
+    // slope from ever producing a jump that has nothing to do with this
+    // vertex's spacing in the mesh. This bounds each of the 9 iterations
+    // individually, not the total displacement across all of them -- the
+    // loop's `1/i` decay means the actual worst-case total is well under
+    // `9 * max_step`, but it is not a hard total-displacement cap by itself.
+    float max_step = max(length(delta), LOD_RELAX_MIN_DISTANCE) * LOD_RELAX_MAX_STEP_FRACTION;
     for (int i = 1; i < 10; i ++) {
-        hpos -= dir * dot(normalize(lod_norm(hpos)).xy, dir) * shift / float(i);
+        // `dir` is already unit-length (it's a `normalize()` result that's
+        // never touched inside this loop), so the push along it always has
+        // magnitude `abs(push_mag)` -- clamping the scalar directly avoids
+        // an extra `length()` (a redundant sqrt of a value already known)
+        // and the branch a min/max-based clamp would otherwise need, in a
+        // loop that runs per vertex, per frame, for every visible LoD
+        // terrain vertex.
+        float push_mag = dot(normalize(lod_norm(hpos)).xy, dir) * shift / float(i);
+        hpos -= dir * clamp(push_mag, -max_step, max_step);
     }
 
     return vec3(hpos, alt_at_real(hpos));

@@ -100,9 +100,9 @@ impl AdletStronghold {
         // relative to entrance
         let angle = angle_samples
             .max_by_key(|theta| {
-                let entrance_height = land.get_alt_approx(entrance);
+                let entrance_height = land.ground_alt_at(entrance);
                 let height =
-                    |pos: Vec2<f32>| land.get_alt_approx(pos.as_() + entrance) - entrance_height;
+                    |pos: Vec2<f32>| land.ground_alt_at(pos.as_() + entrance) - entrance_height;
                 let (x, y) = (theta.cos(), theta.sin());
                 (40..=50)
                     .map(|r| {
@@ -126,8 +126,8 @@ impl AdletStronghold {
             + (Vec2::new(angle.cos(), angle.sin()) * (tunnel_length as f32 + cavern_radius as f32))
                 .as_();
 
-        let cavern_alt = (land.get_alt_approx(cavern_center) - cavern_radius as f32)
-            .min(land.get_alt_approx(entrance));
+        let cavern_alt = (land.ground_alt_at(cavern_center) - cavern_radius as f32)
+            .min(land.ground_alt_at(entrance));
 
         let mut outer_structures = Vec::<(AdletStructure, Vec2<i32>, Dir2)>::new();
 
@@ -161,10 +161,11 @@ impl AdletStronghold {
                 };
 
                 // Check that structure not in the water or too close to another
-                // structure
+                // structure XINDELER: authored-aware (authored
+                // water regions).
                 if land
-                    .get_chunk_wpos(structure_center.as_() + entrance)
-                    .is_some_and(|c| c.is_underwater())
+                    .chunk_water_wpos(structure_center.as_() + entrance)
+                    .is_some_and(|w| w.underwater)
                     || outer_structures.iter().any(|(kind, rpos, _dir)| {
                         structure_center.distance_squared(*rpos)
                             < structure_kind.required_separation(kind).pow(2)
@@ -676,7 +677,7 @@ impl Structure for AdletStronghold {
             .iter()
             .map(|(structure, rpos, dir)| {
                 let wpos = rpos + self.entrance;
-                (structure, wpos, land.get_alt_approx(wpos), dir)
+                (structure, wpos, land.ground_alt_at(wpos), dir)
             })
             .chain(self.cavern_structures.iter().map(|(structure, rpos, dir)| {
                 (structure, rpos + self.cavern_center, self.cavern_alt, dir)
@@ -1564,7 +1565,10 @@ impl Structure for AdletStronghold {
                             max: Vec2::new(yetipit_entrance_pos.x, yetipit_entrance_pos.y + 1)
                                 .with_z((alt as i32) - 7),
                         })
-                        .fill(Fill::Block(Block::air(SpriteKind::BoneKeyhole)));
+                        // Progression-gated, like the Haniwa dungeon's key gate: opts
+                        // out of ranged/keyless unlocking (e.g. the `knock` spell) via
+                        // `no_knock`. Melee key-item unlocking is unaffected.
+                        .fill(locked_dungeon_keyhole(SpriteKind::BoneKeyhole));
                 },
                 AdletStructure::Tannery => {
                     // shattered bone pieces

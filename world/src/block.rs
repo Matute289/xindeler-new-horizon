@@ -1,6 +1,6 @@
 use crate::{
     CONFIG, IndexRef,
-    column::{ColumnGen, ColumnSample},
+    column::{ColumnGen, ColumnSample, WallStrata},
     util::{FastNoise, RandomField, Sampler, SmallCache},
 };
 use common::{
@@ -74,14 +74,50 @@ impl<'a> BlockGen<'a> {
             cliff_offset,
             cliff_height,
             ice_depth,
+            ice_centre,
+            surface_block_override,
+            flood_block,
+            exposed_wall_floor,
             ..
         } = sample;
 
         let wposf = wpos.map(|e| e as f64);
 
         // Sample blocks
-        let water = Block::new(BlockKind::Water, Rgb::zero());
+        //
+        // Usually `Water`, but a governing `BiomeProfile` regional terrain
+        // override can replace this with any other fluid-like block kind
+        // (e.g. `Lava` for a volcano) -- see `ColumnSample::flood_block`.
+        // The color is chosen to match how that block kind is colored
+        // elsewhere in world-gen (e.g. `world/src/layer/cave.rs`'s lava).
+        let water = Block::new(flood_block, match flood_block {
+            BlockKind::Lava => Rgb::new(255, 65, 0),
+            _ => Rgb::zero(),
+        });
         let grass_depth = (1.5 + 2.0 * chaos).min(alt - basement);
+        // Authored ground lowered below the sim's basement (`alt < basement`,
+        // so `grass_depth` is negative and the column is filled up to the
+        // basement): the filled blocks are unchanged, but they are coloured
+        // like real ground -- a grass/earth surface layer under `alt`, then the
+        // natural earth-and-stone strata -- instead of the engine's
+        // blue deep-rock ramp, which a negative depth reaches already
+        // next to the surface.
+        let below_basement = sample.lowered_below_basement();
+        let layer = 1.5 + 2.0 * chaos;
+        if below_basement && (wposf.z as f32) >= alt - layer && (wposf.z as f32) < basement {
+            return Some(lowered_surface_block(
+                surface_block_override,
+                water_level,
+                alt,
+                snow_cover,
+                surface_color,
+                sub_surface_color,
+                (wposf.z as f32 - (alt - layer))
+                    .div(layer)
+                    .clamp(0.0, 1.0)
+                    .sqrt(),
+            ));
+        }
         if (wposf.z as f32) < alt - grass_depth {
             let stone_factor = (alt - grass_depth - wposf.z as f32) * 0.15;
             let col = Lerp::lerp(
@@ -90,6 +126,15 @@ impl<'a> BlockGen<'a> {
                 stone_factor,
             )
             .map(|e| (e * 255.0) as u8);
+
+            // The exposed side of an authored dry pit's wall (the column
+            // stands above neighbouring authored dry ground): the column's own
+            // strata (earth, then natural stone with rare ore flecks) instead
+            // of the engine's blue underground rock colour.
+            let wall = exposed_wall_floor.is_some_and(|f| wposf.z as f32 > f);
+            let strata = (wall || below_basement).then(|| sample.wall_strata(wpos.xy()));
+            let solid =
+                |kind: BlockKind, col: Rgb<u8>| solid_block(strata.as_ref(), wpos, kind, col);
 
             if stone_factor >= 0.5 {
                 if wposf.z as f32 > alt - cliff_offset.max(0.0) {
@@ -109,20 +154,27 @@ impl<'a> BlockGen<'a> {
                             (wposf.z as f32 - basement * 0.3).div(2.0).sin() * 0.5 + 0.5,
                         )
                         .map(|e| e as u8);
-                        Some(Block::new(BlockKind::Rock, col))
+                        Some(solid(BlockKind::Rock, col))
                     }
                 } else {
-                    Some(Block::new(BlockKind::Rock, col))
+                    Some(solid(BlockKind::Rock, col))
                 }
             } else {
-                Some(Block::new(BlockKind::Earth, col))
+                Some(solid(BlockKind::Earth, col))
             }
         } else if wposf.z as i32 <= alt as i32 {
             let grass_factor = (wposf.z as f32 - (alt - grass_depth))
                 .div(grass_depth)
                 .sqrt();
             // Surface
-            Some(if water_level > alt.ceil() {
+            Some(if let Some(forced) = surface_block_override {
+                // A governing `BiomeProfile` override forces a specific
+                // surface block kind (e.g. bare `Rock` on a volcano's
+                // slopes) -- this takes full priority over the
+                // Sand/Earth/Snow/Grass decision below entirely.
+                let col = Lerp::lerp(sub_surface_color, surface_color, grass_factor);
+                Block::new(forced, col.map(|e| (e * 255.0) as u8))
+            } else if water_level > alt.ceil() {
                 Block::new(
                     BlockKind::Sand,
                     sub_surface_color.map(|e| (e * 255.0) as u8),
@@ -143,8 +195,12 @@ impl<'a> BlockGen<'a> {
         }
         .or_else(|| {
             let over_water = alt < water_level;
-            // Water
-            if over_water && (wposf.z as f32 - water_level).abs() < ice_depth {
+            // Water (or whatever `flood_block` governs here -- lava doesn't
+            // freeze, so ice only ever forms over an actual `Water` flood).
+            if over_water
+                && flood_block == BlockKind::Water
+                && (wposf.z as f32 - ice_centre).abs() < ice_depth
+            {
                 Some(Block::new(BlockKind::Ice, CONFIG.ice_color))
             } else if (wposf.z as f32) < water_level {
                 // Ocean
@@ -172,9 +228,70 @@ impl ZCache<'_> {
 
         let ground_max = self.sample.alt + warp + 2.0;
 
-        let max = ground_max.max(self.sample.water_level + 2.0 + self.sample.ice_depth);
+        // XINDELER: the bound stays on `water_level`, not on the ice band's
+        // centre. Authored ice never rises above `water_level` (see
+        // `AuthoredColumn::ice_band`), but a regional flood can lift
+        // `water_level` well over the drawn surface, and the water column up to
+        // it must still be generated.
+        let max = z_max(ground_max, self.sample.water_level, self.sample.ice_depth);
 
         (min, max)
+    }
+}
+
+/// Upper bound of the voxel loop for a column: the ground bound or the water
+/// level plus the ice band's half-depth, whichever is higher.
+#[inline]
+pub(crate) fn z_max(ground_max: f32, water_level: f32, ice_depth: f32) -> f32 {
+    ground_max.max(water_level + 2.0 + ice_depth)
+}
+
+/// The surface block of a lowered column (authored ground below the sim's
+/// basement) at `grass_factor` (0 at the bottom of the surface layer to 1 at
+/// its top). It repeats the generic surface decision of
+/// [`BlockGen::get_with_z_cache`] (kept inline there, to stay close to
+/// upstream) on plain values.
+fn lowered_surface_block(
+    surface_block_override: Option<BlockKind>,
+    water_level: f32,
+    alt: f32,
+    snow_cover: bool,
+    surface_color: Rgb<f32>,
+    sub_surface_color: Rgb<f32>,
+    grass_factor: f32,
+) -> Block {
+    if let Some(forced) = surface_block_override {
+        let col = Lerp::lerp(sub_surface_color, surface_color, grass_factor);
+        Block::new(forced, col.map(|e| (e * 255.0) as u8))
+    } else if water_level > alt.ceil() {
+        Block::new(
+            BlockKind::Sand,
+            sub_surface_color.map(|e| (e * 255.0) as u8),
+        )
+    } else {
+        let col = Lerp::lerp(sub_surface_color, surface_color, grass_factor);
+        if grass_factor < 0.7 {
+            Block::new(BlockKind::Earth, col.map(|e| (e * 255.0) as u8))
+        } else if snow_cover {
+            Block::new(BlockKind::Snow, col.map(|e| (e * 255.0) as u8))
+        } else {
+            Block::new(BlockKind::Grass, col.map(|e| (e * 255.0) as u8))
+        }
+    }
+}
+
+/// A solid underground block: the generic `kind`/`col` one, or, on the
+/// exposed wall of an authored dry pit (`strata` is `Some`), the column's own
+/// wall strata.
+fn solid_block(
+    strata: Option<&WallStrata>,
+    wpos: Vec3<i32>,
+    kind: BlockKind,
+    col: Rgb<u8>,
+) -> Block {
+    match strata {
+        Some(strata) => strata.block(wpos),
+        None => Block::new(kind, col),
     }
 }
 
@@ -197,6 +314,24 @@ fn rotate_for_units(ori: u8, units: &Vec2<Vec2<i32>>) -> u8 {
         (ox + ori + if (ox & 2) != 0 { 4 } else { 0 }) % 8
     } else {
         (ox + 8 - ori) % 8
+    }
+}
+
+/// Builds the `SpriteCfg` for a prefab's keyhole `StructureBlock` variant
+/// (`Keyhole`, `KeyholeBars`, and their per-dungeon siblings): it requires
+/// `consumes` to unlock and, like every literal dungeon-generator keyhole
+/// built via `locked_dungeon_keyhole` in `site::plot`, opts out of
+/// ranged/keyless unlocking (e.g. the `knock` spell) via `no_knock` — a
+/// progression-gated prefab keyhole (e.g. DwarvenMine's, which is entirely
+/// prefab-driven) must not be bypassable remotely either. Melee key-item
+/// unlocking is unaffected.
+fn keyhole_cfg(consumes: &str) -> SpriteCfg {
+    SpriteCfg {
+        unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
+            consumes.to_string(),
+        ))),
+        no_knock: true,
+        ..SpriteCfg::default()
     }
 }
 
@@ -360,12 +495,7 @@ pub fn block_from_structure<'a>(
         },
         StructureBlock::Keyhole(consumes) => Some((
             Block::air(SpriteKind::Keyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::Sign(content, ori) => Some((
@@ -380,93 +510,48 @@ pub fn block_from_structure<'a>(
         )),
         StructureBlock::BoneKeyhole(consumes) => Some((
             Block::air(SpriteKind::BoneKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::HaniwaKeyhole(consumes) => Some((
             Block::air(SpriteKind::HaniwaKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::KeyholeBars(consumes) => Some((
             Block::air(SpriteKind::KeyholeBars),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::GlassKeyhole(consumes) => Some((
             Block::air(SpriteKind::GlassKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::TerracottaKeyhole(consumes) => Some((
             Block::air(SpriteKind::TerracottaKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::SahaginKeyhole(consumes) => Some((
             Block::air(SpriteKind::SahaginKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::VampireKeyhole(consumes) => Some((
             Block::air(SpriteKind::VampireKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
 
         StructureBlock::MyrmidonKeyhole(consumes) => Some((
             Block::air(SpriteKind::MyrmidonKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::MinotaurKeyhole(consumes) => Some((
             Block::air(SpriteKind::MinotaurKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::RedwoodWood => {
@@ -486,7 +571,7 @@ pub fn block_from_structure<'a>(
             }
         },
         StructureBlock::Choice(block_table) => block_table
-            .choose_weighted(&mut rand::rng(), |(w, _)| *w)
+            .choose_weighted(&mut crate::choice_rng(pos), |(w, _)| *w)
             .map(|(_, item)| {
                 block_from_structure(
                     index,
@@ -501,5 +586,81 @@ pub fn block_from_structure<'a>(
                 )
             })
             .unwrap_or(None),
+    }
+}
+
+#[cfg(test)]
+mod keyhole_cfg_tests {
+    use super::*;
+
+    /// Every prefab keyhole `StructureBlock` (`Keyhole`/`KeyholeBars` are
+    /// actually placed today, e.g. DwarvenMine's entirely prefab-driven key
+    /// gates; the rest are unused scaffolding for the same family) must go
+    /// through `keyhole_cfg` so `no_knock` can never silently regress for a
+    /// prefab-based dungeon lock, the same way the literal
+    /// `locked_dungeon_keyhole` call sites in `site::plot` are guarded.
+    #[test]
+    fn keyhole_cfg_is_always_no_knock_and_carries_the_consumed_item() {
+        let cfg = keyhole_cfg("common.items.keys.quarry_keys.miner_key");
+
+        assert!(
+            cfg.no_knock,
+            "a prefab dungeon keyhole must set no_knock, so the knock spell can't bypass it"
+        );
+        match cfg.unlock {
+            Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(item))) => {
+                assert_eq!(item, "common.items.keys.quarry_keys.miner_key");
+            },
+            other => panic!("expected UnlockKind::Consumes(Simple(..)), got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod solid_block_tests {
+    use super::*;
+
+    #[test]
+    fn without_a_wall_the_generic_block_is_unchanged() {
+        for kind in [BlockKind::Rock, BlockKind::Earth] {
+            for i in 0..50 {
+                let col = Rgb::new(90 + i as u8, 110, 150);
+                let wpos = Vec3::new(i, 2 * i, 100 - i);
+                assert_eq!(solid_block(None, wpos, kind, col), Block::new(kind, col));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The new lowered-column branch's surface block follows the generic
+    /// surface decision. (`BlockGen::get_with_z_cache` itself needs a
+    /// `ColumnSample`, hence a `SimChunk`, so it is covered by the real-world
+    /// tests instead.)
+    #[test]
+    fn lowered_surface_block_follows_the_generic_surface_decision() {
+        let (surf, sub) = (Rgb::new(0.2, 0.6, 0.2), Rgb::new(0.4, 0.3, 0.2));
+        let at = |ov, water, snow, f| lowered_surface_block(ov, water, 100.0, snow, surf, sub, f);
+        assert_eq!(at(None, 0.0, false, 0.0).kind(), BlockKind::Earth);
+        assert_eq!(at(None, 0.0, false, 0.69).kind(), BlockKind::Earth);
+        assert_eq!(at(None, 0.0, false, 1.0).kind(), BlockKind::Grass);
+        assert_eq!(at(None, 0.0, true, 1.0).kind(), BlockKind::Snow);
+        assert_eq!(at(None, 105.0, false, 1.0).kind(), BlockKind::Sand);
+        assert_eq!(
+            at(Some(BlockKind::Rock), 105.0, false, 1.0).kind(),
+            BlockKind::Rock
+        );
+        // The colour runs from the sub-surface to the surface colour.
+        assert_eq!(
+            at(None, 0.0, false, 0.0).get_color(),
+            Some(sub.map(|e| (e * 255.0) as u8))
+        );
+        assert_eq!(
+            at(None, 0.0, false, 1.0).get_color(),
+            Some(surf.map(|e| (e * 255.0) as u8))
+        );
     }
 }

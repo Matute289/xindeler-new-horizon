@@ -300,7 +300,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Seal, _) => 0.9,
                 (MossySnail, _) => 1.0,
                 (Hyena, _) => 0.95,
-                _ => 0.8,
+                _ => attr_fallback!("QuadrupedSmall", "scaler", 0.8),
             },
             tempo: match (body.species, body.body_type) {
                 (Boar, _) => 1.1,
@@ -320,7 +320,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Seal, _) => 2.5,
                 (TreantSapling, _) => 3.0,
                 (MossySnail, _) => 0.5,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedSmall", "tempo", 1.0),
             },
             maximize: match (body.species, body.body_type) {
                 (Fox, _) => 1.3,
@@ -334,7 +334,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Turtle, _) => 0.8,
                 (Fungome, _) => 0.7,
                 (Hare, _) => 1.3,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedSmall", "maximize", 1.0),
             },
             minimize: match (body.species, body.body_type) {
                 (Pig, _) => 0.6,
@@ -356,7 +356,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Goat, _) => 0.8,
                 (Seal, _) => 0.7,
                 (TreantSapling, _) => 0.7,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedSmall", "minimize", 1.0),
             },
             spring: match (body.species, body.body_type) {
                 (Sheep, _) => 1.2,
@@ -382,7 +382,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Goat, _) => 1.2,
                 (Seal, _) => 0.7,
                 (TreantSapling, _) => 0.5,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedSmall", "spring", 1.0),
             },
             feed: match (body.species, body.body_type) {
                 (Boar, _) => 0.6,
@@ -397,7 +397,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Turtle, _) => 0.5,
                 (Fungome, _) => 0.7,
                 (Hare, _) => 1.2,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedSmall", "feed", 1.0),
             },
             lateral: match (body.species, body.body_type) {
                 (Axolotl, _) => 1.0,
@@ -405,7 +405,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Turtle, _) => 1.0,
                 (Fungome, _) => 1.0,
                 (TreantSapling, _) => 1.0,
-                _ => 0.0,
+                _ => attr_fallback!("QuadrupedSmall", "lateral", 0.0),
             },
         }
     }

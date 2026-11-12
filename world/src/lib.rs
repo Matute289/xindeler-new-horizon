@@ -10,11 +10,18 @@
 #![cfg_attr(feature = "simd", feature(portable_simd))]
 
 mod all;
+pub mod authored_raster;
+#[cfg(test)] mod base_golden_tests;
+mod biome_profile;
 mod block;
 pub mod canvas;
 pub mod civ;
 mod column;
 pub mod config;
+/// Fork-only full-world tests for the authored region. Its own file so the
+/// fork's delta to upstream's `lib.rs` stays one line -- see the module doc.
+#[cfg(test)]
+mod cromatolis_generation_tests;
 pub mod index;
 pub mod land;
 pub mod layer;
@@ -26,6 +33,8 @@ pub mod util;
 
 // Reexports
 pub use crate::{
+    all::ForestKind,
+    biome_profile::{BiomeProfile, BiomeProfiles},
     canvas::{Canvas, CanvasInfo},
     config::{CONFIG, Features},
     land::Land,
@@ -33,10 +42,10 @@ pub use crate::{
 };
 pub use block::BlockGen;
 use civ::WorldCivStage;
-pub use column::ColumnSample;
+pub use column::{ColumnSample, ResolvedBiomeProfile};
 pub use common::terrain::site::{DungeonKindMeta, SettlementKindMeta};
 pub use index::{IndexOwned, IndexRef};
-use sim::WorldSimStage;
+use sim::{SimChunk, WorldSimStage};
 
 use crate::{
     column::ColumnGen,
@@ -58,7 +67,7 @@ use common::{
     spot::Spot,
     terrain::{
         Block, BlockKind, CoordinateConversions, SpriteKind, TerrainChunk, TerrainChunkMeta,
-        TerrainChunkSize, TerrainGrid,
+        TerrainChunkSize, TerrainGrid, TerrainOverrides,
     },
     vol::{ReadVol, RectVolSize, WriteVol},
 };
@@ -85,6 +94,58 @@ lazy_static! {
 
 #[cfg(feature = "use-dyn-lib")]
 pub fn init() { lazy_static::initialize(&LIB); }
+
+#[cfg(test)]
+thread_local! {
+    /// Seed for the next `generate_chunk` calls' dynamic RNG on this thread,
+    /// so tests can compare whole chunks exactly (see
+    /// [`with_deterministic_dynamic_rng`]).
+    static TEST_DYNAMIC_RNG_SEED: std::cell::Cell<Option<[u8; 32]>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with chunk generation's dynamic RNG (chests, entities and the
+/// cave decorations that draw from it) seeded with `seed` on this thread.
+#[cfg(test)]
+pub(crate) fn with_deterministic_dynamic_rng<R>(seed: [u8; 32], f: impl FnOnce() -> R) -> R {
+    // Restores the previous seed even if `f` panics, so a failed test does
+    // not leave a seed behind on a reused test thread.
+    struct Restore(Option<[u8; 32]>);
+    impl Drop for Restore {
+        fn drop(&mut self) { TEST_DYNAMIC_RNG_SEED.with(|s| s.set(self.0)); }
+    }
+    let _restore = Restore(TEST_DYNAMIC_RNG_SEED.with(|s| s.replace(Some(seed))));
+    f()
+}
+
+/// The RNG of a structure's weighted block choice (`StructureBlock::Choice`
+/// in `block.rs`): the thread RNG in the game; in tests inside
+/// [`with_deterministic_dynamic_rng`], seeded from that seed and `pos`.
+#[cfg(not(test))]
+pub(crate) fn choice_rng(_pos: Vec3<i32>) -> rand::rngs::ThreadRng { rand::rng() }
+
+#[cfg(test)]
+pub(crate) fn choice_rng(pos: Vec3<i32>) -> ChaCha8Rng {
+    match TEST_DYNAMIC_RNG_SEED.with(|s| s.get()) {
+        Some(mut seed) => {
+            seed[8..12].copy_from_slice(&pos.x.to_le_bytes());
+            seed[12..16].copy_from_slice(&pos.y.to_le_bytes());
+            seed[16..20].copy_from_slice(&pos.z.to_le_bytes());
+            ChaCha8Rng::from_seed(seed)
+        },
+        None => ChaCha8Rng::from_seed(rand::rng().random()),
+    }
+}
+
+/// The seed of `generate_chunk`'s dynamic RNG: fresh entropy in the game;
+/// a fixed seed inside [`with_deterministic_dynamic_rng`] in tests.
+fn dynamic_rng_seed() -> [u8; 32] {
+    #[cfg(test)]
+    if let Some(seed) = TEST_DYNAMIC_RNG_SEED.with(|s| s.get()) {
+        return seed;
+    }
+    rand::rng().random()
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -152,17 +213,88 @@ impl World {
                     report_stage(WorldGenerateStage::WorldCivGenerate(stage))
                 });
 
+            // XINDELER: an authored settlement on authored water is a data
+            // error (see `authored_raster::queries`).
+            if let Err(err) = authored_raster::queries::check_authored_sites(&sim, &civs) {
+                tracing::error!("{err}");
+                panic!("{err}");
+            }
+
             report_stage(WorldGenerateStage::EconomySimulation);
             sim2::simulate(&mut index, &mut sim);
 
             report_stage(WorldGenerateStage::SpotGeneration);
             Spot::generate(&mut sim);
 
-            (Self { sim, civs }, IndexOwned::new(index))
+            // XINDELER: resolve the authored-void index here rather than from
+            // the first chunk that queries it. See `layer::authored_regions`.
+            layer::authored_regions::warm(&index, &sim);
+
+            let mut world = Self { sim, civs };
+            let index = IndexOwned::new(index);
+            // XINDELER: authored ground meeting natural water is checked once
+            // the column sampler is final (sites placed). See
+            // `authored_raster::queries::check_ground_seams`.
+            if let Err(err) = authored_raster::queries::check_ground_seams(
+                &world,
+                index.as_index_ref(),
+                calendar.as_ref(),
+            ) {
+                tracing::error!("{err}");
+                panic!("{err}");
+            }
+            // XINDELER: sites, authored voids and roads on authored ground
+            // (`authored_raster::post_civ`); the ground queries then answer
+            // the levelled height where listed sites level exact columns.
+            match authored_raster::post_civ::check_ground_consumers(
+                &world,
+                index.as_index_ref(),
+                layer::authored_regions::authored_voids(&index, &world.sim),
+                calendar.as_ref(),
+            ) {
+                Ok(report) => {
+                    world.sim.set_site_levelling(report.sites.levelled_columns);
+                    world
+                        .sim
+                        .set_site_ring_levelling(report.sites.levelled_ring_columns);
+                },
+                Err(err) => {
+                    tracing::error!("{err}");
+                    panic!("{err}")
+                },
+            }
+            (world, index)
         })
     }
 
     pub fn sim(&self) -> &sim::WorldSim { &self.sim }
+
+    /// Replace this world's procedural-layer policy, for a test that
+    /// regenerates the same chunks under two policies and diffs them.
+    ///
+    /// Deliberately this one narrow setter and not a `sim_mut()`: the only
+    /// thing any test has needed to change is which purely-procedural layers
+    /// run, and handing back `&mut WorldSim` would let a future test mutate
+    /// arbitrary sim state that the rest of the world has already been built
+    /// from.
+    ///
+    /// Not `Option`, for the same reason. `None` would mean "no authored
+    /// region", but `layer::authored_regions::warm` has already populated the
+    /// void index by the time any test could call this, so clearing it would
+    /// leave that index alive while telling every other reader the region is
+    /// gone -- a world inconsistent with itself.
+    ///
+    /// There is deliberately no production counterpart at all: these toggles
+    /// are content decisions loaded from the region's own asset, and anything
+    /// able to change them at runtime would make a chunk's contents depend on
+    /// *when* it was generated rather than on where it is.
+    #[cfg(test)]
+    pub(crate) fn set_authored_procedural_layers_for_test(
+        &mut self,
+        layers: sim::AuthoredProceduralLayers,
+    ) {
+        self.sim.set_authored_procedural_layers_for_test(layers);
+    }
 
     pub fn civs(&self) -> &civ::Civs { &self.civs }
 
@@ -172,26 +304,57 @@ impl World {
 
     pub fn get_map_data(&self, index: IndexRef, threadpool: &rayon::ThreadPool) -> WorldMapMsg {
         prof_span!("World::get_map_data");
+        let land = Land::from_sim(self.sim());
         threadpool.install(|| {
             WorldMapMsg {
-                pois: self
-                    .civs()
-                    .pois
-                    .iter()
-                    .map(|(_, poi)| world_msg::PoiInfo {
-                        name: poi.name.clone(),
-                        kind: match &poi.kind {
-                            civ::PoiKind::Peak(alt) => world_msg::PoiKind::Peak(*alt),
-                            civ::PoiKind::Biome(size) => world_msg::PoiKind::Lake(*size),
-                        },
-                        wpos: poi.loc * TerrainChunkSize::RECT_SIZE.map(|e| e as i32),
-                    })
-                    .collect(),
+                pois: {
+                    // Biome labels come from the natural biome table; keep
+                    // them off authored dry ground (moved to a wet chunk of
+                    // the same biome, or dropped when none is left).
+                    let label_config = common::terrain::map::MapConfig::orthographic(
+                        self.sim().map_size_lg(),
+                        0.0..=self.sim().max_height,
+                    );
+                    let biome_pois: Vec<_> = self
+                        .civs()
+                        .pois
+                        .iter()
+                        .filter(|(_, poi)| matches!(poi.kind, civ::PoiKind::Biome(_)))
+                        .map(|(id, poi)| (id, poi.loc))
+                        .collect();
+                    let label_chunks = self.sim().biome_label_chunks(&label_config, &biome_pois);
+                    let mut label_chunks = biome_pois
+                        .iter()
+                        .map(|&(id, _)| id)
+                        .zip(label_chunks)
+                        .collect::<std::collections::HashMap<_, _>>();
+                    self.civs()
+                        .pois
+                        .iter()
+                        .filter_map(|(id, poi)| {
+                            let (kind, loc) = match &poi.kind {
+                                civ::PoiKind::Peak(alt) => {
+                                    (world_msg::PoiKind::Peak(*alt), poi.loc)
+                                },
+                                civ::PoiKind::Biome(size) => {
+                                    (world_msg::PoiKind::Lake(*size), label_chunks.remove(&id)??)
+                                },
+                            };
+                            Some(world_msg::PoiInfo {
+                                name: poi.name.clone(),
+                                kind,
+                                wpos: loc * TerrainChunkSize::RECT_SIZE.map(|e| e as i32),
+                            })
+                        })
+                        .collect()
+                },
                 sites: self
                     .civs()
                     .sites
                     .values()
-                    .filter_map(|site| Some((site.kind.marker()?, site)))
+                    .filter_map(|site| {
+                        Some((site.kind.marker(site.is_authored_settlement())?, site))
+                    })
                     .map(|(marker, site)| {
                         Marker::at(
                             (site.center * TerrainChunkSize::RECT_SIZE.map(|e| e as i32)).as_(),
@@ -203,8 +366,18 @@ impl World {
                         }))
                     })
                     .chain(
-                        layer::cave::surface_entrances(&Land::from_sim(self.sim()), index)
-                            .map(|wpos| Marker::at(wpos.as_()).with_kind(MarkerKind::Cave)),
+                        // Only when the procedural cave layer actually runs:
+                        // `Tunnel`s are hash-derived on demand, so a world that
+                        // skips `apply_caves_to` still has tunnel *data* and
+                        // would otherwise push a cave marker to every client's
+                        // map for a cave that was never carved.
+                        (index.features.caves && self.sim().authored_procedural_caves_enabled())
+                            .then(|| {
+                                layer::cave::surface_entrances(&land, index)
+                                    .map(|wpos| Marker::at(wpos.as_()).with_kind(MarkerKind::Cave))
+                            })
+                            .into_iter()
+                            .flatten(),
                     )
                     .collect(),
                 possible_starting_sites: {
@@ -215,6 +388,12 @@ impl World {
                         .sites
                         .iter()
                         .filter_map(|(_, civ_site)| Some((civ_site, civ_site.site_tmp?)))
+                        // An authored settlement explicitly excluded from player-start selection
+                        // (e.g. for lore/terrain reasons) must never be a candidate at all --
+                        // unlike the score=0 cases below (which still compete for a slot if
+                        // fewer than `STARTING_SITE_COUNT` alternatives exist), this is a hard
+                        // exclusion regardless of how many other candidates there are.
+                        .filter(|(civ_site, _)| civ_site.is_eligible_as_starting_site())
                         .map(|(civ_site, site_id)| {
                             // Score the site according to how suitable it is to
                             // be a starting site
@@ -316,6 +495,19 @@ impl World {
 
     pub fn sample_blocks(&self) -> BlockGen<'_> { BlockGen::new(ColumnGen::new(&self.sim)) }
 
+    /// Same as [`Self::sample_blocks`], but -- when `overrides` is `Some` --
+    /// applies active regional terrain overrides' column-level effects (see
+    /// `common::terrain::regional_override` and `column::ColumnGen`).
+    pub fn sample_blocks_with_overrides<'a>(
+        &'a self,
+        overrides: Option<&'a TerrainOverrides>,
+    ) -> BlockGen<'a> {
+        BlockGen::new(match overrides {
+            Some(overrides) => ColumnGen::with_overrides(&self.sim, overrides),
+            None => ColumnGen::new(&self.sim),
+        })
+    }
+
     /// Find a position that's accessible to a player at the given world
     /// position by searching blocks vertically.
     ///
@@ -332,7 +524,7 @@ impl World {
         // Unwrapping because generate_chunk only returns err when
         // should_continue evals to true
         let (tc, _cs) = self
-            .generate_chunk(index, chunk_pos, None, || false, None)
+            .generate_chunk(index, chunk_pos, None, || false, None, None)
             .unwrap();
 
         tc.find_accessible_pos(spawn_wpos, ascending)
@@ -347,10 +539,31 @@ impl World {
         // TODO: misleading name
         mut should_continue: impl FnMut() -> bool,
         time: Option<(TimeOfDay, Calendar)>,
+        overrides: Option<&TerrainOverrides>,
     ) -> Result<(TerrainChunk, ChunkSupplement), ()> {
         let calendar = time.as_ref().map(|(_, cal)| cal);
 
-        let mut sampler = self.sample_blocks();
+        // Filtered ONCE per `generate_chunk` call to just the overrides that
+        // actually touch this chunk (an AABB-then-exact `touches_chunk`
+        // check per override, done here rather than per column). Both the
+        // column-level sampler below and the chunk-level `Cow<SimChunk>`
+        // patch further down reuse this same small subset, so a chunk
+        // nowhere near any active override never has `ColumnGen::get`
+        // scanning the full, potentially server-wide, active-overrides list
+        // once per block-column -- and a chunk that IS touched only ever
+        // gets filtered once, not once per column either.
+        let touching_overrides: Option<TerrainOverrides> = overrides.and_then(|overrides| {
+            let active: Vec<_> = overrides
+                .overrides_touching_chunk(chunk_pos, TerrainChunkSize::RECT_SIZE)
+                .cloned()
+                .collect();
+            (!active.is_empty()).then_some(TerrainOverrides {
+                version: overrides.version,
+                active,
+            })
+        });
+
+        let mut sampler = self.sample_blocks_with_overrides(touching_overrides.as_ref());
 
         let chunk_wpos2d = chunk_pos * TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
         let chunk_center_wpos2d = chunk_wpos2d + TerrainChunkSize::RECT_SIZE.map(|e| e as i32 / 2);
@@ -379,7 +592,25 @@ impl World {
             .and_then(|base_z| self.sim.get(chunk_pos).map(|sim_chunk| (base_z, sim_chunk))) */
             .get_base_z(chunk_pos)
         {
-            Some(base_z) => (base_z as i32, self.sim.get(chunk_pos).unwrap()),
+            // XINDELER: an authored bed or bank can lie far below every sim
+            // chunk's own base (a slot canyon cut into a plateau); blocks below
+            // `base_z` default to stone, so the base must reach below it or
+            // the air over the authored water would stay solid rock. Only the
+            // chunk's *own* authored cells count: a chunk writes only its own
+            // columns, so no neighbour apron is needed and every chunk without
+            // authored cells (all of them outside a region) keeps its floor.
+            Some(base_z) => (
+                match self
+                    .sim
+                    .authored_rasters
+                    .as_ref()
+                    .and_then(|rasters| rasters.floor_block(chunk_pos))
+                {
+                    Some(floor) => (base_z as i32).min(floor),
+                    None => base_z as i32,
+                },
+                self.sim.get(chunk_pos).unwrap(),
+            ),
             // Some((base_z, sim_chunk)) => (base_z as i32, sim_chunk),
             None => {
                 // NOTE: This is necessary in order to generate a handful of
@@ -387,13 +618,94 @@ impl World {
                 return Ok((self.sim().generate_oob_chunk(), ChunkSupplement::default()));
             },
         };
+
+        // Chunk-level (as opposed to `ColumnGen::get`'s per-column) regional
+        // terrain override patch: applied ONCE per `generate_chunk` call, at
+        // this chunk's center, and consumed everywhere below that would
+        // otherwise read the raw `sim_chunk` for its biome label,
+        // wildlife-density closures, or forest-species lottery (`get_biome`,
+        // `apply_wildlife_supplement`, `layer::tree`'s real call site).
+        // `Cow::Borrowed` (zero-cost) unless an override actually touches
+        // this chunk.
+        let sim_chunk: Cow<SimChunk> = match touching_overrides.as_ref() {
+            Some(overrides) => {
+                let (temp, humidity, tree_density_mul, damage, biome_governing) = overrides
+                    .climate_tree_density_damage_and_profile_at(
+                        chunk_center_wpos2d,
+                        sim_chunk.temp,
+                        sim_chunk.humidity,
+                    );
+                // NOTE: `(*sim_chunk).clone()`, not `sim_chunk.clone()` --
+                // `sim_chunk` is already `&SimChunk` here, and `&T` is
+                // itself always `Clone` (a cheap pointer copy) regardless of
+                // whether `T` is; without the explicit deref this would
+                // silently clone the reference instead of the chunk.
+                let mut patched: SimChunk = (*sim_chunk).clone();
+                patched.temp = temp;
+                patched.humidity = humidity;
+                // `damage.vegetation_mul` reuses the exact same multiplier
+                // mechanism `ClimateOverride::tree_density_mul` already
+                // threads through here, rather than a parallel path.
+                patched.tree_density *= tree_density_mul * damage.vegetation_mul;
+                // Best-effort: only affects this chunk's informational
+                // metadata (minimap coloring, etc, via `TerrainChunkMeta`
+                // below) at the chunk CENTER -- the real per-column terrain
+                // height change happens in `ColumnGen::get`, not here.
+                patched.alt += damage.rim - damage.depth;
+                // Resolve a governing `BiomeProfile` override's catalog
+                // entry (same lookup `ColumnGen::get` does, at chunk
+                // granularity here) and patch `forest_kind` so
+                // `ColumnSample::forest_kind`/this chunk's biome metadata
+                // agree with what `layer::tree`'s per-position override
+                // (see `world/src/layer/tree.rs`) actually places. This is
+                // a DETERMINISTIC representative pick (highest-weight entry
+                // in the profile's own list), not a seeded random draw --
+                // unlike the real per-tree placement, nothing here needs to
+                // vary tree-to-tree, it just needs a single label for the
+                // whole chunk.
+                if let Some(governing) = biome_governing
+                    && let Some(profile) = index
+                        .biome_profiles
+                        .entries
+                        .iter()
+                        .find(|profile| profile.id == governing.profile.profile)
+                {
+                    patched.tree_density *= Lerp::lerp(
+                        1.0,
+                        profile.tree_density_mul,
+                        governing.blend * governing.profile.intensity.clamp(0.0, 1.0),
+                    );
+                    if let Some((forest_kind, _)) =
+                        profile.forest.iter().max_by(|(_, a), (_, b)| {
+                            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                    {
+                        patched.forest_kind = *forest_kind;
+                    }
+                }
+                Cow::Owned(patched)
+            },
+            None => Cow::Borrowed(sim_chunk),
+        };
+        let sim_chunk: &SimChunk = &sim_chunk;
+
+        let chunk_water = self.sim.chunk_water(chunk_pos);
+        // The ground level the client compares itself with to detect being
+        // underground: follows authored lowered ground instead of the frozen
+        // sim height (identical to `sim_chunk.alt` for every other chunk).
+        let meta_alt = match self.sim.authored_rasters.as_ref() {
+            Some(rasters) => rasters.chunk_ground_alt(chunk_pos, sim_chunk.alt),
+            None => sim_chunk.alt,
+        };
         let meta = TerrainChunkMeta::new(
             sim_chunk.get_location_name(&index.sites, &self.civs.pois, chunk_center_wpos2d),
             sim_chunk.get_biome(),
-            sim_chunk.alt,
+            meta_alt,
             sim_chunk.tree_density,
-            sim_chunk.river.is_river(),
-            sim_chunk.river.near_water(),
+            // XINDELER: authored-aware (authored water regions); clients use
+            // these for ambience and weather.
+            chunk_water.map_or(sim_chunk.river.is_river(), |w| w.river),
+            chunk_water.map_or(sim_chunk.river.near_water(), |w| w.near_water),
             sim_chunk.river.velocity,
             sim_chunk.temp,
             sim_chunk.humidity,
@@ -436,8 +748,29 @@ impl World {
 
                 let (min_z, max_z) = z_cache.get_z_limits();
 
+                // The deep stone fill; the exposed wall of an authored dry
+                // pit is the column's own strata (`BlockGen`). Authored
+                // ground lowered below the sim's basement is strata all the
+                // way down, flagged or not (jittered only as deep as a wall
+                // can be seen, one constant stone colour below that).
+                let wall_from = if z_cache.sample.lowered_below_basement() {
+                    Some(base_z)
+                } else {
+                    z_cache
+                        .sample
+                        .exposed_wall_floor
+                        .map(|f| f.floor() as i32 + 1)
+                };
+                let strata =
+                    wall_from.map(|_| z_cache.sample.wall_strata(Vec2::new(x, y) + chunk_wpos2d));
                 (base_z..min_z as i32).for_each(|z| {
-                    let _ = chunk.set(Vec3::new(x, y, z), stone);
+                    let block = match (wall_from, &strata) {
+                        (Some(from), Some(strata)) if z >= from => {
+                            strata.block(Vec3::from(chunk_wpos2d) + Vec3::new(x, y, z))
+                        },
+                        _ => stone,
+                    };
+                    let _ = chunk.set(Vec3::new(x, y, z), block);
                 });
 
                 (min_z as i32..max_z as i32).for_each(|z| {
@@ -459,7 +792,7 @@ impl World {
         };
 
         // Only use for rng affecting dynamic elements like chests and entities!
-        let mut dynamic_rng = ChaCha8Rng::from_seed(rand::rng().random());
+        let mut dynamic_rng = ChaCha8Rng::from_seed(dynamic_rng_seed());
 
         // Apply layers (paths, caves, etc.)
         let mut canvas = Canvas {
@@ -472,23 +805,84 @@ impl World {
                 index,
                 chunk: sim_chunk,
                 calendar,
+                overrides: touching_overrides.as_ref(),
             },
             chunk: &mut chunk,
             entity_spawns: Vec::new(),
             rtsim_resource_blocks: Vec::new(),
         };
 
+        // `apply_trains_to` only appends `ChunkMeta::tracks` bezier splines
+        // -- it stamps zero voxels. Those splines feed two readers: real
+        // rail-snapping vehicle physics for a `Body::Ship(ship::Body::Train)`
+        // entity (`common/systems/src/phys`, which clamps a train's
+        // position/orientation to the nearest track every tick) and
+        // voxygen's debug-hitbox overlay (`DebugShape::TrainTrack`). Trains
+        // are a real, admin-spawnable ship body today (`ALL_SHIPS`, the
+        // `/ship Train` command) with working animation and audio -- this is
+        // NOT dead/debug-only code, just currently-unshipped content:
+        // `assets/world/features.ron` sets `train_tracks: false` map-wide
+        // ("TODO: train stations, train entities"), so `apply_trains_to`
+        // doesn't run anywhere in the shipped game.
+        //
+        // That's still why this stays a flat kill switch rather than a 5th
+        // `AuthoredProceduralLayers` toggle like caverns/caves/rocks/spots,
+        // just not for a "debug-only" reason: `AuthoredProceduralLayers`
+        // exists specifically for layers that "read no authored data at all
+        // and stamp hash-derived geometry straight into the block volume"
+        // (see its doc comment) -- i.e. they can physically collide with
+        // authored geometry in the same voxel. Rail splines never touch the
+        // block volume, so that block-volume race can't happen here, and
+        // with `train_tracks` globally off and no per-region train policy to
+        // encode yet, a per-region RON toggle would be speculative
+        // machinery. Revisit if/when trains actually ship (stations,
+        // entities, `train_tracks: true`).
+        //
+        // Scoped to the map-global `authored_cromatolis_v0` rather than the
+        // more general `authored_region_id` because, unlike
+        // `sim::generate_cliffs`'s `tree_density` crush guard (a genuine
+        // "authored data wins over procedural noise" rule that should
+        // extend to any future region), this isn't a claim about
+        // authored-content priority at all -- it's "don't lay rail splines
+        // through a hand-authored region's geometry", which today is
+        // exactly the same population as "any region is loaded" and has no
+        // shipped behavior to get wrong if a second region ever needs a
+        // different answer.
         if index.features.train_tracks && !sim_chunk.authored_cromatolis_v0 {
             layer::apply_trains_to(&mut canvas, &self.sim, sim_chunk, chunk_center_wpos2d);
         }
 
-        if index.features.caverns {
+        // Purely procedural voxel layers. They read no authored data and stamp
+        // hash-derived content straight into the block volume, so whether an
+        // authored region wants them is per-region *content policy*, not a
+        // data-priority invariant -- it lives in that region's
+        // `{map_asset}_features` RON rather than as a literal here, and
+        // composes with the global `index.features` toggles (a layer runs only
+        // when both allow it). See `sim::AuthoredProceduralLayers` for the
+        // rationale and for what turning `caves` off actually costs.
+        //
+        // `apply_trees_to`/`apply_shrubs_to`/`apply_scatter_to` are
+        // deliberately absent from that set: they are driven *by* the authored
+        // `tree_density`, i.e. they consume authored data rather than override
+        // it. `apply_paths_to` likewise draws from the authored
+        // `SimChunk.path`.
+        let authored_layers = self.sim.authored_procedural_layers();
+        let procedural_layer_enabled = |pick: fn(&sim::AuthoredProceduralLayers) -> bool| -> bool {
+            authored_layers.as_ref().is_none_or(pick)
+        };
+
+        if index.features.caverns && procedural_layer_enabled(|l| l.caverns) {
             layer::apply_caverns_to(&mut canvas, &mut dynamic_rng);
         }
-        if index.features.caves {
+        if index.features.caves && procedural_layer_enabled(|l| l.caves) {
             layer::apply_caves_to(&mut canvas, &mut dynamic_rng);
         }
-        if index.features.rocks {
+        if sim_chunk.authored_cromatolis_v0 {
+            layer::apply_cromatolis_interiors_to(&mut canvas);
+            layer::apply_cromatolis_cave_features_to(&mut canvas);
+            layer::apply_cromatolis_local_aerial_features_to(&mut canvas);
+        }
+        if index.features.rocks && procedural_layer_enabled(|l| l.rocks) {
             layer::apply_rocks_to(&mut canvas, &mut dynamic_rng);
         }
         if index.features.shrubs {
@@ -497,13 +891,23 @@ impl World {
         if index.features.trees {
             layer::apply_trees_to(&mut canvas, &mut dynamic_rng, calendar);
         }
+        // Not gated behind any `index.features` flag: a `Damage` override's
+        // debris field is an explicit, admin/event-activated regional
+        // effect, not an ambient world-gen feature toggle -- it has nothing
+        // to do with the trees/scatter features immediately around it.
+        layer::apply_terrain_damage_to(&mut canvas, &mut dynamic_rng);
         if index.features.scatter {
             layer::apply_scatter_to(&mut canvas, &mut dynamic_rng, calendar);
         }
         if index.features.paths {
             layer::apply_paths_to(&mut canvas);
         }
-        if index.features.spots {
+        // Belt-and-braces with `Spot::generate`, which already refuses to place
+        // the `SimChunk::spot` marker at all when a region disables spots --
+        // deliberately both, so the marker and the structure can never
+        // disagree. A marker with no structure would leave rtsim's
+        // `get_nearest_spot` quest targeting pointing players at empty ground.
+        if index.features.spots && procedural_layer_enabled(|l| l.spots) {
             layer::apply_spots_to(&mut canvas, &mut dynamic_rng);
         }
         // layer::apply_coral_to(&mut canvas);
@@ -775,6 +1179,11 @@ impl World {
                             Rgb::black(),
                             lod::ObjectKind::CliffTownAirshipDock,
                         )),
+                        site::plot::PlotKind::NavalPort(_) => Some((
+                            site.tile_wpos(plot.root_tile),
+                            Rgb::black(),
+                            lod::ObjectKind::NavalPort,
+                        )),
                         _ => None,
                     })
                 })
@@ -787,7 +1196,7 @@ impl World {
                     kind: model,
                     pos: (wpos2d - min_wpos)
                         .map(|e| e as i16)
-                        .with_z(self.sim().get_alt_approx(wpos2d).unwrap_or(0.0) as i16),
+                        .with_z(self.sim().ground_alt_at(wpos2d).unwrap_or(0.0) as i16),
                     flags: if column.snow_cover {
                         lod::InstFlags::SNOW_COVERED
                     } else {

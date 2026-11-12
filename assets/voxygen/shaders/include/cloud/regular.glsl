@@ -15,6 +15,18 @@ float billow_noise_2d(vec2 pos) {
     return abs(noise_2d(pos) - 0.5) * 2.0;
 }
 
+// How much thicker ground mist gets in the densest fog. Multiplies the mist
+// term, so 1.0 here would mean "fog doubles it". Thickening costs nothing
+// extra: it scales a value the raymarch already computes at every step.
+const float FOG_MIST_BOOST = 4.0;
+// How much higher, in blocks, dense fog pushes the altitude mist stops fading
+// out at. Without this, thick fog would still sit only in the deepest valleys.
+//
+// Kept small relative to MIST_FADE_HEIGHT below, because *this* one is not
+// free: raising the ceiling pulls more raymarch steps into the noise-sampling
+// `mist > 0.0` branch. Prefer turning FOG_MIST_BOOST up over turning this up.
+const float FOG_CEILING_RISE = 200.0;
+
 // Returns vec4(r, g, b, density)
 vec4 cloud_at(vec3 pos, float dist, vec3 dir, out vec3 emission, out float not_underground) {
     #ifdef EXPERIMENTAL_CURVEDWORLD
@@ -35,19 +47,29 @@ vec4 cloud_at(vec3 pos, float dist, vec3 dir, out vec3 emission, out float not_u
 
     float alt = alt_at(pos.xy - focus_off.xy);
 
+    // One weather fetch for everything this function needs out of it: a second
+    // `cloud_tendency_at`/`fog_density_at` call here would double the sample
+    // count of the whole cloud raymarch.
+    vec4 weather = sample_weather(pos.xy);
+    float cloud_tendency = weather.r;
+    // Fog thickens the same ground-hugging mist the cloud pass already
+    // renders, and lifts its ceiling, rather than being a separate effect --
+    // so clouds, sun/moon access and vapour density all respond to it for
+    // free.
+    float fog = weather.a;
+
     // Mist sits close to the ground in valleys (TODO: use base_alt to put it closer to water)
     float mist_min_alt = 0.5;
     #if (CLOUD_MODE >= CLOUD_MODE_MEDIUM)
         mist_min_alt = (textureLod(sampler2D(t_noise, s_noise), pos.xy / 35000.0, 0).x - 0.5) * 1.5 + 0.5;
     #endif
-    mist_min_alt = view_distance.z * 1.5 * (1.0 + mist_min_alt * 0.5) + alt * 0.5 + 250;
+    mist_min_alt = view_distance.z * 1.5 * (1.0 + mist_min_alt * 0.5) + alt * 0.5 + 250 + fog * FOG_CEILING_RISE;
     const float MIST_FADE_HEIGHT = 1000;
-    float mist = 0.01 * pow(clamp(1.0 - (pos.z - mist_min_alt) / MIST_FADE_HEIGHT, 0.0, 1), 10.0) * flat_earth_hack;
+    float mist = 0.01 * (1.0 + fog * FOG_MIST_BOOST) * pow(clamp(1.0 - (pos.z - mist_min_alt) / MIST_FADE_HEIGHT, 0.0, 1), 10.0) * flat_earth_hack;
 
     vec3 wind_pos = vec3(pos.xy + wind_offset(), pos.z + noise_2d(pos.xy / 20000) * 500);
 
     // Clouds
-    float cloud_tendency = cloud_tendency_at(pos.xy);
     float cloud = 0;
 
     if (mist > 0.0) {
@@ -299,7 +321,10 @@ vec3 get_cloud_color(vec3 surf_color, vec3 dir, vec3 origin, float max_dist, con
                     surf_color,
                 };
                 float h = max(0.0, min(pos.z, 900.0 - pos.z) / 450.0);
-                float rain = rain_density_at(pos.xy) * pow(h, 0.1);
+                // Only liquid rain refracts a rainbow; snowfall over the same
+                // cell must not. One fetch, both channels.
+                vec4 rainbow_weather = sample_weather(pos.xy);
+                float rain = rainbow_weather.g * (1.0 - rainbow_weather.b) * pow(h, 0.1);
 
                 float sun = sun_access * get_sun_brightness();
                 float energy = pow(rain * sun * min(cdist / 500.0, 1.0), 2.0) * 0.4;

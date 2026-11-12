@@ -37,6 +37,9 @@ egui-ui = ["voxygen-egui", "egui", "egui-wgpu", "egui-winit"]
 shaderc-from-source = ["shaderc/build-from-source"]
 discord = ["discord-sdk"]
 bin_cmd_doc_gen = []
+# Dev-only unattended shot scripts (XINDELER_SHOT_SCRIPT). Never add this to
+# `default` or `default-publish`; enable it explicitly.
+shot-script = []
 
 # We don't ship egui with published release builds so a separate feature is required that excludes it.
 default-publish = [

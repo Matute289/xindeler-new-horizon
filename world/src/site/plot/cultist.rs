@@ -39,7 +39,7 @@ impl Cultist {
             max: site.tile_wpos(tile_aabr.max),
         };
         let center = bounds.center();
-        let base = land.get_alt_approx(center) as i32;
+        let base = land.ground_alt_at(center) as i32;
         let room_size = 30;
         let mut room_data = vec![];
 
@@ -84,7 +84,7 @@ impl Cultist {
 
         Self {
             bounds,
-            alt: land.get_alt_approx(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
+            alt: land.ground_alt_at(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
                 as i32
                 + 2,
             base,
@@ -147,7 +147,10 @@ impl Structure for Cultist {
         let rock = Fill::Brick(BlockKind::Rock, Rgb::new(55, 50, 60), 24);
         let water = Fill::Block(Block::new(BlockKind::Water, Rgb::zero()));
         let key_door = Fill::Block(Block::air(SpriteKind::KeyDoor));
-        let key_hole = Fill::Block(Block::air(SpriteKind::Keyhole));
+        // Progression-gated, like the Haniwa dungeon's key gate: opts out of
+        // ranged/keyless unlocking (e.g. the `knock` spell) via `no_knock`.
+        // Melee key-item unlocking is unaffected.
+        let key_hole = locked_dungeon_keyhole(SpriteKind::Keyhole);
         let gold_chain = Fill::Block(Block::air(SpriteKind::SeaDecorChain));
 
         for room in room_data {

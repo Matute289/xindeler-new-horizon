@@ -43,7 +43,7 @@ impl DesertCityArena {
             min: site.tile_wpos(tile_aabr.min),
             max: site.tile_wpos(tile_aabr.max),
         };
-        let alt = land.get_alt_approx(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
+        let alt = land.ground_alt_at(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
             as i32
             + 2;
         let base = alt + 1;

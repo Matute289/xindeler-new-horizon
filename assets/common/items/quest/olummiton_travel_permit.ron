@@ -1,0 +1,7 @@
+ItemDef(
+    legacy_name: "Olummiton Academy Travel Permit",
+    legacy_description: "A travel permit sealed by Olummiton Academy, its threads humming faintly — it recognizes only the hand it was pressed into.",
+    kind: Quest,
+    quality: Moderate,
+    tags: [],
+)

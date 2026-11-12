@@ -1,0 +1,14 @@
+SpawnEntry (
+    name: "Cromatolis abyssal-plain wildlife.",
+    note: "Sparse open-water/deep-seabed predators -- the `abyssal_plain` profile in cromatolis_v0_aquatic_ecology.ron, deliberately barren of flora but not of fauna.",
+    rules: [
+        Pack(
+            groups: [
+                (2, (1, 1, "common.entity.wild.aggressive.sandshark")),
+                (1, (1, 1, "common.entity.wild.aggressive.rocksnapper")),
+            ],
+            spawn_mode: Water,
+            day_period: [Night, Morning, Noon, Evening],
+        ),
+    ],
+)

@@ -1,5 +1,10 @@
 use crate::{
     Canvas, CanvasInfo, ColumnSample, IndexRef, Land,
+    layer::{
+        authored_regions::authored_voids_for as authored_voids,
+        authored_voids::{ChunkVoids, ProceduralContact, SURFACE_MARGIN, chunk_voids_at},
+        traversal::{AccommodationTier, PassageColumn, PassageQuery},
+    },
     site::SiteKind,
     util::{
         FastNoise2d, LOCALITY, RandomField, RandomPerm, SQUARE_4, SmallCache, StructureGen2d,
@@ -59,7 +64,8 @@ fn node_at(cell: Vec2<i32>, level: u32, land: &Land) -> Option<Node> {
 
             if level > 0
                 || (!chunk.near_cliffs()
-                    && !chunk.river.near_water()
+                    // XINDELER: authored-aware (authored water regions).
+                    && !land.near_water_at(wpos).unwrap_or_else(|| chunk.river.near_water())
                     && chunk.sites.is_empty()
                     && land.get_gradient_approx(wpos) < 0.75)
             {
@@ -73,10 +79,21 @@ fn node_at(cell: Vec2<i32>, level: u32, land: &Land) -> Option<Node> {
     }
 }
 
-pub fn surface_entrances<'a>(
+/// Every surface cave mouth in the world, paired with **the descent behind
+/// it** -- the `level 0 -> level 1` tunnel a player who walks into that mouth
+/// actually follows.
+///
+/// [`surface_entrances`] (and therefore every `MarkerKind::Cave` on the map) is
+/// *derived* from this rather than being a second copy of the predicate, so
+/// "the mouths that are marked" and "the descents that must stay open" can
+/// never be two different sets. That equality is what makes
+/// `no_marked_surface_mouth_is_plugged_by_a_seal` (in
+/// [`crate::layer::cromatolis_cave_features`]) a statement about the markers
+/// and not merely about some descents.
+pub(crate) fn surface_descents<'a>(
     land: &'a Land,
     index: IndexRef<'a>,
-) -> impl Iterator<Item = Vec2<i32>> + 'a {
+) -> impl Iterator<Item = (Vec2<i32>, Tunnel)> + 'a {
     let sz_cells = to_cell(land.size().as_::<i32>().cpos_to_wpos(), 0);
     (0..sz_cells.x + 1)
         .flat_map(move |x| (0..sz_cells.y + 1).map(move |y| Vec2::new(x, y)))
@@ -84,15 +101,26 @@ pub fn surface_entrances<'a>(
             let tunnel = tunnel_below_from_cell(cell, 0, land)?;
             // If there is water here there most likely isn't an accessible
             // entrance.
-            if land
-                .column_sample(tunnel.a.wpos, index)
-                .is_some_and(|c| c.water_dist.is_none_or(|d| d > 5.0))
-            {
-                Some(tunnel.a.wpos)
+            //
+            // XINDELER: nor is there one under exact authored ground: the
+            // guard in `tunnel_bounds_at_col_guarded_by` keeps a tunnel from
+            // breaking that surface, so the mouth is sealed rock and a marker
+            // there would advertise a cave that cannot be entered.
+            if land.column_sample(tunnel.a.wpos, index).is_some_and(|c| {
+                c.water_dist.is_none_or(|d| d > 5.0) && exact_top_block(&c).is_none()
+            }) {
+                Some((tunnel.a.wpos, tunnel))
             } else {
                 None
             }
         })
+}
+
+pub fn surface_entrances<'a>(
+    land: &'a Land,
+    index: IndexRef<'a>,
+) -> impl Iterator<Item = Vec2<i32>> + 'a {
+    surface_descents(land, index).map(|(mouth, _)| mouth)
 }
 
 #[derive(Copy, Clone)]
@@ -360,6 +388,18 @@ pub(crate) fn tunnels_at<'a>(
         })
 }
 
+/// The descent from a node at `level` to one at `level + 1`.
+///
+/// At `level == 0` this is the **surface descent** behind a map-marked cave
+/// mouth: its upper node sits at `depth = -6`, i.e. above the terrain, which
+/// is what makes it a mouth rather than a junction. It is not a shaft --- its
+/// lower node is in a *different* cell, up to ~1 536 blocks away at
+/// `depth = 114` --- so it is a long, shallow **ramp** across the whole
+/// 0-114 m band rather than a shaft, and anything authored inside that band is
+/// something it can run into. [`surface_descents`] enumerates the marked ones;
+/// an authored region that wants to know whether the guard plugs any of them
+/// walks them (Cromatolis does, in
+/// [`crate::layer::cromatolis_cave_features`]).
 fn tunnel_below_from_cell(cell: Vec2<i32>, level: u32, land: &Land) -> Option<Tunnel> {
     let wpos = to_wpos(cell, level);
     Some(Tunnel {
@@ -392,37 +432,209 @@ fn all_tunnels_at<'a>(
     })
 }
 
-fn tunnel_bounds_at_from<'a>(
+/// XINDELER: the top block the authored raster fixes exactly for this column
+/// (exact ground, wet bed or bank), `None` for a blend cell, an unauthored
+/// column and everything outside an authored region.
+fn exact_top_block(col: &ColumnSample) -> Option<i32> {
+    col.authored
+        .as_ref()
+        .and_then(|authored| authored.cell.exact_ground_block())
+}
+
+/// XINDELER: stop a tunnel's z-range under a column whose top block is fixed
+/// exactly (`exact_top`, see [`exact_top_block`]); a no-op for `None`.
+///
+/// `Range::end` is exclusive, so `end = top - SURFACE_MARGIN` leaves
+/// `SURFACE_MARGIN + 1` blocks of rock above the highest carved block
+/// (`top - SURFACE_MARGIN - 1`), where an authored void's inclusive
+/// `col_alt - SURFACE_MARGIN` ceiling leaves `SURFACE_MARGIN`. The one extra
+/// block is intentional: the procedural tunnel also dresses its roof (cover,
+/// stalactites) below `end`, so the margin is kept a little generous rather
+/// than re-tuned to the authored-void number. A range this empties
+/// (`end <= start`) is dropped by the caller.
+fn clamp_under_exact_top(mut z_range: Range<i32>, exact_top: Option<i32>) -> Range<i32> {
+    if let Some(top) = exact_top {
+        z_range.end = z_range.end.min(top - SURFACE_MARGIN as i32);
+    }
+    z_range
+}
+
+/// The single function every consumer reads a tunnel's per-column z-range
+/// through: `apply_caves_to` carves from it, and `tree.rs`/`shrub.rs` suppress
+/// planting from it (via [`tunnel_bounds_at`]).
+///
+/// XINDELER: that makes it the only correct home for the authored-void guard
+/// (`voids`) -- filtering in `apply_caves_to`'s column loop instead would leave
+/// vegetation suppressed over tunnels that were never carved. The guard is a
+/// *parameter* rather than something this function looks up, so the test-only
+/// [`tunnel_bounds_at_unguarded`] can measure the "before" side without adding
+/// a branch to the production path. See [`crate::layer::authored_voids`].
+///
+/// `voids` is this **chunk's** already-resolved bucket, not the whole index: a
+/// per-chunk caller resolves it once with [`chunk_voids_at`] and hands the same
+/// value to all 1 024 of its columns.
+fn tunnel_bounds_at_chunk<'a>(
     wpos2d: Vec2<i32>,
     info: &'a CanvasInfo,
-    _land: &'a Land,
+    land: &'a Land,
     tunnels: impl Iterator<Item = (u32, Tunnel)> + 'a,
+    voids: Option<ChunkVoids<'a>>,
 ) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
-    let wposf = wpos2d.map(|e| e as f64 + 0.5);
     info.col_or_gen(wpos2d)
         .map(move |col| {
-            let col_alt = col.alt;
-            let col_water_dist = col.water_dist;
-            tunnels.filter_map(move |(level, tunnel)| {
-                let (z_range, horizontal, vertical, dist) = tunnel.z_range_at(wposf, *info)?;
-                // Avoid cave entrances intersecting water
-                let z_range = Lerp::lerp_unclamped(
-                    z_range.end,
-                    z_range.start,
-                    1.0 - (1.0
-                        - ((col_water_dist.unwrap_or(1000.0) - 4.0).max(0.0) / 32.0)
-                            .clamped(0.0, 1.0))
-                        * (1.0 - ((col_alt - z_range.end as f32 - 4.0) / 8.0).clamped(0.0, 1.0)),
-                )..z_range.end;
-                if z_range.end - z_range.start > 0 {
-                    Some((level, z_range, horizontal, vertical, dist, tunnel))
-                } else {
-                    None
-                }
-            })
+            tunnel_bounds_at_col_guarded_by(
+                wpos2d,
+                info,
+                land,
+                col.alt,
+                col.water_dist,
+                exact_top_block(&col),
+                tunnels,
+                voids,
+            )
         })
         .into_iter()
         .flatten()
+}
+
+/// As [`tunnel_bounds_at_chunk`], for a caller that already holds
+/// this column's sample.
+///
+/// Generating a `ColumnSample` is the most expensive thing done per column in
+/// world-gen and `CanvasInfo::col_or_gen` does not cache, so a caller that
+/// needs both the sample and the tunnel bounds must not ask for the sample
+/// twice.
+///
+/// `voids` is this **chunk's** bucket, resolved by the caller (see
+/// [`chunk_voids_at`]), so the guard costs nothing per column beyond the
+/// geometry it actually has to test.
+///
+/// XINDELER: `exact_top` is the top block the authored raster fixes exactly
+/// for this column (see [`exact_top_block`]), `None` anywhere else. A
+/// tunnel may run *under* such a column but never break its surface: the
+/// range stops at least `SURFACE_MARGIN` blocks of rock below that top (see
+/// [`clamp_under_exact_top`]), as an authored void does, and a mouth that
+/// would open there is sealed rock. This is a clamp on top of the
+/// water-distance narrowing, never a widening, and it is inert wherever
+/// `exact_top` is `None`.
+fn tunnel_bounds_at_col_guarded_by<'a>(
+    wpos2d: Vec2<i32>,
+    info: &'a CanvasInfo,
+    _land: &'a Land,
+    col_alt: f32,
+    col_water_dist: Option<f32>,
+    exact_top: Option<i32>,
+    tunnels: impl Iterator<Item = (u32, Tunnel)> + 'a,
+    voids: Option<ChunkVoids<'a>>,
+) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
+    let wposf = wpos2d.map(|e| e as f64 + 0.5);
+    tunnels.filter_map(move |(level, tunnel)| {
+        let (z_range, horizontal, vertical, dist) = tunnel.z_range_at(wposf, *info)?;
+        // Avoid cave entrances intersecting water
+        let z_range = Lerp::lerp_unclamped(
+            z_range.end,
+            z_range.start,
+            1.0 - (1.0
+                - ((col_water_dist.unwrap_or(1000.0) - 4.0).max(0.0) / 32.0).clamped(0.0, 1.0))
+                * (1.0 - ((col_alt - z_range.end as f32 - 4.0) / 8.0).clamped(0.0, 1.0)),
+        )..z_range.end;
+        let z_range = clamp_under_exact_top(z_range, exact_top);
+        // An authored void claiming this column decides whether this tunnel
+        // exists here at all.
+        //
+        // `Seal`: drop the whole entry for this column rather than splitting
+        // the range. Splitting would leave a thin rock slab *inside* the
+        // protected volume; dropping leaves a clean solid plug where the
+        // tunnel meets the authored feature, which is the seal being asked
+        // for.
+        //
+        // `Connect` (and "no authored shape here") falls through completely
+        // untouched -- not a wider range, not a narrower one, not a second
+        // entry. That no-op looks unfinished and is not: the authored carve
+        // runs *after* this layer and unconditionally overwrites every block
+        // in its own footprint, so the join the player sees is produced by
+        // pass ordering alone. What survives inside the authored footprint is
+        // authored geometry; what survives outside it is ordinary dressed
+        // tunnel; and the opening between them is the tunnel's own
+        // cross-section, which tapers to zero at its lateral edge and so
+        // always reads as a lens-shaped mouth rather than a rectangular punch.
+        // Blending or join code here would be a second system with an opinion
+        // about the same voxels.
+        if voids.as_ref().is_some_and(|voids| {
+            voids.contact_at_column(wpos2d, col_alt, &z_range) == Some(ProceduralContact::Seal)
+        }) {
+            return None;
+        }
+        if z_range.end - z_range.start > 0 {
+            Some((level, z_range, horizontal, vertical, dist, tunnel))
+        } else {
+            None
+        }
+    })
+}
+
+fn tunnel_bounds_at_from<'a>(
+    wpos2d: Vec2<i32>,
+    info: &'a CanvasInfo,
+    land: &'a Land,
+    tunnels: impl Iterator<Item = (u32, Tunnel)> + 'a,
+) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
+    tunnel_bounds_at_chunk(
+        wpos2d,
+        info,
+        land,
+        tunnels,
+        chunk_voids_at(authored_voids(info), wpos2d),
+    )
+}
+
+/// [`tunnel_bounds_at`] as it would behave in a world with no authored region
+/// loaded at all -- the "before" side of the authored-void measurements.
+#[cfg(test)]
+pub(crate) fn tunnel_bounds_at_unguarded<'a>(
+    wpos2d: Vec2<i32>,
+    info: &'a CanvasInfo,
+    land: &'a Land,
+) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
+    tunnel_bounds_at_chunk(wpos2d, info, land, all_tunnels_at(wpos2d, info, land), None)
+}
+
+/// [`tunnel_bounds_at`] and [`tunnel_bounds_at_unguarded`] for one column, from
+/// a sample the caller already holds --- both sides of a before/after
+/// measurement without paying for the column twice.
+///
+/// Generating a `ColumnSample` is the most expensive thing done per column in
+/// world-gen and `CanvasInfo::col_or_gen` does not cache, so calling both
+/// public entry points on the same column costs two of them.
+/// [`tunnel_bounds_at_col_guarded_by`] already documents that rule for
+/// production callers; this is how a measurement obeys it.
+#[cfg(test)]
+pub(crate) fn tunnel_bounds_at_col_both<'a>(
+    wpos2d: Vec2<i32>,
+    info: &'a CanvasInfo,
+    land: &'a Land,
+    col: &ColumnSample,
+) -> (
+    impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a,
+    impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a,
+) {
+    let (alt, water_dist, exact_top) = (col.alt, col.water_dist, exact_top_block(col));
+    let make = move |voids| {
+        tunnel_bounds_at_col_guarded_by(
+            wpos2d,
+            info,
+            land,
+            alt,
+            water_dist,
+            exact_top,
+            all_tunnels_at(wpos2d, info, land),
+            voids,
+        )
+    };
+    (
+        make(None),
+        make(chunk_voids_at(authored_voids(info), wpos2d)),
+    )
 }
 
 pub fn tunnel_bounds_at<'a>(
@@ -431,6 +643,131 @@ pub fn tunnel_bounds_at<'a>(
     land: &'a Land,
 ) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
     tunnel_bounds_at_from(wpos2d, info, land, all_tunnels_at(wpos2d, info, land))
+}
+
+/// How far below the surface a traversal repair may reach, in blocks.
+///
+/// The tunnel carve itself stops at `col.alt`, but a *repair* is allowed to
+/// open air the carve did not, so it needs the same clamp every other void
+/// keeps: without one, lifting a ceiling over a rock near the surface could
+/// punch a hole through to daylight.
+const REPAIR_SURFACE_MARGIN: i32 = crate::layer::authored_voids::SURFACE_MARGIN as i32;
+
+/// The procedural tunnel layer, as a passage the traversal analysis can ask
+/// about --- the [`AccommodationTier::Procedural`] implementor of
+/// [`PassageQuery`].
+///
+/// Holds a tunnel list pre-filtered to one small neighbourhood, so a caller
+/// analysing a single intruder pays the lattice walk once rather than once
+/// per column.
+pub(crate) struct TunnelPassage<'a> {
+    info: CanvasInfo<'a>,
+    tunnels: Vec<(u32, Tunnel)>,
+}
+
+/// Every tunnel, at any level, whose spline passes within `radius` of
+/// `center`. `None` when nothing does, so a caller can skip the analysis
+/// entirely --- which is the common case by a wide margin.
+pub(crate) fn tunnel_passage_near<'a>(
+    center: Vec2<i32>,
+    radius: f64,
+    info: &CanvasInfo<'a>,
+    land: &Land,
+) -> Option<TunnelPassage<'a>> {
+    let centerf = center.map(|e| e as f64 + 0.5);
+    let tunnels: Vec<(u32, Tunnel)> = all_tunnels_at(center, info, land)
+        .filter(|(_, tunnel)| tunnel.possibly_near(centerf, radius).is_some())
+        .collect();
+    (!tunnels.is_empty()).then_some(TunnelPassage {
+        info: *info,
+        tunnels,
+    })
+}
+
+impl TunnelPassage<'_> {
+    /// The raw, column-independent z-range of every nearby tunnel at this
+    /// column --- the cheap pre-check that decides whether an intruder is
+    /// worth analysing at all. Unlike [`PassageQuery::column`] it samples no
+    /// column, so it costs a handful of noise lookups rather than a full
+    /// column generation.
+    ///
+    /// Intentionally conservative: it is the raw band, before the water
+    /// narrowing, the exact-ground clamp and the authored-void guard, so it is
+    /// a superset of what [`PassageQuery::column`] later keeps. It may send an
+    /// intruder to the full analysis for nothing, never skip one that matters.
+    pub(crate) fn coarse_bands(&self, wpos2d: Vec2<i32>, out: &mut Vec<(i32, i32)>) {
+        let wposf = wpos2d.map(|e| e as f64 + 0.5);
+        for (_, tunnel) in &self.tunnels {
+            if let Some((z_range, _, _, _)) = tunnel.z_range_at(wposf, self.info) {
+                out.push((z_range.start, z_range.end - 1));
+            }
+        }
+    }
+}
+
+impl PassageQuery for TunnelPassage<'_> {
+    /// Noise-derived geometry: `z_range_at`'s `horizontal` / `vertical` come
+    /// straight out of `cave_fbm_nz`, so a boulder-local widening of a few
+    /// blocks is inside this layer's own variance and nobody authored the
+    /// radius it changes.
+    fn tier(&self) -> AccommodationTier { AccommodationTier::Procedural }
+
+    fn column(&self, wpos2d: Vec2<i32>) -> Option<PassageColumn> {
+        let info = self.info;
+        let land = info.land();
+        let col = info.col_or_gen(wpos2d)?;
+        let col_alt = col.alt;
+        // The air a body can actually stand in, not the cleared range: the
+        // clear is only the first half of the pass, and `write_column`
+        // refills the range from both ends with bedrock, floor build-up and
+        // ceiling cover. Reading the raw range here would model a void
+        // several blocks taller than the one that ships -- and would let a
+        // repair channel sit below the tunnel's own floor and trench it.
+        //
+        // Guarded by the same authored-void index the carve reads, so a
+        // tunnel this column seals off is not one an intruder can be blamed
+        // for obstructing: it is not there.
+        let mut bands: Vec<(i32, i32)> = tunnel_bounds_at_col_guarded_by(
+            wpos2d,
+            &info,
+            &land,
+            col_alt,
+            col.water_dist,
+            exact_top_block(&col),
+            self.tunnels.iter().copied(),
+            chunk_voids_at(authored_voids(&info), wpos2d),
+        )
+        .filter_map(|(_, z_range, horizontal, vertical, dist, tunnel)| {
+            let fill = tunnel_column(
+                &info,
+                &col,
+                wpos2d,
+                &z_range,
+                &tunnel,
+                (horizontal, vertical, dist),
+            );
+            let end = fill.ceiling.min(col_alt as i32 + 1);
+            (end > fill.floor).then_some((fill.floor, end - 1))
+        })
+        .collect();
+        if bands.is_empty() {
+            return None;
+        }
+        bands.sort_unstable();
+        // Merge overlapping tunnels into one band each: two tunnels crossing
+        // the same column at the same depth are one void, not two.
+        let mut merged: Vec<(i32, i32)> = Vec::with_capacity(bands.len());
+        for (lo, hi) in bands {
+            match merged.last_mut() {
+                Some(last) if lo <= last.1 + 1 => last.1 = last.1.max(hi),
+                _ => merged.push((lo, hi)),
+            }
+        }
+        Some(PassageColumn {
+            bands: merged,
+            ceiling_limit: col_alt as i32 - REPAIR_SURFACE_MARGIN,
+        })
+    }
 }
 
 pub fn apply_caves_to(canvas: &mut Canvas, rng: &mut impl Rng) {
@@ -472,9 +809,15 @@ pub fn apply_caves_to(canvas: &mut Canvas, rng: &mut impl Rng) {
             .unwrap_or(0.0)
             .clamp(0.0, 1.0);
         let mut structure_cache = SmallCache::default();
+        // XINDELER: resolved once for the whole chunk, not once per column --
+        // the authored-void grid is chunk-granular and `foreach_col` never
+        // leaves this chunk. Kept to two lines on purpose: this is inside an
+        // upstream-owned function, and every line the fork adds here is a line
+        // the monthly `gitlab/master` merge has to resolve.
+        let voids = chunk_voids_at(authored_voids(&info), info.wpos());
         canvas.foreach_col(|canvas, wpos2d, col| {
             let tunnel_bounds =
-                tunnel_bounds_at_from(wpos2d, &info, &land, tunnels.iter().copied())
+                tunnel_bounds_at_chunk(wpos2d, &info, &land, tunnels.iter().copied(), voids)
                     .collect::<Vec<_>>();
 
             // First, clear out tunnels
@@ -573,43 +916,40 @@ struct Flower {
 }
 
 // #[inline_tweak::tweak_fn]
-fn write_column<R: Rng>(
-    canvas: &mut Canvas,
-    col: &ColumnSample,
-    level: u32,
-    wpos2d: Vec2<i32>,
-    z_range: Range<i32>,
-    z_ranges: &[Range<i32>],
-    tunnel: Tunnel,
-    dimensions: (f32, f32, f32),
-    giant_tree_dist: f32,
-    structure_cache: &mut SmallCache<Vec3<i32>, Option<CaveStructure>>,
-    structure_seeds: &[(Vec2<i32>, u32); 9],
-    rng: &mut R,
-) {
-    let info = canvas.info();
+/// Everything about a tunnel column that follows from its `z` range alone,
+/// independent of what is already written into the chunk.
+///
+/// Split out of [`write_column`] --- which destructures it --- so that the
+/// void a tunnel actually leaves can be asked for without writing anything.
+/// The cleared `z` range is *not* that void: the fill refills it from both
+/// ends, and the air a body can stand in is only `floor ..= ceiling - 1`.
+struct TunnelColumn {
+    biome: Biome,
+    ceiling_cover: f32,
+    is_ice: bool,
+    is_snow: bool,
+    /// Lowest `z` the fill writes at all.
+    bedrock: i32,
+    /// Top of the solid floor build-up, before its surface cover.
+    base: i32,
+    /// Lowest walkable `z`: the surface a body stands on.
+    floor: i32,
+    /// Lowest `z` of the solid ceiling build-up, so the open air at this
+    /// column is `floor ..= ceiling - 1`.
+    ceiling: i32,
+}
 
-    // Exposed to the sky, or some other void above
-    let void_above = !canvas.get(wpos2d.with_z(z_range.end)).is_filled();
-    let void_below = !canvas.get(wpos2d.with_z(z_range.start - 1)).is_filled();
-    // Exposed to the sky
-    let sky_above = z_range.end as f32 > col.alt;
+fn tunnel_column(
+    info: &CanvasInfo,
+    col: &ColumnSample,
+    wpos2d: Vec2<i32>,
+    z_range: &Range<i32>,
+    tunnel: &Tunnel,
+    dimensions: (f32, f32, f32),
+) -> TunnelColumn {
     let cavern_height = (z_range.end - z_range.start) as f32;
     let (cave_width, max_height, dist_cave_center) = dimensions;
-    let biome = tunnel.biome_at(wpos2d.with_z(z_range.start), &info);
-
-    // Get the range, if there is any, where the current cave overlaps with
-    // other caves. Right now this is only used to prevent ceiling cover
-    // from being place
-    let overlap = z_ranges.iter().find_map(|other_z_range| {
-        if *other_z_range == z_range {
-            return None;
-        }
-        let start = z_range.start.max(other_z_range.start);
-        let end = z_range.end.min(other_z_range.end);
-        let min = z_range.start.min(other_z_range.start);
-        if start < end { Some(min..end) } else { None }
-    });
+    let biome = tunnel.biome_at(wpos2d.with_z(z_range.start), info);
 
     let stalactite = {
         FastNoise2d::new(35)
@@ -654,19 +994,6 @@ fn write_column<R: Rng>(
                 },
             )
             .max(0.0)
-    } else {
-        0.0
-    };
-
-    let basalt = if biome.fire > 0.5 {
-        FastNoise2d::new(36)
-            .get(wpos2d.map(|e| e as f64 / 16.0))
-            .mul(1.25)
-            .sub(0.75)
-            .max(0.0)
-            .mul(((cave_width + max_height) / 64.0).clamped(0.0, 1.0))
-            .mul(6.0 + cavern_height * 0.5)
-            .mul((biome.fire - 0.5).powi(3) * 8.0)
     } else {
         0.0
     };
@@ -717,8 +1044,6 @@ fn write_column<R: Rng>(
         0.0
     };
 
-    let rand = RandomField::new(37 + level);
-
     let is_ice = biome.icy + col.marble * 0.2 > 0.5 && col.marble > 0.6;
     let is_snow = biome.snowy + col.marble_mid * 0.2 > 0.5 && col.marble_mid > 0.6;
 
@@ -745,6 +1070,82 @@ fn write_column<R: Rng>(
     let floor = base + dirt + bump as i32;
     let ceiling =
         z_range.end - (stalactite * has_stalactite as i32 as f32).max(ceiling_cover) as i32;
+
+    TunnelColumn {
+        biome,
+        ceiling_cover,
+        is_ice,
+        is_snow,
+        bedrock,
+        base,
+        floor,
+        ceiling,
+    }
+}
+
+fn write_column<R: Rng>(
+    canvas: &mut Canvas,
+    col: &ColumnSample,
+    level: u32,
+    wpos2d: Vec2<i32>,
+    z_range: Range<i32>,
+    z_ranges: &[Range<i32>],
+    tunnel: Tunnel,
+    dimensions: (f32, f32, f32),
+    giant_tree_dist: f32,
+    structure_cache: &mut SmallCache<Vec3<i32>, Option<CaveStructure>>,
+    structure_seeds: &[(Vec2<i32>, u32); 9],
+    rng: &mut R,
+) {
+    let info = canvas.info();
+
+    // Exposed to the sky, or some other void above
+    let void_above = !canvas.get(wpos2d.with_z(z_range.end)).is_filled();
+    let void_below = !canvas.get(wpos2d.with_z(z_range.start - 1)).is_filled();
+    // Exposed to the sky
+    let sky_above = z_range.end as f32 > col.alt;
+    let cavern_height = (z_range.end - z_range.start) as f32;
+    let (cave_width, max_height, _dist_cave_center) = dimensions;
+
+    // Get the range, if there is any, where the current cave overlaps with
+    // other caves. Right now this is only used to prevent ceiling cover
+    // from being place
+    let overlap = z_ranges.iter().find_map(|other_z_range| {
+        if *other_z_range == z_range {
+            return None;
+        }
+        let start = z_range.start.max(other_z_range.start);
+        let end = z_range.end.min(other_z_range.end);
+        let min = z_range.start.min(other_z_range.start);
+        if start < end { Some(min..end) } else { None }
+    });
+
+    let TunnelColumn {
+        biome,
+        ceiling_cover,
+        is_ice,
+        is_snow,
+        bedrock,
+        base,
+        floor,
+        ceiling,
+        ..
+    } = tunnel_column(&info, col, wpos2d, &z_range, &tunnel, dimensions);
+
+    let basalt = if biome.fire > 0.5 {
+        FastNoise2d::new(36)
+            .get(wpos2d.map(|e| e as f64 / 16.0))
+            .mul(1.25)
+            .sub(0.75)
+            .max(0.0)
+            .mul(((cave_width + max_height) / 64.0).clamped(0.0, 1.0))
+            .mul(6.0 + cavern_height * 0.5)
+            .mul((biome.fire - 0.5).powi(3) * 8.0)
+    } else {
+        0.0
+    };
+
+    let rand = RandomField::new(37 + level);
 
     let get_ceiling_drip = |wpos: Vec2<i32>, freq: f64, length: f32| {
         let wposf = wpos.map(|e| e as f32);
@@ -1939,4 +2340,526 @@ fn apply_entity_spawns<R: Rng>(canvas: &mut Canvas, wpos: Vec3<i32>, biome: &Bio
     if RandomField::new(canvas.info().index().seed).chance(wpos, 0.000005) {
         canvas.spawn(EntityInfo::at(wpos.map(|e| e as f32)).into_waypoint());
     } */
+}
+
+/// Measurement harnesses for the authored-void guard: they walk the lattice
+/// the way a player would and report what the guard did to it.
+///
+/// Kept in one block at the end of the file, rather than beside the functions
+/// they exercise, because this module is inherited from upstream Veloren and
+/// is edited there: a few hundred lines wedged into the middle of it turns
+/// every future upstream merge into a conflict, where a tail append does not.
+#[cfg(test)]
+pub(crate) mod measure {
+    use super::*;
+    use crate::layer::authored_voids::AuthoredVoids;
+
+    /// What the authored-void guard does to **one** tunnel, walked end to end.
+    ///
+    /// Reported per tunnel rather than aggregated because the failures this
+    /// exists to find are per tunnel: a map marker whose corridor stops at
+    /// a wall (V13), and a lattice edge that cannot be used to get anywhere
+    /// (V17).
+    #[derive(Debug)]
+    pub(crate) struct TunnelWalk {
+        /// Columns along the tunnel's own centreline that carry a tunnel at all
+        /// with the guard off. Not simply the axis length: the centreline runs
+        /// past the ends of the carved volume, and the water lerp can empty the
+        /// range near the surface.
+        pub(crate) open_columns: u32,
+        /// ...of those, how many the guard drops entirely. Each one is a solid
+        /// plug straight across the corridor, because the clip's unit is a
+        /// whole `(column, tunnel)` entry. **This is the number V13 is
+        /// about, and its target is zero.**
+        ///
+        /// Includes [`Self::exact_sealed_columns`]: a column the exact-ground
+        /// clamp empties is a plug across the corridor all the same.
+        pub(crate) sealed_columns: u32,
+        /// ...of the sealed columns, how many are plugged not by an authored
+        /// void but by the exact-ground clamp (the tunnel would run here, but
+        /// would break the surface of drawn ground). A mouth marked under a
+        /// drawn patch shows up here rather than being skipped.
+        pub(crate) exact_sealed_columns: u32,
+        /// ...and how many an authored void claims with
+        /// [`ProceduralContact::Connect`]: the tunnel runs into an authored cave
+        /// and is deliberately left to open into it.
+        pub(crate) connect_columns: u32,
+        /// Columns lying in a chunk that holds *any* authored shape at all,
+        /// whatever its policy and whatever z-band it claims.
+        ///
+        /// This is V13's **positive control** and it is the reason that
+        /// measurement's zero is worth anything. `sealed_columns == 0` is only
+        /// evidence that the guard spares the descents if the descents were
+        /// somewhere the guard could have fired; a run where every descent
+        /// sailed past the authored region entirely would report
+        /// exactly the same zero and mean nothing.
+        pub(crate) near_authored_columns: u32,
+        /// How far along the tunnel, in blocks from its upper node, the first
+        /// plug sits: for a descent, how far a player gets before the
+        /// wall.
+        pub(crate) first_seal_at: Option<i32>,
+    }
+
+    impl TunnelWalk {
+        /// Whether this tunnel survives the guard along its whole length ---
+        /// i.e. whether it can still be used to get from one of its
+        /// nodes to the other.
+        pub(crate) fn is_open(&self) -> bool { self.sealed_columns == 0 }
+    }
+
+    /// Walk one tunnel's centreline column by column and report what the guard
+    /// does to it. Test-only; this is the harness behind V13 and V17.
+    ///
+    /// The walk follows the **spline**, not the chord. A descent's `curve` is
+    /// exactly `0.0` (see [`tunnel_below_from_cell`]) so for those the two
+    /// coincide, but a lateral edge bows well off its chord, and hard-coding
+    /// the chord would make the measurement quietly wrong --- the same trap
+    /// [`crate::layer::authored_voids`] calls out for capsules.
+    pub(crate) fn walk_tunnel(
+        tunnel: &Tunnel,
+        level: u32,
+        info: &CanvasInfo,
+        land: &Land,
+        voids: Option<&AuthoredVoids>,
+    ) -> TunnelWalk {
+        let start = tunnel.a.wpos.map(|e| e as f64 + 0.5);
+        let end = tunnel.b.wpos.map(|e| e as f64 + 0.5);
+        let spline = river_spline_coeffs(start, tunnel.ctrl_offset(), end);
+        // 1.5 samples per block of chord: enough that consecutive samples are
+        // never more than a block apart even where the spline bows, so a plug
+        // cannot hide between two of them.
+        let steps = (start.distance(end) * 1.5).ceil().max(1.0) as i32;
+
+        let mut verdict = TunnelWalk {
+            open_columns: 0,
+            sealed_columns: 0,
+            connect_columns: 0,
+            exact_sealed_columns: 0,
+            near_authored_columns: 0,
+            first_seal_at: None,
+        };
+        let mut travelled = 0.0_f64;
+        let mut previous = start;
+        let mut last_sampled = None;
+
+        for step in 0..=steps {
+            let t = f64::from(step) / f64::from(steps);
+            let point = spline.x * t * t + spline.y * t + spline.z;
+            travelled += point.distance(previous);
+            previous = point;
+            let wpos2d = point.map(|e| e.round() as i32);
+            // Consecutive samples land in the same column more often than not
+            // at this density; sampling a column twice would
+            // double-count it.
+            if last_sampled == Some(wpos2d) {
+                continue;
+            }
+            last_sampled = Some(wpos2d);
+
+            let Some(col) = info.col_or_gen(wpos2d) else {
+                continue;
+            };
+            // The chunk bucket, resolved here because the walk moves between
+            // chunks column by column and so cannot hoist it any further.
+            let chunk_voids = chunk_voids_at(voids, wpos2d);
+            let exact_top = exact_top_block(&col);
+            let bounds_with = |exact_top, voids| {
+                tunnel_bounds_at_col_guarded_by(
+                    wpos2d,
+                    info,
+                    land,
+                    col.alt,
+                    col.water_dist,
+                    exact_top,
+                    std::iter::once((level, *tunnel)),
+                    voids,
+                )
+                .next()
+            };
+            let bounds = |voids| bounds_with(exact_top, voids);
+            let Some((_, z_range, ..)) = bounds(None) else {
+                // The tunnel is absent here either because it never reached
+                // this column, or because the exact-ground clamp emptied its
+                // range. The second is a deliberate plug across the corridor,
+                // so it is counted -- not skipped, which would blind every
+                // mouth check to a mouth under a drawn patch.
+                if exact_top.is_some() && bounds_with(None, None).is_some() {
+                    verdict.open_columns += 1;
+                    verdict.sealed_columns += 1;
+                    verdict.exact_sealed_columns += 1;
+                    verdict
+                        .first_seal_at
+                        .get_or_insert_with(|| travelled.round() as i32);
+                }
+                continue;
+            };
+            verdict.open_columns += 1;
+            if voids.is_some_and(|voids| !voids.in_chunk(wpos2d).is_empty()) {
+                verdict.near_authored_columns += 1;
+            }
+            let contact =
+                voids.and_then(|voids| voids.contact_at_column(wpos2d, col.alt, &z_range));
+            // The plug count is read off the production guard, not re-derived
+            // from the contact: a column the guard drops is a
+            // column the corridor loses, whatever the reason. The
+            // two can only differ if the guard grows a
+            // second reason to drop an entry, and then this is the assertion
+            // that says so rather than the count quietly drifting.
+            let plugged = bounds(chunk_voids).is_none();
+            // A plain `assert_eq!`, not `debug_assert_eq!`: every caller
+            // documents itself as `cargo test --release`, and the
+            // workspace release profile sets `debug-assertions =
+            // false` -- so a debug assertion here would be compiled
+            // out of precisely the run it is meant to guard, and the
+            // counts really would drift quietly. One comparison per column is
+            // nothing next to the `col_or_gen` above it.
+            assert_eq!(
+                plugged,
+                contact == Some(ProceduralContact::Seal),
+                "the tunnel walk and the production guard disagree at {wpos2d:?}"
+            );
+            if plugged {
+                verdict.sealed_columns += 1;
+                verdict
+                    .first_seal_at
+                    .get_or_insert_with(|| travelled.round() as i32);
+            } else if contact == Some(ProceduralContact::Connect) {
+                verdict.connect_columns += 1;
+            }
+        }
+        verdict
+    }
+
+    /// A node of the cave lattice, as a key: the level it sits on and the cell
+    /// it was drawn in. Test-only, for V17's reachability walk.
+    type LatticeNode = (u32, Vec2<i32>);
+
+    /// Which level a node was drawn on, recovered from its depth.
+    ///
+    /// `node_at` sets `depth = AVG_LEVEL_DEPTH * level - 6` and nothing else in
+    /// the lattice writes a depth, so this inverts exactly. Recovered rather
+    /// than passed around because a [`Tunnel`]'s two nodes are not always
+    /// on the same level --- a descent joins one level to the next --- so a
+    /// single `level` argument cannot describe both ends.
+    fn node_level(node: &Node) -> u32 { ((node.depth + 6) / AVG_LEVEL_DEPTH).max(0) as u32 }
+
+    /// The lattice key of one end of a tunnel.
+    fn lattice_node(node: &Node) -> LatticeNode {
+        let level = node_level(node);
+        (level, to_cell(node.wpos, level))
+    }
+
+    /// Whether a procedural tunnel's own network still reaches a marked surface
+    /// mouth once the authored-void guard has plugged what it plugs ---
+    /// **V17**.
+    ///
+    /// # What this is and is not
+    ///
+    /// It is a *characterisation*. Spec §5.2.3 derives from the lattice's own
+    /// parameters that the mean degree is ≈ 1.35, below percolation, so the
+    /// procedural cave network would be small clusters rather than one
+    /// connected system, and roughly one breach in four would land on a
+    /// cluster with no way out. That estimate counts only the **lateral**
+    /// edges [`tunnels_at`] produces. It is not the whole lattice:
+    /// [`tunnels_down_from`] also joins every level to the next *at the
+    /// same cell index* (the arithmetic in [`tunnel_below_from_cell`] lands
+    /// a descent back on the cell it left), so each node also has an
+    /// up-edge and a down-edge whenever the nodes at those levels exist ---
+    /// roughly `2 x 0.75` more degree, which takes the real lattice over
+    /// the percolation threshold rather than under it. This measures
+    /// what that works out to.
+    ///
+    /// **A dead end is not a bug.** An authored cave reached by a tunnel that
+    /// goes nowhere else is still carved, still has its own authored
+    /// entrance, and is still minable --- exactly what it was before this
+    /// row existed. Nothing in the engine reads this; it exists so the
+    /// number in the PR body is measured rather than assumed, and so nobody
+    /// builds avoidance logic for a non-problem.
+    ///
+    /// # The walk
+    ///
+    /// Breadth-first over the lattice from the breached tunnel's two nodes,
+    /// crossing an edge only if [`walk_tunnel`] says the guard leaves it open
+    /// along its whole length --- so a cluster whose only way out is plugged
+    /// correctly reports unreachable. A level-1 node reaches daylight when its
+    /// own cell has a surface descent that is both *marked* (the water test
+    /// [`surface_descents`] applies) and unplugged.
+    ///
+    /// Returns the verdict and **how many lattice nodes the walk had to visit**
+    /// to reach it. That second number is the measurement's evidence: a
+    /// verdict of "reachable" is only worth something if the walk was doing
+    /// real work, and a walk that answered from the starting node every
+    /// time would be reporting the starting node's cell rather than the
+    /// network.
+    pub(crate) fn breach_reaches_surface(
+        from: &Tunnel,
+        level: u32,
+        info: &CanvasInfo,
+        land: &Land,
+        voids: Option<&AuthoredVoids>,
+        open_edges: &mut OpenEdgeCache,
+    ) -> (bool, usize) {
+        let index = info.index();
+        // A guarded edge the walk cannot cross is not a way out of anywhere.
+        if !edge_is_open(from, level, info, land, voids, open_edges) {
+            return (false, 0);
+        }
+
+        let mut seen: hashbrown::HashSet<LatticeNode> = hashbrown::HashSet::new();
+        let mut queue: std::collections::VecDeque<LatticeNode> =
+            [lattice_node(&from.a), lattice_node(&from.b)].into();
+        // A cap, so a characterisation over a lattice that turns out to
+        // percolate cannot become a hang. Reaching it reports `false`,
+        // which understates reachability rather than overstating it --
+        // the safe direction for a number whose only use is deciding
+        // there is nothing to fix.
+        //
+        // It binds: the lattice is ~21x21 cells over 5 levels. That is exactly
+        // why the traversal below must be breadth-first -- a
+        // depth-first walk spends the budget wandering to the far side
+        // of the map before it tries the level-1 node two hops away, so
+        // the cap would start deciding the answer.
+        const MAX_NODES: usize = 512;
+
+        while let Some(node) = queue.pop_front() {
+            if !seen.insert(node) {
+                continue;
+            }
+            if seen.len() > MAX_NODES {
+                break;
+            }
+            let (level_here, cell) = node;
+            let Some(here) = node_at(cell, level_here, land) else {
+                continue;
+            };
+            // `lattice_node` recovers a node's level by inverting `node_at`'s
+            // `depth = AVG_LEVEL_DEPTH * level - 6`. Checked here, against a
+            // real node, rather than asserted in a doc comment: if
+            // that formula ever changes, the whole walk would
+            // otherwise keep running and silently classify every
+            // node onto the wrong level.
+            assert_eq!(
+                node_level(&here),
+                level_here,
+                "a node's depth no longer encodes the level it was drawn on"
+            );
+
+            // Daylight: this node's own cell has a marked, unplugged descent
+            // from the surface. Only cells one level below the
+            // surface have one.
+            if level_here == 1
+                && let Some(descent) = tunnel_below_from_cell(cell, 0, land)
+                && land
+                    .column_sample(descent.a.wpos, index)
+                    .is_some_and(|c| c.water_dist.is_none_or(|d| d > 5.0))
+                && edge_is_open(&descent, 1, info, land, voids, open_edges)
+            {
+                return (true, seen.len());
+            }
+
+            // Every edge below is one `all_tunnels_at` actually carves, and
+            // only those. An edge this walk can cross that the
+            // world never digs would let a breach "reach" daylight
+            // by a route no player can take, and would bias the
+            // reported fraction *upwards* -- the opposite direction
+            // from `MAX_NODES`, so the two would not even cancel into a known
+            // sign.
+            //
+            // Lateral edges. `all_tunnels_at` asks `tunnels_at` for levels
+            // `1..=LAYERS` only, so **level 0 has no laterals**: the surface
+            // nodes are joined to the world by their descents
+            // alone. `tunnels_at(_, 0, _)` would happily invent
+            // some, and level-0 nodes are dense (`node_at`
+            // skips the chance roll at level 0), so this gate is load-bearing
+            // rather than tidy.
+            //
+            // For the levels that do have them, `tunnels_at` enumerates every
+            // edge whose upper node lies in the 3x3 cell
+            // neighbourhood -- a superset of this node's own
+            // incident edges in both directions; filtering on the
+            // node position is what narrows it back down.
+            let lateral = (level_here >= 1)
+                .then(|| {
+                    tunnels_at(here.wpos, level_here, land)
+                        .filter(move |edge| edge.a.wpos == here.wpos || edge.b.wpos == here.wpos)
+                        .map(move |edge| {
+                            let other = if edge.a.wpos == here.wpos {
+                                edge.b.wpos
+                            } else {
+                                edge.a.wpos
+                            };
+                            (edge, level_here, (level_here, to_cell(other, level_here)))
+                        })
+                })
+                .into_iter()
+                .flatten();
+            // Descents: the one leaving this node downwards, and the one
+            // arriving from the level above.
+            //
+            // Both are single edges, because a descent always lands back on the
+            // cell index it left: `tunnel_below_from_cell` offsets by half a
+            // cell and `to_cell` shifts by a quarter on odd levels,
+            // which together stay inside the same cell whichever
+            // parity the level has. So the node above `(L, cell)`
+            // is exactly `(L - 1, cell)` -- no neighbourhood
+            // search, and the same arithmetic this function's own doc
+            // describes.
+            //
+            // `all_tunnels_at` carves descents for source levels `0..LAYERS`
+            // only, so the bottom level has no down-edge.
+            let down = (level_here < LAYERS)
+                .then(|| tunnel_below_from_cell(cell, level_here, land))
+                .flatten()
+                .map(|edge| {
+                    (
+                        edge,
+                        level_here + 1,
+                        (level_here + 1, to_cell(edge.b.wpos, level_here + 1)),
+                    )
+                });
+            let up = (level_here > 0)
+                .then(|| tunnel_below_from_cell(cell, level_here - 1, land))
+                .flatten()
+                .map(|edge| {
+                    assert_eq!(
+                        to_cell(edge.b.wpos, level_here),
+                        cell,
+                        "a descent no longer lands on the cell index it left"
+                    );
+                    (edge, level_here, (level_here - 1, cell))
+                });
+
+            for (edge, edge_level, other) in lateral.chain(down).chain(up) {
+                if !seen.contains(&other)
+                    && edge_is_open(&edge, edge_level, info, land, voids, open_edges)
+                {
+                    queue.push_back(other);
+                }
+            }
+        }
+        (false, seen.len())
+    }
+
+    /// Memo of which lattice edges the guard leaves open, shared across every
+    /// [`breach_reaches_surface`] call of one measurement.
+    ///
+    /// Keyed on the edge's two node positions in sorted order, so the same edge
+    /// reached from either end is one entry.
+    ///
+    /// The key deliberately drops the level. It can, because `level` is inert
+    /// in [`walk_tunnel`]: it is carried through as the tuple tag and nothing
+    /// else, and the z-range comes from [`Tunnel::z_range_at`], which never
+    /// sees it. If [`tunnel_bounds_at_col_guarded_by`] ever starts reading
+    /// `level`, this key has to grow one.
+    pub(crate) type OpenEdgeCache = hashbrown::HashMap<(Vec2<i32>, Vec2<i32>), bool>;
+
+    /// [`walk_tunnel`]`(..).is_open()`, memoised.
+    ///
+    /// Not an optimisation so much as what makes the measurement affordable at
+    /// all. Walking one edge costs a `ColumnSample` per column over its whole
+    /// ~1 500-block length, and `CanvasInfo::col_or_gen` does not cache, so an
+    /// edge walk is on the order of a thousand full column generations. Without
+    /// this, every breach in a cluster re-walks that cluster's entire edge set
+    /// from scratch: the cost is `O(breaches x cluster size)` over a lattice
+    /// that only holds a few thousand distinct edges, and it grows with the
+    /// breach count rather than with the map.
+    fn edge_is_open(
+        edge: &Tunnel,
+        level: u32,
+        info: &CanvasInfo,
+        land: &Land,
+        voids: Option<&AuthoredVoids>,
+        cache: &mut OpenEdgeCache,
+    ) -> bool {
+        let (a, b) = (edge.a.wpos, edge.b.wpos);
+        let key = if (a.x, a.y) <= (b.x, b.y) {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        if let Some(&open) = cache.get(&key) {
+            return open;
+        }
+        let open = walk_tunnel(edge, level, info, land, voids).is_open();
+        cache.insert(key, open);
+        open
+    }
+}
+
+/// The exact-ground clamp, asserted directly rather than through a world, so
+/// a wet bed or a bank is covered without the water narrowing (which acts
+/// within 36 m of water and can hide the clamp) standing in for it.
+#[cfg(test)]
+mod exact_clamp_tests {
+    use super::*;
+    use crate::authored_raster::AuthoredCell;
+
+    const MARGIN: i32 = SURFACE_MARGIN as i32;
+
+    #[test]
+    fn no_exact_top_leaves_the_range_alone() {
+        assert_eq!(clamp_under_exact_top(10..120, None), 10..120);
+    }
+
+    #[test]
+    fn a_range_above_the_ceiling_is_cut_down_to_it() {
+        assert_eq!(clamp_under_exact_top(10..120, Some(100)), 10..100 - MARGIN);
+    }
+
+    #[test]
+    fn a_range_already_deep_enough_is_untouched() {
+        assert_eq!(clamp_under_exact_top(10..50, Some(100)), 10..50);
+    }
+
+    #[test]
+    fn a_near_surface_range_is_emptied_and_so_dropped() {
+        let clamped = clamp_under_exact_top(97..102, Some(100));
+        assert!(clamped.end - clamped.start <= 0, "{clamped:?}");
+    }
+
+    #[test]
+    fn the_clamp_keeps_one_block_more_cover_than_an_authored_void() {
+        // Inclusive authored ceiling: `col_alt - SURFACE_MARGIN` -> cover of
+        // SURFACE_MARGIN blocks. Exclusive end here -> one more.
+        let top = 100;
+        let last_carved = clamp_under_exact_top(0..500, Some(top)).end - 1;
+        assert_eq!(top - last_carved, MARGIN + 1);
+    }
+
+    #[test]
+    fn wet_beds_banks_and_exact_ground_all_clamp_and_blend_cells_do_not() {
+        let cells = [
+            (
+                AuthoredCell::Wet {
+                    surface_block: 120,
+                    bed_block: 100,
+                },
+                true,
+            ),
+            (AuthoredCell::Bank { bed_block: 100 }, true),
+            (
+                AuthoredCell::Ground {
+                    block: 100,
+                    weight: crate::authored_raster::format::GROUND_EXACT,
+                },
+                true,
+            ),
+            (
+                AuthoredCell::Ground {
+                    block: 100,
+                    weight: 1,
+                },
+                false,
+            ),
+            (AuthoredCell::None, false),
+        ];
+        for (cell, clamps) in cells {
+            let range = clamp_under_exact_top(10..120, cell.exact_ground_block());
+            assert_eq!(range.end < 120, clamps, "{cell:?} -> {range:?}");
+            if clamps {
+                // A wet cell is clamped under its *bed*, not its water surface.
+                assert_eq!(range.end, 100 - MARGIN, "{cell:?}");
+            }
+        }
+    }
 }

@@ -1,4 +1,9 @@
-use crate::{CONFIG, IndexRef, column::ColumnSample, sim::SimChunk, util::close};
+use crate::{
+    CONFIG, IndexRef,
+    column::ColumnSample,
+    sim::{AquaticEcologyProfileId, CROMATOLIS_V0_REGION_ID, SimChunk, WaterBodyKind},
+    util::close,
+};
 use common::{
     assets::{AssetExt, Ron},
     calendar::{Calendar, CalendarEvent},
@@ -370,8 +375,8 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
             },
         ),
         // Ocean animals
-        ("world.wildlife.spawn.temperate.ocean", |_c, col| {
-            close(col.temp, CONFIG.temperate_temp, 1.0) / 10.0
+        ("world.wildlife.spawn.temperate.ocean", |c, col| {
+            not_cromatolis(c) * close(col.temp, CONFIG.temperate_temp, 1.0) / 10.0
                 * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
                     && matches!(col.chunk.get_biome(), BiomeKind::Ocean)
                 {
@@ -438,7 +443,8 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
         // **Tropical**
         // River animals
         ("world.wildlife.spawn.tropical.river", |c, col| {
-            close(col.temp, CONFIG.tropical_temp, 0.5)
+            not_cromatolis(c)
+                * close(col.temp, CONFIG.tropical_temp, 0.5)
                 * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
                     && !matches!(col.chunk.get_biome(), BiomeKind::Ocean)
                     && c.alt > CONFIG.sea_level + 20.0
@@ -449,8 +455,8 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
                 }
         }),
         // Ocean animals
-        ("world.wildlife.spawn.tropical.ocean", |_c, col| {
-            close(col.temp, CONFIG.tropical_temp, 0.1) / 10.0
+        ("world.wildlife.spawn.tropical.ocean", |c, col| {
+            not_cromatolis(c) * close(col.temp, CONFIG.tropical_temp, 0.1) / 10.0
                 * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
                     && matches!(col.chunk.get_biome(), BiomeKind::Ocean)
                 {
@@ -472,14 +478,73 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
                 }
         }),
         // Arctic ocean animals
-        ("world.wildlife.spawn.arctic.ocean", |_c, col| {
-            close(col.temp, CONFIG.snow_temp, 0.25) / 10.0
+        ("world.wildlife.spawn.arctic.ocean", |c, col| {
+            not_cromatolis(c) * close(col.temp, CONFIG.snow_temp, 0.25) / 10.0
                 * if matches!(col.chunk.get_biome(), BiomeKind::Ocean) {
                     0.001
                 } else {
                     0.0
                 }
         }),
+        // Cromatolis aquatic animals -- one manifest entry per fauna/flora
+        // profile in `cromatolis_v0_aquatic_ecology.ron`, replacing the
+        // `cromatolis.ocean`/`.lake` stopgap this row used before a real
+        // per-water-body ecology profile existed. Each entry is a bare `fn`
+        // pointer (no captured state, same constraint every entry in this
+        // manifest is under) that defers all the real selection work --
+        // water kind, salinity, depth and temperature -- to
+        // `SimChunk::aquatic_ecology_profile`, already resolved once per
+        // chunk at world-generation time. See
+        // `cromatolis_aquatic_profile_density`'s doc comment for why the
+        // profile match happens there rather than here.
+        (
+            "world.wildlife.spawn.cromatolis.aquatic.caribbean_reef_shelf",
+            |c, col| {
+                cromatolis_aquatic_profile_density(
+                    c,
+                    col,
+                    AquaticEcologyProfileId::CaribbeanReefShelf,
+                )
+            },
+        ),
+        (
+            "world.wildlife.spawn.cromatolis.aquatic.temperate_kelp_shelf",
+            |c, col| {
+                cromatolis_aquatic_profile_density(
+                    c,
+                    col,
+                    AquaticEcologyProfileId::TemperateKelpShelf,
+                )
+            },
+        ),
+        (
+            "world.wildlife.spawn.cromatolis.aquatic.abyssal_plain",
+            |c, col| {
+                cromatolis_aquatic_profile_density(c, col, AquaticEcologyProfileId::AbyssalPlain)
+            },
+        ),
+        (
+            "world.wildlife.spawn.cromatolis.aquatic.swamp_shallows",
+            |c, col| {
+                cromatolis_aquatic_profile_density(c, col, AquaticEcologyProfileId::SwampShallows)
+            },
+        ),
+        (
+            "world.wildlife.spawn.cromatolis.aquatic.estuary",
+            |c, col| cromatolis_aquatic_profile_density(c, col, AquaticEcologyProfileId::Estuary),
+        ),
+        (
+            "world.wildlife.spawn.cromatolis.aquatic.standing_lake",
+            |c, col| {
+                cromatolis_aquatic_profile_density(c, col, AquaticEcologyProfileId::StandingLake)
+            },
+        ),
+        (
+            "world.wildlife.spawn.cromatolis.aquatic.mountain_river",
+            |c, col| {
+                cromatolis_aquatic_profile_density(c, col, AquaticEcologyProfileId::MountainRiver)
+            },
+        ),
         // Rainforest area animals
         ("world.wildlife.spawn.tropical.rainforest", |c, _col| {
             close(c.temp, CONFIG.tropical_temp + 0.1, 0.4)
@@ -510,24 +575,37 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
         ("world.wildlife.spawn.tropical.rock", |c, col| {
             close(c.temp, CONFIG.tropical_temp + 0.1, 0.5) * col.rock_density * BASE_DENSITY * 5.0
         }),
-        // **Desert**
+        // **Desert** -- gated off in Cromatolis (see `not_cromatolis`'s doc
+        // comment): its authored baseline temperature curve
+        // (`cromatolis_baseline_temp`) needs some real coastal chunks to
+        // reach the hot end of the abstract scale (several dungeon-site
+        // predicates require it), which would otherwise satisfy these
+        // temp-only/loosely-humidity-gated density formulas across the
+        // large majority of the map -- verified directly against real
+        // generated Cromatolis terrain: `close(chunk.temp, CONFIG.desert_temp
+        // + 0.2, 0.3)` alone (the ungated `desert.hot` formula below) is
+        // nonzero for ~86% of all chunks. Same scoping pattern as
+        // `SimChunk::get_biome`'s `Snowland`/`Desert` checks.
         // Area animals
         ("world.wildlife.spawn.desert.area", |c, _col| {
-            close(c.temp, CONFIG.desert_temp + 0.1, 0.4)
+            not_cromatolis(c)
+                * close(c.temp, CONFIG.desert_temp + 0.1, 0.4)
                 * close(c.humidity, CONFIG.desert_hum, 0.4)
                 * BASE_DENSITY
                 * 0.8
         }),
         // Wasteland animals
         ("world.wildlife.spawn.desert.wasteland", |c, _col| {
-            close(c.temp, CONFIG.desert_temp + 0.2, 0.3)
+            not_cromatolis(c)
+                * close(c.temp, CONFIG.desert_temp + 0.2, 0.3)
                 * close(c.humidity, CONFIG.desert_hum, 0.5)
                 * BASE_DENSITY
                 * 1.3
         }),
         // River animals
         ("world.wildlife.spawn.desert.river", |c, col| {
-            close(col.temp, CONFIG.desert_temp + 0.2, 0.3)
+            not_cromatolis(c)
+                * close(col.temp, CONFIG.desert_temp + 0.2, 0.3)
                 * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
                     && !matches!(col.chunk.get_biome(), BiomeKind::Ocean)
                     && c.alt > CONFIG.sea_level + 20.0
@@ -539,13 +617,178 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
         }),
         // Hot area desert
         ("world.wildlife.spawn.desert.hot", |c, _col| {
-            close(c.temp, CONFIG.desert_temp + 0.2, 0.3) * BASE_DENSITY * 3.8
+            not_cromatolis(c) * close(c.temp, CONFIG.desert_temp + 0.2, 0.3) * BASE_DENSITY * 3.8
         }),
         // Rock animals
         ("world.wildlife.spawn.desert.rock", |c, col| {
-            close(c.temp, CONFIG.desert_temp + 0.2, 0.05) * col.rock_density * BASE_DENSITY * 4.0
+            not_cromatolis(c)
+                * close(c.temp, CONFIG.desert_temp + 0.2, 0.05)
+                * col.rock_density
+                * BASE_DENSITY
+                * 4.0
         }),
     ]
+}
+
+/// `1.0` outside the authored Cromatolis region, `0.0` inside it. Used to
+/// gate density/feature formulas that key off `chunk.temp`/`chunk.humidity`
+/// crossing `CONFIG`'s desert thresholds, so that literal desert wildlife
+/// never appears on lore-authored tropical/Caribbean ground. Same scoping
+/// pattern as `SimChunk::get_biome`'s `Snowland`/`Desert` checks, extracted
+/// here since several density formulas need it.
+///
+/// What it protects against changed with the per-zone climate, but it is
+/// still load-bearing. It used to hold back the whole coastline: one flat hot
+/// sea-level baseline put ~86% of the grid inside the ungated
+/// `world.wildlife.spawn.desert.hot` window. No *climatic* zone reaches
+/// `CONFIG.desert_temp` any more (the warmest anchor lands at abstract 0.533),
+/// but an authored microclimate pocket does, by design -- so without this gate
+/// the magically-warmed ground around a dungeon would spawn desert fauna.
+pub(crate) fn not_cromatolis(c: &SimChunk) -> f32 {
+    f32::from(c.authored_region_id != Some(CROMATOLIS_V0_REGION_ID))
+}
+
+/// Density for one Cromatolis aquatic-ecology manifest entry: nonzero only
+/// for a column whose chunk resolved exactly `id` in
+/// `SimChunk::aquatic_ecology_profile`.
+///
+/// The real selection work -- water kind, salinity, depth and temperature --
+/// already happened once per chunk at world-generation time (see
+/// `AuthoredAquaticEcology`/`ResolvedAquaticEcology` in `crate::sim`), so
+/// this only has to compare the resolved answer against which profile *this*
+/// manifest entry is. `0.0` outside the authored Cromatolis region, off the
+/// requested profile, or away from actual water -- the same `water_dist`
+/// near-water gate every other aquatic manifest entry in this file uses.
+///
+/// The magnitude is read from the matching profile's own authored `density`
+/// field (`crate::sim::aquatic_ecology_profile_density`) rather than a Rust
+/// constant, so a rich reef and a sparse abyssal plain need not share one
+/// number -- see that field's doc comment for how its current values were
+/// chosen (they preserve the ocean/lake asymmetry the stopgap this schema
+/// replaced used: its ocean entry divided density by 10, its lake entry did
+/// not).
+fn cromatolis_aquatic_profile_density(
+    c: &SimChunk,
+    col: &ColumnSample,
+    id: AquaticEcologyProfileId,
+) -> f32 {
+    f32::from(c.authored_region_id == Some(CROMATOLIS_V0_REGION_ID))
+        // XINDELER: authored water whose chunk carries no profile (the
+        // exporter leaves the masks untouched in authored regions) uses its
+        // region's profile.
+        * f32::from(
+            col.authored
+                .and_then(|a| a.wet_aquatic_profile())
+                .or(c.aquatic_ecology_profile)
+                == Some(id),
+        )
+        * if col.water_dist.map(|d| d < 1.0).unwrap_or(false) {
+            crate::sim::aquatic_ecology_profile_density(id)
+        } else {
+            0.0
+        }
+}
+
+/// Chunk-level predicate for "freshwater" (river, lake or lagoon -- anything
+/// wet that is not sea/ocean). Also used by the aquatic-ecology coverage
+/// regressions in `crate::sim`'s test module to define the freshwater half
+/// of the wet-chunk partition.
+///
+/// Deliberately reads `SimChunk::water_body` rather than `river.is_lake()`:
+/// once `RiverKind::River` became reachable on this map, `is_lake()` alone
+/// stopped covering the whole freshwater network (a carveable river chunk is
+/// `RiverKind::River`, not `RiverKind::Lake`), and asking the ecological
+/// classification directly survives the next change to how wide corridors
+/// are carved, which the physical `RiverKind` would not.
+///
+/// No production caller today -- the aquatic manifest entries above gate on
+/// `aquatic_ecology_profile` instead -- only this crate's own test module.
+/// `expect` rather than `allow` so the attribute cannot outlive a real
+/// non-test caller appearing.
+#[cfg_attr(not(test), expect(dead_code))]
+pub(crate) fn cromatolis_freshwater(c: &SimChunk) -> bool {
+    matches!(
+        c.water_body,
+        Some(WaterBodyKind::River | WaterBodyKind::Lake | WaterBodyKind::Lagoon)
+    )
+}
+
+/// Cromatolis-only density multiplier, loaded from `cromatolis_v0_density_
+/// boost.ron` (see `CromatolisWildlifeDensityBoost`) and applied once per
+/// column in `apply_wildlife_supplement` on top of every manifest entry's
+/// own density formula, rather than editing each affected land/jungle/
+/// tropical closure individually (which risks silently missing one as new
+/// entries are added). `BASE_DENSITY` (`spawn_manifest`) and the general,
+/// non-Cromatolis manifest entries are shared by every world this engine
+/// can generate, so they can't be raised without rebalancing every other
+/// world using this engine -- same constraint `not_cromatolis` above
+/// already documents, just the boost-instead-of-gate case.
+///
+/// Land and open ocean were both measured, via a real
+/// `World::generate_chunk`-instrumented audit (not just the column-density
+/// formula, which can be misleadingly optimistic vs. the real
+/// roll+gradient+footprint-clearance pipeline), as reading far too sparse
+/// during normal exploration; lake (whose presence bug, a separate root
+/// cause, is already fixed above by the `cromatolis.lake` manifest entry)
+/// measured already dense, so it's left alone (`1.0`). See the commit that
+/// introduced this constant for the full real before/after audit numbers
+/// and the exact tuning iteration.
+///
+/// `1.0` for every column outside the authored Cromatolis region (a no-op
+/// for every other world using this manifest) and for lake/river columns
+/// inside it (left unboosted -- already dense enough, see above).
+///
+/// Takes only the primitives it needs (rather than `&SimChunk`/
+/// `&ColumnSample`) so it stays trivially unit-testable without hand-
+/// constructing either of those large, many-field structs.
+fn cromatolis_wildlife_boost(
+    authored_region_id: Option<&'static str>,
+    is_underwater: bool,
+    is_ocean: bool,
+    boost: CromatolisWildlifeDensityBoost,
+) -> f32 {
+    if authored_region_id != Some(CROMATOLIS_V0_REGION_ID) {
+        return 1.0;
+    }
+    if !is_underwater {
+        boost.land
+    } else if is_ocean {
+        boost.ocean
+    } else {
+        1.0
+    }
+}
+
+/// Cromatolis-only wildlife-density tuning knob (see
+/// `cromatolis_wildlife_boost`), loaded from `assets/world/wildlife/
+/// cromatolis_v0_density_boost.ron` -- kept as data, alongside
+/// `AuthoredCromatolisClimate`'s `cromatolis_v0_climate.ron`, rather than a
+/// Rust constant, since it's a designer-tunable balance number that has
+/// already needed more than one measure-and-adjust iteration.
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct CromatolisWildlifeDensityBoost {
+    land: f32,
+    ocean: f32,
+}
+
+impl CromatolisWildlifeDensityBoost {
+    fn load() -> Self {
+        Ron::load_expect_cloned("world.wildlife.cromatolis_v0_density_boost").into_inner()
+    }
+}
+
+// XINDELER: a natural column counts as ice only past the base half-depth of
+// 0.5 (the noise gives many smaller values on shallow cold shores, which must
+// not change the natural spawns); on authored water the one-block band
+// (half-depth exactly 0.5) counts too, as it does in the map colouring.
+#[inline]
+pub(crate) fn is_ice_column(
+    ice_depth: f32,
+    authored: Option<&crate::authored_raster::AuthoredColumn>,
+    is_underwater: bool,
+) -> bool {
+    let authored_wet = authored.is_some_and(|a| a.cell.is_wet());
+    (ice_depth > 0.5 || (ice_depth > 0.0 && authored_wet)) && is_underwater
 }
 
 pub fn apply_wildlife_supplement<'a, R: Rng>(
@@ -562,6 +805,15 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
     let scatter = &index.wildlife_spawns;
     // Configurable density multiplier
     let wildlife_density_modifier = index.features.wildlife_density;
+    // Loaded once per chunk (not per column) and only when actually inside
+    // Cromatolis -- every other world never touches this asset at all. See
+    // `cromatolis_wildlife_boost`'s doc comment.
+    let cromatolis_density_boost = (chunk.authored_region_id == Some(CROMATOLIS_V0_REGION_ID))
+        .then(CromatolisWildlifeDensityBoost::load)
+        .unwrap_or(CromatolisWildlifeDensityBoost {
+            land: 1.0,
+            ocean: 1.0,
+        });
 
     for y in 0..vol.size_xy().y as i32 {
         for x in 0..vol.size_xy().x as i32 {
@@ -577,17 +829,33 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
             };
 
             let is_underwater = col_sample.water_level > col_sample.alt;
-            let is_ice = col_sample.ice_depth > 0.5 && is_underwater;
+            let is_ice = is_ice_column(
+                col_sample.ice_depth,
+                col_sample.authored.as_ref(),
+                is_underwater,
+            );
             let (current_day_period, calendar) = if let Some((time, calendar)) = time {
                 (DayPeriod::from(time.0), Some(calendar))
             } else {
                 (DayPeriod::Noon, None)
             };
 
+            // Cromatolis-scoped wildlife-density boost (see
+            // `cromatolis_wildlife_boost`'s doc comment). `1.0` everywhere
+            // outside the authored Cromatolis region, so this is a no-op for
+            // every other world using this manifest.
+            let cromatolis_boost = cromatolis_wildlife_boost(
+                chunk.authored_region_id,
+                is_underwater,
+                matches!(col_sample.chunk.get_biome(), BiomeKind::Ocean),
+                cromatolis_density_boost,
+            );
+
             let entity_group = scatter
                 .iter()
                 .filter_map(|(entry, get_density)| {
-                    let density = get_density(chunk, col_sample) * wildlife_density_modifier;
+                    let density =
+                        get_density(chunk, col_sample) * wildlife_density_modifier * cromatolis_boost;
                     (density > 0.0)
                         .then(|| {
                             entry
@@ -609,7 +877,11 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
             if let Some(pack) = entity_group {
                 let desired_alt = match pack.spawn_mode {
                     SpawnMode::Land | SpawnMode::Underwater => col_sample.alt,
-                    SpawnMode::Ice => col_sample.water_level + 1.0 + col_sample.ice_depth,
+                    // XINDELER: one block over the top of the ice band
+                    // (`ice_centre + ice_depth`): the water level plus the
+                    // half-depth for natural water, the drawn surface for a
+                    // downward-only band on authored water.
+                    SpawnMode::Ice => col_sample.ice_centre + 1.0 + col_sample.ice_depth,
                     SpawnMode::Water => dynamic_rng.random_range(
                         col_sample.alt..col_sample.water_level.max(col_sample.alt + 0.1),
                     ),
@@ -730,7 +1002,123 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sim::AuthoredAquaticEcology;
     use hashbrown::HashMap;
+
+    // Regression: `cromatolis_wildlife_boost` must be a strict no-op
+    // (`1.0`) for every chunk outside the authored Cromatolis region, for
+    // every combination of land/underwater and ocean/non-ocean -- i.e. a
+    // non-Cromatolis world's wildlife density is numerically unchanged by
+    // the boost this function applies. Exhaustive over the function's whole
+    // (tiny) input space, so this can't miss a case.
+    #[test]
+    fn cromatolis_wildlife_boost_is_noop_outside_cromatolis() {
+        // Deliberately not `1.0`/`1.0` -- if the region check were ever
+        // accidentally dropped or inverted, a boost this far from identity
+        // would make the assertions below fail loudly instead of by luck.
+        let boost = CromatolisWildlifeDensityBoost {
+            land: 24.0,
+            ocean: 3.2,
+        };
+        for authored_region_id in [None, Some("some_other_future_region")] {
+            for is_underwater in [false, true] {
+                for is_ocean in [false, true] {
+                    assert_eq!(
+                        cromatolis_wildlife_boost(
+                            authored_region_id,
+                            is_underwater,
+                            is_ocean,
+                            boost
+                        ),
+                        1.0,
+                        "authored_region_id={authored_region_id:?} is_underwater={is_underwater} \
+                         is_ocean={is_ocean} must not be boosted outside Cromatolis"
+                    );
+                }
+            }
+        }
+    }
+
+    // Regression: inside Cromatolis, land and open-ocean columns get the
+    // passed-in boost, and lake/river columns (underwater, not ocean) are
+    // deliberately left at `1.0` -- see `cromatolis_wildlife_boost`'s doc
+    // comment for why.
+    #[test]
+    fn cromatolis_wildlife_boost_applies_inside_cromatolis() {
+        let region = Some(CROMATOLIS_V0_REGION_ID);
+        let boost = CromatolisWildlifeDensityBoost {
+            land: 24.0,
+            ocean: 3.2,
+        };
+        assert_eq!(
+            cromatolis_wildlife_boost(region, false, false, boost),
+            boost.land
+        );
+        assert_eq!(
+            cromatolis_wildlife_boost(region, true, true, boost),
+            boost.ocean
+        );
+        assert_eq!(
+            cromatolis_wildlife_boost(region, true, false, boost),
+            1.0,
+            "lake/river columns must stay unboosted"
+        );
+    }
+
+    // Checks that the real Cromatolis wildlife-density boost asset loads
+    // and parses.
+    #[test]
+    fn cromatolis_wildlife_density_boost_asset_loads() {
+        let boost = CromatolisWildlifeDensityBoost::load();
+        assert!(boost.land > 0.0);
+        assert!(boost.ocean > 0.0);
+    }
+
+    // Regression: `AuthoredAquaticEcologyProfile::fauna` is declared as the
+    // source of truth for each aquatic-ecology profile's species mix, but
+    // (see that field's doc comment) it is not read at runtime -- the real
+    // species list lives in a hand-authored `SpawnEntry` asset per profile,
+    // meant to match it. Nothing else enforces that the two stay in sync, so
+    // this does: for every `world.wildlife.spawn.cromatolis.aquatic.<id>`
+    // manifest entry, its `SpawnEntry`'s species/weight set (summed across
+    // every `Pack`, since a profile may split Water/Land packs) must equal
+    // the matching profile's declared `fauna` list exactly.
+    #[test]
+    fn cromatolis_aquatic_spawn_entries_match_their_declared_ecology_fauna() {
+        let catalog = AuthoredAquaticEcology::load_owned("world.map.cromatolis_v0_aquatic_ecology")
+            .expect("the configured Cromatolis aquatic ecology profile must load");
+
+        for (specifier, _) in spawn_manifest() {
+            let Some(id) = specifier.strip_prefix("world.wildlife.spawn.cromatolis.aquatic.")
+            else {
+                continue;
+            };
+            let profile = catalog
+                .profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .unwrap_or_else(|| panic!("no aquatic ecology profile declared for '{id}'"));
+
+            let mut declared: HashMap<&str, f32> = HashMap::new();
+            for (weight, entity) in &profile.fauna {
+                *declared.entry(entity.as_str()).or_default() += weight;
+            }
+
+            let mut actual: HashMap<String, f32> = HashMap::new();
+            let SpawnEntry { rules, .. } = SpawnEntry::from(specifier);
+            for pack in rules {
+                for (weight, (_, _, entity)) in pack.groups {
+                    *actual.entry(entity).or_default() += weight as f32;
+                }
+            }
+
+            assert_eq!(
+                declared,
+                actual.iter().map(|(k, v)| (k.as_str(), *v)).collect(),
+                "'{specifier}' has drifted from its declared '{id}' aquatic ecology fauna list"
+            );
+        }
+    }
 
     // Checks that each entry in spawn manifest is loadable
     #[test]

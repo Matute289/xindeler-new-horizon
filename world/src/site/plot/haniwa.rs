@@ -7,7 +7,7 @@ use crate::{
 };
 use common::{
     generation::EntityInfo,
-    terrain::{Structure as PrefabStructure, StructuresGroup, sprite::SpriteCfg},
+    terrain::{Structure as PrefabStructure, StructuresGroup},
 };
 use lazy_static::lazy_static;
 use rand::prelude::*;
@@ -36,7 +36,7 @@ impl Haniwa {
             max: site.tile_wpos(tile_aabr.max),
         };
         let center = bounds.center();
-        let base = land.get_alt_approx(center) as i32;
+        let base = land.ground_alt_at(center) as i32;
         let diameter = (150 + RandomField::new(0).get(center.with_z(base)) % 10) as i32;
         let dir_select = (RandomField::new(0).get(center.with_z(base)) % 4) as usize;
         let rotation = (PI / 2.0) * dir_select as f32;
@@ -75,7 +75,7 @@ impl Haniwa {
         }
         let boss_room_position = center_room_positions[center_room_positions.len() - 1];
         Self {
-            alt: land.get_alt_approx(site.tile_center_wpos(tile_aabr.center())) as i32 + 2,
+            alt: land.ground_alt_at(site.tile_center_wpos(tile_aabr.center())) as i32 + 2,
             center,
             base,
             diameter,
@@ -122,10 +122,7 @@ impl Structure for Haniwa {
         // physical `haniwa_key` to pass this door, so its keyhole opts
         // out of ranged/keyless unlocking (e.g. the `knock` spell) via
         // `no_knock`. Melee key-item unlocking is unaffected.
-        let key_hole = Fill::sprite_ori_cfg(SpriteKind::HaniwaKeyhole, 0, SpriteCfg {
-            no_knock: true,
-            ..Default::default()
-        });
+        let key_hole = locked_dungeon_keyhole(SpriteKind::HaniwaKeyhole);
         let trap = Fill::Block(Block::air(SpriteKind::HaniwaTrap));
         let rock_broken = Fill::Sampling(Arc::new(|center| {
             Some(match (RandomField::new(0).get(center)) % 48 {

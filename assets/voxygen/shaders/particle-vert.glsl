@@ -121,6 +121,15 @@ const int FLAME_CLOAK_ORBIT = 80;
 const int DUST = 81;
 const int CAVE_DUST = 82;
 const int BUBBLE_AMBIENT = 83;
+// The Cromatolis Aerial Citadel's harmless practice beam/sphere
+// (`common::comp::CitadelPracticeBeam`/`CitadelPracticeSphere`, spawned via
+// `voxygen::scene::particle::ParticleMgr::maintain_citadel_beam_particles`/
+// `maintain_citadel_sphere_particles`). These must have their own case
+// below (not fall through to `default:`), since that default case's random
+// upward drift and shrinking scale would visibly desync from the CPU-side
+// beam/sphere position each frame.
+const int CITADEL_LASER = 84;
+const int CITADEL_SPHERE = 85;
 
 // meters per second squared (acceleration)
 const float earth_gravity = 9.807;
@@ -1330,6 +1339,40 @@ void main() {
                 vec3(1.0 - slow_start(0.05)),
                 vec4(0.6, 0.65, 0.75, 1),
                 spin_in_axis(vec3(1,1,1), lifetime() * 2.0)
+            );
+            break;
+        case CITADEL_LASER:
+            // Same stretch-along-`inst_dir` shape as `LASER` above (reuses
+            // its already-declared `perp_axis`), with a distinct
+            // cyan/violet arcane-energy color so it doesn't read as the
+            // same effect as the unrelated red `LASER`.
+            f_reflect = 0.0;
+            perp_axis = normalize(cross(inst_dir, vec3(0.0, 0.0, 1.0)));
+            attr = Attr(
+                inst_dir * percent(),
+                vec3(1.0, 1.0, 50.0),
+                vec4(vec3(0.5, 1.2, 2.4), 1),
+                spin_in_axis(perp_axis, asin(inst_dir.z / length(inst_dir)) + PI / 2.0)
+            );
+            break;
+        case CITADEL_SPHERE:
+            // The sphere's actual shape comes from the `laser_beam_small`
+            // voxel model this mode is drawn with (see
+            // `ParticleMgr::render`'s `CITADEL_SPHERE_MODEL_KEY` draw), not
+            // from particle geometry -- unlike every other mode above, this
+            // must not drift via `linear_motion` or shrink like the default
+            // case: the CPU side already recomputes and respawns this
+            // particle at the correct world position every ~250ms (see
+            // `ParticleMgr::maintain_citadel_sphere_particles`), so a fixed
+            // offset/scale/color keeps it visually steady for that short
+            // life instead of flickering or drifting away from its true
+            // position.
+            f_reflect = 0.0;
+            attr = Attr(
+                vec3(0.0),
+                vec3(1.0),
+                vec4(0.5, 1.2, 2.4, 1),
+                spin_in_axis(vec3(0, 0, 1), lifetime() * 2.0)
             );
             break;
         default:

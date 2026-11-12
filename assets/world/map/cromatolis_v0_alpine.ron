@@ -1,0 +1,8 @@
+(
+    schema: 1,
+    tree_line_altitude_m: 700.0,
+    snow_start_altitude_m: 700.0,
+    persistent_snow_altitude_m: 1010.0,
+    transition_rock_blend: 0.62,
+    slope_rock_blend: 0.22,
+)

@@ -83,7 +83,13 @@ vec2 wpos_to_uv(vec2 wpos) {
     return vec2(uv_pos.x, uv_pos.y);
 }
 
-// Weather texture
+// Weather texture.
+//
+// Channel layout (written by `Lod::maintain`):
+//   r = cloud cover
+//   g = precipitation, whatever form it falls in
+//   b = fraction of that precipitation falling as snow rather than rain
+//   a = fog density
 layout(set = 0, binding = 12) uniform texture2D t_weather;
 layout(set = 0, binding = 13) uniform sampler s_weather;
 
@@ -95,6 +101,14 @@ float cloud_tendency_at(vec2 wpos) {
     return sample_weather(wpos).r;
 }
 
+// Total precipitation, rain and snow alike. Named for the rain it originally
+// only described; a caller that means *water* specifically must scale this by
+// `1.0 - sample_weather(wpos).b`.
+//
+// There are deliberately no `snow_fraction_at`/`fog_density_at` siblings: both
+// of this diff's readers of `.b` and `.a` already hold a `sample_weather()`
+// result and take their channel straight off it, so an accessor would be dead
+// GLSL. Read the channel layout off `t_weather` above.
 float rain_density_at(vec2 wpos) {
     return sample_weather(wpos).g;
 }

@@ -1,0 +1,14 @@
+SpawnEntry (
+    name: "Cromatolis kelp-shelf wildlife.",
+    note: "Cool temperate-shelf kelp-forest inhabitants -- the `temperate_kelp_shelf` profile in cromatolis_v0_aquatic_ecology.ron.",
+    rules: [
+        Pack(
+            groups: [
+                (2, (1, 2, "common.entity.wild.peaceful.marlin")),
+                (1, (1, 2, "common.entity.wild.peaceful.seal")),
+            ],
+            spawn_mode: Water,
+            day_period: [Night, Morning, Noon, Evening],
+        ),
+    ],
+)

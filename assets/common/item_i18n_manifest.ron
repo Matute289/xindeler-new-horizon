@@ -2568,6 +2568,9 @@
             "common.items.quest.gnarling_carving",
         ): "sprite-quest-gnarling_carving",
         Simple(
+            "common.items.quest.olummiton_travel_permit",
+        ): "sprite-quest-olummiton_travel_permit",
+        Simple(
             "common.items.grasses.long",
         ): "sprite-grass-grass_long_5",
         Simple(

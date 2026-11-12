@@ -130,7 +130,7 @@ lazy_static! {
     .collect();
 
     static ref WEATHERS: Vec<String> = [
-        "clear", "cloudy", "rain", "wind", "storm"
+        "clear", "cloudy", "rain", "wind", "storm", "snow", "fog"
     ]
     .iter()
     .map(|s| s.to_string())
@@ -452,6 +452,7 @@ pub enum ServerChatCommand {
     AreaAdd,
     AreaList,
     AreaRemove,
+    ArenaTotem,
     Aura,
     Ban,
     BanIp,
@@ -463,8 +464,13 @@ pub enum ServerChatCommand {
     Buff,
     Build,
     Campfire,
+    CitadelPracticeBeam,
+    CitadelPracticeSphere,
+    CitadelSphereTurretPilot,
+    CitadelTurretPilot,
     ClearPersistedTerrain,
     CreateLocation,
+    CromatolisGoto,
     DeathEffect,
     DebugColumn,
     DebugWays,
@@ -476,6 +482,7 @@ pub enum ServerChatCommand {
     Dummy,
     Explosion,
     Faction,
+    GiveGatePermit,
     GiveItem,
     GiveItemQuality,
     Gizmos,
@@ -551,6 +558,7 @@ pub enum ServerChatCommand {
     Spot,
     Sudo,
     Tell,
+    TerrainOverride,
     Tether,
     Time,
     TimeScale,
@@ -715,14 +723,62 @@ impl ServerChatCommand {
                 Content::localized("command-area_remove-desc"),
                 Some(Admin),
             ),
+            // A deliberately narrow fixture-spawn command. `/object
+            // GnarlingTotemGreen` does not apply `Immovable`, so it cannot
+            // exercise physics that real arena totems use.
+            ServerChatCommand::ArenaTotem => cmd(
+                vec![],
+                Content::Plain("Spawns an immovable Gnarling arena totem for fixture QA".into()),
+                Some(Admin),
+            ),
             ServerChatCommand::Campfire => cmd(
                 vec![],
                 Content::localized("command-campfire-desc"),
                 Some(Admin),
             ),
+            // These 4 citadel pilot/practice commands are intentionally
+            // `Some(Admin)`, not the faction-string-match gate the reference
+            // implementation ported them with -- see the doc comment on
+            // `server::cmd::handle_citadel_turret_pilot` for the full
+            // rationale (a player-choosable `Faction` name is not a real
+            // credential boundary).
+            ServerChatCommand::CitadelPracticeBeam => cmd(
+                vec![],
+                Content::localized("command-citadel_practice_beam-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::CitadelPracticeSphere => cmd(
+                vec![],
+                Content::localized("command-citadel_practice_sphere-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::CitadelSphereTurretPilot => cmd(
+                vec![
+                    Float("yaw degrees", 0.0, Required),
+                    Float("pitch degrees", 0.0, Required),
+                ],
+                Content::localized("command-citadel_sphere_turret_pilot-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::CitadelTurretPilot => cmd(
+                vec![
+                    Float("yaw degrees", 0.0, Required),
+                    Float("pitch degrees", 0.0, Required),
+                ],
+                Content::localized("command-citadel_turret_pilot-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::ClearPersistedTerrain => cmd(
                 vec![Integer("chunk_radius", 6, Required)],
                 Content::localized("command-clear_persisted_terrain-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::CromatolisGoto => cmd(
+                vec![
+                    Integer("source pixel x", 1024, Required),
+                    Integer("source pixel y", 768, Required),
+                ],
+                Content::localized("command-cromatolis_goto-desc"),
                 Some(Admin),
             ),
             ServerChatCommand::DeathEffect => cmd(
@@ -775,6 +831,11 @@ impl ServerChatCommand {
                 vec![Message(Optional)],
                 Content::localized("command-faction-desc"),
                 None,
+            ),
+            ServerChatCommand::GiveGatePermit => cmd(
+                vec![PlayerName(Required)],
+                Content::localized("command-give_gate_permit-desc"),
+                Some(Admin),
             ),
             ServerChatCommand::GiveItem => cmd(
                 vec![
@@ -1248,6 +1309,33 @@ impl ServerChatCommand {
                 Content::localized("command-tell-desc"),
                 None,
             ),
+            ServerChatCommand::TerrainOverride => cmd(
+                vec![
+                    Enum(
+                        "kind",
+                        vec![
+                            "snow".to_string(),
+                            "crater".to_string(),
+                            "debris".to_string(),
+                            "biome".to_string(),
+                            "clear".to_string(),
+                        ],
+                        Required,
+                    ),
+                    // For every kind except `biome`, this is the radius
+                    // (defaults vary per kind -- see `handle_terrain_override`).
+                    // For `biome`, this position is instead the catalog
+                    // profile id (radius, if given, becomes the THIRD
+                    // argument for that kind only) -- see
+                    // `handle_terrain_override`'s own `raw_args` handling for
+                    // why `biome`'s argument order can't be made to match
+                    // every other kind's here.
+                    Integer("radius", 64, Optional),
+                    Any("profile", Optional),
+                ],
+                Content::localized("command-terrain_override-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::Time => cmd(
                 vec![Enum("time", TIMES.clone(), Optional)],
                 Content::localized("command-time-desc"),
@@ -1489,6 +1577,7 @@ impl ServerChatCommand {
             ServerChatCommand::AreaAdd => "area_add",
             ServerChatCommand::AreaList => "area_list",
             ServerChatCommand::AreaRemove => "area_remove",
+            ServerChatCommand::ArenaTotem => "arena_totem",
             ServerChatCommand::Aura => "aura",
             ServerChatCommand::Ban => "ban",
             ServerChatCommand::BanIp => "ban_ip",
@@ -1501,6 +1590,11 @@ impl ServerChatCommand {
             ServerChatCommand::Build => "build",
             ServerChatCommand::Campfire => "campfire",
             ServerChatCommand::ClearPersistedTerrain => "clear_persisted_terrain",
+            ServerChatCommand::CromatolisGoto => "cromatolis_goto",
+            ServerChatCommand::CitadelPracticeBeam => "citadel_practice_beam",
+            ServerChatCommand::CitadelPracticeSphere => "citadel_practice_sphere",
+            ServerChatCommand::CitadelSphereTurretPilot => "citadel_sphere_turret_pilot",
+            ServerChatCommand::CitadelTurretPilot => "citadel_turret_pilot",
             ServerChatCommand::DeathEffect => "death_effect",
             ServerChatCommand::DebugColumn => "debug_column",
             ServerChatCommand::DebugWays => "debug_ways",
@@ -1509,6 +1603,7 @@ impl ServerChatCommand {
             ServerChatCommand::Dummy => "dummy",
             ServerChatCommand::Explosion => "explosion",
             ServerChatCommand::Faction => "faction",
+            ServerChatCommand::GiveGatePermit => "give_gate_permit",
             ServerChatCommand::GiveItem => "give_item",
             ServerChatCommand::GiveItemQuality => "give_item_quality",
             ServerChatCommand::Gizmos => "gizmos",
@@ -1570,6 +1665,7 @@ impl ServerChatCommand {
             ServerChatCommand::Spot => "spot",
             ServerChatCommand::Sudo => "sudo",
             ServerChatCommand::Tell => "tell",
+            ServerChatCommand::TerrainOverride => "terrain_override",
             ServerChatCommand::Time => "time",
             ServerChatCommand::TimeScale => "time_scale",
             ServerChatCommand::Tp => "tp",
@@ -1951,6 +2047,52 @@ mod tests {
         let list2 = list.clone();
         list.sort_unstable();
         assert_eq!(list, list2);
+    }
+
+    #[test]
+    fn citadel_command_variants_have_stable_keywords_admin_gating_and_argument_shapes() {
+        let commands = [
+            (
+                ServerChatCommand::CitadelPracticeBeam,
+                "citadel_practice_beam",
+                0,
+            ),
+            (
+                ServerChatCommand::CitadelPracticeSphere,
+                "citadel_practice_sphere",
+                0,
+            ),
+            (
+                ServerChatCommand::CitadelSphereTurretPilot,
+                "citadel_sphere_turret_pilot",
+                2,
+            ),
+            (
+                ServerChatCommand::CitadelTurretPilot,
+                "citadel_turret_pilot",
+                2,
+            ),
+        ];
+
+        for (command, keyword, argument_count) in commands {
+            assert_eq!(command.keyword(), keyword);
+            assert_eq!(command.data().args.len(), argument_count);
+            assert_eq!(
+                command.data().needs_role,
+                Some(Role::Admin),
+                "{keyword} must stay gated by a real role, not the reference implementation's \
+                 player-choosable-faction-name check",
+            );
+        }
+    }
+
+    #[test]
+    fn arena_totem_command_is_a_no_argument_admin_command() {
+        let command = ServerChatCommand::ArenaTotem;
+
+        assert_eq!(command.keyword(), "arena_totem");
+        assert!(command.data().args.is_empty());
+        assert_eq!(command.data().needs_role, Some(Role::Admin));
     }
 
     #[test]

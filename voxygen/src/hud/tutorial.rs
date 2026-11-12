@@ -460,13 +460,14 @@ impl TutorialState {
     }
 
     pub(crate) fn event_notification(&mut self, notif: &UserNotification) {
-        #[allow(clippy::single_match)]
         match notif {
             UserNotification::WaypointUpdated => {
                 if self.earn_achievement(Achievement::SetWaypoint) {
                     self.show_hint(Hint::Waypoint, Duration::from_secs(1));
                 }
             },
+            // No tutorial hint tied to a regional terrain transition.
+            UserNotification::TerrainTransition { .. } => {},
         }
     }
 

@@ -1,14 +1,19 @@
 use crate::{
     CONFIG, IndexRef,
+    authored_raster::AuthoredCell,
     column::ColumnSample,
-    sim::{RiverKind, WorldSim},
+    sim::{
+        AuthoredEcologyZone, AuthoredGroundCoverProfile, AuthoredMapEcologyProfile,
+        GroundCoverBand, GroundSubstrate, RiverKind, WorldSim,
+    },
     site::SiteKind,
 };
 use common::{
+    store::Id,
     terrain::{
         CoordinateConversions, NEIGHBOR_DELTA, TerrainChunkSize,
         map::{Connection, ConnectionKind, MapConfig, MapSample},
-        vec2_as_uniform_idx,
+        uniform_idx_as_vec2, vec2_as_uniform_idx,
     },
     vol::RectVolSize,
 };
@@ -31,6 +36,125 @@ fn shade_rgb(base: Rgb<u8>, factor: f64) -> Rgb<u8> {
         (base.r as f64 * factor).clamp(0.0, 255.0) as u8,
         (base.g as f64 * factor).clamp(0.0, 255.0) as u8,
         (base.b as f64 * factor).clamp(0.0, 255.0) as u8,
+    )
+}
+
+/// Whether authored land-only post-processing may run after the base map color
+/// has been selected. This guard encloses texture, hillshade, contour, and
+/// ridge work as well as the ground-cover tint, so physical water retains its
+/// dedicated base treatment.
+fn authored_map_post_processing_applies(
+    river_kind: Option<RiverKind>,
+    true_alt: f64,
+    true_sea_level: f64,
+) -> bool {
+    !matches!(river_kind, Some(RiverKind::Lake { .. } | RiverKind::Ocean))
+        && true_alt >= true_sea_level
+}
+
+/// Whether this particular map cell, rather than the map rendering mode, has
+/// physical water that must keep its own visual treatment.
+/// `MapConfig::is_water` only asks the renderer whether it should include water
+/// globally; its default is `true`, so using it here would suppress authored
+/// land presentation across the entire world map.
+fn authored_map_cell_is_physical_water(
+    river_kind: Option<RiverKind>,
+    depth_m: f64,
+    true_alt: f64,
+    true_sea_level: f64,
+) -> bool {
+    matches!(river_kind, Some(RiverKind::Lake { .. } | RiverKind::Ocean))
+        || depth_m > 0.0
+        || true_alt < true_sea_level
+}
+
+/// Physical column material always outranks authored map presentation. The
+/// optional column fact is absent only at an unavailable map boundary; the
+/// compact regional alpine fact remains available there.
+fn authored_preview_has_physical_surface(
+    authored_alpine_snowland: bool,
+    column_surface_is_physical: Option<bool>,
+) -> bool {
+    authored_alpine_snowland || column_surface_is_physical.unwrap_or(false)
+}
+
+/// Applies the authored ground-cover band's map-preview tint. Physical map
+/// layers deliberately bypass this stage: their water/mountain rendering is
+/// applied by `sample_pos` and must not inherit a vegetation tint. An explicit
+/// substrate zone then wins over the continuous cover band on remaining land.
+pub(super) fn authored_ground_cover_preview_tint(
+    base: Rgb<u8>,
+    profile: Option<&AuthoredGroundCoverProfile>,
+    ground_cover: f32,
+    ground_substrate: Option<GroundSubstrate>,
+    is_water: bool,
+    is_physical_mountain: bool,
+) -> (Option<GroundCoverBand>, Rgb<u8>) {
+    let Some(profile) = profile.filter(|_| !is_water && !is_physical_mountain) else {
+        return (None, base);
+    };
+    if ground_substrate == Some(GroundSubstrate::Sand) {
+        return (None, Rgb::new(0xbd, 0xad, 0x5a));
+    }
+    let band = profile.classify(ground_cover);
+    let definition = profile
+        .bands
+        .iter()
+        .find(|definition| definition.band == band)
+        .expect("validated ground-cover profile contains its classified band");
+    let tint = Rgb::new(
+        (definition.map_tint.0 * 255.0) as u8,
+        (definition.map_tint.1 * 255.0) as u8,
+        (definition.map_tint.2 * 255.0) as u8,
+    );
+    (
+        Some(band),
+        blend_rgb(base, tint, definition.map_blend as f64),
+    )
+}
+
+/// Adds the authored ecological cue after the soil treatment. This consumes
+/// the exact authored ecology zone, so its visible extents never drift with a
+/// procedural `BiomeKind`; it still cannot change terrain blocks, authored
+/// vegetation density, or placement rules.
+///
+/// A shoreline remains physically authoritative for every category except an
+/// authored wetland. A `ColumnSample` deliberately marks `water_dist <= 3`
+/// as physical so the *ground* retains its shoreline material, but treating
+/// that proximity as rock/snow/cliff here erased wetland presentation along
+/// the very water edge that defines it.
+fn authored_ecology_preview_tint(
+    base: Rgb<u8>,
+    profile: Option<&AuthoredMapEcologyProfile>,
+    ecology_zone: Option<AuthoredEcologyZone>,
+    tree_density: f64,
+    is_water: bool,
+    is_physical_surface: bool,
+    is_shoreline: bool,
+    has_non_shore_physical: bool,
+) -> Rgb<u8> {
+    if is_water {
+        return base;
+    }
+    let Some(zone) = ecology_zone
+        .and_then(|ecology_zone| profile.and_then(|profile| profile.zone_for(ecology_zone)))
+    else {
+        return base;
+    };
+    if is_physical_surface
+        && !(is_shoreline && !has_non_shore_physical && zone.zone == AuthoredEcologyZone::Wetland)
+    {
+        return base;
+    }
+    let tint = Rgb::new(
+        (zone.map_tint.0 * 255.0) as u8,
+        (zone.map_tint.1 * 255.0) as u8,
+        (zone.map_tint.2 * 255.0) as u8,
+    );
+    blend_rgb(
+        base,
+        tint,
+        f64::from(zone.base_blend) + tree_density * f64::from(zone.tree_density_blend),
     )
 }
 
@@ -76,6 +200,382 @@ pub fn sample_wpos(config: &MapConfig, sampler: &WorldSim, wpos: Vec2<i32>) -> f
         / gain
 }
 
+/// [`sample_wpos`] for what the server presents (the world map image and
+/// `WorldMapMsg::alt`, which the client's LOD terrain is built from). On an
+/// authored ground cell (exact or ring) it is `rendered`, the altitude the
+/// column sampler renders at this very column, so distant terrain shows the
+/// edits at the 32 m sample spacing and agrees with the blocks; elsewhere,
+/// or when `rendered` is `None`, exactly [`sample_wpos`]. Never used by
+/// generation.
+///
+/// A ground cell is presented dry: unlike [`sample_wpos`] there is no
+/// `.max(water_alt)` with the chunk table's water, which inside a region is
+/// the frozen natural water and would paint a lowered patch as a lake.
+/// Ground below sea level is not representable in the unsigned map
+/// altitude: [`pack_map_alt`] clamps it to sea level.
+pub fn sample_wpos_presented(
+    config: &MapConfig,
+    sampler: &WorldSim,
+    wpos: Vec2<i32>,
+    rendered: impl FnOnce() -> Option<f32>,
+) -> f32 {
+    if !config.is_basement
+        && matches!(
+            sampler
+                .authored_rasters
+                .as_ref()
+                .and_then(|r| r.cell_at(wpos)),
+            Some(AuthoredCell::Ground { .. })
+        )
+        && let Some(alt) = rendered()
+    {
+        return (alt - config.focus.z as f32) / config.gain;
+    }
+    sample_wpos(config, sampler, wpos)
+}
+
+/// A normalised map altitude (`0.0` = sea level, `1.0` = the top of the
+/// map) packed as `WorldMapMsg::alt` stores it: 13 unsigned bits, shifted
+/// left by 3. Out-of-range values clamp.
+pub fn pack_map_alt(alt: f32) -> u32 { (((alt.clamp(0.0, 1.0) * 8191.0) as u32) & 0x1FFF) << 3 }
+
+/// How a presentation path (a map image, its relief, its river lines) must
+/// treat one chunk: the single place that turns the authored dry-ground rule
+/// ([`WorldSim::chunk_is_authored_dry`]) into the water kind, depth and
+/// altitude the colour, relief and connection decisions read. Built by
+/// [`WorldSim::chunk_presentation`]; [`ChunkPresentation::TABLE`] presents
+/// the chunk table unchanged. Paired with [`WorldSim::presented_wpos`]: with
+/// no column samples that altitude is [`sample_wpos`]'s, which keeps its
+/// `.max(water_alt)`, so dry ground still gets the table's water altitude.
+///
+/// This type covers only the dry rule. The converse rule, authored water the
+/// table calls land coloured as a lake, is applied in [`sample_pos_with`]
+/// from `chunk_authored_only_wet` (`AuthoredOnly` regions only; a table
+/// river chunk with an authored lake stays ground-coloured, and `Auto`
+/// regions stay table-only).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChunkPresentation {
+    /// Authored dry ground: mostly dry by `chunk_water`'s majority rule in a
+    /// `sea_fill: AuthoredOnly` region, so no water of any kind and no
+    /// "below sea level" for colour decisions, at any altitude.
+    pub authored_dry: bool,
+    /// Authored dry ground over every column of the chunk. Only such a chunk
+    /// drops the table's river link: a mostly dry chunk still carries the
+    /// natural river through its unauthored columns.
+    pub authored_fully_dry: bool,
+}
+
+impl ChunkPresentation {
+    /// The chunk table as it is, for paths that do not present authored
+    /// ground (and for the basement map).
+    pub const TABLE: Self = Self {
+        authored_dry: false,
+        authored_fully_dry: false,
+    };
+
+    /// The water kind the colour decisions read: none on authored dry
+    /// ground, the table's elsewhere.
+    pub fn water_kind(&self, table: Option<RiverKind>) -> Option<RiverKind> {
+        if self.authored_dry { None } else { table }
+    }
+
+    /// The water kind a river link (map connection) is drawn from: none on
+    /// a fully authored dry chunk, the table's elsewhere.
+    pub fn connection_kind(&self, table: Option<RiverKind>) -> Option<RiverKind> {
+        if self.authored_fully_dry { None } else { table }
+    }
+
+    /// The water depth (metres) the colour decisions read: zero on authored
+    /// dry ground.
+    pub fn water_depth(&self, table_depth_m: f64) -> f64 {
+        if self.authored_dry {
+            0.0
+        } else {
+            table_depth_m
+        }
+    }
+
+    /// The normalised altitude the colour decisions read: on authored dry
+    /// ground never below `sea_level` (so it is never painted as water);
+    /// elsewhere `alt` itself.
+    pub fn colour_alt(&self, alt: f64, sea_level: f64) -> f64 {
+        if self.authored_dry {
+            alt.max(sea_level)
+        } else {
+            alt
+        }
+    }
+
+    /// The altitude a table-only path (no column samples) presents for a
+    /// chunk, from the caller-supplied `alt` (the chunk's `alt`, or its
+    /// `basement`): on authored dry ground `alt` itself, never raised to the
+    /// frozen table water plane; elsewhere `alt.max(water_alt)`, as
+    /// [`sample_wpos`] does. On real authored dry ground that is the table's
+    /// one-sample-per-chunk altitude, not the rendered authored ground that
+    /// column samples would give.
+    pub fn table_alt(&self, alt: f32, water_alt: f32) -> f32 {
+        if self.authored_dry {
+            alt
+        } else {
+            alt.max(water_alt)
+        }
+    }
+
+    /// Whether a map that draws water (`MapConfig::is_water`) may draw it
+    /// over this chunk (ice colour, shading altitude at the water surface):
+    /// never on authored dry ground.
+    pub fn shows_water(&self, map_draws_water: bool) -> bool {
+        map_draws_water && !self.authored_dry
+    }
+}
+
+impl WorldSim {
+    /// Where a biome label named after the natural biome table may be shown.
+    ///
+    /// `loc` is the chunk the label was named at. If that chunk is not
+    /// authored dry ground it is returned unchanged (so a world without
+    /// authored rasters never moves a label). Otherwise the label moves to
+    /// the closest chunk of the same biome (`poi`) that is not authored dry,
+    /// ties broken by chunk index so the result is deterministic; with none
+    /// left the label is dropped (`None`). This only reads the table and the
+    /// authored dry rule, so it never perturbs the generation RNG.
+    ///
+    /// The Lake size count of a biome still includes its dry chunks, and a
+    /// moved label keeps its original size (cosmetic, by design).
+    pub fn biome_label_chunk(
+        &self,
+        config: &MapConfig,
+        poi: Id<crate::civ::PointOfInterest>,
+        loc: Vec2<i32>,
+    ) -> Option<Vec2<i32>> {
+        self.biome_label_chunks(config, &[(poi, loc)])
+            .pop()
+            .flatten()
+    }
+
+    /// [`Self::biome_label_chunk`] for many labels at once: one pass over
+    /// the chunks however many labels sit on authored dry ground, instead of
+    /// one pass per label. The result is in the order of `labels`.
+    pub fn biome_label_chunks(
+        &self,
+        config: &MapConfig,
+        labels: &[(Id<crate::civ::PointOfInterest>, Vec2<i32>)],
+    ) -> Vec<Option<Vec2<i32>>> {
+        let mut out: Vec<Option<Vec2<i32>>> = labels.iter().map(|&(_, loc)| Some(loc)).collect();
+        // The labels that must move, by biome.
+        let mut moving: std::collections::HashMap<Id<crate::civ::PointOfInterest>, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, &(poi, loc)) in labels.iter().enumerate() {
+            if self.chunk_presentation(config, loc).authored_dry {
+                moving.entry(poi).or_default().push(i);
+                out[i] = None;
+            }
+        }
+        if moving.is_empty() {
+            return out;
+        }
+        let size = self.map_size_lg();
+        // Best (distance, chunk index) per moving label.
+        let mut best: Vec<Option<(i32, usize)>> = vec![None; labels.len()];
+        for (posi, chunk) in self.chunks.iter().enumerate() {
+            let Some(idxs) = chunk.poi.and_then(|poi| moving.get(&poi)) else {
+                continue;
+            };
+            let pos = uniform_idx_as_vec2(size, posi);
+            if self.chunk_presentation(config, pos).authored_dry {
+                continue;
+            }
+            for &i in idxs {
+                let key = (labels[i].1.distance_squared(pos), posi);
+                if best[i].is_none_or(|b| key < b) {
+                    best[i] = Some(key);
+                }
+            }
+        }
+        for idxs in moving.values() {
+            for &i in idxs {
+                out[i] = best[i].map(|(_, posi)| uniform_idx_as_vec2(size, posi));
+            }
+        }
+        out
+    }
+
+    /// How a presentation path must treat `chunk_pos` under `config`
+    /// ([`ChunkPresentation`]). The basement map, chunks outside every
+    /// region and worlds without authored rasters get
+    /// [`ChunkPresentation::TABLE`].
+    pub fn chunk_presentation(
+        &self,
+        config: &MapConfig,
+        chunk_pos: Vec2<i32>,
+    ) -> ChunkPresentation {
+        let authored_dry = !config.is_basement && self.chunk_is_authored_dry(chunk_pos);
+        ChunkPresentation {
+            authored_dry,
+            authored_fully_dry: authored_dry
+                && self
+                    .authored_rasters
+                    .as_ref()
+                    .and_then(|r| r.chunk_summary(chunk_pos))
+                    .is_some_and(|s| {
+                        // Every column authored, none of them water: a
+                        // chunk whose authored columns include wet ones
+                        // still carries its river link.
+                        s.authored_columns == TerrainChunkSize::RECT_SIZE.product()
+                            && s.wet_columns == 0
+                    }),
+        }
+    }
+
+    /// The [`ChunkWater`](crate::authored_raster::queries::ChunkWater) of a
+    /// chunk that holds authored water cells (`wet_columns > 0`) and that
+    /// [`WorldSim::chunk_water`] reports wet: the one definition of that
+    /// predicate. `None` for the basement map, for worlds without authored
+    /// rasters, for chunks the rasters do not touch (their wetness, if any,
+    /// is the procedural table's) and for a chunk `chunk_water` calls dry.
+    /// With `authored_only_required` the chunk must also lie in a
+    /// `sea_fill: AuthoredOnly` region; otherwise (`Auto` regions included)
+    /// any region counts. Both read the same terrain-probe columns
+    /// (`wet_columns` of the chunk summary), so the two callers differ only
+    /// in that region filter.
+    fn chunk_wet_with_authored_cells(
+        &self,
+        config: &MapConfig,
+        chunk_pos: Vec2<i32>,
+        authored_only_required: bool,
+    ) -> Option<crate::authored_raster::queries::ChunkWater> {
+        if config.is_basement
+            || !self
+                .authored_rasters
+                .as_ref()?
+                .chunk_summary(chunk_pos)
+                .is_some_and(|s| s.wet_columns > 0 && (!authored_only_required || s.authored_only))
+        {
+            return None;
+        }
+        self.chunk_water(chunk_pos).filter(|w| w.wet())
+    }
+
+    /// Whether `chunk_pos` holds authored water cells and is presented wet:
+    /// [`WorldSim::chunk_water`] reports river, lake or ocean for it. The
+    /// wetness itself may be natural (a sea chunk with a sliver of authored
+    /// water counts); a chunk with authored water cells that `chunk_water`
+    /// calls dry does not.
+    /// `false` for every chunk of a world without authored rasters and for
+    /// chunks the rasters do not touch (their wetness, if any, is the
+    /// procedural table's).
+    ///
+    /// This is a statement about the sim, not about the map colour: in an
+    /// `Auto` region it can be `true` over table land (an authored lake on
+    /// a chunk the table calls dry) while the world map image still draws
+    /// ground there, to stay byte-identical to the table-only map. Only a
+    /// `sea_fill: AuthoredOnly` region recolours such a chunk as water
+    /// ([`sample_pos_with`]).
+    pub fn chunk_wet_authored(&self, config: &MapConfig, chunk_pos: Vec2<i32>) -> bool {
+        self.chunk_wet_with_authored_cells(config, chunk_pos, false)
+            .is_some()
+    }
+
+    /// The [`ChunkWater`](crate::authored_raster::queries::ChunkWater) of a
+    /// chunk of a `sea_fill: AuthoredOnly` region that holds authored water
+    /// cells and is presented wet; `None` for every other chunk and the
+    /// basement map.
+    fn chunk_authored_only_wet(
+        &self,
+        config: &MapConfig,
+        chunk_pos: Vec2<i32>,
+    ) -> Option<crate::authored_raster::queries::ChunkWater> {
+        self.chunk_wet_with_authored_cells(config, chunk_pos, true)
+    }
+
+    /// The map altitude presented at `wpos` ([`sample_wpos_presented`]): on
+    /// an authored ground cell at a chunk's sample column, the altitude of
+    /// that chunk's column sample in `samples` (one per chunk, as `get_map`
+    /// builds them); [`sample_wpos`] everywhere else, and everywhere when
+    /// `samples` is `None` (paths without column samples stay table-only).
+    ///
+    /// With `samples` of `None` this degrades to [`sample_wpos`], which keeps
+    /// its `.max(water_alt)`: dry ground there still gets the table's water
+    /// altitude. A caller that needs the dry altitude must pass column
+    /// samples or use a table-only dry variant.
+    pub fn presented_wpos(
+        &self,
+        config: &MapConfig,
+        wpos: Vec2<i32>,
+        samples: Option<&[Option<ColumnSample>]>,
+    ) -> f32 {
+        sample_wpos_presented(config, self, wpos, || {
+            let samples = samples?;
+            let chunk = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+            if wpos.map2(chunk, |e, c| e.rem_euclid(c)) != Vec2::zero() {
+                return None;
+            }
+            let pos = wpos.map2(chunk, |e, c| e.div_euclid(c));
+            let size = self.map_size_lg().chunks().map(|e| e as i32);
+            if pos.x < 0 || pos.y < 0 || pos.x >= size.x || pos.y >= size.y {
+                return None;
+            }
+            samples
+                .get(vec2_as_uniform_idx(self.map_size_lg(), pos))?
+                .as_ref()
+                .map(|s| s.alt)
+        })
+    }
+
+    /// [`sample_wpos`] for table-only paths that present authored dry ground
+    /// ([`ChunkPresentation::table_alt`]): the chunk's own altitude on dry
+    /// ground, exactly [`sample_wpos`] everywhere else (and for the
+    /// basement map, or a map that does not draw water).
+    pub fn presented_table_wpos(&self, config: &MapConfig, wpos: Vec2<i32>) -> f32 {
+        let chunk = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+        let presentation =
+            self.chunk_presentation(config, wpos.map2(chunk, |e, c| e.div_euclid(c)));
+        if presentation.authored_dry
+            && let Some(s) = self.get_wpos(wpos)
+        {
+            (presentation.table_alt(s.alt, s.water_alt) - config.focus.z as f32) / config.gain
+        } else {
+            sample_wpos(config, self, wpos)
+        }
+    }
+
+    /// The map sample presented for chunk `pos`: [`sample_pos_with`] with
+    /// authored ground presented ([`Self::chunk_presentation`]). Used by the
+    /// airship route map.
+    pub fn presented_map_sample(
+        &self,
+        config: &MapConfig,
+        index: IndexRef,
+        samples: Option<&[Option<ColumnSample>]>,
+        pos: Vec2<i32>,
+    ) -> MapSample {
+        sample_pos_with(config, self, index, samples, pos, true)
+    }
+}
+
+/// The base water colours of the world map, shallow to deep: the shade of a
+/// water cell is the first entry whose depth bound (`WATER_SHADE_DEPTHS_M`)
+/// it lies under, and the last entry past the final bound.
+pub(crate) const WATER_RGB: [[u8; 3]; 7] = [
+    [0, 0xa8, 0xc9],
+    [0, 0x91, 0xbd],
+    [0, 0x78, 0xab],
+    [0, 0x61, 0x99],
+    [0, 0x4b, 0x82],
+    [0, 0x36, 0x6b],
+    [0, 0x22, 0x52],
+];
+const WATER_SHADE_DEPTHS_M: [f64; 6] = [5.0, 15.0, 30.0, 70.0, 150.0, 300.0];
+
+/// The base water colour of the map for water `depth_m` metres deep.
+pub(crate) fn water_shade(depth_m: f64) -> [u8; 3] {
+    let bucket = WATER_SHADE_DEPTHS_M
+        .iter()
+        .position(|&bound| depth_m < bound)
+        .unwrap_or(WATER_SHADE_DEPTHS_M.len());
+    WATER_RGB[bucket]
+}
+
 /// Samples a MapSample at a chunk.
 ///
 /// You should generally pass a closure over this function into generate
@@ -95,6 +595,50 @@ pub fn sample_pos(
     index: IndexRef,
     samples: Option<&[Option<ColumnSample>]>,
     pos: Vec2<i32>,
+) -> MapSample {
+    sample_pos_with(config, sampler, index, samples, pos, false)
+}
+
+/// [`sample_pos`] for what the server presents (the world map image). With
+/// `authored_ground` true:
+/// - a chunk of authored dry ground in a `sea_fill: AuthoredOnly` region
+///   ([`WorldSim::chunk_is_authored_dry`]) is coloured as the ground it is at
+///   any altitude: its table water (the frozen natural lake or sea) and an
+///   altitude below sea level no longer paint it as water;
+/// - a chunk of such a region that holds authored water cells, that
+///   `chunk_water` reports wet and that the table calls land (no river kind) is
+///   coloured as a lake, shaded by the authored depth
+///   ([`WorldSim::chunk_water_depth`]), with the lake's own flat surface. A
+///   chunk the table already calls water keeps its table colour, and a table
+///   `River` chunk with an authored lake stays ground-coloured. In an `Auto`
+///   region the map stays table-only even where
+///   [`WorldSim::chunk_wet_authored`] is `true` over table land.
+///
+/// Everywhere else, and with `authored_ground` false, exactly
+/// [`sample_pos`].
+pub fn sample_pos_with(
+    config: &MapConfig,
+    sampler: &WorldSim,
+    index: IndexRef,
+    samples: Option<&[Option<ColumnSample>]>,
+    pos: Vec2<i32>,
+    authored_ground: bool,
+) -> MapSample {
+    sample_pos_opts(config, sampler, index, samples, pos, authored_ground, true)
+}
+
+/// [`sample_pos_with`] with the land red clamp (land colours never have a zero
+/// red channel) selectable: `false` gives the colours as they were before the
+/// clamp, which tests compare against.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sample_pos_opts(
+    config: &MapConfig,
+    sampler: &WorldSim,
+    index: IndexRef,
+    samples: Option<&[Option<ColumnSample>]>,
+    pos: Vec2<i32>,
+    authored_ground: bool,
+    land_red_clamp: bool,
 ) -> MapSample {
     let map_size_lg = config.map_size_lg();
     let MapConfig {
@@ -202,19 +746,77 @@ pub fn sample_pos(
                 .map(|e| e as f64)
             };
 
-            (rgb, alt, sample.ice_depth)
+            (
+                rgb,
+                alt,
+                sample.ice_depth,
+                sample.surface_is_physical,
+                sample.water_dist.is_some_and(|distance| distance <= 3.0),
+                sample.snow_cover
+                    || sample.temp <= CONFIG.snow_temp
+                    || sample.cliff_offset > 0.0
+                    || sample.surface_block_override.is_some(),
+            )
         });
 
     let downhill_wpos = downhill.unwrap_or(wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32));
+    // The table chunk altitude, read before a column sample replaces `alt`:
+    // below sea level the chunk already counts as water, whatever the columns
+    // say.
+    let table_true_alt =
+        ((if is_basement { basement } else { alt }) as f64 - focus.z) / gain as f64;
     let alt = if is_basement {
         basement
     } else {
-        column_data.map_or(alt, |(_, alt, _)| alt)
+        column_data.map_or(alt, |(_, alt, _, _, _, _)| alt)
     };
 
+    // Per chunk, not per column: a chunk is authored dry when its authored
+    // columns make it mostly dry by `chunk_water`'s majority-of-columns rule,
+    // so a chunk only partly covered by a dry patch keeps the table's water
+    // when the water still holds at least half of it.
+    // A mostly dry chunk the patch does not cover entirely keeps the table's
+    // river link to its downhill chunk: the natural river still runs through
+    // its unauthored columns, and dropping the link would leave a stub
+    // upstream. Only a fully authored dry chunk drops it.
+    let presentation = if authored_ground {
+        sampler.chunk_presentation(config, pos)
+    } else {
+        ChunkPresentation::TABLE
+    };
     let depth_m = (alt.max(water_alt) - alt).max(0.0) as f64;
-    let true_water_alt = (alt.max(water_alt) as f64 - focus.z) / gain as f64;
+    let mut true_water_alt = (alt.max(water_alt) as f64 - focus.z) / gain as f64;
     let true_alt = (alt as f64 - focus.z) / gain as f64;
+    // What the colour decisions below read: on authored dry ground, no water
+    // of any kind and no "below sea level"; elsewhere the values themselves.
+    let (mut colour_river_kind, mut colour_depth_m, colour_true_alt) = (
+        presentation.water_kind(river_kind),
+        presentation.water_depth(depth_m),
+        presentation.colour_alt(true_alt, true_sea_level),
+    );
+    // Authored water the frozen table calls dry (a lake in a
+    // `sea_fill: AuthoredOnly` region, below sea level or on table land) is
+    // coloured as the water `chunk_water` reports, with its depth shade.
+    // Chunks the table already paints as water (a river kind, or a table
+    // altitude below sea level), and every world without such a region, keep
+    // the table's colour byte for byte.
+    if authored_ground
+        && river_kind.is_none()
+        && table_true_alt >= true_sea_level
+        && let Some(water) = sampler.chunk_authored_only_wet(config, pos)
+    {
+        colour_river_kind = Some(RiverKind::Lake {
+            neighbor_pass_pos: pos,
+        });
+        // The authored-aware depth the sim itself uses (`max_surface_block -
+        // min_ground_block` for a pure authored lake), not the natural land
+        // altitude, which is ~1 m under a pit lake whatever its bed.
+        colour_depth_m = sampler
+            .chunk_water_depth(pos)
+            .map_or(0.0, |d| d.max(0.0) as f64);
+        // A lake over land is a flat surface at its own altitude.
+        true_water_alt = (water.water_alt.max(water.alt) as f64 - focus.z) / gain as f64;
+    }
     let alt = true_alt.clamp(0.0, 1.0);
 
     let default_rgb = Rgb::new(
@@ -226,12 +828,15 @@ pub fn sample_pos(
         if is_shaded { 1.0 } else { alt },
         if is_shaded || is_humidity { 1.0 } else { 0.0 },
     );
-    let column_rgb = column_data.map(|(rgb, _, _)| rgb).unwrap_or(default_rgb);
+    let column_rgb = column_data
+        .map(|(rgb, _, _, _, _, _)| rgb)
+        .unwrap_or(default_rgb);
     let mut connections = [None; 8];
     let mut has_connections = false;
     // TODO: Support non-river connections.
     // TODO: Support multiple connections.
-    let river_width = river_kind.map(|river| match river {
+    let connection_river_kind = presentation.connection_kind(river_kind);
+    let river_width = connection_river_kind.map(|river| match river {
         RiverKind::River { cross_section } => cross_section.x,
         RiverKind::Lake { .. } | RiverKind::Ocean => TerrainChunkSize::RECT_SIZE.x as f32,
     });
@@ -250,11 +855,19 @@ pub fn sample_pos(
                 });
             });
     };
-    let rgb = if is_water && is_ice && column_data.is_some_and(|(_, _, ice_depth)| ice_depth > 0.0)
+    // Whether the colour below is a water colour: the client tells water from
+    // land by a zero red channel, so land must never end at red zero.
+    let mut paints_water = false;
+    let rgb = if presentation.shows_water(is_water)
+        && is_ice
+        && column_data.is_some_and(|(_, _, ice_depth, _, _, _)| ice_depth > 0.0)
     {
         CONFIG.ice_color
     } else {
-        match (river_kind, (is_water, true_alt >= true_sea_level)) {
+        match (
+            colour_river_kind,
+            (is_water, colour_true_alt >= true_sea_level),
+        ) {
             (_, (false, _)) | (None, (_, true)) | (Some(RiverKind::River { .. }), _) => {
                 let (r, g, b) = (
                     (column_rgb.r
@@ -275,14 +888,10 @@ pub fn sample_pos(
                 );
                 Rgb::new((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
             },
-            (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => match depth_m {
-                depth if depth < 5.0 => Rgb::new(0, 0xa8, 0xc9),
-                depth if depth < 15.0 => Rgb::new(0, 0x91, 0xbd),
-                depth if depth < 30.0 => Rgb::new(0, 0x78, 0xab),
-                depth if depth < 70.0 => Rgb::new(0, 0x61, 0x99),
-                depth if depth < 150.0 => Rgb::new(0, 0x4b, 0x82),
-                depth if depth < 300.0 => Rgb::new(0, 0x36, 0x6b),
-                _ => Rgb::new(0, 0x22, 0x52),
+            (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => {
+                paints_water = true;
+                let [r, g, b] = water_shade(colour_depth_m);
+                Rgb::new(r, g, b)
             },
         }
     };
@@ -290,59 +899,55 @@ pub fn sample_pos(
         .get(pos)
         .filter(|sample| sample.authored_cromatolis_v0)
         .filter(|_| {
-            !matches!(river_kind, Some(RiverKind::Lake { .. } | RiverKind::Ocean))
-                && true_alt >= true_sea_level
+            authored_map_post_processing_applies(colour_river_kind, colour_true_alt, true_sea_level)
         }) {
         let altitude = ((sample.alt - CONFIG.sea_level) as f64 / 1050.0).clamp(0.0, 1.0);
         let vegetation = sample.tree_density.clamp(0.0, 1.0) as f64;
+        let is_physical_water = authored_map_cell_is_physical_water(
+            colour_river_kind,
+            colour_depth_m,
+            colour_true_alt,
+            true_sea_level,
+        );
+        let profile = sampler.authored_ground_cover_profile.as_ref();
 
+        // Cromatolis's alpine policy is expressed in real relief metres and
+        // starts at 700 m.  Do not use the old preview-only `altitude > 0.28`
+        // cutoff here: it corresponds to roughly 294 m of relief and used to
+        // erase the authored soil and forest language from valid sub-alpine
+        // woodland.  `authored_alpine_snowland` is the already-resolved,
+        // region-scoped physical fact, so it preserves the rock/snow column
+        // result without reinterpreting altitude a second time. The column
+        // contributes its broader physical-surface fact too: cold snow,
+        // cliffs, forced rock and shoreline material must outrank the visual
+        // ground-cover/ecology layers even below the authored alpine band.
+        let is_physical_alpine = sample.authored_alpine_snowland;
+        let has_non_shore_physical = is_physical_alpine
+            || column_data.is_some_and(|(_, _, _, _, _, non_shore_physical)| non_shore_physical);
+        let is_physical_surface = authored_preview_has_physical_surface(
+            is_physical_alpine,
+            column_data.map(|(_, _, _, is_physical, _, _)| is_physical),
+        );
         let mut out = rgb;
-        if sample.temp >= 0.0 {
-            let dry = Rgb::new(0xbd, 0xad, 0x5a);
-            let dry_blend = ((0.48 - vegetation) / 0.48).clamp(0.0, 1.0)
-                * (1.0 - (altitude / 0.35).clamp(0.0, 1.0))
-                * 0.72;
-            out = Rgb::new(
-                (out.r as f64 * (1.0 - dry_blend) + dry.r as f64 * dry_blend) as u8,
-                (out.g as f64 * (1.0 - dry_blend) + dry.g as f64 * dry_blend) as u8,
-                (out.b as f64 * (1.0 - dry_blend) + dry.b as f64 * dry_blend) as u8,
+        if profile.is_some() {
+            (_, out) = authored_ground_cover_preview_tint(
+                out,
+                profile,
+                sample.ground_cover,
+                sample.ground_substrate,
+                is_physical_water,
+                is_physical_surface,
             );
-
-            if altitude > 0.28 {
-                let mountain_t = ((altitude - 0.28) / 0.46).clamp(0.0, 1.0);
-                let mountain = if mountain_t > 0.6 {
-                    Rgb::new(0x3d, 0x28, 0x1a)
-                } else {
-                    Rgb::new(0x78, 0x55, 0x32)
-                };
-                let mountain_blend = mountain_t * (1.0 - vegetation * 0.42) * 0.95;
-                out = Rgb::new(
-                    (out.r as f64 * (1.0 - mountain_blend) + mountain.r as f64 * mountain_blend)
-                        as u8,
-                    (out.g as f64 * (1.0 - mountain_blend) + mountain.g as f64 * mountain_blend)
-                        as u8,
-                    (out.b as f64 * (1.0 - mountain_blend) + mountain.b as f64 * mountain_blend)
-                        as u8,
-                );
-            }
-
-            if vegetation > 0.24 {
-                let forest = if vegetation > 0.72 {
-                    Rgb::new(0x08, 0x36, 0x20)
-                } else if vegetation > 0.46 {
-                    Rgb::new(0x28, 0x73, 0x35)
-                } else {
-                    Rgb::new(0x82, 0x9d, 0x42)
-                };
-                let altitude_limit =
-                    (1.0 - ((altitude - 0.32) / 0.52).clamp(0.0, 1.0) * 0.78).clamp(0.0, 1.0);
-                let blend = ((vegetation - 0.24) / 0.76).clamp(0.0, 1.0) * altitude_limit * 0.94;
-                out = Rgb::new(
-                    (out.r as f64 * (1.0 - blend) + forest.r as f64 * blend) as u8,
-                    (out.g as f64 * (1.0 - blend) + forest.g as f64 * blend) as u8,
-                    (out.b as f64 * (1.0 - blend) + forest.b as f64 * blend) as u8,
-                );
-            }
+            out = authored_ecology_preview_tint(
+                out,
+                sampler.authored_map_ecology_profile.as_ref(),
+                sampler.authored_ecology_zone_at(pos),
+                vegetation,
+                is_physical_water,
+                is_physical_surface,
+                column_data.is_some_and(|(_, _, _, _, is_shoreline, _)| is_shoreline),
+                has_non_shore_physical,
+            );
         }
         let neighbor_alt = |offset: Vec2<i32>| {
             sampler
@@ -402,6 +1007,14 @@ pub fn sample_pos(
     } else {
         rgb
     };
+    // Land never has a zero red channel (a dark, green or blue surface, a
+    // tint or the shading could otherwise reach it and read as water on the
+    // client). Water keeps its colour exactly.
+    let rgb = if paints_water || !land_red_clamp {
+        rgb
+    } else {
+        Rgb::new(rgb.r.max(1), rgb.g, rgb.b)
+    };
     let rgb = if is_bridge {
         Rgb::new(0x80, 0x80, 0x80)
     } else if is_path {
@@ -412,7 +1025,13 @@ pub fn sample_pos(
 
     MapSample {
         rgb: Rgb::new(rgb.r, rgb.g, rgb.b),
-        alt: if is_water {
+        // The shading altitude: on authored dry ground the raw column
+        // altitude, below sea level on a dry pit, with no water surface over
+        // it. Only the colour decisions above treat such ground as if at sea
+        // level (so it is not painted as water); shading keeps the real
+        // relief. `WorldMapMsg::alt` is packed separately and clamps at sea
+        // level.
+        alt: if presentation.shows_water(is_water) {
             true_alt.max(true_water_alt)
         } else {
             true_alt
@@ -423,5 +1042,336 @@ pub fn sample_pos(
         } else {
             None
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        index::{Index, IndexOwned},
+        sim::{AuthoredEcologyZone, AuthoredGroundCoverProfile, GroundCoverBand},
+    };
+    use common::assets::AssetExt;
+
+    fn cromatolis_profile() -> AuthoredGroundCoverProfile {
+        AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+            .expect("the shipped Cromatolis ground-cover profile must load")
+    }
+
+    fn cromatolis_ecology_profile() -> AuthoredMapEcologyProfile {
+        AuthoredMapEcologyProfile::load_owned("world.map.cromatolis_v0_map_ecology")
+            .expect("the shipped Cromatolis map ecology profile must load")
+    }
+
+    #[test]
+    fn hot_authored_forest_preview_uses_its_profile_band_tint() {
+        let profile = cromatolis_profile();
+        let dry_beige = Rgb::new(0xbd, 0xad, 0x5a);
+
+        let (band, color) =
+            authored_ground_cover_preview_tint(dry_beige, Some(&profile), 0.50, None, false, false);
+
+        assert_eq!(band, Some(GroundCoverBand::Forest));
+        assert_ne!(color, dry_beige);
+        assert!(
+            color.g > color.r && color.g > color.b,
+            "forest preview must remain visibly green after a data-only palette retune"
+        );
+    }
+
+    #[test]
+    fn ecology_preview_keeps_relief_base_but_makes_authored_zones_distinct() {
+        let base = Rgb::new(0x69, 0x7d, 0x43);
+        let profile = cromatolis_ecology_profile();
+        let open_land = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            Some(AuthoredEcologyZone::OpenLand),
+            0.0,
+            false,
+            false,
+            false,
+            false,
+        );
+        let shrubland = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            Some(AuthoredEcologyZone::Shrubland),
+            0.4,
+            false,
+            false,
+            false,
+            false,
+        );
+        let forest = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            Some(AuthoredEcologyZone::TemperateForest),
+            0.9,
+            false,
+            false,
+            false,
+            false,
+        );
+        let swamp = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            Some(AuthoredEcologyZone::Wetland),
+            0.9,
+            false,
+            false,
+            false,
+            false,
+        );
+        let jungle = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            Some(AuthoredEcologyZone::Jungle),
+            0.9,
+            false,
+            false,
+            false,
+            false,
+        );
+
+        assert!(
+            open_land.r > forest.r && open_land.g > forest.g,
+            "open land must stay visibly lighter than temperate forest"
+        );
+        assert!(
+            swamp.b > forest.b,
+            "wetland must retain a visibly cooler (blue-green) map cue"
+        );
+        assert!(
+            jungle.g < forest.g,
+            "jungle must remain visually deeper than temperate forest"
+        );
+        let rgb_distance = |left: Rgb<u8>, right: Rgb<u8>| {
+            (i16::from(left.r) - i16::from(right.r)).unsigned_abs()
+                + (i16::from(left.g) - i16::from(right.g)).unsigned_abs()
+                + (i16::from(left.b) - i16::from(right.b)).unsigned_abs()
+        };
+        for (left_name, left, right_name, right) in [
+            ("open land", open_land, "shrubland", shrubland),
+            ("open land", open_land, "forest", forest),
+            ("forest", forest, "wetland", swamp),
+            ("forest", forest, "jungle", jungle),
+        ] {
+            assert!(
+                rgb_distance(left, right) >= 24,
+                "{left_name} and {right_name} need a cartographically legible palette separation; \
+                 got {left:?} and {right:?}",
+            );
+        }
+        assert_ne!(forest, base);
+        assert_ne!(swamp, forest);
+        assert_ne!(jungle, forest);
+        assert_eq!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::Wetland),
+                1.0,
+                true,
+                false,
+                false,
+                false,
+            ),
+            base,
+            "water keeps its physical map treatment",
+        );
+        assert_eq!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::TemperateForest),
+                1.0,
+                false,
+                true,
+                false,
+                true,
+            ),
+            base,
+            "mountains keep their physical map treatment",
+        );
+        assert_ne!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::Wetland),
+                1.0,
+                false,
+                true,
+                true,
+                false,
+            ),
+            base,
+            "an authored wetland retains its cartographic cue along its physical shoreline",
+        );
+        assert_eq!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::TemperateForest),
+                1.0,
+                false,
+                true,
+                true,
+                false,
+            ),
+            base,
+            "shoreline presentation remains physical outside explicit wetland zones",
+        );
+        assert_eq!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                Some(AuthoredEcologyZone::Wetland),
+                1.0,
+                false,
+                true,
+                true,
+                true,
+            ),
+            base,
+            "wetland never overrides co-located snow, rock, cliff, forced material, or alpine \
+             presentation",
+        );
+    }
+
+    #[test]
+    fn authored_land_tint_is_not_disabled_by_the_global_water_render_option() {
+        // `MapConfig::orthographic` enables water rendering globally. That
+        // configuration must not classify every dry land cell as physical
+        // water and bypass the authored ground/ecology palette.
+        assert!(!authored_map_cell_is_physical_water(None, 0.0, 12.0, 0.0));
+        assert!(authored_map_cell_is_physical_water(
+            Some(RiverKind::Ocean),
+            0.0,
+            12.0,
+            0.0,
+        ));
+        let river = Some(RiverKind::River {
+            cross_section: Vec2::new(2.0, 1.0),
+        });
+        assert!(
+            !authored_map_cell_is_physical_water(river, 0.0, 12.0, 0.0),
+            "a dry river-adjacent cell remains eligible for its authored land tint"
+        );
+        assert!(
+            authored_map_cell_is_physical_water(river, 1.0, 12.0, 0.0),
+            "a water-covered river cell keeps its physical water treatment"
+        );
+        assert!(authored_map_cell_is_physical_water(None, 1.0, 12.0, 0.0));
+        assert!(authored_map_cell_is_physical_water(None, 0.0, -0.1, 0.0));
+    }
+
+    #[test]
+    fn preview_classification_matches_runtime_profile_and_preserves_physical_layers() {
+        let profile = cromatolis_profile();
+        let original = Rgb::new(0x51, 0x62, 0x73);
+
+        let (band, _) =
+            authored_ground_cover_preview_tint(original, Some(&profile), 0.60, None, false, false);
+        assert_eq!(band, Some(profile.classify(0.60)));
+        assert_eq!(band, Some(GroundCoverBand::Jungle));
+
+        for (is_water, is_physical_mountain) in [(true, false), (false, true)] {
+            assert_eq!(
+                authored_ground_cover_preview_tint(
+                    original,
+                    Some(&profile),
+                    0.90,
+                    None,
+                    is_water,
+                    is_physical_mountain,
+                ),
+                (None, original),
+                "physical water and mountains keep their map treatment",
+            );
+        }
+
+        assert_eq!(
+            authored_ground_cover_preview_tint(original, None, 0.90, None, false, false),
+            (None, original),
+            "procedural maps stay on the legacy rendering path",
+        );
+    }
+
+    #[test]
+    fn explicit_sand_substrate_wins_over_green_cover_on_land_only() {
+        let profile = cromatolis_profile();
+        let original = Rgb::new(0x51, 0x62, 0x73);
+        assert_eq!(
+            authored_ground_cover_preview_tint(
+                original,
+                Some(&profile),
+                0.9,
+                Some(GroundSubstrate::Sand),
+                false,
+                false,
+            ),
+            (None, Rgb::new(0xbd, 0xad, 0x5a)),
+        );
+        assert_eq!(
+            authored_ground_cover_preview_tint(
+                original,
+                Some(&profile),
+                0.9,
+                Some(GroundSubstrate::Sand),
+                true,
+                false,
+            ),
+            (None, original),
+            "water remains more authoritative than an authored sand zone",
+        );
+    }
+
+    #[test]
+    fn physical_water_bypasses_the_complete_authored_post_processing_branch() {
+        let sea_level = 0.5;
+
+        assert!(!authored_map_post_processing_applies(
+            Some(RiverKind::Ocean),
+            0.9,
+            sea_level,
+        ));
+        assert!(!authored_map_post_processing_applies(
+            Some(RiverKind::Lake {
+                neighbor_pass_pos: Vec2::zero(),
+            }),
+            0.9,
+            sea_level,
+        ));
+        assert!(!authored_map_post_processing_applies(None, 0.49, sea_level));
+        assert!(authored_map_post_processing_applies(None, 0.5, sea_level));
+    }
+
+    #[test]
+    fn a_real_column_physical_surface_outranks_authored_green_presentation() {
+        assert!(authored_preview_has_physical_surface(false, Some(true)));
+        assert!(authored_preview_has_physical_surface(true, Some(false)));
+        assert!(!authored_preview_has_physical_surface(false, Some(false)));
+        assert!(!authored_preview_has_physical_surface(false, None));
+    }
+
+    #[test]
+    fn sample_pos_keeps_authored_ocean_color_outside_land_post_processing() {
+        let mut sampler = WorldSim::empty();
+        let sample = &mut sampler.chunks[0];
+        sample.authored_cromatolis_v0 = true;
+        sample.river.river_kind = Some(RiverKind::Ocean);
+        sample.water_alt = 100.0;
+        sample.temp = 1.0;
+        sample.tree_density = 1.0;
+        sampler.authored_ground_cover_profile = Some(cromatolis_profile());
+
+        let config = MapConfig::orthographic(sampler.map_size_lg(), 0.0..=1_000.0);
+        let index = IndexOwned::new(Index::new(0));
+
+        let result = sample_pos(&config, &sampler, index.as_index_ref(), None, Vec2::zero());
+
+        assert_eq!(result.rgb, Rgb::new(0x00, 0x4b, 0x82));
     }
 }

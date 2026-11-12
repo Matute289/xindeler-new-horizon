@@ -301,13 +301,13 @@ impl<'a> From<&'a Body> for SkeletonAttr {
             // Z ori (front, front center, back center, center)
             leg_ori: match (body.species, body.body_type) {
                 (Antlion, _) => (0.7, -0.3, -0.4, 0.4),
-                (_, _) => (0.1, -0.3, 0.0, 0.4),
+                (_, _) => attr_fallback!("Arthropod", "leg_ori", (0.1, -0.3, 0.0, 0.4)),
             },
             // Whether or not it used its mandibles for attacks
             snapper: match (body.species, body.body_type) {
                 (Stagbeetle, _) => true,
                 (Antlion, _) => true,
-                (_, _) => false,
+                (_, _) => attr_fallback!("Arthropod", "snapper", false),
             },
         }
     }

@@ -5,6 +5,7 @@ use common::{
     rtsim::TerrainResource,
     terrain::{
         Block, BlockKind, MapSizeLg, SpriteKind, TerrainChunk, TerrainChunkMeta, TerrainChunkSize,
+        TerrainOverrides,
     },
     vol::RectVolSize,
 };
@@ -55,6 +56,7 @@ impl World {
         // TODO: misleading name
         mut _should_continue: impl FnMut() -> bool,
         _time: Option<(TimeOfDay, Calendar)>,
+        _overrides: Option<&TerrainOverrides>,
     ) -> Result<(TerrainChunk, ChunkSupplement), ()> {
         let (x, y) = chunk_pos.map(|e| e.to_le_bytes()).into_tuple();
         let mut rng = SmallRng::from_seed([

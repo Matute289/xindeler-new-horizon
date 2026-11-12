@@ -429,7 +429,8 @@ impl AgentData<'_> {
                                             - read_data
                                                 .world
                                                 .sim()
-                                                .get_alt_approx(
+                                                // XINDELER: authored-aware ground.
+                                                .ground_alt_at(
                                                     self.pos.0.xy().map(|x: f32| x as i32),
                                                 )
                                                 .unwrap_or(0.0);
@@ -597,7 +598,8 @@ impl AgentData<'_> {
                             let terrain_alt = read_data
                                 .world
                                 .sim()
-                                .get_alt_approx(
+                                // XINDELER: authored-aware ground.
+                                .ground_alt_at(
                                     (self.pos.0.xy()
                                         + controller.inputs.look_dir.to_vec().xy() * dist)
                                         .map(|x: f32| x as i32),
@@ -2598,7 +2600,10 @@ impl AgentData<'_> {
         // cooldown elapses again. A deliberate trade-off given how rare
         // multiple simultaneous disguises near one observer is expected to
         // be, not an oversight.
-        let t1_fires = other_pos.0.distance_squared(self.pos.0) < agent.psyche.sight_dist.powi(2)
+        // Scaled by the weather like every other *sight* check: seeing through
+        // a disguise can't be easier than seeing the wearer at all.
+        let t1_sight_dist = agent.psyche.sight_dist * self.weather_visibility;
+        let t1_fires = other_pos.0.distance_squared(self.pos.0) < t1_sight_dist.powi(2)
             && read_data.time.0 - agent.disguise_suspicion_last_roll
                 >= f64::from(tuning.0.disguise_suspicion_reroll_secs);
 
@@ -2703,7 +2708,11 @@ impl AgentData<'_> {
         read_data: &ReadData,
     ) -> bool {
         let within_sight_dist = {
-            let sight_dist = agent.psyche.sight_dist * other_stealth_multiplier;
+            // Snowfall and fog shorten how far this agent can see, on top of
+            // whatever the target is doing to conceal itself. Resolved once
+            // per agent tick in `AgentData`, not re-sampled per candidate.
+            let sight_dist =
+                agent.psyche.sight_dist * other_stealth_multiplier * self.weather_visibility;
             let dist_sqrd = other_pos.0.distance_squared(self.pos.0);
 
             dist_sqrd < sight_dist.powi(2)

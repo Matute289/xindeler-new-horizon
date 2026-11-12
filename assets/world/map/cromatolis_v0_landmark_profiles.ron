@@ -1,0 +1,28 @@
+(
+    schema: "xindeler_open_world.authored_landmark_profiles.v2",
+    coordinate_space: "inherits_landmark_center",
+    notes: [
+        "Physical profiles are canonical authored content. They select reusable structure families; no engine keeps a coordinate-specific landmark exception.",
+        "Black towers use an original sealed spired silhouette: fortified base, tapering shaft, buttresses and asymmetric stone spires. They have no doors, windows or hollow interior until an authored gameplay access is defined.",
+        "Lighthouse families are generic coastal architecture: keeper-house, stone beacon and banded harbour tower. Each has a distinct taper, lantern cage, gallery and roof; references establish mood and function, not copied geometry.",
+        "Height and footprint are in world blocks. Light range is a future runtime light/visibility value and does not yet create a simulation light source.",
+    ],
+    entries: [
+        (site_id: "site.tree_of_life", physical_template: GiantTree, style: AncientCanopy, material: LivingWood, footprint_radius: 64, height: 150, keeper_house: false, light_range: 0),
+        (site_id: "site.the_tree_of_souls", physical_template: GiantTree, style: AncientCanopy, material: LivingWood, footprint_radius: 64, height: 150, keeper_house: false, light_range: 0),
+        (site_id: "site.black_tower_south", physical_template: BlackTower, style: CrownedSpire, material: BlackStone, footprint_radius: 30, height: 320, keeper_house: false, light_range: 0),
+        (site_id: "site.black_tower_north", physical_template: BlackTower, style: CrownedSpire, material: BlackStone, footprint_radius: 26, height: 286, keeper_house: false, light_range: 0),
+        (site_id: "site.dove_point_lighthouse", physical_template: Lighthouse, style: KeeperHouse, material: PaleStone, footprint_radius: 16, height: 82, keeper_house: true, light_range: 300),
+        (site_id: "site.red_lighthouse", physical_template: Lighthouse, style: BandedHarbour, material: PaintedMasonry, footprint_radius: 17, height: 88, keeper_house: false, light_range: 340),
+        (site_id: "site.portland_lighthouse", physical_template: Lighthouse, style: StoneBeacon, material: WeatheredStone, footprint_radius: 14, height: 62, keeper_house: false, light_range: 250),
+        (site_id: "site.kinderpon_beacon", physical_template: Lighthouse, style: StoneBeacon, material: WeatheredStone, footprint_radius: 13, height: 56, keeper_house: false, light_range: 220),
+        (site_id: "site.headlamp_tip", physical_template: Lighthouse, style: StoneBeacon, material: WeatheredStone, footprint_radius: 12, height: 52, keeper_house: false, light_range: 190),
+        (site_id: "site.faro_de_caros", physical_template: Lighthouse, style: KeeperHouse, material: PaleStone, footprint_radius: 15, height: 76, keeper_house: true, light_range: 285),
+        (site_id: "site.faro_de_alzinder", physical_template: Lighthouse, style: BandedHarbour, material: PaintedMasonry, footprint_radius: 16, height: 82, keeper_house: false, light_range: 305),
+        (site_id: "site.bs_lighthouse", physical_template: Lighthouse, style: KeeperHouse, material: PaleStone, footprint_radius: 15, height: 72, keeper_house: true, light_range: 275),
+        (site_id: "site.kalitos_last_light", physical_template: Lighthouse, style: BandedHarbour, material: PaintedMasonry, footprint_radius: 17, height: 94, keeper_house: false, light_range: 360),
+        (site_id: "site.temple_arch_wright", physical_template: Chapel, style: MonumentalChapel, material: PaleStone, footprint_radius: 24, height: 48, keeper_house: false, light_range: 0),
+        (site_id: "site.kalthis_river_port", physical_template: Harbour, style: RiverPort, material: WeatheredStone, footprint_radius: 26, height: 24, keeper_house: false, light_range: 0, facing: West),
+        (site_id: "site.duren_river_port", physical_template: Harbour, style: RiverPort, material: WeatheredStone, footprint_radius: 26, height: 24, keeper_house: false, light_range: 0, facing: East),
+    ],
+)

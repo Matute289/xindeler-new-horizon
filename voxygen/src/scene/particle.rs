@@ -41,23 +41,42 @@ pub struct ParticleMgr {
     /// keep track of lifespans
     particles: Vec<Particle>,
 
+    /// Citadel spheres use their own voxel model instead of the default
+    /// particle cube, while sharing the same instance format.
+    citadel_sphere_particles: Vec<Particle>,
+
     /// keep track of timings
     scheduler: HeartbeatScheduler,
 
     /// GPU Instance Buffer
     instances: Instances<ParticleInstance>,
 
+    citadel_sphere_instances: Instances<ParticleInstance>,
+
     /// GPU Vertex Buffers
     model_cache: HashMap<&'static str, Model<ParticleVertex>>,
+
+    /// Local activation times for transient, server-synchronised Cromatolis
+    /// Aerial Citadel practice beams.
+    citadel_beam_started: HashMap<Entity, f64>,
+
+    /// Local activation times for practice-sphere timelines synchronised at
+    /// the cannon muzzle, so their visual trajectory is not limited by
+    /// entity streaming.
+    citadel_sphere_started: HashMap<Entity, f64>,
 }
 
 impl ParticleMgr {
     pub fn new(renderer: &mut Renderer) -> Self {
         Self {
             particles: Vec::new(),
+            citadel_sphere_particles: Vec::new(),
             scheduler: HeartbeatScheduler::new(),
             instances: default_instances(renderer),
+            citadel_sphere_instances: default_instances(renderer),
             model_cache: default_cache(renderer),
+            citadel_beam_started: HashMap::new(),
+            citadel_sphere_started: HashMap::new(),
         }
     }
 
@@ -743,12 +762,16 @@ impl ParticleMgr {
             // remove dead Particle
             self.particles
                 .retain(|p| p.alive_until > scene_data.state.get_time());
+            self.citadel_sphere_particles
+                .retain(|p| p.alive_until > scene_data.state.get_time());
 
             // add new Particle
             self.maintain_equipment_particles(scene_data, figure_mgr);
             self.maintain_body_particles(scene_data);
             self.maintain_char_state_particles(scene_data, figure_mgr);
             self.maintain_beam_particles(scene_data, lights);
+            self.maintain_citadel_beam_particles(scene_data);
+            self.maintain_citadel_sphere_particles(scene_data);
             self.maintain_block_particles(scene_data, terrain, figure_mgr);
             self.maintain_shockwave_particles(scene_data);
             self.maintain_aura_particles(scene_data);
@@ -765,9 +788,106 @@ impl ParticleMgr {
                 self.particles.clear();
                 self.upload_particles(renderer);
             }
+            if !self.citadel_sphere_particles.is_empty() {
+                self.citadel_sphere_particles.clear();
+                self.upload_particles(renderer);
+            }
 
             // remove all timings
             self.scheduler.clear();
+        }
+    }
+
+    /// Renders the server-synchronised practice-beam timeline
+    /// (`comp::CitadelPracticeBeam`) as a single live stroke, not a trail:
+    /// the previous frame's segment is dropped before drawing the current
+    /// one, so the ray stays continuous without stacked segments.
+    fn maintain_citadel_beam_particles(&mut self, scene_data: &SceneData) {
+        let state = scene_data.state;
+        let ecs = state.ecs();
+        let time = state.get_time();
+
+        // Server-side deletion occurs at the end of the beam's timeline. Retain
+        // a short grace window so a delayed entity removal cannot grow this
+        // map.
+        self.citadel_beam_started
+            .retain(|_, started| time - *started < 6.0);
+
+        // Every citadel-beam particle is replaced every frame regardless of
+        // which beam entity it belonged to (each is re-pushed below if its
+        // timeline still has a visible segment), so a single O(n) pass over
+        // the shared particle pool here -- used by every other effect in the
+        // game, not just citadel beams -- drops them all at once instead of
+        // re-scanning that whole pool once per active beam entity.
+        self.particles
+            .retain(|particle| particle.citadel_beam_entity.is_none());
+
+        for (entity, beam) in (
+            &ecs.entities(),
+            &ecs.read_storage::<comp::CitadelPracticeBeam>(),
+        )
+            .join()
+        {
+            let started = *self.citadel_beam_started.entry(entity).or_insert(time);
+            let elapsed = (time - started).max(0.0) as f32;
+
+            if let Some((tail, head)) = beam.segment_at(elapsed) {
+                self.particles.push(Particle::new_citadel_beam(
+                    entity,
+                    // A short grace duration handles an occasional delayed
+                    // update. It never overlaps: the next update removes this
+                    // entity's prior stroke before installing the new one.
+                    Duration::from_millis(250),
+                    time,
+                    ParticleMode::CitadelLaser,
+                    tail,
+                    head,
+                    scene_data,
+                ));
+            }
+        }
+    }
+
+    /// Renders the server-synchronised practice-sphere timeline
+    /// (`comp::CitadelPracticeSphere`), evaluated locally from the cannon
+    /// muzzle so its visual trajectory stays visible after it crosses
+    /// entity-streaming range.
+    fn maintain_citadel_sphere_particles(&mut self, scene_data: &SceneData) {
+        let state = scene_data.state;
+        let ecs = state.ecs();
+        let time = state.get_time();
+
+        // The entity stays at the muzzle for the practice sphere's visual
+        // timeline. Prune local activation data independently in case the
+        // server deletion update arrives late.
+        self.citadel_sphere_started
+            .retain(|_, started| time - *started < 4.0);
+
+        for (entity, sphere) in (
+            &ecs.entities(),
+            &ecs.read_storage::<comp::CitadelPracticeSphere>(),
+        )
+            .join()
+        {
+            let started = *self.citadel_sphere_started.entry(entity).or_insert(time);
+            let elapsed = (time - started).max(0.0) as f32;
+
+            // Like the beam, each frame replaces this entity's prior visual.
+            self.citadel_sphere_particles
+                .retain(|particle| particle.citadel_beam_entity != Some(entity));
+
+            if let Some(pos) = sphere.position_at(elapsed) {
+                let source_diameter = object::Body::LaserSphereSmall.dimensions().x;
+                self.citadel_sphere_particles
+                    .push(Particle::new_citadel_sphere(
+                        entity,
+                        Duration::from_millis(250),
+                        time,
+                        pos,
+                        sphere.diameter / source_diameter,
+                        scene_data,
+                    ));
+            }
         }
     }
 
@@ -1137,6 +1257,7 @@ impl ParticleMgr {
                             end_pos,
                             Vec2::zero(),
                         ),
+                        citadel_beam_entity: None,
                     }
                 },
             );
@@ -1645,6 +1766,12 @@ impl ParticleMgr {
         let time = state.get_time();
         let dt = scene_data.state.get_delta_time();
         let mut rng = rand::rng();
+        // Hoisted out of the join below: the rain-splash particles need both,
+        // and an asset-cache lookup (which takes an `RwLock` read guard) plus a
+        // shred resource borrow do not belong inside a per-entity loop body.
+        // `WeatherTuning::load`'s own doc comment says as much.
+        let weather_tuning = common::weather::WeatherTuning::load();
+        let terrain = state.terrain();
 
         for (
             entity,
@@ -1717,14 +1844,30 @@ impl ParticleMgr {
                         });
                         // Exposure to sunlight: proxy for how wet the ground is
                         if char_state.meta.last_light > 0.9 {
-                            // Splashing in the rain
-                            let splash_particles =
-                                ((state.weather_at(interpolated.pos.xy()).rain - RAIN_THRESHOLD)
-                                    .max(0.0)
+                            // Splashing in the rain — only liquid rain leaves
+                            // puddles to splash through, so this fades out as
+                            // the same precipitation turns to snow.
+                            //
+                            // `rain` is total precipitation, so testing it
+                            // first short-circuits the terrain lookup on every
+                            // frame it isn't precipitating at all; `snow` can
+                            // only ever reduce the count from here.
+                            let precip = state.weather_at(interpolated.pos.xy());
+                            let splash_particles = if precip.rain > RAIN_THRESHOLD {
+                                let snow_factor = common::weather::snow_factor_at(
+                                    &terrain,
+                                    interpolated.pos.xy(),
+                                    &weather_tuning,
+                                )
+                                .unwrap_or(0.0);
+                                ((precip.liquid_rain(snow_factor) - RAIN_THRESHOLD).max(0.0)
                                     * scale
                                     * 100.0)
                                     .ceil()
-                                    .min(16.0) as usize;
+                                    .min(16.0) as usize
+                            } else {
+                                0
+                            };
                             self.add_particles(
                                 scene_data.particles_chance,
                                 splash_particles,
@@ -3360,6 +3503,31 @@ impl ParticleMgr {
                                 scene_data,
                             )
                         });
+
+                        // Burning additionally smoulders: a few motionless
+                        // smoke wisps dotted around the
+                        // body, on top of the flame licks
+                        // above. Cursed is a magical flame, not real fire, so
+                        // it gets no smoke.
+                        if matches!(buff_kind, BuffKind::Burning) {
+                            let smoke_amount =
+                                usize::from(self.scheduler.heartbeats(Duration::from_millis(200)));
+                            self.add_particles(scene_data.particles_chance, smoke_amount, || {
+                                let smoke_pos = pos
+                                    + Vec3::unit_z() * body.height() * rng.random_range(0.1..0.75)
+                                    + Vec3::<f32>::zero()
+                                        .map(|_| rng.random_range(-1.0..1.0))
+                                        .normalized()
+                                        * body.max_radius();
+                                Particle::new(
+                                    Duration::from_secs_f32(1.5),
+                                    time,
+                                    ParticleMode::StaticSmoke,
+                                    smoke_pos,
+                                    scene_data,
+                                )
+                            });
+                        }
                     },
                     BuffKind::PotionSickness => {
                         let mut multiplicity = 0;
@@ -4688,6 +4856,7 @@ impl ParticleMgr {
                                     tube_pos + radial * flame_reach,
                                     Vec2::zero(),
                                 ),
+                                citadel_beam_entity: None,
                             }
                         },
                     );
@@ -4858,7 +5027,14 @@ impl ParticleMgr {
         // TODO: optimise buffer writes
         let gpu_instances = renderer.create_instances(&all_cpu_instances);
 
+        let sphere_instances = self
+            .citadel_sphere_particles
+            .iter()
+            .map(|p| p.instance)
+            .collect::<Vec<ParticleInstance>>();
+
         self.instances = gpu_instances;
+        self.citadel_sphere_instances = renderer.create_instances(&sphere_instances);
     }
 
     pub fn render<'a>(&'a self, drawer: &mut ParticleDrawer<'_, 'a>, scene_data: &SceneData) {
@@ -4870,12 +5046,22 @@ impl ParticleMgr {
                 .expect("Expected particle model in cache");
 
             drawer.draw(model, &self.instances);
+
+            let sphere_model = &self
+                .model_cache
+                .get(CITADEL_SPHERE_MODEL_KEY)
+                .expect("Expected citadel sphere model in cache");
+            drawer.draw(sphere_model, &self.citadel_sphere_instances);
         }
     }
 
-    pub fn particle_count(&self) -> usize { self.instances.count() }
+    pub fn particle_count(&self) -> usize {
+        self.instances.count() + self.citadel_sphere_instances.count()
+    }
 
-    pub fn particle_count_visible(&self) -> usize { self.instances.count() }
+    pub fn particle_count_visible(&self) -> usize {
+        self.instances.count() + self.citadel_sphere_instances.count()
+    }
 }
 
 fn default_instances(renderer: &mut Renderer) -> Instances<ParticleInstance> {
@@ -4885,36 +5071,42 @@ fn default_instances(renderer: &mut Renderer) -> Instances<ParticleInstance> {
 }
 
 const DEFAULT_MODEL_KEY: &str = "voxygen.voxel.particle";
+/// The Cromatolis Aerial Citadel practice sphere shares `LaserSphereSmall`'s
+/// existing voxel model rather than authoring a new one (see
+/// `object::Body::visual_scale`'s doc comment for the full sharing story).
+const CITADEL_SPHERE_MODEL_KEY: &str = "voxygen.voxel.weapon.projectile.laser_beam_small";
 
 fn default_cache(renderer: &mut Renderer) -> HashMap<&'static str, Model<ParticleVertex>> {
     let mut model_cache = HashMap::new();
 
-    model_cache.entry(DEFAULT_MODEL_KEY).or_insert_with(|| {
-        let vox = DotVox::load_expect(DEFAULT_MODEL_KEY);
+    for model_key in [DEFAULT_MODEL_KEY, CITADEL_SPHERE_MODEL_KEY] {
+        model_cache.entry(model_key).or_insert_with(|| {
+            let vox = DotVox::load_expect(model_key);
 
-        // NOTE: If we add texturing we may eventually try to share it among all
-        // particles in a single atlas.
-        let max_texture_size = renderer.max_texture_size();
-        let max_size = Vec2::from(u16::try_from(max_texture_size).unwrap_or(u16::MAX));
-        let mut greedy = GreedyMesh::new(max_size, crate::mesh::greedy::general_config());
+            // NOTE: If we add texturing we may eventually try to share it among
+            // all particles in a single atlas.
+            let max_texture_size = renderer.max_texture_size();
+            let max_size = Vec2::from(u16::try_from(max_texture_size).unwrap_or(u16::MAX));
+            let mut greedy = GreedyMesh::new(max_size, crate::mesh::greedy::general_config());
 
-        let segment = Segment::from_vox_model_index(&vox.read().0, 0, None);
-        let segment_size = segment.size();
-        let mut mesh = generate_mesh_base_vol_particle(segment, &mut greedy).0;
-        // Center particle vertices around origin
-        for vert in mesh.vertices_mut() {
-            vert.pos[0] -= segment_size.x as f32 / 2.0;
-            vert.pos[1] -= segment_size.y as f32 / 2.0;
-            vert.pos[2] -= segment_size.z as f32 / 2.0;
-        }
+            let segment = Segment::from_vox_model_index(&vox.read().0, 0, None);
+            let segment_size = segment.size();
+            let mut mesh = generate_mesh_base_vol_particle(segment, &mut greedy).0;
+            // Center particle vertices around origin
+            for vert in mesh.vertices_mut() {
+                vert.pos[0] -= segment_size.x as f32 / 2.0;
+                vert.pos[1] -= segment_size.y as f32 / 2.0;
+                vert.pos[2] -= segment_size.z as f32 / 2.0;
+            }
 
-        // NOTE: Ignoring coloring / lighting for now.
-        drop(greedy);
+            // NOTE: Ignoring coloring / lighting for now.
+            drop(greedy);
 
-        renderer
-            .create_model(&mesh)
-            .expect("Failed to create particle model")
-    });
+            renderer
+                .create_model(&mesh)
+                .expect("Failed to create particle model")
+        });
+    }
 
     model_cache
 }
@@ -4992,6 +5184,11 @@ impl HeartbeatScheduler {
 struct Particle {
     alive_until: f64, // created_at + lifespan
     instance: ParticleInstance,
+    /// Identifies the one transient visual used for a citadel cannon's
+    /// server-synchronised timeline entity (a `CitadelPracticeBeam` or
+    /// `CitadelPracticeSphere`). Ordinary particles remain untagged and
+    /// preserve their usual lifetime.
+    citadel_beam_entity: Option<Entity>,
 }
 
 impl Particle {
@@ -5011,6 +5208,7 @@ impl Particle {
                 pos,
                 scene_data.wind_vel,
             ),
+            citadel_beam_entity: None,
         }
     }
 
@@ -5032,6 +5230,49 @@ impl Particle {
                 pos2,
                 scene_data.wind_vel,
             ),
+            citadel_beam_entity: None,
+        }
+    }
+
+    /// The single live stroke for one citadel practice-beam entity's current
+    /// timeline segment (see `ParticleMgr::maintain_citadel_beam_particles`).
+    fn new_citadel_beam(
+        entity: Entity,
+        lifespan: Duration,
+        time: f64,
+        mode: ParticleMode,
+        pos1: Vec3<f32>,
+        pos2: Vec3<f32>,
+        scene_data: &SceneData,
+    ) -> Self {
+        Self {
+            citadel_beam_entity: Some(entity),
+            ..Self::new_directed(lifespan, time, mode, pos1, pos2, scene_data)
+        }
+    }
+
+    /// The current position of one citadel practice-sphere entity's timeline
+    /// (see `ParticleMgr::maintain_citadel_sphere_particles`). `visual_scale`
+    /// is applied via a directed pair one unit apart, matching how ordinary
+    /// directed particles encode their orientation.
+    fn new_citadel_sphere(
+        entity: Entity,
+        lifespan: Duration,
+        time: f64,
+        pos: Vec3<f32>,
+        visual_scale: f32,
+        scene_data: &SceneData,
+    ) -> Self {
+        Self {
+            citadel_beam_entity: Some(entity),
+            ..Self::new_directed(
+                lifespan,
+                time,
+                ParticleMode::CitadelSphere,
+                pos,
+                pos + Vec3::unit_x() * visual_scale,
+                scene_data,
+            )
         }
     }
 
@@ -5060,6 +5301,7 @@ impl Particle {
                 col,
                 scene_data.wind_vel,
             ),
+            citadel_beam_entity: None,
         }
     }
 

@@ -1,0 +1,33 @@
+// The authored, named biome-profile catalog -- see
+// `world/src/biome_profile.rs` for the schema this must match.
+//
+// Ships with exactly ONE throwaway test-fixture profile. Real content
+// profiles (a bespoke swamp, a volcano, ...) are future content-team work,
+// not authored here.
+(
+    schema: "xindeler_open_world.authored_biome_profiles.v1",
+    entries: [
+        (
+            id: "test_fixture_do_not_use_in_content",
+            ground: (0.05, 0.2, 0.08),
+            sub_surface: (0.08, 0.1, 0.05),
+            surface_block: Some(Earth),
+            force_no_snow: true,
+            tree_density_mul: 0.6,
+            forest: [
+                (Swamp, 3.0),
+                (Mangrove, 1.0),
+            ],
+            flood_depth: Some(2.0),
+            flood_block: Water,
+            scatter_deny: [
+                LargeCactus,
+                ShortCactus,
+            ],
+            scatter_boost: [
+                (Reed, 4.0),
+                (LillyPads, 2.5),
+            ],
+        ),
+    ],
+)

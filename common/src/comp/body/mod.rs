@@ -1,4 +1,6 @@
 pub mod arthropod;
+pub(crate) mod attr_audit;
+#[cfg(test)] mod attr_audit_test;
 pub mod biped_large;
 pub mod biped_small;
 pub mod bird_large;
@@ -17,11 +19,14 @@ pub mod quadruped_low;
 pub mod quadruped_medium;
 pub mod quadruped_small;
 pub mod ship;
+pub mod stats;
 pub mod theropod;
 pub mod traversal;
 
+use self::stats::Rowless;
 use crate::{
     assets::{BoxedError, FileAsset, load_ron},
+    comp::body::attr_audit::attr_fallback,
     consts::{HUMAN_DENSITY, WATER_DENSITY},
     npc::NpcKind,
 };
@@ -386,9 +391,9 @@ impl Body {
         let s = match self {
             Body::BirdMedium(bird_medium) => match bird_medium.species {
                 bird_medium::Species::Bat | bird_medium::Species::VampireBat => 0.5,
-                _ => 1.0,
+                _ => attr_fallback!("BirdMedium", "scale", 1.0),
             },
-            _ => 1.0,
+            _ => attr_fallback!("*", "scale", 1.0),
         };
         Scale(s)
     }
@@ -413,177 +418,26 @@ impl Body {
         Density(d)
     }
 
-    // Values marked with ~✅ are checked based on their RL equivalent.
-    // Discrepancy in size compared to their RL equivalents has not necessarily
-    // been taken into account.
+    /// Mass in kilograms, before the entity's `Scale` is applied.
+    ///
+    /// Every creature's number lives in `assets/common/body_stats.ron`; see
+    /// [`stats`] for why it is data and not a `match` any more.
     pub fn mass(&self) -> Mass {
-        let m = match self {
-            Body::BipedLarge(body) => match body.species {
-                biped_large::Species::Slysaurok => 400.0,
-                biped_large::Species::Occultsaurok => 400.0,
-                biped_large::Species::Mightysaurok => 400.0,
-                biped_large::Species::Mindflayer => 420.0,
-                biped_large::Species::Minotaur => 500.0,
-                biped_large::Species::Cavetroll => 600.0,
-                biped_large::Species::Mountaintroll => 600.0,
-                biped_large::Species::Swamptroll => 600.0,
-                biped_large::Species::Gigasfrost | biped_large::Species::Gigasfire => 400.0,
-                biped_large::Species::AdletElder => 350.0,
-                biped_large::Species::HaniwaGeneral => 360.0,
-                biped_large::Species::TerracottaBesieger
-                | biped_large::Species::TerracottaDemolisher
-                | biped_large::Species::TerracottaPunisher
-                | biped_large::Species::TerracottaPursuer
-                | biped_large::Species::Cursekeeper => 380.0,
-                biped_large::Species::Forgemaster => 1600.0,
-                _ => 400.0,
-            },
-            Body::BipedSmall(body) => match body.species {
-                biped_small::Species::IronDwarf => 1000.0,
-                biped_small::Species::Flamekeeper => 1000.0,
-                biped_small::Species::Boreal => 270.0,
-                _ => 50.0,
-            },
-            // ravens are 0.69-2 kg, crows are 0.51 kg on average.
-            Body::BirdMedium(body) => match body.species {
-                bird_medium::Species::SnowyOwl => 3.0,
-                bird_medium::Species::HornedOwl => 3.0,
-                bird_medium::Species::Duck => 3.5,
-                bird_medium::Species::Cockatiel => 2.0,
-                bird_medium::Species::Chicken => 2.5, // ~✅ Red junglefowl are 1-1.5 kg
-                bird_medium::Species::Bat => 1.5,
-                bird_medium::Species::Penguin => 10.0,
-                bird_medium::Species::Eagle => 7.0, // ~✅ Steller's sea eagle are 5-9 kg
-                bird_medium::Species::Goose => 3.5, // ~✅ Swan geese are 2.8-3.5 kg
-                bird_medium::Species::Parrot => 1.0,
-                bird_medium::Species::Peacock => 6.0,
-                bird_medium::Species::Crow => 3.0,
-                bird_medium::Species::Dodo => 4.0,
-                bird_medium::Species::Parakeet => 1.0,
-                bird_medium::Species::Puffin => 2.0,
-                bird_medium::Species::Toucan => 4.5,
-                bird_medium::Species::BloodmoonBat => 1.5,
-                bird_medium::Species::VampireBat => 1.5,
-            },
-            Body::BirdLarge(_) => 250.0,
-            Body::Dragon(_) => 20_000.0,
-            Body::FishMedium(_) => 5.0,
-            Body::FishSmall(_) => 1.0,
-            Body::Golem(_) => 10_000.0,
-            Body::Humanoid(humanoid) => {
-                // Understand that changing the mass values can have effects
-                // on multiple systems.
-                //
-                // If you want to change that value, consult with
-                // Physics and Combat teams
-                //
-                // Weight is proportional height, assuming
-                // a "standard" humanoid is 65kg
-                65.0 * humanoid.scaler()
-            },
-            Body::Object(obj) => obj.mass().0,
-            Body::Item(item) => item.mass().0,
-            Body::QuadrupedLow(body) => match body.species {
-                quadruped_low::Species::Alligator => 360.0, // ~✅
-                quadruped_low::Species::Snaretongue => 280.0,
-                quadruped_low::Species::Asp => 300.0,
-                // saltwater crocodiles can weigh around 1 ton, but our version is the size of an
-                // alligator or smaller, so whatever
-                quadruped_low::Species::Crocodile => 360.0,
-                quadruped_low::Species::SeaCrocodile => 410.0,
-                quadruped_low::Species::Deadwood => 200.0,
-                quadruped_low::Species::Monitor => 200.0,
-                quadruped_low::Species::Pangolin => 300.0,
-                quadruped_low::Species::Salamander => 350.0,
-                quadruped_low::Species::Elbst => 350.0,
-                quadruped_low::Species::Tortoise => 300.0,
-                quadruped_low::Species::Lavadrake => 700.0,
-                quadruped_low::Species::Icedrake => 700.0,
-                quadruped_low::Species::Mossdrake => 700.0,
-                quadruped_low::Species::Rocksnapper => 450.0,
-                quadruped_low::Species::Rootsnapper => 450.0,
-                quadruped_low::Species::Reefsnapper => 450.0,
-                quadruped_low::Species::Maneater => 80.0,
-                quadruped_low::Species::Sandshark => 450.0,
-                quadruped_low::Species::Hakulaq => 400.0,
-                quadruped_low::Species::Dagon => 600.0,
-                quadruped_low::Species::Basilisk => 800.0,
-                quadruped_low::Species::Driggle => 55.0,
-                quadruped_low::Species::Hydra => 800.0,
-            },
-            Body::QuadrupedMedium(body) => match body.species {
-                quadruped_medium::Species::Bear => 500.0, // ~✅ (350-700 kg)
-                quadruped_medium::Species::Cattle => 575.0, // ~✅ (500-650 kg)
-                quadruped_medium::Species::Deer => 80.0,
-                quadruped_medium::Species::Donkey => 200.0,
-                quadruped_medium::Species::Highland => 200.0,
-                quadruped_medium::Species::Horse => 300.0, // ~✅
-                quadruped_medium::Species::Kelpie => 250.0,
-                quadruped_medium::Species::Lion => 170.0, // ~✅ (110-225 kg)
-                quadruped_medium::Species::Panda => 200.0,
-                quadruped_medium::Species::Saber => 130.0,
-                quadruped_medium::Species::Yak => 200.0,
-                quadruped_medium::Species::Dreadhorn => 500.0,
-                quadruped_medium::Species::Mammoth => 1500.0,
-                quadruped_medium::Species::Elephant => 1500.0,
-                quadruped_medium::Species::Catoblepas => 300.0,
-                _ => 200.0,
-            },
-            Body::QuadrupedSmall(body) => match body.species {
-                quadruped_small::Species::Axolotl => 1.0,
-                quadruped_small::Species::Batfox => 10.0,
-                quadruped_small::Species::Beaver => 10.0,
-                quadruped_small::Species::Boar => 80.0, // ~✅ (60-100 kg)
-                quadruped_small::Species::Cat => 4.0,   // ~✅ (4-5 kg)
-                quadruped_small::Species::Dog => 30.0,  // ~✅ (German Shepherd: 30-40 kg)
-                quadruped_small::Species::Fox => 10.0,
-                quadruped_small::Species::Frog => 1.0,
-                quadruped_small::Species::Fungome => 10.0,
-                quadruped_small::Species::Gecko => 1.0,
-                quadruped_small::Species::Goat => 50.0,
-                quadruped_small::Species::Hare => 10.0,
-                quadruped_small::Species::Holladon => 70.0,
-                quadruped_small::Species::Hyena => 70.0, // ~✅ (vaguely)
-                quadruped_small::Species::Jackalope => 10.0,
-                quadruped_small::Species::Pig => 20.0,
-                quadruped_small::Species::Porcupine => 5.0,
-                quadruped_small::Species::Quokka => 10.0,
-                quadruped_small::Species::Rabbit => 2.0,
-                quadruped_small::Species::Raccoon => 30.0,
-                quadruped_small::Species::Rat => 1.0,
-                quadruped_small::Species::Sheep => 50.0,
-                quadruped_small::Species::Skunk => 5.0,
-                quadruped_small::Species::Squirrel => 1.0,
-                quadruped_small::Species::Truffler => 70.0,
-                quadruped_small::Species::Turtle => 40.0,
-                quadruped_small::Species::Seal => 15.0,
-                quadruped_small::Species::TreantSapling => 80.0,
-                quadruped_small::Species::MossySnail => 5.0,
-            },
-            Body::Theropod(body) => match body.species {
-                // for reference, elephants are in the range of 2.6-6.9 tons
-                // and Tyrannosaurus rex were ~8.4-14 tons
-                theropod::Species::Archaeos => 8_000.0,
-                theropod::Species::Ntouka => 8_000.0,
-                theropod::Species::Odonto => 8_000.0,
-                theropod::Species::Dodarock => 700.0,
-                theropod::Species::Sandraptor => 500.0,
-                theropod::Species::Snowraptor => 500.0,
-                theropod::Species::Sunlizard => 500.0,
-                theropod::Species::Woodraptor => 500.0,
-                theropod::Species::Yale => 1_000.0,
-                theropod::Species::Axebeak => 300.0,
-            },
-            Body::Ship(ship) => ship.mass().0,
-            Body::Arthropod(_) => 200.0,
-            // TODO: mass
-            Body::Crustacean(body) => match body.species {
-                crustacean::Species::Crab | crustacean::Species::SoldierCrab => 50.0,
-                crustacean::Species::Karkatha => 1200.0,
-            },
-            Body::Plugin(body) => body.mass().0,
-        };
-        Mass(m)
+        let stats = stats::body_stats();
+        Mass(match self.stats_row(&stats.0) {
+            Ok(row) => row.mass,
+            // Weight is proportional to height, assuming a "standard"
+            // humanoid is 65 kg.
+            //
+            // Understand that changing this value can have effects on
+            // multiple systems. If you want to change it, consult with the
+            // Physics and Combat teams.
+            Err(Rowless::Humanoid(humanoid)) => 65.0 * humanoid.scaler(),
+            Err(Rowless::Object(obj)) => obj.mass().0,
+            Err(Rowless::Item(item)) => item.mass().0,
+            Err(Rowless::Ship(ship)) => ship.mass().0,
+            Err(Rowless::Plugin(body)) => body.mass().0,
+        })
     }
 
     /// The width (shoulder to shoulder), length (nose to tail) and height
@@ -949,43 +803,41 @@ impl Body {
             + match self {
                 Body::QuadrupedSmall(body) => match body.species {
                     quadruped_small::Species::Rat => 0.0,
-                    _ => 2.0,
+                    _ => attr_fallback!("QuadrupedSmall", "spacing_radius", 2.0),
                 },
                 Body::QuadrupedLow(body) => match body.species {
                     quadruped_low::Species::Hakulaq => 0.0,
-                    _ => 2.0,
+                    _ => attr_fallback!("QuadrupedLow", "spacing_radius", 2.0),
                 },
                 Body::BipedSmall(body) => match body.species {
                     biped_small::Species::Husk => 3.0,
-                    _ => 2.0,
+                    _ => attr_fallback!("BipedSmall", "spacing_radius", 2.0),
                 },
-                _ => 2.0,
+                _ => attr_fallback!("*", "spacing_radius", 2.0),
             }
     }
 
     /// Height from the bottom to the top (in metres)
     pub fn height(&self) -> f32 { self.dimensions().z }
 
+    /// The stamina/ability pool this body starts with.
+    ///
+    /// Every creature's number lives in `assets/common/body_stats.ron`.
     pub fn base_energy(&self) -> u16 {
-        match self {
-            Body::BipedLarge(biped_large) => match biped_large.species {
-                biped_large::Species::Dullahan => 400,
-                biped_large::Species::Cultistwarlord | biped_large::Species::Cultistwarlock => 240,
-                _ => 300,
+        let stats = stats::body_stats();
+        match self.stats_row(&stats.0) {
+            Ok(row) => row.base_energy,
+            Err(Rowless::Humanoid(_)) => 100,
+            // The Crux is a channelled ritual anchor: it must never be able
+            // to pay for an ability.
+            Err(Rowless::Object(object::Body::Crux)) => 0,
+            // Props, projectiles, turrets, dropped items, ships and
+            // plugin-defined bodies have no ability economy of their own;
+            // 100 is the structural placeholder their `Energy` component is
+            // built from, not a per-body judgement.
+            Err(Rowless::Object(_) | Rowless::Item(_) | Rowless::Ship(_) | Rowless::Plugin(_)) => {
+                100
             },
-            Body::BirdLarge(body) => match body.species {
-                bird_large::Species::Cockatrice => 400,
-                bird_large::Species::Phoenix => 600,
-                bird_large::Species::Roc => 500,
-                bird_large::Species::FlameWyvern => 600,
-                bird_large::Species::CloudWyvern => 600,
-                bird_large::Species::FrostWyvern => 600,
-                bird_large::Species::SeaWyvern => 600,
-                bird_large::Species::WealdWyvern => 600,
-            },
-            Body::Humanoid(_) => 100,
-            Body::Object(object::Body::Crux) => 0,
-            _ => 100,
         }
     }
 
@@ -993,12 +845,23 @@ impl Body {
     /// protection, and entering a downed state.
     pub fn has_death_protection(&self) -> bool { matches!(self, Body::Humanoid(_)) }
 
-    /// BL-65 threat tier (0-4) used to derive NPC combat-stat baselines, keyed
-    /// off the body exactly like `base_health` (a mob's threat is its body —
-    /// there is no per-level mob scaling here).  T0 = critters/non-combatants,
+    /// Threat tier (0-4) used to derive NPC combat-stat baselines, keyed off
+    /// the body exactly like `base_health` (a mob's threat is its body — there
+    /// is no per-level mob scaling here).  T0 = critters/non-combatants,
     /// T4 = raid bosses.  Humanoid returns 0 (value is unused: the base_*
     /// helpers short-circuit to 0 for humanoids so class stats are never
     /// double-counted).
+    ///
+    /// Unlike `base_health` and friends this is **not** in `body_stats.ron`,
+    /// for two reasons. It is a taxonomy — which bucket a creature sits in —
+    /// and the numbers each bucket maps to already live in data
+    /// (`TIER_ACCURACY`/`TIER_EVASION`/`TIER_CRIT` above, and
+    /// `combat_tuning.ron`); and it is read per entity per tick by the buff
+    /// system, where the asset read `body_stats.ron` costs in a hot-reloading
+    /// build would not be free. Every species match below is therefore
+    /// **exhaustive**: a new species does not compile until it is classified,
+    /// which is a stronger guarantee than that file's start-up error, not a
+    /// weaker one.
     pub fn threat_tier(&self) -> u8 {
         match self {
             // Humanoid PCs/NPCs: tier unused (base_* returns 0 directly).
@@ -1007,8 +870,35 @@ impl Body {
             // ── QuadrupedSmall ────────────────────────────────────────────
             // Hyena is a combatant; everything else is a critter/pet (T0).
             Body::QuadrupedSmall(b) => match b.species {
+                quadruped_small::Species::Axolotl
+                | quadruped_small::Species::Batfox
+                | quadruped_small::Species::Beaver
+                | quadruped_small::Species::Boar
+                | quadruped_small::Species::Cat
+                | quadruped_small::Species::Dog
+                | quadruped_small::Species::Fox
+                | quadruped_small::Species::Frog
+                | quadruped_small::Species::Fungome
+                | quadruped_small::Species::Gecko
+                | quadruped_small::Species::Goat
+                | quadruped_small::Species::Hare
+                | quadruped_small::Species::Holladon
+                | quadruped_small::Species::Jackalope
+                | quadruped_small::Species::MossySnail
+                | quadruped_small::Species::Pig
+                | quadruped_small::Species::Porcupine
+                | quadruped_small::Species::Quokka
+                | quadruped_small::Species::Rabbit
+                | quadruped_small::Species::Raccoon
+                | quadruped_small::Species::Rat
+                | quadruped_small::Species::Seal
+                | quadruped_small::Species::Sheep
+                | quadruped_small::Species::Skunk
+                | quadruped_small::Species::Squirrel
+                | quadruped_small::Species::TreantSapling
+                | quadruped_small::Species::Truffler
+                | quadruped_small::Species::Turtle => 0,
                 quadruped_small::Species::Hyena => 2,
-                _ => 0,
             },
 
             // ── QuadrupedMedium ───────────────────────────────────────────
@@ -1027,20 +917,35 @@ impl Body {
                 | quadruped_medium::Species::Zebra => 0,
                 // small combatant
                 quadruped_medium::Species::Bonerattler => 1,
+                // ordinary combatants
+                quadruped_medium::Species::Barghest
+                | quadruped_medium::Species::Bear
+                | quadruped_medium::Species::Bristleback
+                | quadruped_medium::Species::Darkhound
+                | quadruped_medium::Species::Frostfang
+                | quadruped_medium::Species::Highland
+                | quadruped_medium::Species::Kelpie
+                | quadruped_medium::Species::Lion
+                | quadruped_medium::Species::Moose
+                | quadruped_medium::Species::Panda
+                | quadruped_medium::Species::Saber
+                | quadruped_medium::Species::Snowleopard
+                | quadruped_medium::Species::Tiger
+                | quadruped_medium::Species::Tuskram
+                | quadruped_medium::Species::Wolf
+                | quadruped_medium::Species::Yak => 2,
                 // apex predators / large combatants
                 quadruped_medium::Species::Akhlut
                 | quadruped_medium::Species::Catoblepas
                 | quadruped_medium::Species::ClaySteed
                 | quadruped_medium::Species::Dreadhorn
+                | quadruped_medium::Species::Elephant
                 | quadruped_medium::Species::Grolgar
                 | quadruped_medium::Species::Hirdrasil
                 | quadruped_medium::Species::Mammoth
-                | quadruped_medium::Species::Elephant
                 | quadruped_medium::Species::Ngoubou
                 | quadruped_medium::Species::Roshwalr
                 | quadruped_medium::Species::Tarasque => 3,
-                // default combatants (Bear/Lion/Wolf/Saber/Tiger/etc.)
-                _ => 2,
             },
 
             // ── FishMedium / FishSmall ────────────────────────────────────
@@ -1051,88 +956,278 @@ impl Body {
 
             // ── BirdLarge ─────────────────────────────────────────────────
             Body::BirdLarge(b) => match b.species {
+                bird_large::Species::CloudWyvern
+                | bird_large::Species::Cockatrice
+                | bird_large::Species::FlameWyvern
+                | bird_large::Species::FrostWyvern
+                | bird_large::Species::Roc
+                | bird_large::Species::SeaWyvern
+                | bird_large::Species::WealdWyvern => 3,
                 bird_large::Species::Phoenix => 4,
-                _ => 3,
             },
 
             // ── BirdMedium ────────────────────────────────────────────────
-            // Non-combatant birds → T0; aggressive species → T1.
+            // Species/HP-aware, matching the T-tags already on this body's
+            // own `base_health` entries: non-combatant birds → T0; small
+            // aggressive birds (T1 tag) → T1. The two bats share a `// T3B`
+            // tag there, but that lumps together two very different roles:
+            // VampireBat is ordinary trash-swarm fodder (Vampire Castle
+            // spawns two per `bat_pos`, alongside the one Bloodmoon Bat
+            // boss) at 100 HP — on par with FishMedium::Marlin/Icepike
+            // (50/90 HP, tagged T2) — so it's T2 here, not T3. BloodmoonBat
+            // is the actual Bloodmoon Bat dungeon boss at 1200 HP,
+            // comparable to Golem::Gravewarden (1000 HP) and
+            // BipedLarge::Harvester (1300 HP), both T3 → T3.
             Body::BirdMedium(b) => match b.species {
-                bird_medium::Species::VampireBat | bird_medium::Species::BloodmoonBat => 1,
-                _ => 0,
+                bird_medium::Species::Bat
+                | bird_medium::Species::Chicken
+                | bird_medium::Species::Cockatiel
+                | bird_medium::Species::Dodo
+                | bird_medium::Species::Duck
+                | bird_medium::Species::Parakeet
+                | bird_medium::Species::Peacock
+                | bird_medium::Species::Penguin
+                | bird_medium::Species::Puffin => 0,
+                bird_medium::Species::Crow
+                | bird_medium::Species::Eagle
+                | bird_medium::Species::Goose
+                | bird_medium::Species::HornedOwl
+                | bird_medium::Species::Parrot
+                | bird_medium::Species::SnowyOwl
+                | bird_medium::Species::Toucan => 1,
+                bird_medium::Species::VampireBat => 2,
+                bird_medium::Species::BloodmoonBat => 3,
             },
 
             // ── BipedLarge ────────────────────────────────────────────────
-            // Default T3; hard boss overrides → T4.
+            // Ordinary elites T3; hard bosses T4. Cyclops (1000 HP,
+            // base_poise 300 -- the same standard poise every other T3
+            // entry here carries) sits below several T3 mobs on this same
+            // body (Harvester 1300, AdletElder 1500, Tidalwarrior 1600,
+            // Yeti 1800), while every real T4 boss clears at least 2000 HP
+            // (Mindflayer) up to 30000 (Gigasfrost) and the three whose
+            // poise departs from the 300 standard (Mindflayer 777,
+            // Minotaur 340, Gigas 990) all do so alongside that much
+            // higher HP. Cyclops has neither the HP nor the poise to back
+            // a T4 accuracy/evasion/crit baseline, so it moves to T3.
             Body::BipedLarge(b) => match b.species {
-                biped_large::Species::Mindflayer
-                | biped_large::Species::Minotaur
+                biped_large::Species::AdletElder
+                | biped_large::Species::Blueoni
+                | biped_large::Species::Cavetroll
+                | biped_large::Species::Cultistwarlock
+                | biped_large::Species::Cultistwarlord
                 | biped_large::Species::Cyclops
-                | biped_large::Species::Cursekeeper
-                | biped_large::Species::Gigasfrost
+                | biped_large::Species::Dullahan
+                | biped_large::Species::Executioner
+                | biped_large::Species::HaniwaGeneral
+                | biped_large::Species::Harvester
+                | biped_large::Species::Huskbrute
+                | biped_large::Species::Mightysaurok
+                | biped_large::Species::Mountaintroll
+                | biped_large::Species::Occultsaurok
+                | biped_large::Species::Ogre
+                | biped_large::Species::Redoni
+                | biped_large::Species::SeaBishop
+                | biped_large::Species::Slysaurok
+                | biped_large::Species::Strigoi
+                | biped_large::Species::Swamptroll
+                | biped_large::Species::TerracottaBesieger
+                | biped_large::Species::TerracottaDemolisher
+                | biped_large::Species::TerracottaPunisher
+                | biped_large::Species::TerracottaPursuer
+                | biped_large::Species::Tidalwarrior
+                | biped_large::Species::Tursus
+                | biped_large::Species::Wendigo
+                | biped_large::Species::Werewolf
+                | biped_large::Species::Yeti => 3,
+                biped_large::Species::Cursekeeper
+                | biped_large::Species::Forgemaster
                 | biped_large::Species::Gigasfire
-                | biped_large::Species::Forgemaster => 4,
-                _ => 3,
+                | biped_large::Species::Gigasfrost
+                | biped_large::Species::Mindflayer
+                | biped_large::Species::Minotaur => 4,
             },
 
             // ── BipedSmall ────────────────────────────────────────────────
-            // Default T1; Jiangshi → T2 (notably tougher undead).
+            // Species/HP-aware, matching `assets/common/body_stats.ron`:
+            // ordinary trash humanoids (<=150 HP: Legooms 25, Goblins 30,
+            // Gnome 60, Bushly 60, TreasureEgg 60, Kappa 60, Gnoll 60,
+            // Gnarling 50, Husk 50, Cactid 50, Adlet 65, Mandragora 65,
+            // Sahagin 85, Haniwa/Myrmidon/Irrwurz 100, GnarlingChieftain
+            // 150) → T1. IronDwarf/Jiangshi/ShamanicSpirit (240-250 HP) and
+            // Ashen/Bloodservant (300 HP) are all notably tougher undead
+            // or construct territory, comparable in HP to QuadrupedMedium's
+            // T2 apex predators (Bear 240, Yak 215) → T2. Harlequin (500),
+            // Boreal (800) and the two 2000 HP dungeon bosses
+            // (BloodmoonHeiress, Flamekeeper) sit alongside
+            // Golem::IronGolem (2500, T3) and Crustacean::Karkatha (2000,
+            // T3) → T3, extending this body kind past its old flat T1/T2
+            // ceiling the same species/HP-aware way other bodies already
+            // are here.
             Body::BipedSmall(b) => match b.species {
-                biped_small::Species::Jiangshi => 2,
-                _ => 1,
+                biped_small::Species::Adlet
+                | biped_small::Species::Bushly
+                | biped_small::Species::Cactid
+                | biped_small::Species::Gnarling
+                | biped_small::Species::GnarlingChieftain
+                | biped_small::Species::Gnoll
+                | biped_small::Species::Gnome
+                | biped_small::Species::GoblinChucker
+                | biped_small::Species::GoblinRuffian
+                | biped_small::Species::GoblinThug
+                | biped_small::Species::GreenLegoom
+                | biped_small::Species::Haniwa
+                | biped_small::Species::Husk
+                | biped_small::Species::Irrwurz
+                | biped_small::Species::Kappa
+                | biped_small::Species::Mandragora
+                | biped_small::Species::Myrmidon
+                | biped_small::Species::OchreLegoom
+                | biped_small::Species::PurpleLegoom
+                | biped_small::Species::RedLegoom
+                | biped_small::Species::Sahagin
+                | biped_small::Species::TreasureEgg
+                | biped_small::Species::UmberLegoom => 1,
+                biped_small::Species::Ashen
+                | biped_small::Species::Bloodservant
+                | biped_small::Species::IronDwarf
+                | biped_small::Species::Jiangshi
+                | biped_small::Species::ShamanicSpirit => 2,
+                biped_small::Species::BloodmoonHeiress
+                | biped_small::Species::Boreal
+                | biped_small::Species::Flamekeeper
+                | biped_small::Species::Harlequin => 3,
             },
 
             // ── Golem ─────────────────────────────────────────────────────
-            // Default T2; heavy/boss golems → T3.
+            // T2 up to 550 HP (WoodGolem 120, AncientEffigy 250, ClayGolem
+            // 350, Mogwai 500, CoralGolem 550); T3 from 1000 HP up
+            // (StoneGolem/Treant/Gravewarden all 1000, IronGolem 2500).
+            // AncientEffigy moved down from T3 (it was 250 HP, below even
+            // T2's ClayGolem at 350) and StoneGolem/Treant moved up from T2
+            // (both 1000 HP, identical to Gravewarden which was already
+            // T3) so the split tracks HP instead of contradicting it.
             Body::Golem(b) => match b.species {
+                golem::Species::AncientEffigy
+                | golem::Species::ClayGolem
+                | golem::Species::CoralGolem
+                | golem::Species::Mogwai
+                | golem::Species::WoodGolem => 2,
                 golem::Species::Gravewarden
                 | golem::Species::IronGolem
-                | golem::Species::AncientEffigy => 3,
-                _ => 2,
+                | golem::Species::StoneGolem
+                | golem::Species::Treant => 3,
             },
 
             // ── Theropod ─────────────────────────────────────────────────
-            // Default T3 (large predators); small raptors → T1.
+            // Large predators T3 (275-1320 HP); small raptors T1 (110 HP).
+            // Sunlizard (110 HP, byte-for-byte identical to the three
+            // raptors) moves down from T3 to T1 to match them. Dodarock
+            // (20 HP -- lower than every T1 mob in the game, let alone its
+            // former T3 tier-mates at 275-1320) moves down to T0: `Batfox`
+            // (QuadrupedSmall, 40 HP) is `aggressive` too and already sits
+            // at T0, so being a genuine combatant does not by itself
+            // require a T1 floor -- and at less than half Batfox's HP,
+            // Dodarock has even less claim to one.
             Body::Theropod(b) => match b.species {
+                theropod::Species::Dodarock => 0,
                 theropod::Species::Sandraptor
                 | theropod::Species::Snowraptor
+                | theropod::Species::Sunlizard
                 | theropod::Species::Woodraptor => 1,
-                _ => 3,
+                theropod::Species::Archaeos
+                | theropod::Species::Axebeak
+                | theropod::Species::Ntouka
+                | theropod::Species::Odonto
+                | theropod::Species::Yale => 3,
             },
 
             // ── QuadrupedLow ──────────────────────────────────────────────
-            // Default T2; small/passive → T1; big drakes/bosses → T3.
+            // T2; small/passive → T1; big drakes/bosses → T3. Icedrake and
+            // Mossdrake moved up from T2 to join Lavadrake: all three are
+            // byte-for-byte identical in mass/HP/poise/energy
+            // (700 kg / 340 HP / 205 poise / 100 energy) in
+            // `assets/common/body_stats.ron`, so three reskins of the same
+            // stat block now share one tier instead of splitting across
+            // two. 340 HP also sits far closer to this tier's low end
+            // (Reefsnapper/Rocksnapper/Rootsnapper at 400) than to T2's
+            // high end (Asp at 175), which independently supports T3 over
+            // T2 for the drakes.
             Body::QuadrupedLow(b) => match b.species {
                 quadruped_low::Species::Driggle
                 | quadruped_low::Species::Pangolin
                 | quadruped_low::Species::Tortoise => 1,
-                quadruped_low::Species::Lavadrake
+                quadruped_low::Species::Alligator
+                | quadruped_low::Species::Asp
+                | quadruped_low::Species::Crocodile
+                | quadruped_low::Species::Deadwood
+                | quadruped_low::Species::Elbst
+                | quadruped_low::Species::Hakulaq
+                | quadruped_low::Species::Monitor
+                | quadruped_low::Species::Salamander
+                | quadruped_low::Species::SeaCrocodile => 2,
+                quadruped_low::Species::Basilisk
+                | quadruped_low::Species::Dagon
+                | quadruped_low::Species::Hydra
+                | quadruped_low::Species::Icedrake
+                | quadruped_low::Species::Lavadrake
                 | quadruped_low::Species::Maneater
-                | quadruped_low::Species::Rocksnapper
+                | quadruped_low::Species::Mossdrake
                 | quadruped_low::Species::Reefsnapper
+                | quadruped_low::Species::Rocksnapper
                 | quadruped_low::Species::Rootsnapper
                 | quadruped_low::Species::Sandshark
-                | quadruped_low::Species::Hydra
-                | quadruped_low::Species::Basilisk
-                | quadruped_low::Species::Snaretongue
-                | quadruped_low::Species::Dagon => 3,
-                _ => 2,
+                | quadruped_low::Species::Snaretongue => 3,
             },
 
             // ── Arthropod ─────────────────────────────────────────────────
-            // Default T1; large spiders/antlion → T2.
+            // T1; large spiders/antlion → T2.
             Body::Arthropod(b) => match b.species {
-                arthropod::Species::Tarantula
+                arthropod::Species::Cavespider
+                | arthropod::Species::Dagonite
+                | arthropod::Species::Emberfly
+                | arthropod::Species::Hornbeetle
+                | arthropod::Species::Leafbeetle
+                | arthropod::Species::Moltencrawler
+                | arthropod::Species::Mosscrawler
+                | arthropod::Species::Sandcrawler
+                | arthropod::Species::Stagbeetle
+                | arthropod::Species::Weevil => 1,
+                arthropod::Species::Antlion
                 | arthropod::Species::Blackwidow
-                | arthropod::Species::Antlion => 2,
-                _ => 1,
+                | arthropod::Species::Tarantula => 2,
             },
 
             // ── Crustacean ────────────────────────────────────────────────
-            Body::Crustacean(_) => 0,
+            // Species/HP-aware, matching the T-tags on this body's own
+            // `base_health` entries: ordinary crabs → T0; SoldierCrab is
+            // tagged T2 there → T2. Karkatha (the Shellmaw dungeon boss,
+            // 2000 HP) is also tagged T2 there, but that tag is stale: its
+            // HP sits within the same band as Golem::IronGolem (2500 HP)
+            // and BipedLarge::AdletElder (1500 HP) — both T3 in this very
+            // function — so Karkatha is T3 here, not the flat T0 every
+            // Crustacean got before, and not the stale T2 tag either.
+            Body::Crustacean(b) => match b.species {
+                crustacean::Species::Crab => 0,
+                crustacean::Species::SoldierCrab => 2,
+                crustacean::Species::Karkatha => 3,
+            },
+
+            // ── Object ────────────────────────────────────────────────────
+            // Investigated for a high-HP boss body like Crustacean's
+            // Karkatha: none exists. Every combat-capable Object body
+            // (BarrelOrgan, HaniwaSentry, the dwarven-quarry/cultist
+            // turrets, TerracottaStatue) is a modest-HP (60-600) hazard/
+            // turret/decoy, not a boss with its own accuracy/evasion/crit
+            // baseline to correct, and TerracottaStatue specifically backs
+            // the Cursekeeper decoy mechanic, which is out of scope here.
+            // `base_health` also carries no T-tag convention for this body
+            // (unlike Crustacean/BirdMedium/QuadrupedLow/etc.), so there is
+            // no established per-species tier to extend. Stays flat T0.
+            Body::Object(_) => 0,
 
             // ── Non-combatant / structural bodies ─────────────────────────
-            Body::Object(_) | Body::Ship(_) | Body::Item(_) | Body::Plugin(_) => 0,
+            Body::Ship(_) | Body::Item(_) | Body::Plugin(_) => 0,
         }
     }
 
@@ -1181,199 +1276,32 @@ impl Body {
         )
     }
 
+    /// The hit points this body starts with, before any scaling.
+    ///
+    /// Every creature's number lives in `assets/common/body_stats.ron`.
+    /// `Object` is the one kind still matched here: its bodies are props,
+    /// projectiles and turrets rather than a species roster, so there is no
+    /// `AllSpecies` struct to make the list required — the surviving wildcard
+    /// stays audited by `attr_fallback!` and ledgered.
     pub fn base_health(&self) -> u16 {
-        match self {
-            Body::Humanoid(_) => 100,
-            Body::QuadrupedSmall(quadruped_small) => match quadruped_small.species {
-                // T1
-                quadruped_small::Species::Batfox => 40,
-                quadruped_small::Species::Boar => 55,
-                quadruped_small::Species::Fox => 25,
-                quadruped_small::Species::Goat => 30,
-                quadruped_small::Species::Hare => 20,
-                quadruped_small::Species::Holladon => 25,
-                quadruped_small::Species::Jackalope => 30,
-                quadruped_small::Species::MossySnail => 15,
-                quadruped_small::Species::Porcupine => 25,
-                quadruped_small::Species::Sheep => 30,
-                quadruped_small::Species::TreantSapling => 20,
-                quadruped_small::Species::Truffler => 70,
-                // T2
-                quadruped_small::Species::Hyena => 85,
-                // T0
-                quadruped_small::Species::Beaver => 20,
-                quadruped_small::Species::Cat => 25,
-                quadruped_small::Species::Dog => 30,
-                quadruped_small::Species::Fungome => 15,
-                quadruped_small::Species::Pig => 25,
-                quadruped_small::Species::Quokka => 15,
-                quadruped_small::Species::Rabbit => 15,
-                quadruped_small::Species::Raccoon => 20,
-                quadruped_small::Species::Rat => 10,
-                quadruped_small::Species::Seal => 20,
-                quadruped_small::Species::Skunk => 20,
-                quadruped_small::Species::Turtle => 10,
-                _ => 5,
-            },
-            Body::QuadrupedMedium(quadruped_medium) => match quadruped_medium.species {
-                // T1
-                quadruped_medium::Species::Alpaca => 55,
-                quadruped_medium::Species::Antelope => 70,
-                quadruped_medium::Species::Darkhound => 80,
-                quadruped_medium::Species::Camel => 100,
-                quadruped_medium::Species::Cattle => 90,
-                quadruped_medium::Species::Deer => 55,
-                quadruped_medium::Species::Donkey => 65,
-                quadruped_medium::Species::Horse => 75,
-                quadruped_medium::Species::Llama => 65,
-                quadruped_medium::Species::Mouflon => 75,
-                quadruped_medium::Species::Zebra => 90,
-                // T2
-                quadruped_medium::Species::Barghest => 120,
-                quadruped_medium::Species::Bear => 240,
-                quadruped_medium::Species::Bristleback => 175,
-                quadruped_medium::Species::Bonerattler => 100,
-                quadruped_medium::Species::Frostfang => 185,
-                quadruped_medium::Species::Highland => 205,
-                quadruped_medium::Species::Kelpie => 150,
-                quadruped_medium::Species::Lion => 175,
-                quadruped_medium::Species::Moose => 265,
-                quadruped_medium::Species::Panda => 215,
-                quadruped_medium::Species::Saber => 210,
-                quadruped_medium::Species::Snowleopard => 175,
-                quadruped_medium::Species::Tiger => 205,
-                quadruped_medium::Species::Tuskram => 175,
-                quadruped_medium::Species::Wolf => 110,
-                quadruped_medium::Species::Yak => 215,
-                // T3A
-                quadruped_medium::Species::Akhlut => 720,
-                quadruped_medium::Species::Catoblepas => 720,
-                quadruped_medium::Species::ClaySteed => 400,
-                quadruped_medium::Species::Dreadhorn => 690,
-                quadruped_medium::Species::Grolgar => 450,
-                quadruped_medium::Species::Hirdrasil => 480,
-                quadruped_medium::Species::Mammoth => 880,
-                quadruped_medium::Species::Elephant => 880,
-                quadruped_medium::Species::Ngoubou => 590,
-                quadruped_medium::Species::Roshwalr => 640,
-                quadruped_medium::Species::Tarasque => 370,
-            },
-            Body::FishMedium(fish_medium) => match fish_medium.species {
-                // T2
-                fish_medium::Species::Marlin => 50,
-                fish_medium::Species::Icepike => 90,
-            },
-            Body::Dragon(_) => 500,
-            Body::BirdLarge(bird_large) => match bird_large.species {
-                // T3A
-                bird_large::Species::Cockatrice => 540,
-                bird_large::Species::Roc => 450,
-                // T3B
-                bird_large::Species::FlameWyvern
-                | bird_large::Species::CloudWyvern
-                | bird_large::Species::FrostWyvern
-                | bird_large::Species::SeaWyvern
-                | bird_large::Species::WealdWyvern => 1000,
-                bird_large::Species::Phoenix => 2000,
-            },
-            Body::BirdMedium(bird_medium) => match bird_medium.species {
-                // T0
-                bird_medium::Species::Bat => 10,
-                bird_medium::Species::Chicken => 10,
-                bird_medium::Species::Cockatiel => 10,
-                bird_medium::Species::Dodo => 20,
-                bird_medium::Species::Duck => 10,
-                bird_medium::Species::Parakeet => 10,
-                bird_medium::Species::Peacock => 20,
-                bird_medium::Species::Penguin => 10,
-                bird_medium::Species::Puffin => 20,
-                // T1
-                bird_medium::Species::Crow => 15,
-                bird_medium::Species::Eagle => 35,
-                bird_medium::Species::Goose => 25,
-                bird_medium::Species::HornedOwl => 35,
-                bird_medium::Species::Parrot => 15,
-                bird_medium::Species::SnowyOwl => 35,
-                bird_medium::Species::Toucan => 15,
-                // T3B
-                bird_medium::Species::VampireBat => 100,
-                bird_medium::Species::BloodmoonBat => 1200,
-            },
-            Body::FishSmall(fish_small) => match fish_small.species {
-                // T0
-                fish_small::Species::Clownfish => 5,
-                // T1
-                fish_small::Species::Piranha => 10,
-            },
-            Body::BipedLarge(biped_large) => match biped_large.species {
-                biped_large::Species::Ogre => 320,
-                biped_large::Species::Cyclops => 1000,
-                biped_large::Species::Wendigo => 280,
-                biped_large::Species::Cavetroll => 240,
-                biped_large::Species::Mountaintroll => 240,
-                biped_large::Species::Swamptroll => 240,
-                biped_large::Species::Dullahan => 600,
-                biped_large::Species::Mindflayer => 2000,
-                biped_large::Species::Tidalwarrior => 1600,
-                biped_large::Species::Yeti => 1800,
-                biped_large::Species::Minotaur => 3000,
-                biped_large::Species::Harvester => 1300,
-                biped_large::Species::Blueoni => 240,
-                biped_large::Species::Redoni => 240,
-                biped_large::Species::Huskbrute => 800,
-                biped_large::Species::Cultistwarlord => 200,
-                biped_large::Species::Cultistwarlock => 200,
-                biped_large::Species::Gigasfrost => 30000,
-                biped_large::Species::Gigasfire => 25000,
-                biped_large::Species::AdletElder => 1500,
-                biped_large::Species::Tursus => 300,
-                biped_large::Species::SeaBishop => 550,
-                biped_large::Species::HaniwaGeneral => 600,
-                biped_large::Species::TerracottaBesieger
-                | biped_large::Species::TerracottaDemolisher
-                | biped_large::Species::TerracottaPunisher
-                | biped_large::Species::TerracottaPursuer => 300,
-                biped_large::Species::Cursekeeper => 3000,
-                biped_large::Species::Forgemaster => 10000,
-                biped_large::Species::Strigoi => 800,
-                biped_large::Species::Executioner => 800,
-                _ => 120,
-            },
-            Body::BipedSmall(biped_small) => match biped_small.species {
-                biped_small::Species::GoblinThug
-                | biped_small::Species::GoblinChucker
-                | biped_small::Species::GoblinRuffian => 30,
-                biped_small::Species::GreenLegoom
-                | biped_small::Species::OchreLegoom
-                | biped_small::Species::PurpleLegoom
-                | biped_small::Species::RedLegoom
-                | biped_small::Species::UmberLegoom => 25,
-                biped_small::Species::Cactid => 50,
-                biped_small::Species::Gnarling => 50,
-                biped_small::Species::GnarlingChieftain => 150,
-                biped_small::Species::Mandragora => 65,
-                biped_small::Species::Adlet => 65,
-                biped_small::Species::Sahagin => 85,
-                biped_small::Species::Haniwa => 100,
-                biped_small::Species::Myrmidon => 100,
-                biped_small::Species::Husk => 50,
-                biped_small::Species::Boreal => 800,
-                biped_small::Species::Ashen => 300,
-                biped_small::Species::IronDwarf => 250,
-                biped_small::Species::Irrwurz => 100,
-                biped_small::Species::ShamanicSpirit => 240,
-                biped_small::Species::Jiangshi => 250,
-                biped_small::Species::Flamekeeper => 2000,
-                biped_small::Species::BloodmoonHeiress => 2000,
-                biped_small::Species::Bloodservant => 300,
-                biped_small::Species::Harlequin => 500,
-                _ => 60,
-            },
-            Body::Object(object) => match object {
+        let stats = stats::body_stats();
+        match self.stats_row(&stats.0) {
+            Ok(row) => row.base_health,
+            Err(Rowless::Humanoid(_)) => 100,
+            Err(Rowless::Item(_) | Rowless::Ship(_)) => 1000,
+            Err(Rowless::Plugin(body)) => body.base_health(),
+            Err(Rowless::Object(object)) => match object {
                 object::Body::TrainingDummy => 60000,
                 object::Body::Crossbow => 80,
                 object::Body::Flamethrower => 80,
                 object::Body::Lavathrower => 80,
+                // A stationary single-arrow turret, the same archetype as
+                // Crossbow/Flamethrower/Lavathrower (also 80) rather than
+                // the heavier BarrelOrgan (500) or TerracottaStatue (600):
+                // no reason for it to be tougher than its own family, so it
+                // gets the same explicit value instead of silently
+                // inheriting the 1000 HP flat-neutral fallback below.
+                object::Body::ArrowTurret => 80,
                 object::Body::BarrelOrgan => 500,
                 object::Body::HaniwaSentry => 60,
                 object::Body::SeaLantern => 100,
@@ -1388,92 +1316,8 @@ impl Body {
                 // Same one-shot 30 HP pool as `RemoteSensor` -- see that
                 // arm's own comment.
                 object::Body::ArcaneEye => 30,
-                _ => 1000,
+                _ => attr_fallback!("Object", "base_health", 1000),
             },
-            Body::Item(_) => 1000,
-            Body::Golem(golem) => match golem.species {
-                golem::Species::WoodGolem => 120,
-                golem::Species::ClayGolem => 350,
-                golem::Species::Gravewarden => 1000,
-                golem::Species::CoralGolem => 550,
-                golem::Species::AncientEffigy => 250,
-                golem::Species::Mogwai => 500,
-                golem::Species::IronGolem => 2500,
-                _ => 1000,
-            },
-            Body::Theropod(theropod) => match theropod.species {
-                // T1
-                theropod::Species::Dodarock => 20,
-                // T2
-                theropod::Species::Axebeak => 275,
-                theropod::Species::Sandraptor => 110,
-                theropod::Species::Snowraptor => 110,
-                theropod::Species::Sunlizard => 110,
-                theropod::Species::Woodraptor => 110,
-                // T3A
-                theropod::Species::Yale => 610,
-                // T3B
-                theropod::Species::Archaeos => 880,
-                theropod::Species::Ntouka => 880,
-                theropod::Species::Odonto => 1320,
-            },
-            Body::QuadrupedLow(quadruped_low) => match quadruped_low.species {
-                // T1
-                quadruped_low::Species::Driggle => 50,
-                quadruped_low::Species::Pangolin => 20,
-                quadruped_low::Species::Tortoise => 45,
-                // T2
-                quadruped_low::Species::Alligator => 130,
-                quadruped_low::Species::Asp => 175,
-                quadruped_low::Species::Crocodile => 145,
-                quadruped_low::Species::Deadwood => 85,
-                quadruped_low::Species::Elbst => 145,
-                quadruped_low::Species::Hakulaq => 155,
-                quadruped_low::Species::Monitor => 95,
-                quadruped_low::Species::Salamander => 210,
-                quadruped_low::Species::SeaCrocodile => 180,
-                // T3A
-                quadruped_low::Species::Dagon => 1200,
-                quadruped_low::Species::Icedrake => 340,
-                quadruped_low::Species::Lavadrake => 340,
-                quadruped_low::Species::Maneater => 510,
-                quadruped_low::Species::Mossdrake => 340,
-                quadruped_low::Species::Rocksnapper => 400,
-                quadruped_low::Species::Reefsnapper => 400,
-                quadruped_low::Species::Rootsnapper => 400,
-                quadruped_low::Species::Sandshark => 540,
-                quadruped_low::Species::Hydra => 1000,
-                // T3B
-                quadruped_low::Species::Basilisk => 660,
-                quadruped_low::Species::Snaretongue => 1500,
-            },
-            Body::Arthropod(arthropod) => match arthropod.species {
-                // T1
-                arthropod::Species::Dagonite => 70,
-                arthropod::Species::Emberfly => 20,
-                arthropod::Species::Leafbeetle => 40,
-                arthropod::Species::Weevil => 40,
-                // T2
-                arthropod::Species::Cavespider => 170,
-                arthropod::Species::Hornbeetle => 170,
-                arthropod::Species::Moltencrawler => 145,
-                arthropod::Species::Mosscrawler => 145,
-                arthropod::Species::Sandcrawler => 145,
-                arthropod::Species::Stagbeetle => 170,
-                arthropod::Species::Tarantula => 155,
-                // T3A
-                arthropod::Species::Antlion => 480,
-                arthropod::Species::Blackwidow => 370,
-            },
-            Body::Ship(_) => 1000,
-            Body::Crustacean(crustacean) => match crustacean.species {
-                // T0
-                crustacean::Species::Crab => 40,
-                // T2
-                crustacean::Species::SoldierCrab => 50,
-                crustacean::Species::Karkatha => 2000,
-            },
-            Body::Plugin(body) => body.base_health(),
         }
     }
 
@@ -1657,7 +1501,7 @@ impl Body {
             Body::Object(object) => match object {
                 object::Body::BarrelOrgan | object::Body::ArrowTurret => 0.05,
                 object::Body::TerracottaStatue => 1.5,
-                _ => 0.0,
+                _ => attr_fallback!("Object", "combat_multiplier", 0.0),
             },
             Body::Ship(_) => 0.0,
             Body::BipedLarge(b) => match b.species {
@@ -1666,7 +1510,7 @@ impl Body {
                 biped_large::Species::Minotaur => 4.05,
                 biped_large::Species::Tidalwarrior => 2.75,
                 biped_large::Species::Yeti => 2.25,
-                _ => 1.0,
+                _ => attr_fallback!("BipedLarge", "combat_multiplier", 1.0),
             },
             Body::BipedSmall(b) => match b.species {
                 biped_small::Species::Ashen => 1.33,
@@ -1677,35 +1521,35 @@ impl Body {
                 | biped_small::Species::PurpleLegoom
                 | biped_small::Species::RedLegoom
                 | biped_small::Species::UmberLegoom => 0.8,
-                _ => 1.0,
+                _ => attr_fallback!("BipedSmall", "combat_multiplier", 1.0),
             },
             Body::Golem(g) => match g.species {
                 golem::Species::Gravewarden => 2.45,
-                _ => 1.0,
+                _ => attr_fallback!("Golem", "combat_multiplier", 1.0),
             },
             Body::QuadrupedLow(b) => match b.species {
                 quadruped_low::Species::Snaretongue => 2.0,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedLow", "combat_multiplier", 1.0),
             },
             Body::QuadrupedSmall(b) => match b.species {
                 quadruped_small::Species::Axolotl | quadruped_small::Species::Gecko => 0.6,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedSmall", "combat_multiplier", 1.0),
             },
             #[expect(unreachable_patterns)] // TODO: Remove when more medium fish species are added
             Body::FishMedium(b) => match b.species {
                 fish_medium::Species::Marlin | fish_medium::Species::Icepike => 0.6,
-                _ => 1.0,
+                _ => attr_fallback!("FishMedium", "combat_multiplier", 1.0),
             },
             #[expect(unreachable_patterns)] // TODO: Remove when more small fish species are added
             Body::FishSmall(b) => match b.species {
                 fish_small::Species::Clownfish | fish_small::Species::Piranha => 0.6,
-                _ => 1.0,
+                _ => attr_fallback!("FishSmall", "combat_multiplier", 1.0),
             },
             Body::Crustacean(b) => match b.species {
                 crustacean::Species::Crab | crustacean::Species::SoldierCrab => 0.6,
-                _ => 1.0,
+                _ => attr_fallback!("Crustacean", "combat_multiplier", 1.0),
             },
-            _ => 1.0,
+            _ => attr_fallback!("*", "combat_multiplier", 1.0),
         }
     }
 
@@ -1714,7 +1558,13 @@ impl Body {
     /// `combat_multiplier` uses) rather than a blanket per-body-enum rule —
     /// mirrors how tabletop "advantage on saves against magic" traits are
     /// granted to specific creatures rather than to entire creature families.
-    /// A sparse match; anything not listed has no innate resistance.
+    ///
+    /// Like `threat_tier` this is a taxonomy rather than a tunable number —
+    /// the numbers each tier maps to live in `combat_tuning.ron` — so it stays
+    /// in code, and every match is **exhaustive**. `MagicResistTier::None` is
+    /// spelled out per species and per body kind on purpose: it is the answer
+    /// "this creature has no innate resistance", and writing it down is what
+    /// stops a new creature from inheriting it by accident.
     // TODO: fold in a proper creature-type/fiend predicate once one exists,
     // rather than keying purely off `Body`/species.
     pub fn magic_resist_tier(&self) -> MagicResistTier {
@@ -1732,7 +1582,31 @@ impl Body {
                 | biped_large::Species::Dullahan
                 | biped_large::Species::Harvester
                 | biped_large::Species::Huskbrute => MagicResistTier::Major,
-                _ => MagicResistTier::None,
+                biped_large::Species::AdletElder
+                | biped_large::Species::Cavetroll
+                | biped_large::Species::Cultistwarlock
+                | biped_large::Species::Cultistwarlord
+                | biped_large::Species::Cyclops
+                | biped_large::Species::Executioner
+                | biped_large::Species::Forgemaster
+                | biped_large::Species::Gigasfire
+                | biped_large::Species::Gigasfrost
+                | biped_large::Species::HaniwaGeneral
+                | biped_large::Species::Mightysaurok
+                | biped_large::Species::Mountaintroll
+                | biped_large::Species::Occultsaurok
+                | biped_large::Species::Ogre
+                | biped_large::Species::SeaBishop
+                | biped_large::Species::Slysaurok
+                | biped_large::Species::Strigoi
+                | biped_large::Species::Swamptroll
+                | biped_large::Species::TerracottaBesieger
+                | biped_large::Species::TerracottaDemolisher
+                | biped_large::Species::TerracottaPunisher
+                | biped_large::Species::TerracottaPursuer
+                | biped_large::Species::Tursus
+                | biped_large::Species::Wendigo
+                | biped_large::Species::Werewolf => MagicResistTier::None,
             },
             Body::BipedSmall(b) => match b.species {
                 biped_small::Species::Flamekeeper => MagicResistTier::Legendary,
@@ -1743,111 +1617,69 @@ impl Body {
                 biped_small::Species::Haniwa
                 | biped_small::Species::Boreal
                 | biped_small::Species::Ashen => MagicResistTier::Minor,
-                _ => MagicResistTier::None,
+                biped_small::Species::Adlet
+                | biped_small::Species::BloodmoonHeiress
+                | biped_small::Species::Bushly
+                | biped_small::Species::Cactid
+                | biped_small::Species::Gnarling
+                | biped_small::Species::GnarlingChieftain
+                | biped_small::Species::Gnoll
+                | biped_small::Species::Gnome
+                | biped_small::Species::GoblinChucker
+                | biped_small::Species::GoblinRuffian
+                | biped_small::Species::GoblinThug
+                | biped_small::Species::GreenLegoom
+                | biped_small::Species::Harlequin
+                | biped_small::Species::Husk
+                | biped_small::Species::Irrwurz
+                | biped_small::Species::Kappa
+                | biped_small::Species::Mandragora
+                | biped_small::Species::Myrmidon
+                | biped_small::Species::OchreLegoom
+                | biped_small::Species::PurpleLegoom
+                | biped_small::Species::RedLegoom
+                | biped_small::Species::Sahagin
+                | biped_small::Species::TreasureEgg
+                | biped_small::Species::UmberLegoom => MagicResistTier::None,
             },
-            _ => MagicResistTier::None,
+            // No body kind below has an innate magic-resistance trait. Listed
+            // one by one rather than behind a `_` so that a new body kind is
+            // a compile error here — the question "is this thing hard to
+            // charm?" has to be answered, not defaulted.
+            Body::Humanoid(_)
+            | Body::QuadrupedSmall(_)
+            | Body::QuadrupedMedium(_)
+            | Body::QuadrupedLow(_)
+            | Body::BirdMedium(_)
+            | Body::BirdLarge(_)
+            | Body::FishMedium(_)
+            | Body::FishSmall(_)
+            | Body::Theropod(_)
+            | Body::Golem(_)
+            | Body::Arthropod(_)
+            | Body::Crustacean(_)
+            | Body::Object(_)
+            | Body::Item(_)
+            | Body::Ship(_)
+            | Body::Plugin(_) => MagicResistTier::None,
         }
     }
 
+    /// The stagger pool this body starts with.
+    ///
+    /// Every creature's number lives in `assets/common/body_stats.ron`.
     pub fn base_poise(&self) -> u16 {
-        match self {
-            Body::Humanoid(_) => 100,
-            Body::BipedLarge(biped_large) => match biped_large.species {
-                biped_large::Species::Mindflayer => 777,
-                biped_large::Species::Minotaur => 340,
-                biped_large::Species::Forgemaster => 300,
-                biped_large::Species::Gigasfrost => 990,
-                biped_large::Species::Gigasfire => 990,
-                _ => 300,
+        let stats = stats::body_stats();
+        match self.stats_row(&stats.0) {
+            Ok(row) => row.base_poise,
+            Err(Rowless::Humanoid(_)) => 100,
+            // Nothing here can be staggered: props and projectiles have no
+            // stagger animation, ships and dropped items are not creatures,
+            // and plugin bodies carry their own data. 100 is the structural
+            // placeholder their `Poise` component is built from.
+            Err(Rowless::Object(_) | Rowless::Item(_) | Rowless::Ship(_) | Rowless::Plugin(_)) => {
+                100
             },
-            Body::BipedSmall(b) => match b.species {
-                biped_small::Species::GnarlingChieftain => 130,
-                biped_small::Species::IronDwarf | biped_small::Species::Flamekeeper => 300,
-                biped_small::Species::Boreal => 470,
-                _ => 100,
-            },
-            Body::BirdLarge(b) => match b.species {
-                bird_large::Species::FlameWyvern
-                | bird_large::Species::FrostWyvern
-                | bird_large::Species::CloudWyvern
-                | bird_large::Species::SeaWyvern
-                | bird_large::Species::WealdWyvern => 220,
-                _ => 165,
-            },
-            Body::Golem(_) => 365,
-            Body::QuadrupedMedium(b) => match b.species {
-                quadruped_medium::Species::Bear | quadruped_medium::Species::Grolgar => 195,
-                quadruped_medium::Species::Cattle
-                | quadruped_medium::Species::Llama
-                | quadruped_medium::Species::Alpaca
-                | quadruped_medium::Species::Camel
-                | quadruped_medium::Species::ClaySteed
-                | quadruped_medium::Species::Zebra
-                | quadruped_medium::Species::Donkey
-                | quadruped_medium::Species::Highland
-                | quadruped_medium::Species::Horse
-                | quadruped_medium::Species::Kelpie
-                | quadruped_medium::Species::Hirdrasil
-                | quadruped_medium::Species::Antelope => 165,
-                quadruped_medium::Species::Deer => 140,
-                quadruped_medium::Species::Wolf
-                | quadruped_medium::Species::Tiger
-                | quadruped_medium::Species::Barghest
-                | quadruped_medium::Species::Bonerattler
-                | quadruped_medium::Species::Darkhound
-                | quadruped_medium::Species::Moose
-                | quadruped_medium::Species::Snowleopard
-                | quadruped_medium::Species::Akhlut
-                | quadruped_medium::Species::Bristleback
-                | quadruped_medium::Species::Catoblepas
-                | quadruped_medium::Species::Lion => 190,
-                quadruped_medium::Species::Panda => 150,
-                quadruped_medium::Species::Saber
-                | quadruped_medium::Species::Yak
-                | quadruped_medium::Species::Frostfang
-                | quadruped_medium::Species::Tarasque
-                | quadruped_medium::Species::Tuskram
-                | quadruped_medium::Species::Mouflon
-                | quadruped_medium::Species::Roshwalr
-                | quadruped_medium::Species::Dreadhorn => 205,
-                quadruped_medium::Species::Mammoth
-                | quadruped_medium::Species::Elephant
-                | quadruped_medium::Species::Ngoubou => 230,
-            },
-            Body::QuadrupedLow(b) => match b.species {
-                quadruped_low::Species::Dagon => 270,
-                quadruped_low::Species::Crocodile
-                | quadruped_low::Species::Deadwood
-                | quadruped_low::Species::SeaCrocodile
-                | quadruped_low::Species::Alligator
-                | quadruped_low::Species::Sandshark
-                | quadruped_low::Species::Snaretongue
-                | quadruped_low::Species::Asp => 190,
-                quadruped_low::Species::Tortoise
-                | quadruped_low::Species::Rocksnapper
-                | quadruped_low::Species::Rootsnapper
-                | quadruped_low::Species::Reefsnapper
-                | quadruped_low::Species::Maneater
-                | quadruped_low::Species::Hakulaq
-                | quadruped_low::Species::Lavadrake
-                | quadruped_low::Species::Icedrake
-                | quadruped_low::Species::Basilisk
-                | quadruped_low::Species::Hydra
-                | quadruped_low::Species::Mossdrake => 205,
-                quadruped_low::Species::Elbst
-                | quadruped_low::Species::Salamander
-                | quadruped_low::Species::Monitor
-                | quadruped_low::Species::Pangolin
-                | quadruped_low::Species::Driggle => 130,
-            },
-            Body::Theropod(b) => match b.species {
-                theropod::Species::Archaeos
-                | theropod::Species::Ntouka
-                | theropod::Species::Odonto => 240,
-                theropod::Species::Yale => 220,
-                _ => 195,
-            },
-            _ => 100,
         }
     }
 
@@ -2664,5 +2496,256 @@ mod undead_creature_kind_tests {
     fn ordinary_bodies_are_not_undead() {
         assert!(!is_undead(biped_large_body(biped_large::Species::Minotaur)));
         assert!(!is_undead(biped_small_body(biped_small::Species::Gnarling)));
+    }
+}
+
+#[cfg(test)]
+mod threat_tier_boss_tests {
+    use super::*;
+    use crate::comp::body::{
+        biped_large, biped_small, bird_medium, crustacean, golem, quadruped_low, theropod,
+    };
+
+    fn crustacean_body(species: crustacean::Species) -> Body {
+        Body::Crustacean(crustacean::Body {
+            species,
+            body_type: crustacean::BodyType::Male,
+        })
+    }
+
+    fn bird_medium_body(species: bird_medium::Species) -> Body {
+        Body::BirdMedium(bird_medium::Body {
+            species,
+            body_type: bird_medium::BodyType::Male,
+        })
+    }
+
+    fn golem_body(species: golem::Species) -> Body {
+        Body::Golem(golem::Body {
+            species,
+            body_type: golem::BodyType::Male,
+        })
+    }
+
+    fn biped_large_body(species: biped_large::Species) -> Body {
+        Body::BipedLarge(biped_large::Body {
+            species,
+            body_type: biped_large::BodyType::Male,
+        })
+    }
+
+    fn biped_small_body(species: biped_small::Species) -> Body {
+        Body::BipedSmall(biped_small::Body {
+            species,
+            body_type: biped_small::BodyType::Male,
+        })
+    }
+
+    fn theropod_body(species: theropod::Species) -> Body {
+        Body::Theropod(theropod::Body {
+            species,
+            body_type: theropod::BodyType::Male,
+        })
+    }
+
+    fn quadruped_low_body(species: quadruped_low::Species) -> Body {
+        Body::QuadrupedLow(quadruped_low::Body {
+            species,
+            body_type: quadruped_low::BodyType::Male,
+        })
+    }
+
+    /// The Shellmaw (Sahagin Island's dungeon boss, `Karkatha`, 2000 HP)
+    /// must no longer be lumped in with a trivial T0 crab. Its 2000 HP sits
+    /// within the same band as `Golem::IronGolem` (2500 HP) and
+    /// `BipedLarge::AdletElder` (1500 HP) — both T3 in this function — so
+    /// it must land at exactly T3, matching those comparable-HP bosses, not
+    /// merely "some tier above T0".
+    #[test]
+    fn shellmaw_boss_matches_comparable_hp_bosses_at_tier_three() {
+        let shellmaw = crustacean_body(crustacean::Species::Karkatha);
+        let trivial_crab = crustacean_body(crustacean::Species::Crab);
+
+        assert!(
+            shellmaw.threat_tier() > trivial_crab.threat_tier(),
+            "Shellmaw (dungeon boss) must outrank a plain crab"
+        );
+        assert_eq!(trivial_crab.threat_tier(), 0);
+
+        let iron_golem = golem_body(golem::Species::IronGolem);
+        let adlet_elder = biped_large_body(biped_large::Species::AdletElder);
+        assert_eq!(shellmaw.threat_tier(), 3);
+        assert_eq!(shellmaw.threat_tier(), iron_golem.threat_tier());
+        assert_eq!(shellmaw.threat_tier(), adlet_elder.threat_tier());
+    }
+
+    /// The Bloodmoon Bat (the vampire-dungeon boss, 1200 HP) must no
+    /// longer be capped at the same T1 ceiling as every other BirdMedium,
+    /// and should land in a tier comparable to other ~1000-1500 HP bosses
+    /// elsewhere (e.g. `BipedLarge::Harvester`, 1300 HP, T3).
+    #[test]
+    fn bloodmoon_bat_boss_is_not_capped_at_tier_one() {
+        let bloodmoon_bat = bird_medium_body(bird_medium::Species::BloodmoonBat);
+        let trivial_bird = bird_medium_body(bird_medium::Species::Duck);
+
+        assert!(
+            bloodmoon_bat.threat_tier() > 1,
+            "must exceed the old flat T1 cap"
+        );
+        assert_eq!(trivial_bird.threat_tier(), 0);
+
+        let harvester = biped_large_body(biped_large::Species::Harvester);
+        assert_eq!(bloodmoon_bat.threat_tier(), harvester.threat_tier());
+    }
+
+    /// VampireBat (100 HP trash-swarm fodder, spawned two-per-position
+    /// alongside the one Bloodmoon Bat boss in Vampire Castle) must NOT
+    /// share the boss's tier just because `base_health` tags both `T3B` —
+    /// it belongs with other ~100 HP threats (on par with
+    /// `FishMedium::Marlin`/`Icepike`, tagged T2) instead, strictly below
+    /// the actual boss.
+    #[test]
+    fn vampire_bat_swarm_fodder_does_not_share_the_boss_tier() {
+        let vampire_bat = bird_medium_body(bird_medium::Species::VampireBat);
+        let bloodmoon_bat = bird_medium_body(bird_medium::Species::BloodmoonBat);
+
+        assert_eq!(vampire_bat.threat_tier(), 2);
+        assert!(
+            vampire_bat.threat_tier() < bloodmoon_bat.threat_tier(),
+            "trash-swarm VampireBat must not match the Bloodmoon Bat boss's tier"
+        );
+    }
+
+    /// BloodmoonHeiress and Flamekeeper (both 2000 HP `BipedSmall` dungeon
+    /// bosses) must not be lumped into the same T1 band as trash mobs like
+    /// GoblinThug (30 HP). They belong at T3, alongside comparable-HP
+    /// bosses on other bodies (`Golem::IronGolem` 2500 HP,
+    /// `Crustacean::Karkatha` 2000 HP).
+    #[test]
+    fn biped_small_high_hp_bosses_are_not_lumped_with_trash_tier() {
+        let bloodmoon_heiress = biped_small_body(biped_small::Species::BloodmoonHeiress);
+        let flamekeeper = biped_small_body(biped_small::Species::Flamekeeper);
+        let goblin_thug = biped_small_body(biped_small::Species::GoblinThug);
+        let karkatha = crustacean_body(crustacean::Species::Karkatha);
+
+        assert_eq!(goblin_thug.threat_tier(), 1);
+        assert_eq!(bloodmoon_heiress.threat_tier(), 3);
+        assert_eq!(flamekeeper.threat_tier(), 3);
+        assert_eq!(bloodmoon_heiress.threat_tier(), karkatha.threat_tier());
+    }
+
+    /// Boreal (800 HP) and Harlequin (500 HP) must also clear the old flat
+    /// T1 ceiling, and Jiangshi/IronDwarf/ShamanicSpirit/Ashen/Bloodservant
+    /// (240-300 HP, "notably tougher" than trash but far below the 2000 HP
+    /// bosses) must land at T2, strictly between the two.
+    #[test]
+    fn biped_small_mid_tier_species_sit_strictly_between_trash_and_bosses() {
+        let goblin_thug = biped_small_body(biped_small::Species::GoblinThug);
+        let jiangshi = biped_small_body(biped_small::Species::Jiangshi);
+        let iron_dwarf = biped_small_body(biped_small::Species::IronDwarf);
+        let shamanic_spirit = biped_small_body(biped_small::Species::ShamanicSpirit);
+        let ashen = biped_small_body(biped_small::Species::Ashen);
+        let bloodservant = biped_small_body(biped_small::Species::Bloodservant);
+        let harlequin = biped_small_body(biped_small::Species::Harlequin);
+        let boreal = biped_small_body(biped_small::Species::Boreal);
+
+        for t2 in [jiangshi, iron_dwarf, shamanic_spirit, ashen, bloodservant] {
+            assert_eq!(t2.threat_tier(), 2);
+            assert!(t2.threat_tier() > goblin_thug.threat_tier());
+        }
+        for t3 in [harlequin, boreal] {
+            assert_eq!(t3.threat_tier(), 3);
+        }
+    }
+
+    /// StoneGolem and Treant (both 1000 HP) must match Gravewarden (also
+    /// 1000 HP) at T3 rather than sitting a tier below it, and
+    /// AncientEffigy (250 HP -- less than even T2's ClayGolem at 350) must
+    /// move down to T2 instead of outranking it at T3.
+    #[test]
+    fn golem_tiers_track_hp_not_the_stale_split() {
+        let stone_golem = golem_body(golem::Species::StoneGolem);
+        let treant = golem_body(golem::Species::Treant);
+        let gravewarden = golem_body(golem::Species::Gravewarden);
+        let ancient_effigy = golem_body(golem::Species::AncientEffigy);
+        let clay_golem = golem_body(golem::Species::ClayGolem);
+
+        assert_eq!(stone_golem.threat_tier(), 3);
+        assert_eq!(treant.threat_tier(), 3);
+        assert_eq!(stone_golem.threat_tier(), gravewarden.threat_tier());
+        assert_eq!(ancient_effigy.threat_tier(), 2);
+        assert_eq!(ancient_effigy.threat_tier(), clay_golem.threat_tier());
+    }
+
+    /// Icedrake, Mossdrake and Lavadrake are byte-for-byte identical in
+    /// `assets/common/body_stats.ron` (700 kg / 340 HP / 205 poise / 100
+    /// energy), so three reskins of the same stat block must share one
+    /// threat tier instead of splitting T2/T3.
+    #[test]
+    fn quadruped_low_identical_drakes_share_one_tier() {
+        let icedrake = quadruped_low_body(quadruped_low::Species::Icedrake);
+        let mossdrake = quadruped_low_body(quadruped_low::Species::Mossdrake);
+        let lavadrake = quadruped_low_body(quadruped_low::Species::Lavadrake);
+
+        assert_eq!(icedrake.threat_tier(), 3);
+        assert_eq!(icedrake.threat_tier(), mossdrake.threat_tier());
+        assert_eq!(icedrake.threat_tier(), lavadrake.threat_tier());
+    }
+
+    /// Sunlizard (110 HP) must match the three raptors it is stat-for-stat
+    /// identical to (also 110 HP, T1), not sit two tiers above them.
+    /// Dodarock (20 HP, lower than every T1 mob in the game) must drop out
+    /// of T3 -- which requires 275+ HP everywhere else on this body -- all
+    /// the way to T0, the same floor `QuadrupedSmall::Batfox` (40 HP, also
+    /// `aggressive`) already sits at: being a genuine combatant does not
+    /// by itself earn a body a T1+ baseline it has no HP to back.
+    #[test]
+    fn theropod_low_hp_species_no_longer_outrank_their_own_hp_band() {
+        let sunlizard = theropod_body(theropod::Species::Sunlizard);
+        let sand_raptor = theropod_body(theropod::Species::Sandraptor);
+        let dodarock = theropod_body(theropod::Species::Dodarock);
+        let axebeak = theropod_body(theropod::Species::Axebeak);
+
+        assert_eq!(sunlizard.threat_tier(), 1);
+        assert_eq!(sunlizard.threat_tier(), sand_raptor.threat_tier());
+        assert_eq!(dodarock.threat_tier(), 0);
+        assert!(dodarock.threat_tier() < axebeak.threat_tier());
+    }
+
+    /// Cyclops (1000 HP, standard 300 poise) must not share T4 with real
+    /// 2000+ HP raid bosses (Mindflayer 2000, Minotaur 3000, Forgemaster
+    /// 10000). It moves to T3, alongside other biped-large elites in its
+    /// own HP band (Harvester 1300, AdletElder 1500).
+    #[test]
+    fn cyclops_moves_down_to_match_its_actual_hp_band() {
+        let cyclops = biped_large_body(biped_large::Species::Cyclops);
+        let mindflayer = biped_large_body(biped_large::Species::Mindflayer);
+        let harvester = biped_large_body(biped_large::Species::Harvester);
+
+        assert_eq!(cyclops.threat_tier(), 3);
+        assert_eq!(cyclops.threat_tier(), harvester.threat_tier());
+        assert!(cyclops.threat_tier() < mindflayer.threat_tier());
+    }
+}
+
+#[cfg(test)]
+mod arrow_turret_base_health_tests {
+    use super::*;
+    use crate::comp::body::object;
+
+    /// ArrowTurret must no longer silently inherit the flat 1000 HP
+    /// fallback meant for props and projectiles: it is a combat-capable
+    /// `MagicalMachine` construct (per `creature_type.rs`) in the same
+    /// family as Crossbow/Flamethrower/Lavathrower, and should share their
+    /// value rather than outrank BarrelOrgan/TerracottaStatue by accident.
+    #[test]
+    fn arrow_turret_has_an_explicit_value_matching_its_turret_family() {
+        let arrow_turret = Body::Object(object::Body::ArrowTurret);
+        let crossbow = Body::Object(object::Body::Crossbow);
+        let barrel_organ = Body::Object(object::Body::BarrelOrgan);
+
+        assert_eq!(arrow_turret.base_health(), 80);
+        assert_eq!(arrow_turret.base_health(), crossbow.base_health());
+        assert!(arrow_turret.base_health() < barrel_organ.base_health());
     }
 }

@@ -19,9 +19,9 @@ use common::{
     },
     consts::{MAX_INTERACT_RANGE, MAX_NPCINTERACT_RANGE, SOUND_TRAVEL_DIST_PER_VOLUME},
     event::{
-        CommandPetEvent, CreateItemDropEvent, CreateSpriteEvent, DeleteEvent, DialogueEvent,
-        DismissSummonEvent, EventBus, MineBlockEvent, NpcInteractEvent, SetLanternEvent,
-        SetPetStayEvent, SoundEvent, TamePetEvent, ToggleSpriteLightEvent,
+        ActivateVaultLeverEvent, CommandPetEvent, CreateItemDropEvent, CreateSpriteEvent,
+        DeleteEvent, DialogueEvent, DismissSummonEvent, EventBus, MineBlockEvent, NpcInteractEvent,
+        SetLanternEvent, SetPetStayEvent, SoundEvent, TamePetEvent, ToggleSpriteLightEvent,
     },
     link::Is,
     mounting::Mount,
@@ -52,6 +52,7 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<SoundEvent>(builder, &[]);
     event_dispatch::<CreateSpriteEvent>(builder, &[]);
     event_dispatch::<ToggleSpriteLightEvent>(builder, &[]);
+    event_dispatch::<ActivateVaultLeverEvent>(builder, &[]);
 }
 
 impl ServerEvent for SetLanternEvent {

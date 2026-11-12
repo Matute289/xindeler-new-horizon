@@ -158,12 +158,56 @@ pub trait BodySpec: Sized {
     ) -> [Option<Self::BoneMesh>; 16]; // anim::MAX_BONE_COUNT cargo bug, this does not compiled when set to the const. but should need adjustment if you ever wanna change the const
 }
 
+/// Declares the `BodySpec` for one body kind.
+///
+/// The `bones:` clause names the skeleton this body animates with and lists
+/// its mesh bones **in the order the returned mesh array is indexed by**. That
+/// list is checked against the skeleton's own `MESH_BONE_NAMES` at compile
+/// time, so a body whose bone order drifts out of sync with its skeleton fails
+/// the build instead of rendering a head on a tail.
+///
+/// The clause is mandatory: the array-slot-to-bone mapping is positional with
+/// no other check anywhere in the pipeline, so a new body kind must state the
+/// order it was written against. A body kind arriving from an upstream merge
+/// will therefore *fail to compile* until someone adds its bone list — that is
+/// the forcing function, not a broken merge.
+///
+/// Three `BodySpec` impls are hand-rolled rather than going through this macro
+/// and so get no compile-time check: `ship::Body` and `plugin::Body` below,
+/// and `VolumeKey` in `super::volume`. For those, the runtime
+/// `debug_check_bone_slots` in `super::cache` is the only guard.
+///
+/// Note that the *names* only have to match the skeleton — the manifest fields
+/// and the `mesh_*` helpers are free to use their own vocabulary (`golem`'s
+/// `mesh_torso_upper` fills the `upper_torso` bone), and several body kinds
+/// already do.
 macro_rules! make_vox_spec {
     (
         $body:ty,
+        bones: $Skeleton:ty [ $($bone:ident),* $(,)? ],
         struct $Spec:ident { $( $(+)? $field:ident: $ty:ty = $asset_path:literal),* $(,)? },
         |$self_pat:pat, $spec_pat:pat_param| $bone_meshes:block $(,)?
     ) => {
+        const _: () = {
+            const DECLARED: &[&str] = &[$(stringify!($bone)),*];
+            assert!(
+                DECLARED.len() <= anim::MAX_BONE_COUNT,
+                concat!(
+                    "make_vox_spec!(", stringify!($body), "): more bones declared than ",
+                    "anim::MAX_BONE_COUNT — the mesh array cannot address them",
+                ),
+            );
+            assert!(
+                anim::bone_names_eq(DECLARED, &<$Skeleton>::MESH_BONE_NAMES),
+                concat!(
+                    "make_vox_spec!(", stringify!($body), "): the declared bone order does not ",
+                    "match ", stringify!($Skeleton), "'s `+` bones. Slot N of the mesh array ",
+                    "feeds the Nth skeleton bone by position, so a mismatch here means meshes ",
+                    "render on the wrong bones. Fix the order in whichever of the two is wrong.",
+                ),
+            );
+        };
+
         #[derive(Clone)]
         pub struct $Spec {
             $( $field: AssetHandle<MultiRon<$ty>>, )*
@@ -480,6 +524,8 @@ impl_concatenate_for_wrapper!(HumArmorTabardSpec);
 
 make_vox_spec!(
     Body,
+    bones: anim::character::CharacterSkeleton [head, chest, belt, back, shorts, hand_l, hand_r,
+        foot_l, foot_r, shoulder_l, shoulder_r, glider, main, second, lantern, hold],
     struct HumSpec {
         color: HumColorSpec = "voxygen.voxel.humanoid_color_manifest",
         head: HumHeadSpec = "voxygen.voxel.humanoid_head_manifest",
@@ -1170,6 +1216,8 @@ struct QuadrupedSmallLateralSubSpec {
 
 make_vox_spec!(
     quadruped_small::Body,
+    bones: anim::quadruped_small::QuadrupedSmallSkeleton [head, chest, leg_fl, leg_fr, leg_bl,
+        leg_br, tail],
     struct QuadrupedSmallSpec {
         central: QuadrupedSmallCentralSpec = "voxygen.voxel.quadruped_small_central_manifest",
         lateral: QuadrupedSmallLateralSpec = "voxygen.voxel.quadruped_small_lateral_manifest",
@@ -1411,6 +1459,8 @@ struct QuadrupedMediumLateralSubSpec {
 
 make_vox_spec!(
     quadruped_medium::Body,
+    bones: anim::quadruped_medium::QuadrupedMediumSkeleton [head, neck, jaw, tail, torso_front,
+        torso_back, ears, leg_fl, leg_fr, leg_bl, leg_br, foot_fl, foot_fr, foot_bl, foot_br],
     struct QuadrupedMediumSpec {
         central: QuadrupedMediumCentralSpec = "voxygen.voxel.quadruped_medium_central_manifest",
         lateral: QuadrupedMediumLateralSpec = "voxygen.voxel.quadruped_medium_lateral_manifest",
@@ -1805,6 +1855,8 @@ struct BirdMediumLateralSubSpec {
 
 make_vox_spec!(
     bird_medium::Body,
+    bones: anim::bird_medium::BirdMediumSkeleton [head, chest, tail, wing_in_l, wing_in_r,
+        wing_out_l, wing_out_r, leg_l, leg_r],
     struct BirdMediumSpec {
         central: BirdMediumCentralSpec = "voxygen.voxel.bird_medium_central_manifest",
         lateral: BirdMediumLateralSpec = "voxygen.voxel.bird_medium_lateral_manifest",
@@ -2083,6 +2135,8 @@ struct TheropodLateralSubSpec {
 }
 make_vox_spec!(
     theropod::Body,
+    bones: anim::theropod::TheropodSkeleton [head, jaw, neck, chest_front, chest_back,
+        tail_front, tail_back, hand_l, hand_r, leg_l, leg_r, foot_l, foot_r],
     struct TheropodSpec {
         central: TheropodCentralSpec = "voxygen.voxel.theropod_central_manifest",
         lateral: TheropodLateralSpec = "voxygen.voxel.theropod_lateral_manifest",
@@ -2439,6 +2493,9 @@ struct ArthropodLateralSubSpec {
 }
 make_vox_spec!(
     arthropod::Body,
+    bones: anim::arthropod::ArthropodSkeleton [head, chest, mandible_l, mandible_r, wing_fl,
+        wing_fr, wing_bl, wing_br, leg_fl, leg_fr, leg_fcl, leg_fcr, leg_bcl, leg_bcr, leg_bl,
+        leg_br],
     struct ArthropodSpec {
         central: ArthropodCentralSpec = "voxygen.voxel.arthropod_central_manifest",
         lateral: ArthropodLateralSpec = "voxygen.voxel.arthropod_lateral_manifest",
@@ -2871,6 +2928,8 @@ struct CrustaceanLateralSubSpec {
 }
 make_vox_spec!(
     crustacean::Body,
+    bones: anim::crustacean::CrustaceanSkeleton [chest, tail_f, tail_b, arm_l, pincer_l0,
+        pincer_l1, arm_r, pincer_r0, pincer_r1, leg_fl, leg_cl, leg_bl, leg_fr, leg_cr, leg_br],
     struct CrustaceanSpec {
         central: CrustaceanCentralSpec = "voxygen.voxel.crustacean_central_manifest",
         lateral: CrustaceanLateralSpec = "voxygen.voxel.crustacean_lateral_manifest",
@@ -3313,6 +3372,8 @@ struct FishMediumLateralSubSpec {
 
 make_vox_spec!(
     fish_medium::Body,
+    bones: anim::fish_medium::FishMediumSkeleton [head, jaw, chest_front, chest_back, tail,
+        fin_l, fin_r],
     struct FishMediumSpec {
         central: FishMediumCentralSpec = "voxygen.voxel.fish_medium_central_manifest",
         lateral: FishMediumLateralSpec = "voxygen.voxel.fish_medium_lateral_manifest",
@@ -3533,6 +3594,7 @@ struct FishSmallLateralSubSpec {
 
 make_vox_spec!(
     fish_small::Body,
+    bones: anim::fish_small::FishSmallSkeleton [chest, tail, fin_l, fin_r],
     struct FishSmallSpec {
         central: FishSmallCentralSpec = "voxygen.voxel.fish_small_central_manifest",
         lateral: FishSmallLateralSpec = "voxygen.voxel.fish_small_lateral_manifest",
@@ -3677,6 +3739,8 @@ struct BipedSmallArmorTailSpec(ArmorVoxSpecMap<String, ArmorVoxSpec>);
 impl_concatenate_for_wrapper!(BipedSmallArmorTailSpec);
 make_vox_spec!(
     biped_small::Body,
+    bones: anim::biped_small::BipedSmallSkeleton [head, chest, pants, tail, main, second,
+        hand_l, hand_r, foot_l, foot_r],
     struct BipedSmallSpec {
         armor_foot: BipedSmallArmorFootSpec = "voxygen.voxel.biped_small_armor_foot_manifest",
         weapon: BipedSmallWeaponSpec = "voxygen.voxel.biped_weapon_manifest",
@@ -3972,6 +4036,9 @@ struct DragonLateralSubSpec {
 
 make_vox_spec!(
     dragon::Body,
+    bones: anim::dragon::DragonSkeleton [head_upper, head_lower, jaw, chest_front, chest_rear,
+        tail_front, tail_rear, wing_in_l, wing_in_r, wing_out_l, wing_out_r, foot_fl, foot_fr,
+        foot_bl, foot_br],
     struct DragonSpec {
         central: DragonCentralSpec = "voxygen.voxel.dragon_central_manifest",
         lateral: DragonLateralSpec = "voxygen.voxel.dragon_lateral_manifest",
@@ -4373,6 +4440,9 @@ struct BirdLargeLateralSubSpec {
 
 make_vox_spec!(
     bird_large::Body,
+    bones: anim::bird_large::BirdLargeSkeleton [head, beak, neck, chest, tail_front, tail_rear,
+        wing_in_l, wing_in_r, wing_mid_l, wing_mid_r, wing_out_l, wing_out_r, leg_l, leg_r,
+        foot_l, foot_r],
     struct BirdLargeSpec {
         central: BirdLargeCentralSpec = "voxygen.voxel.bird_large_central_manifest",
         lateral: BirdLargeLateralSpec = "voxygen.voxel.bird_large_lateral_manifest",
@@ -4816,6 +4886,8 @@ impl_concatenate_for_wrapper!(BipedLargeSecondSpec);
 
 make_vox_spec!(
     biped_large::Body,
+    bones: anim::biped_large::BipedLargeSkeleton [head, jaw, upper_torso, lower_torso, tail,
+        main, second, shoulder_l, shoulder_r, hand_l, hand_r, leg_l, leg_r, foot_l, foot_r, hold],
     struct BipedLargeSpec {
         central: BipedLargeCentralSpec = "voxygen.voxel.biped_large_central_manifest",
         lateral: BipedLargeLateralSpec = "voxygen.voxel.biped_large_lateral_manifest",
@@ -5249,6 +5321,8 @@ struct GolemLateralSubSpec {
 
 make_vox_spec!(
     golem::Body,
+    bones: anim::golem::GolemSkeleton [head, jaw, upper_torso, lower_torso, shoulder_l,
+        shoulder_r, hand_l, hand_r, leg_l, leg_r, foot_l, foot_r],
     struct GolemSpec {
         central: GolemCentralSpec = "voxygen.voxel.golem_central_manifest",
         lateral: GolemLateralSpec = "voxygen.voxel.golem_lateral_manifest",
@@ -5585,6 +5659,9 @@ struct QuadrupedLowLateralSubSpec {
 
 make_vox_spec!(
     quadruped_low::Body,
+    bones: anim::quadruped_low::QuadrupedLowSkeleton [head_c_upper, head_c_lower, jaw_c,
+        head_l_upper, head_l_lower, jaw_l, head_r_upper, head_r_lower, jaw_r, chest, tail_front,
+        tail_rear, foot_fl, foot_fr, foot_bl, foot_br],
     struct QuadrupedLowSpec {
         central: QuadrupedLowCentralSpec = "voxygen.voxel.quadruped_low_central_manifest",
         lateral: QuadrupedLowLateralSpec = "voxygen.voxel.quadruped_low_lateral_manifest",
@@ -6000,6 +6077,7 @@ struct ObjectCentralSubSpec {
 
 make_vox_spec!(
     object::Body,
+    bones: anim::object::ObjectSkeleton [bone0, bone1],
     struct ObjectSpec {
         central: ObjectCentralSpec = "voxygen.voxel.object_manifest",
     },
@@ -6102,6 +6180,7 @@ impl_concatenate_for_wrapper!(ItemCentralSpec);
 
 make_vox_spec!(
     body::item::Body,
+    bones: anim::item::ItemSkeleton [bone0],
     struct ItemSpec {
         central: ItemCentralSpec = "voxygen.voxel.item_drop_manifest",
     },

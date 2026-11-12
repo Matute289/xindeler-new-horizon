@@ -1,0 +1,21 @@
+SpawnEntry (
+    name: "Cromatolis swamp-shallows wildlife.",
+    note: "Shallow marshy lake/lagoon-edge inhabitants -- the `swamp_shallows` profile in cromatolis_v0_aquatic_ecology.ron, the closest reachable proxy for a swamp water body now that WaterBodyKind carries no Swamp variant.",
+    rules: [
+        Pack(
+            groups: [
+                (3, (2, 4, "common.entity.wild.peaceful.axolotl")),
+            ],
+            spawn_mode: Water,
+            day_period: [Night, Morning, Noon, Evening],
+        ),
+        Pack(
+            groups: [
+                (3, (2, 5, "common.entity.wild.peaceful.crab")),
+                (1, (1, 1, "common.entity.wild.aggressive.sea_crocodile")),
+            ],
+            spawn_mode: Land,
+            day_period: [Night, Morning, Noon, Evening],
+        ),
+    ],
+)

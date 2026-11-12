@@ -662,7 +662,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Bristleback, _) => 1.1,
                 (ClaySteed, _) => 1.75,
                 (Frostfang, _) => 1.0,
-                _ => 0.9,
+                _ => attr_fallback!("QuadrupedMedium", "scaler", 0.9),
             },
             startangle: match (body.species, body.body_type) {
                 //changes the default angle of front feet
@@ -676,7 +676,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Bonerattler, _) => -0.7,
                 (Roshwalr, _) => -0.3,
                 (Barghest, _) => -0.5,
-                _ => 0.0,
+                _ => attr_fallback!("QuadrupedMedium", "startangle", 0.0),
             },
             tempo: match (body.species, body.body_type) {
                 (Grolgar, _) => 0.85,
@@ -704,7 +704,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Camel, _) => 1.8,
                 (Akhlut, _) => 0.95,
                 (Elephant, _) => 0.25,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedMedium", "tempo", 1.0),
             },
             spring: match (body.species, body.body_type) {
                 (Grolgar, _) => 0.9,
@@ -726,7 +726,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Dreadhorn, _) => 0.85,
                 (Moose, _) => 0.9,
                 (Snowleopard, _) => 1.1,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedMedium", "spring", 1.0),
             },
             feed: match (body.species, body.body_type) {
                 // TODO: Rework some species to allow for feed anim
@@ -739,7 +739,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Antelope, _) => (false, 0.9),
                 (Kelpie, _) => (false, 1.0),
                 (Horse, _) => (true, 0.85),
-                _ => (false, 0.0),
+                _ => attr_fallback!("QuadrupedMedium", "feed", (false, 0.0)),
             },
             ears_for_trunk: matches!(body.species, Elephant),
         }

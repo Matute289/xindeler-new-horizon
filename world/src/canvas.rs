@@ -10,7 +10,9 @@ use common::{
     calendar::Calendar,
     generation::{EntityInfo, EntitySpawn},
     spot::Spot,
-    terrain::{Block, BlockKind, SpriteCfg, Structure, TerrainChunk, TerrainChunkSize},
+    terrain::{
+        Block, BlockKind, SpriteCfg, Structure, TerrainChunk, TerrainChunkSize, TerrainOverrides,
+    },
     vol::{ReadVol, RectVolSize, WriteVol},
 };
 use rand::SeedableRng;
@@ -28,10 +30,24 @@ pub struct CanvasInfo<'a> {
     pub(crate) index: IndexRef<'a>,
     pub(crate) chunk: &'a SimChunk,
     pub(crate) calendar: Option<&'a Calendar>,
+    /// Currently-active regional terrain overrides touching this chunk, if
+    /// any (see `common::terrain::regional_override` and
+    /// `column::ColumnGen::with_overrides`) -- the same small, per-chunk-
+    /// filtered subset `World::generate_chunk` computed once and threaded
+    /// into the column-level sampler. `None` for the mock canvas and any
+    /// other construction site that never needed overrides. Consulted by
+    /// [`Self::col_or_gen`]'s border/anchor-sampling fallback so rocks/
+    /// shrubs/trees sampled slightly outside this chunk's own grid (up to
+    /// ~24 blocks, via `StructureGen2d` spacing) still see an active
+    /// override, not just columns sampled from `Self::col`'s own
+    /// (already-overridden) `column_grid`.
+    pub(crate) overrides: Option<&'a TerrainOverrides>,
 }
 
 impl<'a> CanvasInfo<'a> {
     pub fn calendar(&self) -> Option<&'a Calendar> { self.calendar }
+
+    pub fn overrides(&self) -> Option<&'a TerrainOverrides> { self.overrides }
 
     pub fn wpos(&self) -> Vec2<i32> { self.wpos }
 
@@ -56,7 +72,11 @@ impl<'a> CanvasInfo<'a> {
     /// This function does not (currently) cache generated columns.
     pub fn col_or_gen(&self, wpos: Vec2<i32>) -> Option<Cow<'a, ColumnSample<'_>>> {
         self.col(wpos).map(Cow::Borrowed).or_else(|| {
-            Some(Cow::Owned(ColumnGen::new(self.chunks()).get((
+            let column_gen = match self.overrides {
+                Some(overrides) => ColumnGen::with_overrides(self.chunks(), overrides),
+                None => ColumnGen::new(self.chunks()),
+            };
+            Some(Cow::Owned(column_gen.get((
                 wpos,
                 self.index(),
                 self.calendar,
@@ -72,13 +92,8 @@ impl<'a> CanvasInfo<'a> {
             .filter_map(move |pos| {
                 let pos = self.chunk_pos + pos;
                 self.chunks.get(pos).and_then(|c| c.spot).map(|spot| {
-                    let wpos = pos.map2(TerrainChunkSize::RECT_SIZE, |e, sz| {
-                        e * sz as i32 + sz as i32 / 2
-                    });
-                    // TODO: Very dumb, not this.
-                    let seed = pos.x as u32 | (pos.y as u32).wrapping_shl(16);
-
-                    (wpos, spot, seed ^ 0xA801D82E)
+                    let (wpos, seed) = crate::layer::spot::chunk_spot_placement(pos);
+                    (wpos, spot, seed)
                 })
             })
     }
@@ -99,6 +114,12 @@ impl<'a> CanvasInfo<'a> {
         let zcache_grid = Grid::populate_from(Vec2::broadcast(1), |_| None);
         let sim_chunk = SimChunk {
             authored_cromatolis_v0: false,
+            authored_region_id: None,
+            authored_near_water: false,
+            water_body: None,
+            salinity: None,
+            aquatic_ecology_profile: None,
+            authored_alpine_snowland: false,
             chaos: 0.0,
             alt: 0.0,
             basement: 0.0,
@@ -109,6 +130,8 @@ impl<'a> CanvasInfo<'a> {
             humidity: 0.0,
             rockiness: 0.0,
             tree_density: 0.0,
+            ground_cover: 0.0,
+            ground_substrate: None,
             forest_kind: crate::all::ForestKind::Palm,
             spawn_rate: 0.0,
             river: Default::default(),
@@ -130,6 +153,7 @@ impl<'a> CanvasInfo<'a> {
             index,
             chunk: &sim_chunk,
             calendar: None,
+            overrides: None,
         })
     }
 }

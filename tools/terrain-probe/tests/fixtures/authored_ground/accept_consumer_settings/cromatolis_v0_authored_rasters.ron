@@ -1,0 +1,57 @@
+(
+    schema: 1,
+    regions: [
+        (
+            id: "fixture",
+            min: (2048, 2048),
+            max: (2560, 2560),
+            feather_m: 32,
+            tile_size_m: 256,
+            cell_size_m: 1,
+            layers: [
+                Ground,
+            ],
+            tiles: [
+                (
+                    layer: Ground,
+                    tx: 0,
+                    ty: 0,
+                    sha256: "f7f6b05c0833965cb6a694263ae9c1e725541412dda5c2af4677d76f0e0193c8",
+                ),
+                (
+                    layer: Ground,
+                    tx: 1,
+                    ty: 0,
+                    sha256: "cac536280d893652b19822a87600856ba9f55d4450aded9e694a53b1f8cb2785",
+                ),
+                (
+                    layer: Ground,
+                    tx: 0,
+                    ty: 1,
+                    sha256: "f7ac6c5e7cd29b89e6926d931587bb8783bba0684c266ec68df4ef17b35af67e",
+                ),
+                (
+                    layer: Ground,
+                    tx: 1,
+                    ty: 1,
+                    sha256: "555cf4b854ba5fa48beb6de2f2ea452683ae260059d0c255f6dd36a2e96c2349",
+                ),
+            ],
+            suppress_procedural_in_water: false,
+            exclude_procedural_margin_m: 0,
+            allow_partial: false,
+            allow_partial_chunks: [],
+            aquatic_ecology_profile: None,
+            consistency: (
+                max_authored_dry_table_wet_chunks: 0,
+                max_authored_wet_table_dry_chunks: None,
+            ),
+            sites_on_patch: [
+                "settlement:site.fixture",
+                "procedural-bridge:1,2:3,2",
+            ],
+            site_levelling: false,
+            max_exposed_void_columns: 12,
+        ),
+    ],
+)

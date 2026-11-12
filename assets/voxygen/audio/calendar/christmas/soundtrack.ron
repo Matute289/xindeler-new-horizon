@@ -1,5 +1,8 @@
 // Times: Day, Night, or None (both)
-// Weathers: Clear, Cloudy, Rain, Storm, or None (any weather)
+// Weathers: Clear, Cloudy, Rain, Storm, Snow — one of them, or a list of them
+//          (the track plays if the current weather is any), or None (any
+//          weather). Snow is precipitation over ground cold enough to freeze
+//          it, so a rain track that also suits snowfall lists both.
 // Biomes: Grassland, Forest, Desert, Snowland, Lake, Mountain, Ocean, Jungle, Savannah, Taiga
 //          planned biomes: Swamp
 // Number after biome indicates weighting; higher numbers are less frequent
@@ -75,7 +78,7 @@
             path: "voxygen.audio.soundtrack.overworld.the_heavens_weep",
             length: 210.0,
             timing: None,
-            weather: Rain,
+            weather: [Rain, Snow],
             biomes: [],
             sites: [Void, Settlement(Default), Settlement(CliffTown), Settlement(DesertCity), Settlement(SavannahTown)],
             music_state: Activity(Explore),
@@ -86,7 +89,7 @@
             path: "voxygen.audio.soundtrack.overworld.a_heros_sorrow",
             length: 252.0,
             timing: None,
-            weather: Rain,
+            weather: [Rain, Snow],
             biomes: [],
             sites: [Void, Settlement(Default), Settlement(CliffTown), Settlement(DesertCity), Settlement(SavannahTown)],
             music_state: Activity(Explore),

@@ -19,12 +19,14 @@ pub mod character_suspension;
 pub mod chat;
 pub mod chunk_generator;
 mod chunk_serialize;
+#[cfg(feature = "worldgen")] mod citadel;
 pub mod client;
 pub mod cmd;
 pub mod connection_handler;
 mod data_dir;
 pub mod error;
 pub mod events;
+#[cfg(feature = "worldgen")] mod gate_checkpoint;
 pub mod input;
 pub mod location;
 pub mod lod;
@@ -40,9 +42,12 @@ pub mod rtsim;
 pub mod settings;
 pub mod state_ext;
 pub mod sys;
+pub mod terrain_override;
 #[cfg(feature = "persistent_world")]
 pub mod terrain_persistence;
 #[cfg(not(feature = "worldgen"))] mod test_world;
+#[cfg(feature = "worldgen")]
+mod undercompact_gate;
 
 #[cfg(feature = "worldgen")] mod weather;
 
@@ -173,11 +178,43 @@ impl Default for SpawnPoint {
     fn default() -> Self { Self(Vec3::new(0.0, 0.0, 256.0)) }
 }
 
+#[cfg(test)]
+mod scheduler_registration_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "worldgen")]
+    fn server_startup_registers_the_terrain_damage_healing_scheduler() {
+        let mut ecs = specs::World::new();
+
+        register_system_schedulers(&mut ecs);
+
+        assert!(
+            ecs.try_fetch::<sys::SysScheduler<sys::terrain_damage_heal::Sys>>()
+                .is_some(),
+            "the dispatched terrain_damage_heal system must have its scheduler resource before \
+             the first server tick"
+        );
+    }
+}
+
 // This is the minimum chunk range that is kept loaded around each player
 // server-side. This is independent of the client's view distance and exists to
 // avoid exploits such as small view distance chunk reloading and also to keep
 // various mechanics working fluidly (i.e: not unloading nearby entities).
 pub const MIN_VD: u32 = 6;
+
+/// Insert every scheduler required by a server-only dispatched system before
+/// the first server tick. A `SysScheduler` is a distinct ECS resource per
+/// system type, so registering a dispatcher alone is not sufficient.
+fn register_system_schedulers(ecs: &mut specs::World) {
+    ecs.insert(sys::PersistenceScheduler::every(Duration::from_secs(10)));
+
+    #[cfg(feature = "worldgen")]
+    ecs.insert(sys::SysScheduler::<sys::terrain_damage_heal::Sys>::every(
+        Duration::from_secs(30),
+    ));
+}
 
 // Tick count used for throttling network updates
 // Note this doesn't account for dt (so update rate changes with tick rate)
@@ -285,6 +322,22 @@ pub struct Server {
     chat_cache: ChatCache,
     database_settings: Arc<RwLock<DatabaseSettings>>,
     disconnect_all_clients_requested: bool,
+
+    // Citadel stations stream with their terrain chunks. The refresh only
+    // materializes an absent station; it never creates a second live copy.
+    #[cfg(feature = "worldgen")]
+    citadel_defence_refresh: Duration,
+
+    // Green Post checkpoint gate + Evercross guard reconciliation. Same 1Hz
+    // shape as `citadel_defence_refresh` above; `green_post_checkpoint_open`
+    // is the checkpoint's own cached last-applied physical state (`None`
+    // until the first pass), compared against instead of re-reading live
+    // terrain so the reconciliation stays idempotent without needing a full
+    // tick to apply the previous pass's `BlockChange` first.
+    #[cfg(feature = "worldgen")]
+    green_post_checkpoint_refresh: Duration,
+    #[cfg(feature = "worldgen")]
+    green_post_checkpoint_open: Option<bool>,
 
     event_dispatcher: SendDispatcher<'static>,
 
@@ -411,6 +464,7 @@ impl Server {
         let map = common_net::msg::WorldMapMsg {
             dimensions_lg: Vec2::zero(),
             max_height: 1.0,
+            minimap_voxel_overlay_alpha: u8::MAX,
             rgba: Grid::new(Vec2::new(1, 1), 1),
             horizons: [(vec![0], vec![0]), (vec![0], vec![0])],
             alt: Grid::new(Vec2::new(1, 1), 1),
@@ -508,9 +562,28 @@ impl Server {
                      Additionally, it is expected to be replaced in the future *without* \
                      migration or warning. You have been warned."
                 );
-                state
-                    .ecs_mut()
-                    .insert(TerrainPersistence::new(data_dir.to_owned()));
+                let terrain_persistence = TerrainPersistence::new(data_dir.to_owned());
+                // XINDELER: persisted edits sit on regenerated terrain; warn
+                // when the authored water rasters under them changed.
+                #[cfg(feature = "worldgen")]
+                terrain_persistence.check_authored_rasters_digest(
+                    world.sim().authored_rasters().map(|r| r.digest()),
+                    &world
+                        .sim()
+                        .authored_rasters()
+                        .map(|r| {
+                            r.region_entries()
+                                .map(|e| crate::terrain_persistence::AuthoredRegionDigest {
+                                    id: e.id.to_string(),
+                                    digest: e.digest.to_string(),
+                                    min_chunk: e.bounds.min / 32,
+                                    max_chunk: e.bounds.max / 32,
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
+                );
+                state.ecs_mut().insert(terrain_persistence);
             }
             #[cfg(not(feature = "persistent_world"))]
             error!(
@@ -604,10 +677,8 @@ impl Server {
             Arc::<RwLock<DatabaseSettings>>::clone(&database_settings),
         )?);
 
-        // System schedulers to control execution of systems
-        state
-            .ecs_mut()
-            .insert(sys::PersistenceScheduler::every(Duration::from_secs(10)));
+        // System schedulers must exist before the first dispatched server tick.
+        register_system_schedulers(state.ecs_mut());
 
         // Region map (spatial structure for entity synchronization)
         state.ecs_mut().insert(RegionMap::new());
@@ -815,7 +886,14 @@ impl Server {
             ) {
                 Ok(rtsim) => {
                     state.ecs_mut().insert(rtsim.state().data().time_of_day);
+                    // Rebuild the ECS-side `Arc<TerrainOverrides>` resource
+                    // (the live, fast-access snapshot every chunk generation
+                    // reads) from whatever was persisted in this save. Read
+                    // before the move below hands `rtsim` to the ECS.
+                    let terrain_overrides =
+                        rtsim.with_terrain_overrides(|overrides| overrides.clone());
                     state.ecs_mut().insert(rtsim);
+                    state.ecs_mut().insert(Arc::new(terrain_overrides));
                 },
                 Err(err) => {
                     error!("Failed to load rtsim: {}", err);
@@ -824,6 +902,14 @@ impl Server {
             }
             weather::init(&mut state);
         }
+        // Without worldgen there is no rtsim save to rehydrate from, but
+        // `sys::terrain::Sys` and every regional-terrain-override consumer
+        // still unconditionally fetch this resource -- always insert it, an
+        // empty (no active overrides) snapshot when there's nothing to load.
+        #[cfg(not(feature = "worldgen"))]
+        state
+            .ecs_mut()
+            .insert(Arc::new(common::terrain::TerrainOverrides::default()));
 
         let portrait_service = portrait::PortraitService::spawn(
             Arc::<RwLock<DatabaseSettings>>::clone(&database_settings),
@@ -842,6 +928,12 @@ impl Server {
             chat_cache,
             database_settings,
             disconnect_all_clients_requested: false,
+            #[cfg(feature = "worldgen")]
+            citadel_defence_refresh: Duration::from_secs(1),
+            #[cfg(feature = "worldgen")]
+            green_post_checkpoint_refresh: Duration::from_secs(1),
+            #[cfg(feature = "worldgen")]
+            green_post_checkpoint_open: None,
 
             event_dispatcher: Self::create_event_dispatcher(pools),
 
@@ -1093,6 +1185,41 @@ impl Server {
             &server_constants,
             on_block_update,
         );
+
+        #[cfg(feature = "worldgen")]
+        {
+            // Terrain streaming completed this tick. A station is materialized
+            // only if its own chunk is active and no matching live entity
+            // exists; chunk cleanup unloads it again outside player range.
+            self.citadel_defence_refresh += dt;
+            if self.citadel_defence_refresh >= Duration::from_secs(1) {
+                citadel::ensure_upper_defences(&mut self.state);
+                citadel::ensure_lower_tower_defences(&mut self.state);
+                self.citadel_defence_refresh = Duration::ZERO;
+            }
+
+            // Green Post checkpoint gate + Evercross guard reconciliation --
+            // see `green_post_checkpoint_refresh`'s field doc above.
+            self.green_post_checkpoint_refresh += dt;
+            if self.green_post_checkpoint_refresh >= Duration::from_secs(1) {
+                gate_checkpoint::ensure_green_post_checkpoint(
+                    &mut self.state,
+                    &self.world,
+                    &mut self.green_post_checkpoint_open,
+                );
+                gate_checkpoint::ensure_evercross_guard(&mut self.state, &self.world);
+                self.green_post_checkpoint_refresh = Duration::ZERO;
+            }
+
+            // COW-7b: Undercompact gate lever puzzle restart recovery -- a
+            // one-shot check per newly-loaded chunk, not a 1Hz poll like the
+            // two reconciliations above. See the function's own doc comment.
+            undercompact_gate::ensure_undercompact_gate_restart_recovery(
+                &mut self.state,
+                &self.world,
+                self.index.as_index_ref(),
+            );
+        }
 
         let before_handle_events = Instant::now();
 
@@ -1435,6 +1562,8 @@ impl Server {
                 let rtsim = ecs.read_resource::<rtsim::RtSim>();
                 #[cfg(not(feature = "worldgen"))]
                 let rtsim = ();
+                let terrain_overrides =
+                    ecs.read_resource::<Arc<common::terrain::TerrainOverrides>>();
 
                 // Cancel all pending chunks.
                 chunk_generator.cancel_all();
@@ -1456,6 +1585,7 @@ impl Server {
                                 *ecs.read_resource::<TimeOfDay>(),
                                 (*ecs.read_resource::<Calendar>()).clone(),
                             ),
+                            Some(Arc::clone(&terrain_overrides)),
                         );
                     });
                 }

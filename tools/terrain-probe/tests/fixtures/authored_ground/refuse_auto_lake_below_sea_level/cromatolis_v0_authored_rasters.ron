@@ -1,0 +1,76 @@
+(
+    schema: 1,
+    regions: [
+        (
+            id: "fixture",
+            min: (2048, 2048),
+            max: (2560, 2560),
+            feather_m: 32,
+            tile_size_m: 256,
+            cell_size_m: 1,
+            layers: [
+                Water,
+                Ground,
+            ],
+            tiles: [
+                (
+                    layer: Water,
+                    tx: 0,
+                    ty: 0,
+                    sha256: "10a5c3f3f0f3d59ffc495127fe2a328e17e7afc675349481bb0b09de0a65cfa5",
+                ),
+                (
+                    layer: Ground,
+                    tx: 0,
+                    ty: 0,
+                    sha256: "80cd1011e46023786cc3b6abe02fac72ffdfcef07c4b0e1cf9dd82403b8b6bcf",
+                ),
+                (
+                    layer: Water,
+                    tx: 1,
+                    ty: 0,
+                    sha256: "701fe24703c222e061455038497a8b8643a1e10f84c917430709ad47de1e6619",
+                ),
+                (
+                    layer: Ground,
+                    tx: 1,
+                    ty: 0,
+                    sha256: "9be20746581a932c569932ae1e22a664fe7335bbfa9ddd736560aa0ee441ea2a",
+                ),
+                (
+                    layer: Water,
+                    tx: 0,
+                    ty: 1,
+                    sha256: "8f6a129a1d56458662252fd0365c5f1b6d82b23294cabc72a9df9c625944064a",
+                ),
+                (
+                    layer: Ground,
+                    tx: 0,
+                    ty: 1,
+                    sha256: "f1c3d55b1afba21dca1c6cb3d7cc0914c748209235fbcb511a6f611fea6d4160",
+                ),
+                (
+                    layer: Water,
+                    tx: 1,
+                    ty: 1,
+                    sha256: "f432df874e9f695a770bac959d205551c1734dadc2bd7c88cf4a74642f50fd7f",
+                ),
+                (
+                    layer: Ground,
+                    tx: 1,
+                    ty: 1,
+                    sha256: "730396fc308a23378ddfb9917231f86a0fcbdf74f9ef1ce6bdc767baf46a5080",
+                ),
+            ],
+            suppress_procedural_in_water: false,
+            exclude_procedural_margin_m: 0,
+            allow_partial: false,
+            allow_partial_chunks: [],
+            aquatic_ecology_profile: None,
+            consistency: (
+                max_authored_dry_table_wet_chunks: 0,
+                max_authored_wet_table_dry_chunks: None,
+            ),
+        ),
+    ],
+)

@@ -1,16 +1,32 @@
 #include <lod.glsl>
 #include <sky.glsl>
 
+// How precipitation tints distance haze on this path: a multiplier on sky
+// light, not a drop colour, which is why these are their own pair rather than
+// `RAIN_TINT`/`SNOW_TINT` from `include/rain_occlusion.glsl` (that header is
+// not even included here). RAIN_HAZE_TINT is the upstream value, unchanged.
+// Retuning "the colour of snow" means touching both pairs.
+const vec3 RAIN_HAZE_TINT = vec3(0.1, 0.3, 0.5);
+const vec3 SNOW_HAZE_TINT = vec3(0.75, 0.8, 0.9);
+
 // Everything in here is entirely non-physical: it's the cheap fallback
 vec3 get_cloud_color(vec3 surf_color, vec3 dir, vec3 origin, float max_dist, float quality) {
     // Underwater light attenuation
     surf_color = water_diffuse(surf_color, dir, max_dist);
 
     vec3 sky_light = get_sky_light(dir, false, 0.0);
-    vec3 haze_color = mix(sky_light, sky_light * vec3(0.1, 0.3, 0.5), min(rain_density * 4, 1.0));
-    
+    // Haze responds to snow as much as to rain, but snow hazes white where rain
+    // hazes blue-grey. Both densities are uniforms, so this costs no texture
+    // fetch — deliberately, since this is the fallback path the weakest GPUs
+    // run. Fog is *not* folded in here for the same reason: it is a per-cell
+    // value that would need a fetch, and the cheap path has no mist to thicken.
+    float precip_density = rain_density + snow_density;
+    float snow_frac = clamp(snow_density / max(precip_density, 0.0001), 0.0, 1.0);
+    vec3 haze_tint = mix(RAIN_HAZE_TINT, SNOW_HAZE_TINT, snow_frac);
+    vec3 haze_color = mix(sky_light, sky_light * haze_tint, min(precip_density * 4, 1.0));
+
     #ifndef EXPERIMENTAL_NOHAZE
-        float haze_factor = mix(0.00025, 0.01, rain_density);
+        float haze_factor = mix(0.00025, 0.01, precip_density);
         surf_color = mix(haze_color, surf_color, 1.0 / exp(min(max_dist, 8000.0) * haze_factor));
     #endif
     

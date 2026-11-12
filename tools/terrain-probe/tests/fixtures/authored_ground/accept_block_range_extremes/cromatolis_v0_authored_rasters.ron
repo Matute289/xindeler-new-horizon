@@ -1,0 +1,34 @@
+(
+    schema: 1,
+    regions: [
+        (
+            id: "fixture",
+            min: (2048, 2048),
+            max: (2560, 2560),
+            feather_m: 32,
+            tile_size_m: 256,
+            cell_size_m: 1,
+            layers: [
+                Ground,
+            ],
+            tiles: [
+                (
+                    layer: Ground,
+                    tx: 0,
+                    ty: 0,
+                    sha256: "518189c99e1bc1907e986848fee60697df73cd3c8265a8c229aefda06958204c",
+                ),
+            ],
+            suppress_procedural_in_water: false,
+            exclude_procedural_margin_m: 0,
+            allow_partial: false,
+            allow_partial_chunks: [],
+            aquatic_ecology_profile: None,
+            consistency: (
+                max_authored_dry_table_wet_chunks: 0,
+                max_authored_wet_table_dry_chunks: None,
+            ),
+            sea_fill: AuthoredOnly,
+        ),
+    ],
+)

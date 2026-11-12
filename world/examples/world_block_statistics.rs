@@ -98,9 +98,14 @@ fn generate(db_path: &str, ymin: Option<i32>, ymax: Option<i32>) -> Result<(), B
                 return;
             }
             let start_time = SystemTime::now();
-            if let Ok((chunk, _supplement)) =
-                world.generate_chunk(index.as_index_ref(), Vec2::new(x, y), None, || false, None)
-            {
+            if let Ok((chunk, _supplement)) = world.generate_chunk(
+                index.as_index_ref(),
+                Vec2::new(x, y),
+                None,
+                || false,
+                None,
+                None,
+            ) {
                 let end_time = SystemTime::now();
                 // TODO: Bucket size of 32 causes panics here for some reason.
                 // If that gets fixed then we could turn it back

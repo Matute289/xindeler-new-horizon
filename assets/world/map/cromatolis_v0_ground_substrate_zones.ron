@@ -1,0 +1,14 @@
+(
+    schema: "xindeler_open_world.ground_substrate_zones.v1",
+    // Categorical exceptions remain separate from continuous ground cover.
+    // The Northwall line and its source-map dimensions are resolved from the
+    // fortifications asset at runtime; no map coordinate is duplicated here.
+    zones: [
+        (
+            id: "northwall_exterior_sand",
+            substrate: Sand,
+            fortification_id: "site.northwall_stone",
+            exterior: North,
+        ),
+    ],
+)

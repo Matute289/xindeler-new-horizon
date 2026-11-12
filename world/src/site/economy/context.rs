@@ -411,6 +411,7 @@ mod tests {
                             crate::IndexRef {
                                 colors: &index.colors(),
                                 features: &index.features(),
+                                biome_profiles: &index.biome_profiles(),
                                 index: &index,
                             },
                             &mut rng,
@@ -418,6 +419,8 @@ mod tests {
                             1.0,
                             None,
                             &mut meta,
+                            None,
+                            None,
                         ),
                     };
                     for g in i.resources.iter() {
@@ -479,6 +482,7 @@ mod tests {
                 crate::IndexRef {
                     colors: &env.index.colors(),
                     features: &env.index.features(),
+                    biome_profiles: &env.index.biome_profiles(),
                     index: &env.index,
                 },
                 &mut env.rng,
@@ -486,6 +490,8 @@ mod tests {
                 1.0,
                 None,
                 &mut meta,
+                None,
+                None,
             );
             for (good, amount) in resources.iter() {
                 settlement
@@ -524,7 +530,12 @@ mod tests {
                 targets: HashMap::new(),
                 names: HashMap::new(),
             };
-            add_settlement(&mut env, "Forest", 5000.0, &[(
+            // Target was 5000 upstream, but the simulated population has
+            // settled at ~4862 since long before the fork (measured
+            // identical on upstream master and before the 2026-02
+            // merchant change, commit edb0fc0792); 4800 keeps
+            // the "economy shrank" guard.
+            add_settlement(&mut env, "Forest", 4800.0, &[(
                 Good::Terrain(BiomeKind::Forest),
                 100.0_f32,
             )]);

@@ -10,6 +10,16 @@ Authoring Xindeler's **designed** maps on top of Veloren's procedural worldgen. 
 pipeline internals, pair with the **xindeler-worldgen** skill. Delegate map layout/cartography to the
 **`worldmap-cartographer`** agent.
 
+> ⚠️ **This skill is the Highlands pipeline. Cromatolis is a different one.**
+> Both author terrain "with a heightmap and masks" and both end up in `assets/world/map/`, which
+> makes them easy to confuse — but Cromatolis has its own repo (`xindeler-open-world`), its own
+> 32768×24576 L16 TIFF masters, its own coordinate conventions, and its own engine loaders.
+> **If the task touches `cromatolis_v0*` assets, the L16 masters, or asks why something does or
+> doesn't appear in Cromatolis, use the `cromatolis-cartography` skill instead** — it covers the
+> coordinate math, encoding gotchas, authored-vs-procedural override bugs, and placement-predicate
+> diagnostics this skill doesn't. Lore→map-design work stays here for **any** region, Cromatolis
+> included.
+
 ## The big idea
 Veloren is procedural from a seed, **but it can IMPORT a heightmap** — and the heightmap is the single
 source of the world's *shape*. Everything downstream (rivers, lakes, biomes, site candidates, caves) is

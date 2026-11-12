@@ -34,7 +34,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             (
                 pos,
                 world
-                    .generate_chunk(index, pos, None, || false, None)
+                    .generate_chunk(index, pos, None, || false, None, None)
                     .unwrap(),
             )
         })

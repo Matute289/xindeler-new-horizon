@@ -1,0 +1,21 @@
+(
+    // Cromatolis-only wildlife-density multiplier (see
+    // `world/src/layer/wildlife.rs`'s `cromatolis_wildlife_boost`), applied
+    // on top of every manifest entry's own density formula, but only for
+    // chunks inside the authored Cromatolis region -- every other world
+    // using this engine is completely unaffected by this file.
+    //
+    // Calibrated against a real `World::generate_chunk`-instrumented audit
+    // (the full roll+gradient+footprint-clearance entity-placement
+    // pipeline, not just the density formula): land was measured at 1.26%
+    // of real chunks producing any wildlife entity, open ocean at 6.39% --
+    // both read as far too sparse during normal exploration. These two
+    // values were tuned (one round of measure-and-adjust) to bring both to
+    // a real chunk-hit-rate of roughly 20%, landing at 18.37% (land) and
+    // 18.63% (ocean) on the final audit run. Lake was already measured at
+    // 43.88% and is intentionally left unboosted (`world/src/layer/
+    // wildlife.rs` never reads an `ocean`-style field for it) -- see the
+    // commit that introduced this file for the exact numbers.
+    land: 24.0,
+    ocean: 3.2,
+)

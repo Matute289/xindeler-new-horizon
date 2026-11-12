@@ -83,6 +83,11 @@ pub(super) fn simulated_wind_vel(
     //
     // Way more thermals in strong rain as its often caused by strong thermals.
     // Less in weak rain or cloudy ..
+    //
+    // NOTE: `rain` here means precipitation of any form, snowfall included —
+    // audited when snow was added and correctly left as-is. What lifts a glider
+    // is the convection driving the precipitation, not whether it happens to be
+    // falling as water; a blizzard is if anything the stronger updraught.
     lift *= if interp_weather.rain.is_between(0.5, 1.0) && interp_weather.cloud.is_between(0.6, 1.0)
     {
         1.5

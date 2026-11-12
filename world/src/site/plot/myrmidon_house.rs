@@ -32,7 +32,7 @@ impl MyrmidonHouse {
         Self {
             bounds,
             alt: alt.unwrap_or_else(|| {
-                land.get_alt_approx(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
+                land.ground_alt_at(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
                     as i32
                     + 2
             }),

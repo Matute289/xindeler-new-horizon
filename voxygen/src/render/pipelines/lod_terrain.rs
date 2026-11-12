@@ -290,3 +290,160 @@ impl LodTerrainPipeline {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Offline shader-compile gate for the LoD terrain shaders, mirroring
+    //! `pipelines::particle`'s `particle_shaders_compile` /
+    //! `particle_shaders_parse_with_naga` pair. These shaders are only ever
+    //! compiled at runtime inside a live client with a GPU
+    //! (`renderer::pipeline_creation`), so a GLSL error otherwise costs a
+    //! full client launch to discover — and on a hot reload it is swallowed
+    //! into a single `error!` line while the old pipeline keeps running.
+    //!
+    //! Added alongside the `lod_pos()` relaxation-loop fix in
+    //! `include/lod.glsl` (bounding the per-iteration "push toward local
+    //! optima" step, which could otherwise blow up on a steep real cliff and
+    //! produce a degenerate LoD triangle) so a future edit to that function
+    //! fails a fast, GPU-less test instead of only showing up as an in-game
+    //! artifact.
+
+    const SHADER_DIR: &str = "voxygen/shaders";
+
+    fn shader_source(relative: &str) -> String {
+        let path = common::assets::ASSETS_PATH.join(SHADER_DIR).join(relative);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+    }
+
+    /// Fallible twin of `shader_source`, for use inside `shaderc`'s include
+    /// callback: that callback is invoked from C, so it must return an error
+    /// rather than unwind a panic across the FFI boundary.
+    fn try_shader_source(relative: &str) -> Result<String, String> {
+        let path = common::assets::ASSETS_PATH.join(SHADER_DIR).join(relative);
+        std::fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))
+    }
+
+    /// Resolves an `#include <…>` exactly as the renderer's `fetch_include`
+    /// does (`renderer::pipeline_creation`): a fixed whitelist, with `cloud`
+    /// standing in for a graphics setting, and an error for anything else —
+    /// so adding an include the renderer cannot resolve fails here rather
+    /// than at client launch.
+    fn resolve_include(name: &str, constants: &str) -> Result<String, String> {
+        match name {
+            "constants.glsl" => Ok(constants.to_string()),
+            "cloud.glsl" => try_shader_source("include/cloud/regular.glsl"),
+            "globals.glsl"
+            | "shadows.glsl"
+            | "rain_occlusion.glsl"
+            | "sky.glsl"
+            | "light.glsl"
+            | "srgb.glsl"
+            | "random.glsl"
+            | "lod.glsl"
+            | "point_glow.glsl"
+            | "fxaa.glsl" => try_shader_source(&format!("include/{name}")),
+            other => Err(format!(
+                "include <{other}> is not in the renderer's whitelist, so the client would refuse \
+                 to compile this shader"
+            )),
+        }
+    }
+
+    /// The subset of `ShaderModules::new`'s generated prelude that the LoD
+    /// terrain shaders' include chain reads. One fixed configuration on
+    /// purpose — this is a syntax gate, not a matrix.
+    fn constants_prelude() -> String {
+        format!(
+            "{}\n#define VOXYGEN_COMPUTATION_PREFERENCE \
+             VOXYGEN_COMPUTATION_PREFERENCE_FRAGMENT\n#define FLUID_MODE \
+             FLUID_MODE_MEDIUM\n#define CLOUD_MODE CLOUD_MODE_MEDIUM\n#define REFLECTION_MODE \
+             REFLECTION_MODE_MEDIUM\n#define LIGHTING_ALGORITHM \
+             LIGHTING_ALGORITHM_ASHIKHMIN\n#define SHADOW_MODE SHADOW_MODE_MAP\n#define \
+             SSAO_QUALITY SSAO_QUALITY_MEDIUM\n",
+            shader_source("include/constants.glsl"),
+        )
+    }
+
+    /// Runs both LoD terrain shaders through `shaderc`, the renderer's
+    /// *fallback* compiler — the default is naga unless
+    /// `VELOREN_DISABLE_NAGA_SHADERS` is set (`render::mod`,
+    /// `PipelineModes::enable_naga`), which
+    /// `lod_terrain_shaders_parse_with_naga` below covers. `shaderc` is the
+    /// stricter of the two and gives the better error message, with an
+    /// exact line number.
+    #[test]
+    fn lod_terrain_shaders_compile() {
+        let constants = constants_prelude();
+
+        let compiler = shaderc::Compiler::new().expect("shaderc unavailable");
+        let mut options = shaderc::CompileOptions::new().expect("shaderc options");
+        options.set_optimization_level(shaderc::OptimizationLevel::Zero);
+        options.set_forced_version_profile(430, shaderc::GlslProfile::Core);
+        options.set_include_callback(move |name, _, from, _| {
+            Ok(shaderc::ResolvedInclude {
+                resolved_name: name.to_string(),
+                content: resolve_include(name, &constants)
+                    .map_err(|err| format!("include <{name}> in {from}: {err}"))?,
+            })
+        });
+
+        for (file, kind) in [
+            ("lod-terrain-vert.glsl", shaderc::ShaderKind::Vertex),
+            ("lod-terrain-frag.glsl", shaderc::ShaderKind::Fragment),
+        ] {
+            compiler
+                .compile_into_spirv(&shader_source(file), kind, file, "main", Some(&options))
+                .unwrap_or_else(|err| panic!("{file} failed to compile:\n{err}"));
+        }
+    }
+
+    /// The renderer's *default* shader path is naga, not `shaderc`
+    /// (`render::mod`'s `enable_naga`, honoured in
+    /// `renderer::pipeline_creation`). naga's GLSL frontend accepts a
+    /// different dialect, so a shader that `shaderc` compiles can still fail
+    /// for an ordinary player. This parses both LoD terrain shaders the way
+    /// `WgpuCompiler` does — the same recursive regex include expansion, no
+    /// extra defines — through naga's frontend directly, which needs no GPU.
+    #[test]
+    fn lod_terrain_shaders_parse_with_naga() {
+        let constants = constants_prelude();
+        let include = regex::Regex::new("(?mR)^#include +<(.+)>$").expect("include regex");
+
+        for (file, stage) in [
+            ("lod-terrain-vert.glsl", wgpu::naga::ShaderStage::Vertex),
+            ("lod-terrain-frag.glsl", wgpu::naga::ShaderStage::Fragment),
+        ] {
+            let mut source = shader_source(file);
+            // `WgpuCompiler` expands includes repeatedly until none remain.
+            loop {
+                let mut failure = None;
+                let expanded = include
+                    .replace_all(&source, |captured: &regex::Captures| match resolve_include(
+                        &captured[1],
+                        &constants,
+                    ) {
+                        Ok(content) => content,
+                        Err(err) => {
+                            failure = Some(err);
+                            String::new()
+                        },
+                    })
+                    .into_owned();
+                if let Some(err) = failure {
+                    panic!("{file}: {err}");
+                }
+                if expanded == source {
+                    break;
+                }
+                source = expanded;
+            }
+
+            wgpu::naga::front::glsl::Frontend::default()
+                .parse(&wgpu::naga::front::glsl::Options::from(stage), &source)
+                .unwrap_or_else(|err| {
+                    panic!("{file} failed to parse with naga (the default compiler):\n{err:?}")
+                });
+        }
+    }
+}
