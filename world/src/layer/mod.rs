@@ -1,25 +1,14 @@
-pub mod authored_regions;
-pub mod authored_voids;
 pub mod cave;
-pub mod cromatolis_aerial_citadel;
-pub mod cromatolis_cave_features;
-pub mod cromatolis_interior;
 pub mod rock;
-pub(crate) mod rock_traversal;
 pub mod scatter;
 pub mod shrub;
 pub mod spot;
-pub mod terrain_damage;
-pub mod traversal;
 pub mod tree;
 pub mod wildlife;
 
 pub use self::{
-    cave::apply_caves_to, cromatolis_aerial_citadel::apply_cromatolis_local_aerial_features_to,
-    cromatolis_cave_features::apply_cromatolis_cave_features_to,
-    cromatolis_interior::apply_cromatolis_interiors_to, rock::apply_rocks_to,
-    scatter::apply_scatter_to, shrub::apply_shrubs_to, spot::apply_spots_to,
-    terrain_damage::apply_terrain_damage_to, tree::apply_trees_to,
+    cave::apply_caves_to, rock::apply_rocks_to, scatter::apply_scatter_to, shrub::apply_shrubs_to,
+    spot::apply_spots_to, tree::apply_trees_to,
 };
 
 use crate::{
@@ -273,21 +262,6 @@ pub fn apply_paths_to(canvas: &mut Canvas) {
         {
             let inset = 0;
 
-            // XINDELER: on an exact authored ground cell the patch is the
-            // road's terrain: paint the top block only (no notch, no dike, no
-            // head-space cut). See `authored_raster::post_civ` for the report
-            // of civ roads crossing authored cliffs.
-            if col
-                .authored
-                .is_some_and(|a| a.cell.is_exact_ground_layer_cell())
-            {
-                let wpos = Vec3::new(wpos2d.x, wpos2d.y, col.alt as i32);
-                let path_color =
-                    path.surface_color(col.sub_surface_color.map(|e| (e * 255.0) as u8), wpos);
-                canvas.set(wpos, Block::new(BlockKind::Earth, path_color));
-                return;
-            }
-
             let authored_path_profile = if canvas.info().chunk.authored_cromatolis_v0 {
                 let info = canvas.info();
                 let center_alt = PathLocals::new(&info, col, path_nearest).riverless_alt;
@@ -412,12 +386,7 @@ pub fn apply_trains_to(
 pub fn apply_coral_to(canvas: &mut Canvas) {
     let info = canvas.info();
 
-    // XINDELER: authored-aware (authored water regions).
-    if !info
-        .chunks()
-        .chunk_water(info.chunk_pos)
-        .map_or(info.chunk.river.near_water(), |w| w.near_water)
-    {
+    if !info.chunk.river.near_water() {
         return; // Don't bother with coral for a chunk nowhere near water
     }
 

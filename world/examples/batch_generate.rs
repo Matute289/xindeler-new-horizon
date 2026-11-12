@@ -27,7 +27,7 @@ use tracing_subscriber::EnvFilter;
 use vek::{Aabr, Rgb, Vec2};
 use xindeler_world::{
     CONFIG, IndexOwned, World, WorldGenerateStage,
-    sim::{FileOpts, GenOpts, WorldOpts, WorldSimStage, get_horizon_map},
+    sim::{FileOpts, GenOpts, WorldOpts, WorldSimStage, get_horizon_map, sample_pos, sample_wpos},
 };
 
 #[derive(Parser)]
@@ -200,8 +200,7 @@ fn generate_one(
 
         map_config.generate(
             |pos| {
-                let default_sample =
-                    sampler.presented_map_sample(&map_config, index_ref, None, pos);
+                let default_sample = sample_pos(&map_config, sampler, index_ref, None, pos);
                 let [r, g, b, _a] = map.rgba[pos].to_le_bytes();
 
                 MapSample {
@@ -209,7 +208,7 @@ fn generate_one(
                     ..default_sample
                 }
             },
-            |wpos| sampler.presented_table_wpos(&map_config, wpos),
+            |wpos| sample_wpos(&map_config, sampler, wpos),
             |pos, (r, g, b, a)| {
                 image.put_pixel(
                     pos.x as u32,

@@ -33,7 +33,6 @@ fn cave(c: &mut Criterion) {
                     None,
                     || false,
                     None,
-                    None,
                 ));
             }
         });
@@ -66,7 +65,6 @@ fn cave(c: &mut Criterion) {
                     chunk,
                     None,
                     || false,
-                    None,
                     None,
                 ));
             }

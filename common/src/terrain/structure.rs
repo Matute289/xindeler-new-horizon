@@ -368,12 +368,8 @@ Sprite in question: {sprite:?}
         let specs =
             assets::load_rec_dir::<Ron<Vec<StructureSpec>>>(STRUCTURE_MANIFESTS_DIR).unwrap();
         for id in specs.read().ids() {
-            // Ignore manifest files that aren't a bare `Vec<StructureSpec>`
-            // RON array -- `world.manifests.biome_profiles` (see
-            // `world/src/biome_profile.rs`) is its own differently-shaped
-            // catalog (named fields, a `schema` string, `BiomeProfile`
-            // entries), validated by its own dedicated test instead.
-            if id != "world.manifests.spots" && id != "world.manifests.biome_profiles" {
+            // Ignore manifest file
+            if id != "world.manifests.spots" {
                 let group = Ron::<Vec<StructureSpec>>::load(id).unwrap_or_else(|e| {
                     panic!("failed to load: {id}\n{e:?}");
                 });

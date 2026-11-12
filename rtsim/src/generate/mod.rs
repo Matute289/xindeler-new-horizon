@@ -1,11 +1,6 @@
 pub mod faction;
 pub mod name;
 pub mod site;
-// XINDELER: NH-171 per-settlement population.
-pub mod population;
-#[cfg(test)] mod population_report;
-
-pub use population::{SettlementPopulation, settlement_population};
 
 use crate::data::{
     CURRENT_VERSION, Data, Nature,
@@ -34,14 +29,20 @@ pub fn wanted_population(world: &World, index: IndexRef) -> Population {
     let sites = &index.sites;
 
     // Spawn some npcs at settlements
-    for town in sites
-        .iter()
-        .filter_map(|(_, site)| settlement_population(site))
+    for (_, site) in sites.iter()
+        // TODO: Stupid. Only find site towns
+        .filter(|(_, site)| site.meta().is_some_and(|m| matches!(m, common::terrain::SiteKindMeta::Settlement(_))))
     {
-        pop.add(TrackedPopulation::Guards, town.guards);
-        pop.add(TrackedPopulation::Adventurers, town.adventurers);
-        pop.add(TrackedPopulation::OtherTownNpcs, town.others);
-        pop.add(TrackedPopulation::Merchants, town.merchants);
+        let town_pop = site.plots().len() as u32;
+        let guards = town_pop / 4;
+        let adventurers = town_pop / 5;
+        let others = town_pop.saturating_sub(guards + adventurers);
+
+        pop.add(TrackedPopulation::Guards, guards);
+        pop.add(TrackedPopulation::Adventurers, adventurers);
+        pop.add(TrackedPopulation::OtherTownNpcs, others);
+
+        pop.add(TrackedPopulation::Merchants, (town_pop / 6) + 1);
     }
 
     let pirate_hideouts = sites
@@ -99,15 +100,11 @@ impl Data {
             architect: Default::default(),
             quests: Default::default(),
             banished: Default::default(),
-            undercompact_gate: Default::default(),
-            terrain_overrides: Default::default(),
             world_narrative: Default::default(),
 
             tick: 0,
             time_of_day: TimeOfDay(settings.start_time),
             should_purge: false,
-            authored_rasters_digest: None,
-            authored_region_digests: Default::default(),
         };
 
         let initial_factions = (0..16)
@@ -161,15 +158,9 @@ impl Data {
 
         this.architect.wanted_population = wanted_population(world, index);
 
-        let groups = this.architect.wanted_population.groups();
         info!(
-            total = this.architect.wanted_population.total(),
-            civilians = groups.civilians,
-            pirates = groups.pirates,
-            cultists = groups.cultists,
-            monsters = groups.monsters,
-            wild = groups.wild,
-            "Generated rtsim NPCs to be spawned."
+            "Generated {} rtsim NPCs to be spawned.",
+            this.architect.wanted_population.total()
         );
 
         this

@@ -3,12 +3,11 @@ use crate::{
     util::{math::close, sampler::Sampler},
 };
 use common::{match_some, terrain::structure::StructureBlock};
-use serde::Deserialize;
 use std::ops::Range;
 use strum::EnumIter;
 use vek::*;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, EnumIter)]
+#[derive(Copy, Clone, Debug, EnumIter)]
 pub enum ForestKind {
     Palm,
     Acacia,

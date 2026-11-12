@@ -30,7 +30,7 @@ impl VampireCastle {
             max: site.tile_wpos(tile_aabr.max),
         };
         let center = bounds.center();
-        let plot_base = land.ground_alt_at(center) as i32;
+        let plot_base = land.get_alt_approx(center) as i32;
         let castle_length = 24;
         let castle_width = 18;
         let tower_base = plot_base + 1;
@@ -85,7 +85,7 @@ impl VampireCastle {
 
         Self {
             bounds,
-            alt: land.ground_alt_at(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
+            alt: land.get_alt_approx(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
                 as i32,
             castle_data,
         }
@@ -119,10 +119,7 @@ impl Structure for VampireCastle {
         let window_ver = Fill::Block(Block::air(SpriteKind::WitchWindow));
         let window_ver2 = Fill::Block(Block::air(SpriteKind::WitchWindow));
         let key_door = Fill::Block(Block::air(SpriteKind::VampireKeyDoor));
-        // Progression-gated, like the Haniwa dungeon's key gate: opts out of
-        // ranged/keyless unlocking (e.g. the `knock` spell) via `no_knock`.
-        // Melee key-item unlocking is unaffected.
-        let key_hole = locked_dungeon_keyhole(SpriteKind::VampireKeyhole);
+        let key_hole = Fill::Block(Block::air(SpriteKind::VampireKeyhole));
         let onewaydoor = Fill::Block(Block::air(SpriteKind::OneWayWall).with_ori(2).unwrap());
         let candles = Fill::Sampling(Arc::new(|wpos| {
             Some(match (RandomField::new(0).get(wpos)) % 4 {

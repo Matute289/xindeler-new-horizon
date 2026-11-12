@@ -1475,10 +1475,8 @@ impl<V: RectRasterableVol> Terrain<V> {
                 min: visible_bounding_box.min.as_::<f64>(),
                 max: visible_bounding_box.max.as_::<f64>(),
             };
-            // Must match the axis the occlusion map is rendered and sampled
-            // along everywhere else; snow falls far slower and more slanted
-            // than rain.
-            let ray_direction = scene_data.client.precip_vel_at_player().normalized();
+            let weather = scene_data.client.weather_at_player();
+            let ray_direction = weather.rain_vel().normalized();
 
             // NOTE: We use proj_mat_treeculler here because
             // calc_focused_light_volume_points makes the assumption that the
@@ -1519,12 +1517,6 @@ impl<V: RectRasterableVol> Terrain<V> {
     }
 
     pub fn chunk_count(&self) -> usize { self.chunks.len() }
-
-    /// The chunk has a finished mesh and no pending (re)mesh job.
-    #[cfg(feature = "shot-script")]
-    pub fn is_meshed(&self, chunk_key: Vec2<i32>) -> bool {
-        self.chunks.contains_key(&chunk_key) && !self.mesh_todo.contains_key(&chunk_key)
-    }
 
     pub fn visible_chunk_count(&self) -> usize {
         self.chunks
