@@ -78,7 +78,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::VecDeque,
-    f32,
     fs::File,
     io::{BufReader, BufWriter},
     ops::{Add, Div, Mul, Neg, Sub},

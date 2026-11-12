@@ -153,6 +153,7 @@ mod tests {
             banished: Default::default(),
             undercompact_gate: Default::default(),
             terrain_overrides: Default::default(),
+            world_narrative: Default::default(),
             tick: 0,
             time_of_day: TimeOfDay(10.0 * MIN_SPAWN_DELAY),
             should_purge: false,
