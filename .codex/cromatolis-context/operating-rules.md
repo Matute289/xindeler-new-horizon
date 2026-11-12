@@ -20,8 +20,9 @@
    configurado por `.lfsconfig`; GitHub recibe punteros LFS, nunca blobs ni
    GitHub LFS.
 2. Nunca hacer push directo ni mergear `main` o `development`. Para Cromatolis,
-   el trabajo derivado vuelve primero por PR a
-   `new-horizon/open-world-cromatolis`.
+   el trabajo derivado vuelve por PR a `development` (la rama
+   `new-horizon/open-world-cromatolis` quedó retirada al unificarse en
+   `development`, PR #466).
 3. Antes de editar, revisar `git status`. El worktree puede contener trabajo de
    otra sesión; se preserva y se trabaja alrededor de él.
 

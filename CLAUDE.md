@@ -113,7 +113,7 @@ queda lista para mergear, no solo cuando estás bloqueado — Mati no siempre es
 
 ## Toolchain
 
-Nightly Rust is required (pinned in `rust-toolchain`, currently `nightly-2026-07-01`). The sibling
+Nightly Rust is required (pinned in `rust-toolchain`, currently `nightly-2026-09-15`). The sibling
 `xindeler-open-world` repo is different: its CI pins **stable Rust 1.99** (run `cargo +1.99 clippy` /
 `cargo +1.99 test` there before a PR). The project uses the 2024 edition. The `specs` ECS crate requires nightly.
 

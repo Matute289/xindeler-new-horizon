@@ -9,9 +9,11 @@ evidencia.
 ## Punto de partida actual
 
 - Worktree de trabajo: `xindeler-new-horizon-cromatolis`.
-- Rama de integración de Cromatolis: `new-horizon/open-world-cromatolis`.
-- Nuevo trabajo: crear una rama/worktree aislado desde esa rama y volver por
-  PR hacia ella. No tocar cambios locales ajenos que ya existan en el
+- Rama de integración de Cromatolis: `development` (la rama
+  `new-horizon/open-world-cromatolis` quedó retirada al unificarse en
+  `development`, PR #466).
+- Nuevo trabajo: crear una rama/worktree aislado desde `development` y volver
+  por PR hacia ella. No tocar cambios locales ajenos que ya existan en el
   worktree.
 - `xindeler-new-horizon` es el motor, cliente y servidor públicos;
   `docs/design/` es el repo privado de diseño anidado.
