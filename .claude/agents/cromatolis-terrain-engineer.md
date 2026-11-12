@@ -62,10 +62,17 @@ What each doc is for:
 
 ```
 engine_alt   = 140 + l16_relief_metres        # CONFIG.sea_level = 140
-height_m     = -700 + (gray16 / 65535) * 1940
-gray16       = round(((height_m + 700) / 1940) * 65535)
+height_m     = (gray16 - 18724) * 7000 / 65535                # l16_v2_z0 (Cromatolis since v25)
+gray16       = 18724 + round_half_away(height_m * 65535 / 7000)  # sea level = gray 18724 exactly
 chunks/px    = 1023/32768 (x), 1023/24576 (y)  # master canvas -> chunk grid
 ```
+
+The height profile is per world (`height_profile` in xindeler-open-world's
+`manual_mask_pins.ron`; single definition `tools/precision/profiles.py`).
+Cromatolis adopted `l16_v2_z0` (10.68 cm per gray, -1999.97..+5000.03 m) on
+2026-10-03 with `heightmap_manual_v25`; revisions up to v23 are `l16_v1`
+(`height_m = -700 + gray16 * 1940 / 65535`, 2.96 cm). Decode a master with
+the profile its pin or sidecar provenance records, never by assumption.
 
 **The single most expensive mistake in this area**: encoding a target
 *engine* altitude straight into the mask. You must encode

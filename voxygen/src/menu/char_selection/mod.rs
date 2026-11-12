@@ -27,6 +27,8 @@ pub struct CharSelectionState {
     client: Rc<RefCell<Client>>,
     persisted_state: Rc<RefCell<hud::PersistedHudState>>,
     scene: Scene,
+    #[cfg(feature = "shot-script")]
+    shot_login: crate::shot_script::login::CharSelectDriver,
 }
 
 impl CharSelectionState {
@@ -50,6 +52,8 @@ impl CharSelectionState {
             client,
             persisted_state,
             scene,
+            #[cfg(feature = "shot-script")]
+            shot_login: Default::default(),
         }
     }
 
@@ -261,6 +265,15 @@ impl PlayState for CharSelectionState {
                 );
             }
 
+            // Unattended shot script: create/select its character, enter the world.
+            #[cfg(feature = "shot-script")]
+            if self.shot_login.tick(
+                &mut self.client.borrow_mut(),
+                global_state.settings.graphics.view_distances(),
+            ) {
+                return PlayStateResult::Shutdown;
+            }
+
             // Tick the client (currently only to keep the connection alive).
             let localized_strings = &global_state.i18n.read();
 
@@ -296,6 +309,10 @@ impl PlayState for CharSelectionState {
                                 self.char_selection_ui.select_character(character_id);
                             },
                             client::Event::CharacterError(error) => {
+                                #[cfg(feature = "shot-script")]
+                                if crate::shot_script::login::character_error(&error) {
+                                    return PlayStateResult::Shutdown;
+                                }
                                 self.char_selection_ui.display_error(error);
                             },
                             client::Event::CharacterJoined(metadata) => {

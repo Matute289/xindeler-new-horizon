@@ -6,7 +6,7 @@
 //! all. A fork-only block bolted onto upstream's last line is the noisiest
 //! possible shape for the monthly merge; one `mod` line is not. Same
 //! reasoning that moved `cave.rs`'s measurement harnesses to that file's
-//! tail in COW-23 Phase 6.
+//! tail in the cave-and-void work Phase 6.
 //!
 //! Everything here needs the real Cromatolis LFS assets pulled locally
 //! (`git lfs pull` against the VPS store) and is therefore `#[ignore]`d.
@@ -94,12 +94,12 @@ fn ineligible_authored_settlements_never_appear_as_possible_starting_sites() {
     );
 }
 
-/// **COW-23 T20 — the post-flip measurement pass.**
+/// **The post-flip measurement pass.**
 ///
 /// `cromatolis_v0_procedural_layers.ron` shipped `caves: false, rocks:
-/// false` from COW-15 until COW-23's T15 flipped both. Everything Phases
-/// 1–3 built exists to make that flip safe, and every number measured
-/// before it was measured through a *probe* — a read-only replica of a
+/// false` from the authored-void work until the flip to `true` for both.
+/// Everything Phases 1–3 built exists to make that flip safe, and every number
+/// measured before it was measured through a *probe* — a read-only replica of a
 /// generation path, or a layer forced on for one chunk at a time. This is
 /// the one measurement taken through the real thing: whole chunks, out of
 /// `World::generate_chunk`, in the configuration the region actually
@@ -166,8 +166,9 @@ fn cromatolis_procedural_layer_flip_adds_volume_without_costing_authored_void() 
     use crate::{layer::authored_regions::authored_voids_for, sim::AuthoredProceduralLayers};
 
     /// How many authored-void chunks to regenerate, three times each.
-    /// Matches the sample size `T12`/V8 used for the guard's cost, so the
-    /// two are talking about the same slice of the region.
+    /// Matches the sample size the earlier measurement pass used for the
+    /// guard's cost, so the two are talking about the same slice of the
+    /// region.
     const T20_CHUNK_SAMPLE: usize = 2_000;
     /// How far above a column's surface to look for boulder volume. The
     /// tallest rock kind the lattice places is far below this.
@@ -570,13 +571,13 @@ fn cromatolis_procedural_layer_flip_adds_volume_without_costing_authored_void() 
 /// `apply_caves_to`, and what localising the authored-passage lookup saves
 /// `apply_rocks_to`.
 ///
-/// Both were recorded as production-perf follow-ups when COW-23's `caves` and
-/// `rocks` toggles were flipped on: the carve resolved a chunk-granular bucket
-/// once per *column*, and the rock pass answered a world-constant question
-/// with a scan over every indexed shape once per *rock candidate*. Neither was
-/// a correctness problem, and neither was worth a ride-along on a content
-/// flip -- so each gets its own measurement here, run against the real region
-/// rather than reasoned about.
+/// Both were recorded as production-perf follow-ups when the cave-and-void
+/// work's `caves` and `rocks` toggles were flipped on: the carve resolved a
+/// chunk-granular bucket once per *column*, and the rock pass answered a
+/// world-constant question with a scan over every indexed shape once per *rock
+/// candidate*. Neither was a correctness problem, and neither was worth a
+/// ride-along on a content flip -- so each gets its own measurement here, run
+/// against the real region rather than reasoned about.
 ///
 /// Reported, not asserted to a threshold, for the same reason every other
 /// figure in this file is: the numbers move with the machine and with the
@@ -990,7 +991,7 @@ fn authored_cave_roofs_are_rock_not_crust() {
 /// `civ::Site.authored.is_some()` (surfaced on the real, generated
 /// `site::Site` as `is_authored_settlement`) is the same signal
 /// `rtsim::generate::site::good_or_evil` already uses to keep these sites
-/// from being classified as hostile (COW-19); this test is that fix's
+/// from being classified as hostile; this test is that fix's
 /// counterpart for the map marker, exercised against the real generated
 /// world rather than the `SiteKind::marker` unit test's synthetic bool.
 ///
@@ -1083,9 +1084,10 @@ const EXPECTED_NAVAL_PORTS: &[(&str, PortClass)] = &[
     ("site.mazon_town", PortClass::Pier),
     ("site.portland", PortClass::Pier),
     ("site.rios_port", PortClass::Pier),
+    // Hita is Town/Large since the settlement-size corrections (was Village/Small = Jetty).
+    ("site.hita", PortClass::Pier),
     ("site.andiran", PortClass::Jetty),
     ("site.garens_town", PortClass::Jetty),
-    ("site.hita", PortClass::Jetty),
     ("site.timos", PortClass::Jetty),
 ];
 
@@ -1435,11 +1437,11 @@ fn the_13_route_stops_all_generate_a_naval_port() {
 }
 
 /// Per-tier berth class layout the real placement is expected to produce,
-/// duplicated from spec §4.3 for the same reason [`EXPECTED_NAVAL_PORTS`]
+/// duplicated from the design for the same reason [`EXPECTED_NAVAL_PORTS`]
 /// duplicates the tier-per-settlement table: a drift here should name which
 /// tier's class mix moved, not just that a number changed somewhere.
 ///
-/// ⚠️ **`Harbour`'s row is `[Large, Small, Small, Small]`, not spec §4.3's
+/// ⚠️ **`Harbour`'s row is `[Large, Small, Small, Small]`, not the design's
 /// authored `4 Large + 2 Small`.** `Harbour` has exactly one real site in
 /// this dataset (Kalthis), so this row *is* Kalthis's own real ceiling, not
 /// a generic target. Root cause (`world/src/site/plot/naval_port.rs`,
@@ -1456,8 +1458,8 @@ fn the_13_route_stops_all_generate_a_naval_port() {
 /// tier's nominal 6 berths survive -- 1 `Large` + 3 `Small` -- which is this
 /// real coastline's genuine ceiling, not a bug to chase further. If
 /// Kalthis's authored waterfront position or footprint ever changes (e.g.
-/// COW-24.1 §11.3's footprint-radius bump for the river-port district), this
-/// row needs re-measuring, not just re-approving.
+/// the naval-berth work's footprint-radius bump for the river-port district),
+/// this row needs re-measuring, not just re-approving.
 const EXPECTED_BERTH_CLASSES: &[(PortClass, &[BerthClass])] = &[
     (PortClass::Jetty, &[BerthClass::Small]),
     (PortClass::Pier, &[BerthClass::Large, BerthClass::Small]),
@@ -1492,23 +1494,45 @@ const EXPECTED_BERTH_CLASSES: &[(PortClass, &[BerthClass])] = &[
 /// Kalitos, Sutar Town, Mazon Town, Rios Port -- reaches its own `Large`
 /// berth fine, so this is Portland's own waterfront, not a `Pier`-wide
 /// ceiling). If Portland's authored waterfront position or footprint ever
-/// changes (e.g. COW-24.1 §11.9's Portland redesign), this row needs
+/// changes (e.g. the naval-berth work's Portland redesign), this row needs
 /// re-measuring, not just re-approving.
-const EXPECTED_BERTH_CLASS_OVERRIDES: &[(&str, &[BerthClass])] =
-    &[("site.portland", &[BerthClass::Small])];
-
-/// The settlements whose `Jetty` berth is small enough that the hull-cap
-/// table (spec §4.4) depends on an anchorage existing for their routes to
-/// take a `Galleon` at all.
-const EXPECTED_JETTY_VILLAGES: &[&str] = &[
-    "site.andiran",
-    "site.garens_town",
-    "site.hita",
-    "site.timos",
+///
+/// **`site.dove_city` (`Quay`) is `[Large, Small, Small]`, not the tier's
+/// `[Large, Large, Small, Small]`, since site seeds became per-site
+/// (`civ::seeds`, 2026-10-04).** That one-time re-roll moved Dove City's
+/// layout: the Large finger now moors at x 27,735 / 27,754 and its Port
+/// berth lands over chunk (866, 272), about 5.2 blocks deep, under
+/// `Large`'s 6, so `measure_berths` drops it (the Starboard twin keeps 6).
+/// The 4/4 berths on the old roll were luck: every tried seed domain
+/// (`v1`..`v4`) and the earlier heightmap re-encode all land on this same
+/// 3-berth deck, so this is the coast's real capacity at that spot, not a
+/// berth-search bug. Accepted as the expected value on 2026-10-04; restoring
+/// the 4th Large berth is follow-up work by editing the coast in a heightmap
+/// revision (deepen the water under the Large finger's Port berth to at
+/// least 6 blocks), after which this row goes away. Re-measure if Dove
+/// City's waterfront or the heightmap there changes.
+///
+/// **Open item:** the content currently provides 3 berths here, not the
+/// tier's 4. The relaxed row above is a recorded gap in the authored
+/// coastline, not a design decision; it must be deleted (restoring the
+/// stricter expectation) once the Large finger's Port berth has 6 blocks of
+/// water.
+const EXPECTED_BERTH_CLASS_OVERRIDES: &[(&str, &[BerthClass])] = &[
+    ("site.portland", &[BerthClass::Small]),
+    ("site.dove_city", &[
+        BerthClass::Large,
+        BerthClass::Small,
+        BerthClass::Small,
+    ]),
 ];
 
+/// The settlements whose `Jetty` berth is small enough that the hull-cap
+/// table depends on an anchorage existing for their routes to
+/// take a `Galleon` at all.
+const EXPECTED_JETTY_VILLAGES: &[&str] = &["site.andiran", "site.garens_town", "site.timos"];
+
 /// The villages whose waterfront is too shallow/narrow for any anchorage
-/// (spec §11.2, measured independently): their routes are expected to stay
+/// (the design, measured independently): their routes are expected to stay
 /// `SailBoat`-capped rather than fail the generation run.
 ///
 /// ⚠️ **Three villages, not one** -- `site.andiran` and `site.timos` joined
@@ -1533,17 +1557,21 @@ const EXPECTED_JETTY_VILLAGES: &[&str] = &[
 /// already documented for its berth. All three are real, verified terrain
 /// limits -- not an artifact of the lane-berth fix, which only supplied the
 /// tender berth the search needs to run at all.
-const EXPECTED_ANCHORAGE_EXCEPTIONS: &[&str] = &["site.andiran", "site.hita", "site.timos"];
+///
+/// `site.hita` was the third exception until the settlement-size corrections
+/// made it Town/Large: it is a `Pier` port now, outside this Jetty-village
+/// contract.
+const EXPECTED_ANCHORAGE_EXCEPTIONS: &[&str] = &["site.andiran", "site.timos"];
 
 /// **The berth contract, against the real authored region.**
 ///
-/// This is the `desert_city_airship_dock.rs` regression (spec §2.5), turned
+/// This is the `desert_city_airship_dock.rs` regression, turned
 /// into an assertion: a `NavalPort` plot with complete geometry but an
 /// unimplemented or dropped discovery hook would pass
 /// `the_13_route_stops_all_generate_a_naval_port` above and still be
-/// invisible to [`all_naval_berths`] -- the only path the rest of COW-24 has
-/// to a berth's or anchorage's real id. Also covers berth class counts
-/// (spec §4.3), per-class minimum depth, and that every emitted id is
+/// invisible to [`all_naval_berths`] -- the only path the rest of the
+/// maritime-route work has to a berth's or anchorage's real id. Also covers
+/// berth class counts , per-class minimum depth, and that every emitted id is
 /// unique world-wide.
 ///
 /// Requires the real Cromatolis LFS assets to be pulled locally. Recommended
@@ -1673,9 +1701,9 @@ fn every_naval_berth_is_discoverable_with_the_right_classes_and_depth() {
     );
 }
 
-/// **The village anchorages that lift the hull cap (spec §4.4, §11.2).**
+/// **The village anchorages that lift the hull cap.**
 ///
-/// Re-asserts spec §4.4's table with anchorages in the picture: every
+/// Re-asserts the design's table with anchorages in the picture: every
 /// `Jetty` village is expected to carry exactly one `Large`-class anchorage
 /// -- making its routes `Galleon`-capable -- except the villages named in
 /// [`EXPECTED_ANCHORAGE_EXCEPTIONS`], whose waterfront measured too
@@ -1757,3 +1785,12 @@ fn every_jetty_has_an_anchorage_or_the_known_exception() {
          waterfront); these villages unexpectedly also have none: {capped:?}"
     );
 }
+
+/// Per-site layout digests, determinism and terrain-perturbation
+/// experiments for the authored world's civ layer.
+pub(crate) mod site_layouts;
+
+/// Authored settlement layouts (footprint, anchor, building quotas) against
+/// the real authored world: placement rules, wiring and the spread of
+/// building counts over seeds.
+mod settlement_layouts;

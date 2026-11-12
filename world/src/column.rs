@@ -1,6 +1,7 @@
 use crate::{
     CONFIG, IndexRef, Land,
     all::ForestKind,
+    authored_raster,
     biome_profile::BiomeProfile,
     sim::{
         AuthoredGroundCoverProfile, CROMATOLIS_V0_REGION_ID, GroundSubstrate, Path, RiverKind,
@@ -33,6 +34,10 @@ pub struct ColumnGen<'a> {
     /// `World::generate_chunk` path (via `World::sample_blocks_with_overrides`)
     /// ever passes `Some`.
     overrides: Option<&'a TerrainOverrides>,
+    /// Samples blend (ring) cells of an authored ground layer as unauthored
+    /// columns of their region, so the post-civ site check can measure what
+    /// the ring adds. Only [`Self::without_ring`] sets it.
+    without_ring: bool,
 }
 
 #[derive(Deserialize)]
@@ -100,6 +105,21 @@ impl ResolvedBiomeProfile<'_> {
     pub fn strength(&self) -> f32 { self.blend * self.intensity }
 }
 
+/// Distance from water (m) over which the column sampler fades warp and
+/// procedural relief back in; the authored water layer tracks distances to
+/// authored water up to the same value (`authored_raster::DIST_CAP_M`).
+pub(crate) const WATER_WARP_FADE_M: f32 = 64.0;
+
+/// A governing `BiomeProfile` override with a baked `flood_to` floods the
+/// water level up to that altitude, blended in by its strength, never below
+/// the ambient level (see the call site in [`ColumnGen::get`]).
+fn flooded_water_level(water_level: f32, biome_profile: Option<ResolvedBiomeProfile<'_>>) -> f32 {
+    match biome_profile.and_then(|rp| rp.flood_to.map(|flood_to| (rp, flood_to))) {
+        Some((rp, flood_to)) => water_level.max(Lerp::lerp(water_level, flood_to, rp.strength())),
+        None => water_level,
+    }
+}
+
 /// Generalised power function, pushes values in the range 0-1 to extremes.
 fn power(x: f64, t: f64) -> f64 {
     if x < 0.5 {
@@ -114,6 +134,17 @@ impl<'a> ColumnGen<'a> {
         Self {
             sim,
             overrides: None,
+            without_ring: false,
+        }
+    }
+
+    /// Same as [`Self::new`], but a blend (ring) cell of an authored ground
+    /// layer samples as an unauthored column of its region: the terrain the
+    /// ring is blended away from.
+    pub fn without_ring(sim: &'a WorldSim) -> Self {
+        Self {
+            without_ring: true,
+            ..Self::new(sim)
         }
     }
 
@@ -135,6 +166,7 @@ impl<'a> ColumnGen<'a> {
         Self {
             sim,
             overrides: Some(overrides),
+            without_ring: false,
         }
     }
 }
@@ -148,6 +180,20 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let chunk_pos = wpos.wpos_to_cpos();
 
         let sim = &self.sim;
+        // XINDELER: the authored water raster at this column, `None` outside
+        // every authored region (then nothing below changes). See
+        // `crate::authored_raster`.
+        let authored = sim
+            .authored_rasters
+            .as_ref()
+            .and_then(|rasters| rasters.column(wpos))
+            .map(|a| {
+                if self.without_ring {
+                    a.without_ring()
+                } else {
+                    a
+                }
+            });
 
         // let turb = Vec2::new(
         //     sim.gen_ctx.turb_x_nz.get((wposf.div(48.0)).into_array()) as f32,
@@ -798,13 +844,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let flood_block = biome_profile
             .filter(|rp| rp.flood_to.is_some())
             .map_or(BlockKind::Water, |rp| rp.profile.flood_block);
-        let water_level =
-            match biome_profile.and_then(|rp| rp.flood_to.map(|flood_to| (rp, flood_to))) {
-                Some((rp, flood_to)) => {
-                    water_level.max(Lerp::lerp(water_level, flood_to, rp.strength()))
-                },
-                None => water_level,
-            };
+        let water_level = flooded_water_level(water_level, biome_profile);
 
         let mut spawn_rules = SpawnRules::default();
         for site in sim_chunk.sites.iter().map(|site| &index.sites[*site]) {
@@ -1047,13 +1087,52 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             * gradient.unwrap_or(0.0).min(1.0)
             * surface_rigidity;
 
-        let warp_factor = water_dist.map_or(1.0, |d| ((d - 0.0) / 64.0).clamped(0.0, 1.0));
+        let warp_factor =
+            water_dist.map_or(1.0, |d| ((d - 0.0) / WATER_WARP_FADE_M).clamped(0.0, 1.0));
         let warp_factor = warp_factor * spawn_rules.max_warp;
         // NOTE: To disable warp, uncomment this line.
         // let warp_factor = 0.0;
+        let riverless_alt_delta_unfaded = riverless_alt_delta;
         let riverless_alt_delta = Lerp::lerp(0.0, riverless_alt_delta, warp_factor);
         let alt = alt + riverless_alt_delta;
         let alt = alt + warp * warp_factor;
+
+        // XINDELER: inside an authored region the raster replaces the
+        // sim-derived water and the terrain it carved; regional overrides
+        // (flood here, `Damage` just below) stay on top. See
+        // `crate::authored_raster`.
+        let authored_raster::EngineColumn {
+            alt,
+            water_level,
+            water_dist,
+            warp_factor,
+            cliff_offset,
+            riverless_alt,
+        } = authored_raster::apply(
+            authored,
+            authored_raster::EngineColumn {
+                alt,
+                water_level,
+                water_dist,
+                warp_factor,
+                cliff_offset,
+                riverless_alt,
+            },
+            authored_raster::DryTerrain {
+                riverless_alt,
+                riverless_alt_delta: riverless_alt_delta_unfaded,
+                warp,
+                max_warp: spawn_rules.max_warp,
+                base_sea_level,
+                // Only an authored column reads it.
+                site_prefer_alt: if authored.is_some() {
+                    spawn_rules.get_preferred_alt()
+                } else {
+                    (0.0, 0.0)
+                },
+            },
+            |level| flooded_water_level(level, biome_profile),
+        );
 
         // A `Damage` override's crater bowl/rim (see
         // `common::terrain::regional_override::DamageOverride`), applied
@@ -1361,6 +1440,10 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                     sub_surface_color,
                 )
             };
+            // XINDELER: an exact authored ground cell keeps its height under
+            // snow (the top block turns to snow, it does not grow one), a
+            // blend cell fades it; see `crate::authored_raster`.
+            let snow_height = authored.map_or(snow_height, |a| a.ground_snow_height(snow_height));
             (
                 alt + snow_height,
                 ground,
@@ -1465,6 +1548,14 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         } else {
             0.0
         };
+
+        // XINDELER: ice on authored water only forms downward from the drawn
+        // surface (`AuthoredColumn::ice_band`); `ice_centre` is the band's
+        // centre, the water level for every natural column, so `BlockGen`
+        // keeps one compare per voxel. See `crate::authored_raster`.
+        let (ice_centre, ice_depth) = authored
+            .and_then(|a| a.ice_band(water_level, ice_depth))
+            .unwrap_or((water_level, ice_depth));
 
         // A scorched/burnt look for a crater or debris field, blended in by
         // `damage.scorch` (already faded by radial blend strength and
@@ -1589,9 +1680,24 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             cliff_height,
             water_vel,
             ice_depth,
+            ice_centre,
             surface_block_override,
             flood_block,
             governing_biome_profile: biome_profile,
+            authored,
+            exposed_wall_floor: authored
+                .filter(|a| {
+                    a.settings.sea_fill == authored_raster::SeaFill::AuthoredOnly
+                        && !a.cell.is_wet()
+                })
+                .and_then(|a| {
+                    let own_ground = matches!(
+                        a.cell,
+                        authored_raster::AuthoredCell::Ground { .. }
+                            | authored_raster::AuthoredCell::Bank { .. }
+                    );
+                    sim.dry_wall_floor_at(wpos, alt, own_ground)
+                }),
 
             chunk: sim_chunk,
         })
@@ -1719,7 +1825,13 @@ pub struct ColumnSample<'a> {
     pub cliff_offset: f32,
     pub cliff_height: f32,
     pub water_vel: Vec3<f32>,
+    /// Half-thickness of the `Ice` band over the water: ice where
+    /// `|z - ice_centre| < ice_depth`. `0` is no ice.
     pub ice_depth: f32,
+    /// Centre of the `Ice` band: the water level, except on an authored wet
+    /// column, whose band sits under the authored surface
+    /// (`authored_raster::AuthoredColumn::ice_band`).
+    pub ice_centre: f32,
     /// A governing `BiomeProfile` override's forced surface block kind (e.g.
     /// `Rock` for a volcano), if any -- see `world/src/block.rs`'s
     /// `BlockGen::get_with_z_cache`.
@@ -1733,11 +1845,75 @@ pub struct ColumnSample<'a> {
     /// `world/src/layer/tree.rs`, `shrub.rs`, and `scatter.rs` for the
     /// profile's own forest/scatter-deny/scatter-boost lists.
     pub governing_biome_profile: Option<ResolvedBiomeProfile<'a>>,
+    /// XINDELER: the authored raster column here (`None` outside every
+    /// authored region). See `crate::authored_raster`.
+    pub authored: Option<authored_raster::AuthoredColumn>,
+    /// XINDELER: the altitude of the lowest neighbouring authored dry ground
+    /// that this column stands more than a block above, in a
+    /// `sea_fill: AuthoredOnly` region (the wall of an authored dry pit);
+    /// `None` everywhere else. Blocks of the column above it are the wall's
+    /// exposed face and show the column's own strata
+    /// (`ColumnSample::dry_wall_block`, `world/src/block.rs`,
+    /// `WorldSim::dry_wall_floor_at`).
+    pub exposed_wall_floor: Option<f32>,
 
     pub chunk: &'a SimChunk,
 }
 
 impl ColumnSample<'_> {
+    /// The block of an authored dry pit's exposed wall at `wpos`
+    /// ([`Self::exposed_wall_floor`]): the column's own strata as they would
+    /// run with depth, not the engine's single deep-stone ramp. Under the
+    /// surface layer the wall is `Earth` (the column's sub-surface colour) down
+    /// to the column's own soil depth (`alt - basement`; none where the surface
+    /// is forced to bare rock), blended into `Rock` over a short band by a
+    /// position hash, then `Rock` in the natural stone colour of exposed
+    /// cliffs (a warm grey tinted by the column, banded like the engine's
+    /// cliff faces) -- never the engine's underground blue (`stone_col`). A
+    /// very sparse speckle of the rock is tinted as ore. The flecks are
+    /// cosmetic: they are plain `Rock`-kind blocks and yield nothing when
+    /// mined.
+    pub fn dry_wall_block(&self, wpos: Vec3<i32>) -> common::terrain::Block {
+        self.wall_strata(wpos.xy()).block(wpos)
+    }
+
+    /// Whether this column belongs to a `sea_fill: AuthoredOnly` authored
+    /// region.
+    pub fn is_authored_only(&self) -> bool {
+        self.authored
+            .is_some_and(|a| a.settings.sea_fill == authored_raster::SeaFill::AuthoredOnly)
+    }
+
+    /// Authored ground of a `sea_fill: AuthoredOnly` region that the raster
+    /// lowered below the sim's basement (`alt < basement`). Never true for
+    /// sim, no-manifest or `Auto`-region columns (`alt >= basement` there).
+    pub fn lowered_below_basement(&self) -> bool {
+        lowered_below_basement(self.is_authored_only(), self.alt, self.basement)
+    }
+
+    /// The per-column invariants of [`Self::dry_wall_block`], to be built once
+    /// per column and reused for every wall block of it. `col` is the
+    /// column's world position (it seeds the synthetic soil depth of a
+    /// lowered column).
+    pub fn wall_strata(&self, col: Vec2<i32>) -> WallStrata {
+        let lowered = self.lowered_below_basement();
+        WallStrata::new(
+            self.alt,
+            self.basement,
+            self.chaos,
+            self.surface_block_override == Some(BlockKind::Rock),
+            self.sub_surface_color,
+            lowered,
+            col,
+        )
+    }
+
+    /// Whether procedural decorations (boulders, trees, scatter) must not be
+    /// rooted here: authored water of a region that suppresses them.
+    pub fn authored_procedural_suppressed(&self) -> bool {
+        self.authored.is_some_and(|a| a.procedural_suppressed())
+    }
+
     pub fn get_info(&self) -> ColInfo {
         ColInfo {
             alt: self.alt,
@@ -1957,4 +2133,433 @@ pub struct ColInfo {
     pub basement: f32,
     pub cliff_offset: f32,
     pub cliff_height: f32,
+}
+
+/// Deepest soil a pit wall may show before it is stone, in blocks.
+const WALL_MAX_SOIL: f32 = 40.0;
+/// Width, in blocks, of the earth-to-stone blend band on a pit wall.
+pub(crate) const WALL_BLEND_BAND: f32 = 6.0;
+/// The natural stone of an exposed pit wall (a warm grey, linear 0..1).
+const WALL_STONE: Rgb<f32> = Rgb::new(0.47, 0.44, 0.41);
+/// How much of the column's sub-surface colour tints the wall stone.
+const WALL_STONE_TINT: f32 = 0.3;
+/// Synthetic soil depth, in blocks, of a lowered column (authored ground below
+/// the sim's basement, which has no real soil: `alt - basement` is negative).
+/// It mimics the engine's typical 5-8 block soil on rim columns, so the
+/// column shows earth and then stone; it varies per column by a position hash.
+const LOWERED_SOIL_MIN: f32 = 4.0;
+const LOWERED_SOIL_MAX: f32 = 10.0;
+/// Position-hash seed of a lowered column's soil depth.
+const LOWERED_SOIL_SEED: u32 = 0x57a1_0005;
+/// How deep, in blocks under the surface layer of a lowered column, its strata
+/// are jittered (colour noise and ore flecks). A wall of it can only be
+/// seen down to about the depth of a pit's rim above the neighbouring
+/// ground, and per-block noise makes every sub-chunk it touches heterogeneous
+/// (it roughly doubles the serialised chunk size when it runs to the bottom
+/// of the world); the stone below this is one constant colour (see
+/// [`WallStrata::deep_block`]).
+const LOWERED_JITTER_DEPTH: f32 = 14.0;
+/// Mean of the wall's banding shade (`1.0` to `0.7`, times jitter ~1): the
+/// constant shade of the deep stone of a lowered column.
+const DEEP_STONE_SHADE: f32 = 0.85;
+/// Chance that a rock block of a pit wall is an ore fleck.
+pub(crate) const WALL_ORE_CHANCE: f32 = 0.004;
+/// Position-hash seeds of the wall's earth/stone mix, colour jitter and ore.
+const WALL_MIX_SEED: u32 = 0x57a1_0001;
+const WALL_JITTER_SEED: u32 = 0x57a1_0002;
+const WALL_ORE_SEED: u32 = 0x57a1_0003;
+const WALL_ORE_KIND_SEED: u32 = 0x57a1_0004;
+/// Fleck colours: iron, copper, gold, coal.
+const WALL_ORES: [(u8, u8, u8); 4] = [(150, 92, 62), (92, 150, 100), (212, 178, 62), (38, 38, 44)];
+
+/// What a pit wall block is at a depth below the surface layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WallLayer {
+    Earth,
+    Rock,
+    Ore(Rgb<u8>),
+}
+
+fn lowered_below_basement(authored_only: bool, alt: f32, basement: f32) -> bool {
+    authored_only && alt < basement
+}
+
+/// The layer of an exposed pit wall `depth` blocks under its surface layer for
+/// a column with `soil` blocks of earth. `mix` is a position hash in `[0, 1)`:
+/// the earth/stone blend is probabilistic over a band of [`WALL_BLEND_BAND`]
+/// blocks centred on the soil depth. `ore` and `ore_kind` are position-hash
+/// thunks in `[0, 1)`, evaluated only when the block is rock (and, for
+/// `ore_kind`, only on an ore hit). A column without soil never has earth.
+pub(crate) fn wall_layer(
+    depth: f32,
+    soil: f32,
+    mix: f32,
+    ore: impl FnOnce() -> f32,
+    ore_kind: impl FnOnce() -> f32,
+) -> WallLayer {
+    let earth_p = ((soil - depth) / WALL_BLEND_BAND + 0.5).clamp(0.0, 1.0);
+    if soil > 0.0 && mix < earth_p {
+        WallLayer::Earth
+    } else if ore() < WALL_ORE_CHANCE {
+        let i = ((ore_kind() * WALL_ORES.len() as f32) as usize).min(WALL_ORES.len() - 1);
+        WallLayer::Ore(WALL_ORES[i].into())
+    } else {
+        WallLayer::Rock
+    }
+}
+
+/// The per-column constants of an exposed pit wall's strata.
+#[derive(Clone, Copy, Debug)]
+pub struct WallStrata {
+    alt: f32,
+    grass_depth: f32,
+    soil: f32,
+    /// Depth under the surface layer below which the stone is one constant
+    /// colour (lowered columns only).
+    deep_depth: f32,
+    band_base: f32,
+    earth: Rgb<f32>,
+    stone: Rgb<f32>,
+}
+
+impl WallStrata {
+    fn new(
+        alt: f32,
+        basement: f32,
+        chaos: f32,
+        bare_rock: bool,
+        sub_surface_color: Rgb<f32>,
+        lowered: bool,
+        col: Vec2<i32>,
+    ) -> Self {
+        // A lowered column's real surface is its `alt` (`alt - basement` is
+        // negative): the surface layer is the `1.5 + 2 chaos` blocks under
+        // it and the strata start right below.
+        let (alt, grass_depth) = if lowered {
+            (alt, 1.5 + 2.0 * chaos)
+        } else {
+            (alt, (1.5 + 2.0 * chaos).min(alt - basement))
+        };
+        Self {
+            alt,
+            grass_depth,
+            deep_depth: if lowered {
+                LOWERED_JITTER_DEPTH
+            } else {
+                f32::INFINITY
+            },
+            soil: if bare_rock {
+                0.0
+            } else if lowered {
+                let h = RandomField::new(LOWERED_SOIL_SEED).get_f32(col.with_z(0));
+                Lerp::lerp(LOWERED_SOIL_MIN, LOWERED_SOIL_MAX, h)
+            } else {
+                (alt - basement).clamp(0.0, WALL_MAX_SOIL)
+            },
+            band_base: basement * 0.3,
+            earth: sub_surface_color,
+            stone: Rgb::lerp(WALL_STONE, sub_surface_color, WALL_STONE_TINT),
+        }
+    }
+
+    /// The stone far below the wall: the natural warm grey in one constant
+    /// colour, without jitter or ore, so it compresses like the engine's
+    /// generic deep fill. It is not tinted by the column either: a colour that
+    /// differs from column to column makes every sub-chunk it fills
+    /// heterogeneous (it adds about 20% to the serialised size of the chunks
+    /// around a deep pit).
+    fn deep_block(&self) -> common::terrain::Block {
+        common::terrain::Block::new(
+            BlockKind::Rock,
+            (WALL_STONE * DEEP_STONE_SHADE).map(|e| (e * 255.0).clamp(0.0, 255.0) as u8),
+        )
+    }
+
+    /// The wall block at `wpos`.
+    pub fn block(&self, wpos: Vec3<i32>) -> common::terrain::Block {
+        let depth = self.alt - self.grass_depth - wpos.z as f32;
+        if depth > self.deep_depth {
+            return self.deep_block();
+        }
+        let mix = RandomField::new(WALL_MIX_SEED).get_f32(wpos);
+        let layer = wall_layer(
+            depth,
+            self.soil,
+            mix,
+            || RandomField::new(WALL_ORE_SEED).get_f32(wpos),
+            || RandomField::new(WALL_ORE_KIND_SEED).get_f32(wpos),
+        );
+        let to_u8 = |c: Rgb<f32>| c.map(|e| (e * 255.0).clamp(0.0, 255.0) as u8);
+        let shaded = |c: Rgb<f32>| {
+            // Engine-style horizontal banding of an exposed face.
+            let jitter = RandomField::new(WALL_JITTER_SEED).get_f32(wpos);
+            let band = (wpos.z as f32 - self.band_base).div(2.0).sin() * 0.5 + 0.5;
+            let shade = Lerp::lerp(1.0, 0.7, band) * (0.94 + 0.12 * jitter);
+            to_u8(c * shade)
+        };
+        match layer {
+            WallLayer::Earth => common::terrain::Block::new(BlockKind::Earth, shaded(self.earth)),
+            WallLayer::Rock => common::terrain::Block::new(BlockKind::Rock, shaded(self.stone)),
+            WallLayer::Ore(col) => common::terrain::Block::new(BlockKind::Rock, col),
+        }
+    }
+}
+
+#[cfg(test)]
+mod wall_layer_tests {
+    use super::*;
+
+    fn at(depth: f32, soil: f32, mix: f32) -> WallLayer {
+        wall_layer(depth, soil, mix, || 0.9, || 0.0)
+    }
+
+    #[test]
+    fn a_deep_soil_column_shows_earth_then_stone() {
+        let at = |depth, mix| at(depth, 12.0, mix);
+        assert_eq!(at(0.0, 0.5), WallLayer::Earth);
+        assert_eq!(at(8.0, 0.5), WallLayer::Earth);
+        assert_eq!(at(20.0, 0.5), WallLayer::Rock);
+        // Inside the band both occur, by the hash.
+        assert_eq!(at(12.0, 0.2), WallLayer::Earth);
+        assert_eq!(at(12.0, 0.8), WallLayer::Rock);
+    }
+
+    #[test]
+    fn a_stone_heavy_column_is_stone_from_the_start() {
+        for depth in [4.0, 10.0, 300.0] {
+            assert_eq!(at(depth, 0.0, 0.5), WallLayer::Rock);
+        }
+    }
+
+    #[test]
+    fn a_soilless_column_has_no_earth_even_at_the_surface() {
+        for depth in [0.0, 1.0, 2.0, 2.9] {
+            for i in 0..100 {
+                let mix = i as f32 / 100.0;
+                assert_ne!(at(depth, 0.0, mix), WallLayer::Earth, "{depth} {mix}");
+            }
+        }
+    }
+
+    #[test]
+    fn ore_is_sparse_deterministic_and_only_in_rock() {
+        let n = 200_000;
+        let mut ore = 0;
+        for i in 0..n {
+            let p = Vec3::new(i, i / 7, -i / 3);
+            let l = |p| {
+                wall_layer(
+                    50.0,
+                    0.0,
+                    RandomField::new(WALL_MIX_SEED).get_f32(p),
+                    || RandomField::new(WALL_ORE_SEED).get_f32(p),
+                    || RandomField::new(WALL_ORE_KIND_SEED).get_f32(p),
+                )
+            };
+            assert_eq!(l(p), l(p));
+            ore += matches!(l(p), WallLayer::Ore(_)) as u32;
+        }
+        let rate = ore as f32 / n as f32;
+        assert!(
+            (rate - WALL_ORE_CHANCE).abs() < WALL_ORE_CHANCE * 0.3,
+            "{rate}"
+        );
+        assert_eq!(at(0.0, 9.0, 0.1), WallLayer::Earth);
+    }
+
+    /// The pre-hoisting implementation (all four hashes on every block, the
+    /// invariants recomputed per block), kept as the reference.
+    #[allow(clippy::too_many_arguments)]
+    fn reference_block(
+        alt: f32,
+        basement: f32,
+        chaos: f32,
+        bare_rock: bool,
+        sub_surface_color: Rgb<f32>,
+        wpos: Vec3<i32>,
+    ) -> common::terrain::Block {
+        let grass_depth = (1.5 + 2.0 * chaos).min(alt - basement);
+        let depth = alt - grass_depth - wpos.z as f32;
+        let soil = if bare_rock {
+            0.0
+        } else {
+            (alt - basement).clamp(0.0, WALL_MAX_SOIL)
+        };
+        let mix = RandomField::new(WALL_MIX_SEED).get_f32(wpos);
+        let jitter = RandomField::new(WALL_JITTER_SEED).get_f32(wpos);
+        let ore = RandomField::new(WALL_ORE_SEED).get_f32(wpos);
+        let ore_kind = RandomField::new(WALL_ORE_KIND_SEED).get_f32(wpos);
+        let earth_p = ((soil - depth) / WALL_BLEND_BAND + 0.5).clamp(0.0, 1.0);
+        let layer = if mix < earth_p {
+            WallLayer::Earth
+        } else if ore < WALL_ORE_CHANCE {
+            let i = ((ore_kind * WALL_ORES.len() as f32) as usize).min(WALL_ORES.len() - 1);
+            WallLayer::Ore(WALL_ORES[i].into())
+        } else {
+            WallLayer::Rock
+        };
+        let band = (wpos.z as f32 - basement * 0.3).div(2.0).sin() * 0.5 + 0.5;
+        let shade = Lerp::lerp(1.0, 0.7, band) * (0.94 + 0.12 * jitter);
+        let to_u8 = |c: Rgb<f32>| c.map(|e| (e * 255.0).clamp(0.0, 255.0) as u8);
+        match layer {
+            WallLayer::Earth => {
+                common::terrain::Block::new(BlockKind::Earth, to_u8(sub_surface_color * shade))
+            },
+            WallLayer::Rock => {
+                let stone = Rgb::lerp(WALL_STONE, sub_surface_color, WALL_STONE_TINT);
+                common::terrain::Block::new(BlockKind::Rock, to_u8(stone * shade))
+            },
+            WallLayer::Ore(col) => common::terrain::Block::new(BlockKind::Rock, col),
+        }
+    }
+
+    fn columns() -> Vec<(f32, f32, f32, bool, Rgb<f32>)> {
+        let mut v = Vec::new();
+        for (i, &(alt, basement)) in [
+            (130.0, 124.0),
+            (131.5, 123.0),
+            (140.0, 100.0),
+            (90.0, 89.5),
+            (200.0, 120.0),
+            (100.0, 100.0),
+        ]
+        .iter()
+        .enumerate()
+        {
+            for (j, &sub) in [
+                Rgb::new(0.35, 0.28, 0.2),
+                Rgb::new(0.45, 0.4, 0.3),
+                Rgb::new(0.6, 0.55, 0.5),
+                Rgb::new(0.2, 0.25, 0.4),
+            ]
+            .iter()
+            .enumerate()
+            {
+                v.push((alt, basement, 0.1 + 0.2 * j as f32, (i + j) % 5 == 0, sub));
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn the_hoisted_strata_match_the_reference_bit_for_bit() {
+        let mut n = 0;
+        for (alt, basement, chaos, bare, sub) in columns() {
+            let strata = WallStrata::new(alt, basement, chaos, bare, sub, false, Vec2::zero());
+            for i in 0..200 {
+                let wpos = Vec3::new(1000 + i * 13, -400 + i * 7, alt as i32 - 1 - (i % 60));
+                let new = strata.block(wpos);
+                let old = reference_block(alt, basement, chaos, bare, sub, wpos);
+                // A column without soil no longer has earth in its first
+                // blocks (it was a bug); everything else is unchanged.
+                if old.kind() == BlockKind::Earth
+                    && (bare || alt <= basement)
+                    && new.kind() != BlockKind::Earth
+                {
+                    continue;
+                }
+                assert_eq!(new, old, "{alt} {basement} {bare} {wpos:?}");
+                n += 1;
+            }
+        }
+        assert!(n > 4000, "{n}");
+    }
+
+    /// Authored ground lowered below the sim's basement (`alt < basement`):
+    /// earth first, then stone, never the engine's blue (`stone_col`), at any
+    /// depth; the soil is the synthetic 4..10 blocks and varies per column.
+    #[test]
+    fn columns_below_their_basement_show_earth_then_stone_and_no_blue() {
+        let blue_minus_red = |c: Rgb<u8>| c.b as i32 - c.r as i32;
+        let mut soils = std::collections::BTreeSet::new();
+        for sub in [
+            Rgb::new(0.35, 0.28, 0.2),
+            Rgb::new(0.6, 0.55, 0.5),
+            Rgb::new(0.2, 0.25, 0.4),
+        ] {
+            for (alt, basement) in [(131.4, 140.0), (120.0, 120.5), (95.0, 160.0)] {
+                for chaos in [0.0, 0.3, 1.0] {
+                    for k in 0..30 {
+                        let col = Vec2::new(k * 7, k * 3);
+                        let strata = WallStrata::new(alt, basement, chaos, false, sub, true, col);
+                        assert!((LOWERED_SOIL_MIN..=LOWERED_SOIL_MAX).contains(&strata.soil));
+                        soils.insert((strata.soil * 100.0) as i32);
+                        // The strata start under the surface layer, which
+                        // is `alt - layer`.
+                        let top = (alt - (1.5 + 2.0 * chaos)).floor() as i32;
+                        for depth in 0..60 {
+                            let b = strata.block(col.with_z(top - depth));
+                            let c = b.get_color().unwrap();
+                            assert!(matches!(b.kind(), BlockKind::Earth | BlockKind::Rock));
+                            // (Earth takes the biome's own colour, blue in
+                            // a teal biome; the stone is never blue.)
+                            if b.kind() == BlockKind::Rock
+                                && !WALL_ORES.iter().any(|o| Rgb::from(*o) == c)
+                            {
+                                assert!(blue_minus_red(c) <= 30, "{c:?} {sub:?}");
+                                assert_ne!((c.r, c.g, c.b), (90, 110, 150));
+                            }
+                        }
+                        // Earth right under the surface layer, stone below
+                        // the soil and its blend band.
+                        let kind_at = |depth| strata.block(col.with_z(top - depth)).kind();
+                        assert_eq!(kind_at(0), BlockKind::Earth);
+                        assert_eq!(kind_at(20), BlockKind::Rock);
+                        assert_eq!(kind_at(50), BlockKind::Rock);
+                        // Far below, the stone is one constant natural colour.
+                        let deep = |d| strata.block(col.with_z(top - d));
+                        assert_eq!(deep(60), deep(500));
+                        assert_eq!(deep(60).kind(), BlockKind::Rock);
+                        assert!(blue_minus_red(deep(60).get_color().unwrap()) <= 30);
+                    }
+                }
+            }
+        }
+        assert!(soils.len() > 20, "the soil does not vary per column");
+    }
+
+    /// Only authored-only columns below their basement take the lowered
+    /// path: sim, no-manifest and `Auto` columns (`alt >= basement`) never
+    /// do, so their output is the generic path's, byte for byte.
+    #[test]
+    fn only_authored_only_columns_below_their_basement_are_lowered() {
+        for alt in [90.0f32, 123.4, 200.0] {
+            for d in [-5.0f32, -0.01, 0.0, 0.5, 40.0] {
+                let basement = alt - d.abs();
+                assert!(!lowered_below_basement(true, alt, basement));
+                assert!(!lowered_below_basement(false, alt, basement));
+            }
+            assert!(lowered_below_basement(true, alt, alt + 0.01));
+            assert!(!lowered_below_basement(false, alt, alt + 0.01));
+        }
+    }
+
+    #[test]
+    fn wall_blocks_are_never_blue() {
+        let blue_minus_red = |c: Rgb<u8>| c.b as i32 - c.r as i32;
+        for sub in [
+            Rgb::new(0.35, 0.28, 0.2),
+            Rgb::new(0.45, 0.4, 0.3),
+            Rgb::new(0.6, 0.55, 0.5),
+            Rgb::new(0.3, 0.32, 0.3),
+        ] {
+            for bare in [false, true] {
+                let strata = WallStrata::new(130.0, 123.0, 0.3, bare, sub, false, Vec2::zero());
+                for depth in 0..80 {
+                    for k in 0..40 {
+                        let wpos = Vec3::new(k * 5, k * 3, 129 - depth);
+                        let b = strata.block(wpos);
+                        let c = b.get_color().unwrap();
+                        if matches!(b.kind(), BlockKind::Earth | BlockKind::Rock)
+                            && !WALL_ORES.iter().any(|o| Rgb::from(*o) == c)
+                        {
+                            assert!(blue_minus_red(c) <= 30, "{c:?} {sub:?}");
+                            // The engine's old deep-rock blue (`stone_col`).
+                            assert_ne!((c.r, c.g, c.b), (90, 110, 150));
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

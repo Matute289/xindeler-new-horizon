@@ -35,7 +35,7 @@ impl GliderRing {
             center: *wpos,
             direction,
             number,
-            base: land.get_alt_approx(*wpos) as i32 + 1,
+            base: land.ground_alt_at(*wpos) as i32 + 1,
             ring_thickness: 4,
             ring_height: 35,
             ring_radius: 16,

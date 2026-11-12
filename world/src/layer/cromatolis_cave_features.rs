@@ -192,8 +192,8 @@ const MAX_BRANCH_FLOOR_DRIFT: i32 = 64;
 /// ~6.1e-4 ore + 1.5e-4 gem = **~7.6e-4 mineral per floor column**,
 /// depth-averaged (peak ~1.4e-3 in the shallow layers). So `Trace` here is
 /// still well above the procedural rate and `Abundant` is roughly 12x it:
-/// an authored, named-vein-grade deposit, which is the point. Until COW-23
-/// T15 flipped `cromatolis_v0_procedural_layers.ron` to `caves: true`
+/// an authored, named-vein-grade deposit, which is the point. Until
+/// `cromatolis_v0_procedural_layers.ron` was set to `caves: true`
 /// (2026-09-19), `cave.rs` did not run in Cromatolis at all and these 281
 /// finite caves carried the region's entire mineral economy on their own.
 /// They now sit alongside the procedural layer's own, far sparser roll, and
@@ -2065,7 +2065,7 @@ mod tests {
         )
     }
 
-    /// **T19 of the COW-23 task board.** How much of each authored cave's
+    /// **The post-flip cave measurement.** How much of each authored cave's
     /// *intended* hub chamber is actually air in the real generated world.
     ///
     /// This is the measurement the corner-pruning fix is accepted against.
@@ -2667,14 +2667,26 @@ mod tests {
         );
     }
 
-    /// The guard cannot change which surface cave entrances exist, and this
-    /// pins that it did not: markers come from the node lattice
-    /// (`surface_entrances` never calls the tunnel query at all), so a change
-    /// here means the lattice or the authored map moved, never the guard.
+    /// The authored-void guard cannot change which surface cave entrances
+    /// exist, and this pins that it did not: markers come from the node
+    /// lattice (`surface_entrances` never calls the tunnel query at all; the
+    /// only authored input is the exact-ground filter, inert while the shipped
+    /// map draws no exact patch), so a change
+    /// here means the lattice, the authored map or a nearby site's layout
+    /// moved (a mouth is only marked where the column sample sees no water
+    /// within 5 blocks, and a nearby site's spawn rules -- its radius and
+    /// preferred altitude -- shift that sample's ground), never the guard.
     #[test]
     #[ignore]
     fn the_real_region_still_derives_its_surface_cave_markers() {
-        const EXPECTED_MARKERS: usize = 150;
+        // Coupled to town layouts: it moved 150 -> 149 when per-site seeds
+        // re-rolled Gloomshear's layout (one mouth ~250 m away). A change
+        // here together with a changed `cromatolis_site_layout_digests.txt`
+        // is that coupling, not a cave regression; re-check which mouth
+        // moved before re-baselining. 149 -> 148 when Duren's
+        // layout domain grew to its wards, and the mouth at (8202, 26754),
+        // ~960 blocks from Duren's pin, now lies inside the town's extent.
+        const EXPECTED_MARKERS: usize = 148;
 
         let (world, index) = cromatolis_world();
         let land = Land::from_sim(world.sim());
@@ -3051,7 +3063,7 @@ mod tests {
         // Both sides are forced explicitly rather than leaning on whatever the
         // region currently ships, so this keeps measuring exactly one variable
         // whichever way COW-23's toggles point. `rocks` is forced *off* on both
-        // sides for the same reason: since COW-23 T15 the region ships
+        // sides for the same reason: since the flip the region ships
         // `rocks: true`, and `apply_rocks_to` runs after the authored carve, so
         // a boulder stamped over an authored ore sprite would read as a
         // "declined" placement and be blamed on the cave guard, which had

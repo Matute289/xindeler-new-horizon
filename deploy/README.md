@@ -40,12 +40,12 @@ el binario anterior, reinicia y verifica salud contra `http://127.0.0.1:14005/he
 binario nuevo no responde en 60 segundos, restaura el anterior automáticamente y sale con
 error.
 
-**La build tarda ~10-30 minutos** en la VPS (2 vCPU) — correrlo en una sesión que no se vaya a
+**La build tarda ~10-30 minutos** en la VPS (medido en la caja vieja de 2 vCPU; desde la migración del 2026-10-10 la VPS tiene 4 cores) — correrlo en una sesión que no se vaya a
 cortar, o con `nohup`/`tmux`.
 
 También compila e instala `portrait_gen` (el binario headless que renderiza retratos de
 personaje, NH-83) — en perfil `dev` (sin LTO), no `--release`: vive en el crate `voxygen`, cuyo
-perfil de release usa LTO completo, que no entra en los 3.8 GB de RAM de esta VPS. Sin binario
+perfil de release usa LTO completo, que no entraba en los 3.8 GB de RAM de la VPS vieja (2026-10-10: la VPS pasó a una caja de ~15 GB, así que ya no es un límite duro; `deploy.sh` lo sigue compilando en `dev` hasta que alguien decida cambiarlo). Sin binario
 anterior ni rollback dedicado: se spawnea por pedido, no corre como servicio, así que una build
 rota simplemente falla cerrado (`PortraitService` ya trata cualquier salida inesperada como
 `Failed` y no sirve retrato, sin afectar al resto del servidor).

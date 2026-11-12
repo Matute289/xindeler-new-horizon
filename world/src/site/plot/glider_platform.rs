@@ -25,7 +25,7 @@ impl GliderPlatform {
         Self {
             center: wpos,
             direction,
-            alt: land.get_alt_approx(wpos) as i32,
+            alt: land.ground_alt_at(wpos) as i32,
         }
     }
 }

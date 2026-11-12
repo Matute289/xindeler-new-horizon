@@ -33,7 +33,7 @@ impl MyrmidonArena {
             max: site.tile_wpos(tile_aabr.max),
         };
         let center = bounds.center();
-        let base = land.get_alt_approx(center) as i32 + 2;
+        let base = land.ground_alt_at(center) as i32 + 2;
         let diameter = (bounds.max.x - bounds.min.x).min(bounds.max.y - bounds.min.y) - 20;
         let radius = diameter / 2;
         let entry_pos = Vec2::new(center.x, center.y + radius - 12);

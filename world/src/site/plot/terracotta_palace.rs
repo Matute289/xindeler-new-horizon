@@ -30,7 +30,7 @@ impl TerracottaPalace {
         };
         Self {
             bounds,
-            alt: land.get_alt_approx(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
+            alt: land.ground_alt_at(site.tile_center_wpos((tile_aabr.max - tile_aabr.min) / 2))
                 as i32
                 + 2,
         }

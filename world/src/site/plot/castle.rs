@@ -24,7 +24,7 @@ impl Castle {
         let alt = SQUARE_4
             .iter()
             .map(|corner| tile_aabr.min + (tile_aabr.max - tile_aabr.min - 1) * corner)
-            .map(|pos| land.get_alt_approx(site.tile_center_wpos(pos)) as i32)
+            .map(|pos| land.ground_alt_at(site.tile_center_wpos(pos)) as i32)
             .sum::<i32>()
             / 4;
 
@@ -35,7 +35,7 @@ impl Castle {
                 max: site.tile_wpos(tile_aabr.max),
             },
             gate_aabr,
-            gate_alt: land.get_alt_approx(site.tile_center_wpos(gate_aabr.center())) as i32,
+            gate_alt: land.ground_alt_at(site.tile_center_wpos(gate_aabr.center())) as i32,
             alt,
         }
     }

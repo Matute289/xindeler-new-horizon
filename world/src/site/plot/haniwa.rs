@@ -36,7 +36,7 @@ impl Haniwa {
             max: site.tile_wpos(tile_aabr.max),
         };
         let center = bounds.center();
-        let base = land.get_alt_approx(center) as i32;
+        let base = land.ground_alt_at(center) as i32;
         let diameter = (150 + RandomField::new(0).get(center.with_z(base)) % 10) as i32;
         let dir_select = (RandomField::new(0).get(center.with_z(base)) % 4) as usize;
         let rotation = (PI / 2.0) * dir_select as f32;
@@ -75,7 +75,7 @@ impl Haniwa {
         }
         let boss_room_position = center_room_positions[center_room_positions.len() - 1];
         Self {
-            alt: land.get_alt_approx(site.tile_center_wpos(tile_aabr.center())) as i32 + 2,
+            alt: land.ground_alt_at(site.tile_center_wpos(tile_aabr.center())) as i32 + 2,
             center,
             base,
             diameter,

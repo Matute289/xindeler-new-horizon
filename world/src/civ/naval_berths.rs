@@ -1,4 +1,4 @@
-//! The world-wide naval-berth/anchorage discovery pass (spec §5.3, §11.2).
+//! The world-wide naval-berth/anchorage discovery pass.
 //!
 //! By analogy with `airship_travel::all_airshipdock_positions`: one mutable
 //! counter, advanced by each port's berth *and* anchorage count together,
@@ -38,12 +38,12 @@ pub struct SiteBerths {
 /// Collect every naval berth and anchorage in the world, grouped by the
 /// site that built them.
 ///
-/// This is the deliverable COW-24's maritime-traffic itinerary code depends
-/// on, and it retires that code's placeholder (snapping to the nearest
-/// navigable water chunk near a settlement's centre), which should survive
-/// only as the `warn!`-logged fallback for a stop whose settlement produced
-/// no port. It is also the fix for the `desert_city_airship_dock.rs`
-/// failure mode (spec §2.5): a port with no entry here is invisible to
+/// This is the deliverable the maritime-route work's maritime-traffic itinerary
+/// code depends on, and it retires that code's placeholder (snapping to the
+/// nearest navigable water chunk near a settlement's centre), which should
+/// survive only as the `warn!`-logged fallback for a stop whose settlement
+/// produced no port. It is also the fix for the `desert_city_airship_dock.rs`
+/// failure mode: a port with no entry here is invisible to
 /// every consumer no matter how finished its geometry looks, because this
 /// function -- not the plot's own fields -- is the only path a consumer has
 /// to a berth's or anchorage's real, addressable id.

@@ -1,0 +1,4 @@
+# Digest of the civ layer (sites + roads) of the default procedural map, world seed 0.
+# Checked by site_layouts::procedural_world_civ_layer_matches_the_committed_digest.
+# digest	sites	tracks	nodes
+ecc41f4f559299a7	205	59	9279

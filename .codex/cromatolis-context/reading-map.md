@@ -32,7 +32,8 @@ Consultar la referencia temática antes de cambiar una capa concreta: `01`
 Las fuentes anteriores a la migración se consultan solo como evidencia:
 
 - `xindeler-open-world/worlds/cromatolis/docs/*aerial-citadel*`
-- `xindeler-old` en su commit de laboratorio consolidado.
+- `xindeler-old` en su commit de laboratorio consolidado (checkout local borrado el
+  2026-10-04; bundle en `~/Documents/xindeler-scratch-backup-2026-10-04/old-repos/`).
 
 No se hace un port ciego de ninguno. La implementación real de New Horizon y
 los artefactos COW-8 anteriores determinan el punto de partida.

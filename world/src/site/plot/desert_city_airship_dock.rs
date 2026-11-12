@@ -44,7 +44,7 @@ impl DesertCityAirshipDock {
             max: site.tile_wpos(tile_aabr.max),
         };
         let alt = alt.unwrap_or_else(|| {
-            land.get_alt_approx(site.tile_center_wpos(door_tile + door_dir)) as i32
+            land.ground_alt_at(site.tile_center_wpos(door_tile + door_dir)) as i32
         });
         let center = bounds.center();
 
@@ -62,7 +62,7 @@ impl DesertCityAirshipDock {
         for dx in -3..=3 {
             for dy in -3..=3 {
                 let pos = center + Vec2::new(dx * 24, dy * 24);
-                let alt = land.get_surface_alt_approx(pos) as i32;
+                let alt = land.surface_alt_at(pos) as i32;
                 if alt > max_surface_alt {
                     max_surface_alt = alt;
                 }
@@ -77,7 +77,7 @@ impl DesertCityAirshipDock {
         for dx in -2..=2 {
             for dy in -2..=2 {
                 let pos = center + Vec2::new(dx * foundation_qtr, dy * foundation_qtr);
-                let alt = land.get_surface_alt_approx(pos) as i32;
+                let alt = land.surface_alt_at(pos) as i32;
                 if alt > max_foundation_alt {
                     max_foundation_alt = alt;
                 }

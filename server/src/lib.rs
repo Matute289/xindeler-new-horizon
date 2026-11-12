@@ -562,9 +562,28 @@ impl Server {
                      Additionally, it is expected to be replaced in the future *without* \
                      migration or warning. You have been warned."
                 );
-                state
-                    .ecs_mut()
-                    .insert(TerrainPersistence::new(data_dir.to_owned()));
+                let terrain_persistence = TerrainPersistence::new(data_dir.to_owned());
+                // XINDELER: persisted edits sit on regenerated terrain; warn
+                // when the authored water rasters under them changed.
+                #[cfg(feature = "worldgen")]
+                terrain_persistence.check_authored_rasters_digest(
+                    world.sim().authored_rasters().map(|r| r.digest()),
+                    &world
+                        .sim()
+                        .authored_rasters()
+                        .map(|r| {
+                            r.region_entries()
+                                .map(|e| crate::terrain_persistence::AuthoredRegionDigest {
+                                    id: e.id.to_string(),
+                                    digest: e.digest.to_string(),
+                                    min_chunk: e.bounds.min / 32,
+                                    max_chunk: e.bounds.max / 32,
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
+                );
+                state.ecs_mut().insert(terrain_persistence);
             }
             #[cfg(not(feature = "persistent_world"))]
             error!(

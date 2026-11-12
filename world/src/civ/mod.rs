@@ -4,6 +4,8 @@ pub mod airship_travel;
 mod econ;
 mod maritime_traffic;
 pub mod naval_berths;
+pub(crate) mod seeds;
+mod settlement_layouts;
 
 #[cfg(feature = "airship_maps")]
 pub mod airship_route_map;
@@ -76,10 +78,11 @@ pub struct Civs {
 //   at runtime.
 // - Loading is gated on `SimChunk::authored_region_id ==
 //   Some(CROMATOLIS_V0_REGION_ID)` (the region registry `world/src/sim`
-//   maintains), not a literal asset-name check, and never panics on
-//   invalid/missing data -- it warns and falls back to procedural generation
-//   instead (same posture as the terrain/water/biome loaders this crate already
-//   uses).
+//   maintains), not a literal asset-name check. Inside an authored Cromatolis
+//   world every one of these layers is mandatory: missing, unparsable or
+//   invalid data stops world generation with a message naming the asset file
+//   and the reason (`load_authored_cromatolis_layer`), the same posture as the
+//   authored raster manifest. Procedural worlds never load them.
 // - `AuthoredCromatolisLandmarkProfiles` is ported as data + validation only.
 //   Its physical-template/style/material fields describe a real bespoke
 //   landmark renderer that exists in the reference engine
@@ -96,6 +99,11 @@ pub struct Civs {
 //   `SiteKind::Refactor` today -- that's the honest, measured baseline, not a
 //   placeholder bug: no real per-family physical generator exists yet.
 // ---------------------------------------------------------------------------
+
+/// Upper bound on one settlement's authored `npc_count`. A typo guard, not a
+/// budget: the world-wide budget is rtsim's NPC ceiling (a separate NPC
+/// population budget), and no single settlement is planned above a few hundred.
+const MAX_SETTLEMENT_NPC_COUNT: u32 = 5_000;
 
 /// Authored settlement data for Cromatolis. The source-of-truth asset is
 /// generated from `xindeler-open-world`, while the engine consumes this
@@ -151,6 +159,21 @@ impl AuthoredCromatolisSettlements {
             }
             if !settlement.population.is_valid() {
                 return Err(format!("invalid population metadata for {}", settlement.id));
+            }
+            if let Some(npc_count) = settlement.population.npc_count
+                && npc_count > MAX_SETTLEMENT_NPC_COUNT
+            {
+                return Err(format!(
+                    "settlement {} asks for {npc_count} NPCs, above the per-settlement limit of \
+                     {MAX_SETTLEMENT_NPC_COUNT}",
+                    settlement.id
+                ));
+            }
+            if settlement.target_buildings == 0 {
+                return Err(format!(
+                    "settlement {} has a target_buildings of 0",
+                    settlement.id
+                ));
             }
             if settlement.category == AuthoredSettlementCategory::Capital {
                 capitals += 1;
@@ -406,7 +429,7 @@ struct AuthoredCromatolisRoute {
     points: Vec<AuthoredMapPoint>,
 }
 
-/// Authored Cromatolis maritime trade routes (COW-24). Unlike
+/// Authored Cromatolis maritime trade routes. Unlike
 /// `AuthoredCromatolisRouteGraph`'s overland routes, a maritime route must
 /// never be carved into the terrain as a walkable road: ships don't need a
 /// paved seabed, and the real gap between the mainland and Rios Port's
@@ -722,7 +745,6 @@ fn bridge_is_selected_for_preview(preview: &str, bridge_id: &str) -> bool {
 
 #[derive(Debug, Clone)]
 struct AuthoredBridgeMeta {
-    #[expect(dead_code)]
     id: String,
     name: String,
     design: site::AuthoredBridgeDesign,
@@ -901,7 +923,6 @@ struct AuthoredCromatolisGate {
 
 #[derive(Debug, Clone)]
 struct AuthoredFortificationMeta {
-    #[expect(dead_code)]
     id: String,
     name: String,
     design: site::AuthoredFortificationDesign,
@@ -1010,6 +1031,10 @@ enum AuthoredSettlementCategory {
     City,
     Town,
     Village,
+    /// Indigenous-style village: generated exactly like a
+    /// `Village` today, with its own contract families, building targets
+    /// and (placeholder) architectural direction.
+    Aldea,
     Hamlet,
     Inn,
     Post,
@@ -1024,6 +1049,7 @@ impl AuthoredSettlementCategory {
             Self::City => "city",
             Self::Town => "town",
             Self::Village => "village",
+            Self::Aldea => "aldea",
             Self::Hamlet => "hamlet",
             Self::Inn => "inn",
             Self::Post => "post",
@@ -1037,9 +1063,12 @@ impl AuthoredSettlementCategory {
     const fn default_site_kind(self) -> SiteKind {
         match self {
             Self::Inn | Self::Post => SiteKind::Camp,
-            Self::Capital | Self::City | Self::Town | Self::Village | Self::Hamlet => {
-                SiteKind::Refactor
-            },
+            Self::Capital
+            | Self::City
+            | Self::Town
+            | Self::Village
+            | Self::Aldea
+            | Self::Hamlet => SiteKind::Refactor,
         }
     }
 
@@ -1056,7 +1085,7 @@ impl AuthoredSettlementCategory {
             // `default_site_kind` above), so `generate_city` never sees this
             // arm for them today -- included anyway so the match stays
             // exhaustive and correct if that ever changes.
-            Self::Village | Self::Hamlet | Self::Inn | Self::Post => PortClass::Jetty,
+            Self::Village | Self::Aldea | Self::Hamlet | Self::Inn | Self::Post => PortClass::Jetty,
         }
     }
 }
@@ -1103,6 +1132,118 @@ fn resolve_naval_port(
 /// boundary knows what kind of thing the keep-out region describes, and
 /// therefore how much room it deserves.
 const AUTHORED_LANDMARK_CLEARANCE_BLOCKS: i32 = 12;
+
+/// Resolves the authored settlement layouts into world space, each keeping
+/// out of every authored landmark's footprint as well as the circles it
+/// names itself. A layout is only consumed by the city generator, so a
+/// layout for a settlement that does not generate as a city (an inn, a post)
+/// is a data error, reported like any other bad authored layer.
+fn resolve_settlement_layouts(
+    sites: &Store<Site>,
+    layouts: &settlement_layouts::AuthoredSettlementLayouts,
+    pins: &settlement_layouts::AuthoredPins,
+    landmark_exclusions: &[PortExclusion],
+) -> std::collections::HashMap<String, site::layout::SettlementLayout> {
+    for id in layouts.site_ids() {
+        let kind = sites
+            .values()
+            .find(|site| site.authored_id() == Some(id))
+            .map(|site| &site.kind);
+        if !matches!(kind, Some(SiteKind::Refactor)) {
+            let specifier = settlement_layouts::SPECIFIER;
+            let err = AuthoredLayerError(format!(
+                "authored Cromatolis settlement layouts [{specifier}]: {id} has a layout but \
+                 generates as {kind:?}, not as a city"
+            ));
+            fatal_authored::<()>(err);
+        }
+    }
+    let landmark_exclusions: Vec<_> = landmark_exclusions
+        .iter()
+        .map(|exclusion| site::layout::LayoutExclusion {
+            centre_wpos: exclusion.centre_wpos,
+            radius: exclusion.radius,
+        })
+        .collect();
+    layouts.resolve(pins, &landmark_exclusions)
+}
+
+/// Generates one authored settlement of an already generated Cromatolis
+/// (world seed 0) world again, from `seed` (`None`: its own first-draw
+/// seed), with exactly the inputs
+/// world generation gives it (size, naval port request, landmark
+/// exclusions, and its layout unless `with_layout` is false). For measuring
+/// how a settlement's layout varies over seeds.
+#[cfg(test)]
+pub(crate) fn generate_authored_city_with_seed(
+    world: &crate::World,
+    index: IndexRef,
+    site_id: &str,
+    seed: Option<[u8; 32]>,
+    with_layout: bool,
+) -> (WorldSite, Option<site::layout::SettlementLayout>) {
+    generate_authored_city_with_edited_layout(world, index, site_id, seed, with_layout, |_| {})
+}
+
+/// [`generate_authored_city_with_seed`], with `edit` applied to the layout
+/// first (e.g. a test exclusion that makes a ward unreachable).
+#[cfg(test)]
+pub(crate) fn generate_authored_city_with_edited_layout(
+    world: &crate::World,
+    index: IndexRef,
+    site_id: &str,
+    seed: Option<[u8; 32]>,
+    with_layout: bool,
+    edit: impl FnOnce(&mut site::layout::SettlementLayout),
+) -> (WorldSite, Option<site::layout::SettlementLayout>) {
+    let map_size = world.sim().map_size_lg();
+    let settlements =
+        AuthoredCromatolisSettlements::load_owned("world.map.cromatolis_v0_sites").unwrap();
+    let landmarks =
+        AuthoredCromatolisLandmarks::load_owned("world.map.cromatolis_v0_landmarks").unwrap();
+    let maritime_routes =
+        AuthoredCromatolisMaritimeRoutes::load_owned("world.map.cromatolis_v0_maritime_routes")
+            .unwrap();
+    let layouts =
+        settlement_layouts::AuthoredSettlementLayouts::load_owned(settlement_layouts::SPECIFIER)
+            .unwrap();
+    let pins = settlement_layouts::AuthoredPins::new(map_size, &settlements, &landmarks);
+    layouts.validate(&pins).unwrap();
+    let sites = &world.civs().sites;
+    let exclusions = authored_landmark_exclusions(sites);
+    let resolved = resolve_settlement_layouts(sites, &layouts, &pins, &exclusions);
+    let sim_site = sites
+        .values()
+        .find(|site| site.authored_id() == Some(site_id))
+        .unwrap_or_else(|| panic!("no authored site {site_id}"));
+    let authored = sim_site.authored.as_ref().unwrap();
+    let wpos = sim_site.center.cpos_to_wpos_center();
+    let naval_port = resolve_naval_port(Some(authored), Some(&maritime_routes))
+        .map(|class| NavalPortRequest::new(class, &exclusions));
+    let mut layout = with_layout
+        .then(|| resolved.get(site_id).cloned())
+        .flatten();
+    if let Some(layout) = layout.as_mut() {
+        edit(layout);
+    }
+    let seed = seed.unwrap_or_else(|| {
+        seeds::CivSeedPolicy::new(0, true)
+            .site_seed(sim_site)
+            .unwrap()
+    });
+    let site = WorldSite::generate_city(
+        &Land::from_sim(world.sim()),
+        index,
+        &mut ChaChaRng::from_seed(seed),
+        wpos,
+        authored.size.city_scale(),
+        None,
+        &mut SitesGenMeta::new(0),
+        naval_port,
+        layout.as_ref(),
+    );
+    (site, layout)
+}
 
 /// Every established authored landmark, as a keep-out region for the shoreline
 /// port search.
@@ -1203,6 +1344,17 @@ struct AuthoredSettlementPopulation {
     peoples: Vec<AuthoredSettlementPeople>,
     #[serde(default)]
     future_peoples: Vec<String>,
+    /// The rtsim NPC population this settlement aims for: the total over every
+    /// town role (guards, adventurers, merchants and the other
+    /// professions). It is a target, not a hard cap: it sets how many town
+    /// NPCs the world wants, and respawns are steered toward settlements
+    /// below their number, but when none of those can take one
+    /// (e.g. all loaded) an NPC may still go to a settlement at its number.
+    /// `None` keeps the upstream rule, which sizes the population by the
+    /// settlement's plot count, so a settlement changes only when this is
+    /// set. Decoupled from `target_buildings`.
+    #[serde(default)]
+    npc_count: Option<u32>,
 }
 
 impl AuthoredSettlementPopulation {
@@ -1409,6 +1561,10 @@ struct AuthoredCromatolisSettlement {
     name: String,
     category: AuthoredSettlementCategory,
     size: AuthoredSettlementSize,
+    /// The building-count target the open-world exporter resolved for this
+    /// settlement (its authored override, else the resolving template
+    /// family's default). Required: an export without it is a stale one.
+    target_buildings: usize,
     population: AuthoredSettlementPopulation,
     center: AuthoredMapPoint,
     requires_capital_castle: bool,
@@ -1433,7 +1589,18 @@ struct AuthoredSettlementMeta {
     name: String,
     category: AuthoredSettlementCategory,
     size: AuthoredSettlementSize,
+    /// This settlement's own building-count target, read from the site (never
+    /// re-derived from the family). Caps the layout floor
+    /// (`seeds::CivSeedPolicy::layout_band`); the density work that sizes a
+    /// settlement by it is separate.
+    target_buildings: usize,
+    /// The architectural direction of the resolving template family, if it
+    /// names one. Placeholder: no house-style variants exist yet, so every
+    /// direction generates with the default (Villa) style.
     #[expect(dead_code)]
+    architectural_direction: Option<ArchitecturalDirection>,
+    /// Read for `npc_count` (`Site::authored_npc_count`); the peoples are
+    /// not consumed by generation yet.
     population: AuthoredSettlementPopulation,
     #[expect(dead_code)]
     requires_capital_castle: bool,
@@ -1442,7 +1609,6 @@ struct AuthoredSettlementMeta {
 
 #[derive(Debug, Clone)]
 struct AuthoredLandmarkMeta {
-    #[expect(dead_code)]
     id: String,
     name: String,
     #[expect(dead_code)]
@@ -1482,6 +1648,47 @@ struct SettlementTemplateFamily {
     /// (`"camp"`, `"refactor_city"`, or `"refactor_city_with_castle"`). See
     /// `site_kind_for_fallback_name`.
     xindeler_old_fallback: String,
+    /// The family's default building-count target. A settlement's
+    /// own `target_buildings` (which may be an authored override) is what
+    /// generation reads; this is only validated and kept for tooling.
+    #[serde(default, deserialize_with = "present_value")]
+    target_buildings: Option<usize>,
+    /// The family's architectural direction id, if it has one (see
+    /// [`ArchitecturalDirection`]). Kept as the raw string so that an
+    /// unknown id is reported by `validate`, with the family named, rather
+    /// than as an opaque deserialization error.
+    #[serde(default, deserialize_with = "present_value")]
+    architectural_direction: Option<String>,
+}
+
+/// Deserializes an optional field written as a bare value (`field: 25`, as
+/// the open-world export writes it, not `field: Some(25)`); an absent field
+/// is `None` through `#[serde(default)]`.
+fn present_value<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// An architectural direction a template family can ask for. Placeholder
+/// for the house-style / palette variants that need art first: nothing
+/// branches on it yet, so every direction renders with the default style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchitecturalDirection {
+    /// Indigenous-style village (`aldea` families). Villa style until art
+    /// exists.
+    IndigenousAldea,
+}
+
+impl ArchitecturalDirection {
+    fn from_contract_key(key: &str) -> Option<Self> {
+        match key {
+            "indigenous_aldea" => Some(Self::IndigenousAldea),
+            _ => None,
+        }
+    }
 }
 
 impl FileAsset for SettlementTemplateContract {
@@ -1500,6 +1707,19 @@ impl SettlementTemplateContract {
         }
         if self.template_families.is_empty() {
             return Err("settlement template contract has no families".to_string());
+        }
+        for family in &self.template_families {
+            if family.target_buildings == Some(0) {
+                return Err(format!("family {} has a target_buildings of 0", family.id));
+            }
+            if let Some(direction) = &family.architectural_direction
+                && ArchitecturalDirection::from_contract_key(direction).is_none()
+            {
+                return Err(format!(
+                    "family {} names unknown architectural_direction {direction:?}",
+                    family.id
+                ));
+            }
         }
         Ok(())
     }
@@ -1534,18 +1754,38 @@ fn resolve_settlement_site_kind(
     category: AuthoredSettlementCategory,
     size: AuthoredSettlementSize,
 ) -> SiteKind {
-    contract
-        .and_then(|contract| {
-            contract.template_families.iter().find(|family| {
-                family.category == category.contract_key()
-                    && family
-                        .supported_sizes
-                        .iter()
-                        .any(|s| s == size.contract_key())
-            })
-        })
+    find_settlement_template_family(contract, category, size)
         .and_then(|family| site_kind_for_fallback_name(&family.xindeler_old_fallback))
         .unwrap_or_else(|| category.default_site_kind())
+}
+
+/// The first template family covering `category` at `size`, if the contract
+/// is loaded and has one.
+fn find_settlement_template_family(
+    contract: Option<&SettlementTemplateContract>,
+    category: AuthoredSettlementCategory,
+    size: AuthoredSettlementSize,
+) -> Option<&SettlementTemplateFamily> {
+    contract?.template_families.iter().find(|family| {
+        family.category == category.contract_key()
+            && family
+                .supported_sizes
+                .iter()
+                .any(|s| s == size.contract_key())
+    })
+}
+
+/// The architectural direction of the family covering `category` at `size`
+/// (`None` if there is no such family, or it names none).
+fn resolve_architectural_direction(
+    contract: Option<&SettlementTemplateContract>,
+    category: AuthoredSettlementCategory,
+    size: AuthoredSettlementSize,
+) -> Option<ArchitecturalDirection> {
+    find_settlement_template_family(contract, category, size)?
+        .architectural_direction
+        .as_deref()
+        .and_then(ArchitecturalDirection::from_contract_key)
 }
 
 // Change this to get rid of particularly horrid seeds
@@ -1789,7 +2029,7 @@ const CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS: &[&str] = &[
 /// call to `establish_procedural_cromatolis_route_connectors` right after
 /// the mainland pass) rather than their own maritime stop.
 ///
-/// `site.rios_port` itself is therefore **empty** now (COW-24): it used to
+/// `site.rios_port` itself is therefore **empty** now: it used to
 /// list all three, back when the maritime-route system referenced below was
 /// "not-yet-built" -- `establish_authored_cromatolis_maritime_routes` now
 /// gives Rios Port a real `Track` to the mainland (it has authored maritime
@@ -1816,7 +2056,8 @@ const CROMATOLIS_DELIBERATELY_ROADLESS_SETTLEMENTS: &[&str] = &[
 /// maritime pass above runs first and already gave it a `Track`. This list
 /// stays in place (currently empty) so the real-data reachability regression
 /// can pin any *future* gap explicitly instead of either failing outright or
-/// silently passing over it, exactly as it did for this one before COW-24.
+/// silently passing over it, exactly as it did for this one before the
+/// maritime-route work.
 const CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED: &[&str] = &[];
 
 /// Cromatolis's isolated northwest island group's own settlements that
@@ -1842,19 +2083,100 @@ const CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS: &[&str] =
 
 /// Seeds `site.rios_port` into
 /// `establish_procedural_cromatolis_route_connectors`'s "already reachable"
-/// set for the island-scoped call. Since COW-24,
+/// set for the island-scoped call. Since the maritime-route work,
 /// `establish_authored_cromatolis_maritime_routes` normally already gives
 /// Rios Port a real `Track` of its own by the time this runs (making this
 /// seed redundant in the common case), but the explicit seed stays as a
-/// deliberate fallback: if the maritime route asset ever fails to load or
-/// validate (`warn!`-and-`None`, never a hard failure -- see that loader's
-/// call site), Rios Port would otherwise have no real `Track` yet, and
+/// deliberate fallback: if maritime route registration ever leaves Rios Port
+/// without a `Track` (the asset itself failing to load or validate is now a
+/// hard error, see `load_authored_cromatolis_layer`), Rios Port would
+/// otherwise have no real `Track` yet, and
 /// without this seed the island-scoped pass would have nothing to anchor its
 /// first target to (its normal "already reachable" set is derived from real
 /// Track edges) and every island target would fail immediately with "no
 /// already-connected settlement to anchor to" -- degrading island-internal
 /// connectivity along with mainland reachability instead of just the latter.
 const CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS: &[&str] = &["site.rios_port"];
+
+/// A failure to load or validate one authored Cromatolis layer. `Display`
+/// names the layer, the asset file and the reason (a RON parse error carries
+/// its own line and column), so a startup panic is actionable on its own.
+#[derive(Debug, PartialEq, Eq)]
+struct AuthoredLayerError(String);
+
+impl fmt::Display for AuthoredLayerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) }
+}
+
+/// `world.map.cromatolis_v0_sites` ->
+/// `assets/world/map/cromatolis_v0_sites.ron`
+fn authored_layer_file(specifier: &str) -> String {
+    format!("assets/{}.ron", specifier.replace('.', "/"))
+}
+
+/// Builds the message for a layer asset that could not be loaded. `io_kind`
+/// is the underlying I/O error kind when the failure was I/O (not a parse
+/// error); `reason` is the underlying error's text.
+fn authored_layer_load_failure(
+    layer: &str,
+    specifier: &str,
+    io_kind: Option<std::io::ErrorKind>,
+    reason: &dyn fmt::Display,
+) -> AuthoredLayerError {
+    let file = authored_layer_file(specifier);
+    AuthoredLayerError(match io_kind {
+        Some(std::io::ErrorKind::NotFound) => {
+            format!(
+                "authored Cromatolis {layer} [{specifier}]: {file} is missing, but this world is \
+                 the authored Cromatolis map and requires it"
+            )
+        },
+        Some(kind) => {
+            format!(
+                "authored Cromatolis {layer} [{specifier}]: I/O error reading {file} ({kind:?}): \
+                 {reason}"
+            )
+        },
+        None => {
+            format!(
+                "authored Cromatolis {layer} [{specifier}]: {file} does not parse (unknown \
+                 fields, unknown enum values such as an unknown category, and wrong types are \
+                 errors): {reason}"
+            )
+        },
+    })
+}
+
+/// Logs `err` before stopping world generation with it: a startup failure
+/// reaches the server log as an error event, not only as a panic message.
+fn fatal_authored<T>(err: impl fmt::Display) -> T {
+    tracing::error!("{err}");
+    panic!("{err}")
+}
+
+/// Loads and validates one authored Cromatolis layer; see the comment above
+/// `authored_settlements` in [`Civs::generate`] for why this is fatal.
+fn load_authored_cromatolis_layer<T: FileAsset>(
+    layer: &str,
+    specifier: &str,
+    validate: impl FnOnce(&T) -> Result<(), String>,
+) -> Result<T, AuthoredLayerError> {
+    let loaded = T::load_owned(specifier).map_err(|err| {
+        authored_layer_load_failure(
+            layer,
+            specifier,
+            crate::authored_raster::io_error_kind(&err),
+            err.reason(),
+        )
+    })?;
+    validate(&loaded).map_err(|reason| {
+        AuthoredLayerError(format!(
+            "authored Cromatolis {layer} [{specifier}]: {} failed validation: {reason}",
+            authored_layer_file(specifier)
+        ))
+    })?;
+    Ok(loaded)
+}
 
 impl Civs {
     pub fn generate(
@@ -1886,107 +2208,74 @@ impl Civs {
         let authored_cromatolis = sim.chunks.first().is_some_and(|chunk| {
             chunk.authored_region_id == Some(crate::sim::CROMATOLIS_V0_REGION_ID)
         });
+        // XINDELER: in an authored Cromatolis world every authored layer below
+        // is mandatory. A layer that is missing, does not parse or fails
+        // validation stops world generation with a message naming the asset
+        // file and the reason (the same posture as the authored raster
+        // manifest in `WorldSim::generate`) instead of silently falling back
+        // to procedural sites, which would hide the failure behind a
+        // plausible-looking world. Procedural worlds never reach these loads.
+        let map_size_lg = sim.map_size_lg();
         let authored_settlements = if authored_cromatolis {
-            match AuthoredCromatolisSettlements::load_owned("world.map.cromatolis_v0_sites") {
-                Ok(settlements) => match settlements.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(settlements),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored settlements; using procedural \
-                             sites"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored settlements; using procedural sites"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "settlements",
+                    "world.map.cromatolis_v0_sites",
+                    |settlements: &AuthoredCromatolisSettlements| settlements.validate(map_size_lg),
+                )
+                .unwrap_or_else(fatal_authored),
+            )
         } else {
             None
         };
         let authored_landmarks = if authored_cromatolis {
-            match AuthoredCromatolisLandmarks::load_owned("world.map.cromatolis_v0_landmarks") {
-                Ok(landmarks) => match landmarks.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(landmarks),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored landmarks; continuing without \
-                             them"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored landmarks; continuing without them"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "landmarks",
+                    "world.map.cromatolis_v0_landmarks",
+                    |landmarks: &AuthoredCromatolisLandmarks| landmarks.validate(map_size_lg),
+                )
+                .unwrap_or_else(fatal_authored),
+            )
         } else {
             None
         };
-        let authored_landmark_profiles = if authored_cromatolis {
-            match AuthoredCromatolisLandmarkProfiles::load_owned(
+        let authored_landmark_profiles = authored_landmarks.as_ref().map(|landmarks| {
+            load_authored_cromatolis_layer(
+                "landmark profiles",
                 "world.map.cromatolis_v0_landmark_profiles",
-            ) {
-                Ok(profiles) => match authored_landmarks.as_ref() {
-                    Some(landmarks) => match profiles.validate(landmarks) {
-                        Ok(()) => Some(profiles),
-                        Err(err) => {
-                            warn!(
-                                ?err,
-                                "Could not validate Cromatolis landmark profiles; continuing \
-                                 without them"
-                            );
-                            None
-                        },
+                |profiles: &AuthoredCromatolisLandmarkProfiles| profiles.validate(landmarks),
+            )
+            .unwrap_or_else(fatal_authored)
+        });
+        // Footprint, main-plaza anchor and building quotas of the authored
+        // settlements that have one; resolved against the settlement and
+        // landmark pins it names.
+        let authored_settlement_layouts = authored_settlements
+            .as_ref()
+            .zip(authored_landmarks.as_ref())
+            .map(|(settlements, landmarks)| {
+                let pins =
+                    settlement_layouts::AuthoredPins::new(map_size_lg, settlements, landmarks);
+                let layouts = load_authored_cromatolis_layer(
+                    "settlement layouts",
+                    settlement_layouts::SPECIFIER,
+                    |layouts: &settlement_layouts::AuthoredSettlementLayouts| {
+                        layouts.validate(&pins)
                     },
-                    None => None,
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis landmark profiles; continuing without them"
-                    );
-                    None
-                },
-            }
-        } else {
-            None
-        };
+                )
+                .unwrap_or_else(fatal_authored);
+                (layouts, pins)
+            });
         let authored_settlement_template_contract = if authored_settlements.is_some() {
-            match SettlementTemplateContract::load_owned(
-                "world.map.cromatolis_v0_settlement_template_contract",
-            ) {
-                Ok(contract) => match contract.validate() {
-                    Ok(()) => Some(contract),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate the settlement template contract; falling back to \
-                             the default Camp/Refactor split"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load the settlement template contract; falling back to the \
-                         default Camp/Refactor split"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "settlement template contract",
+                    "world.map.cromatolis_v0_settlement_template_contract",
+                    |contract: &SettlementTemplateContract| contract.validate(),
+                )
+                .unwrap_or_else(fatal_authored),
+            )
         } else {
             None
         };
@@ -1994,27 +2283,14 @@ impl Civs {
         // only make sense once the settlement loader itself is available
         // (region-scoped the same way, not a literal asset-name check).
         let authored_routes = if authored_cromatolis && authored_settlements.is_some() {
-            match AuthoredCromatolisRouteGraph::load_owned("world.map.cromatolis_v0_routes") {
-                Ok(routes) => match routes.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(routes),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored route graph; continuing \
-                             without RTSim routes"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored route graph; continuing without RTSim \
-                         routes"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "route graph",
+                    "world.map.cromatolis_v0_routes",
+                    |routes: &AuthoredCromatolisRouteGraph| routes.validate(map_size_lg),
+                )
+                .unwrap_or_else(fatal_authored),
+            )
         } else {
             None
         };
@@ -2022,29 +2298,14 @@ impl Civs {
         // maritime routes also resolve their endpoints by authored
         // settlement id.
         let authored_maritime_routes = if authored_cromatolis && authored_settlements.is_some() {
-            match AuthoredCromatolisMaritimeRoutes::load_owned(
-                "world.map.cromatolis_v0_maritime_routes",
-            ) {
-                Ok(routes) => match routes.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(routes),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored maritime route graph; \
-                             continuing without RTSim maritime routes"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored maritime route graph; continuing \
-                         without RTSim maritime routes"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "maritime route graph",
+                    "world.map.cromatolis_v0_maritime_routes",
+                    |routes: &AuthoredCromatolisMaritimeRoutes| routes.validate(map_size_lg),
+                )
+                .unwrap_or_else(fatal_authored),
+            )
         } else {
             None
         };
@@ -2057,26 +2318,14 @@ impl Civs {
             None
         };
         let authored_bridges = if authored_bridge_preview.is_some() {
-            match AuthoredCromatolisBridges::load_owned("world.map.cromatolis_v0_bridges") {
-                Ok(bridges) => match bridges.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(bridges),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored bridges; continuing without \
-                             them"
-                        );
-                        None
-                    },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored bridges; continuing without them"
-                    );
-                    None
-                },
-            }
+            Some(
+                load_authored_cromatolis_layer(
+                    "bridges",
+                    "world.map.cromatolis_v0_bridges",
+                    |bridges: &AuthoredCromatolisBridges| bridges.validate(map_size_lg),
+                )
+                .unwrap_or_else(fatal_authored),
+            )
         } else {
             None
         };
@@ -2085,33 +2334,28 @@ impl Civs {
         // Cromatolis layer above (and, like bridges, only make sense once
         // settlements exist).
         let authored_fortifications = if authored_cromatolis && authored_settlements.is_some() {
-            match AuthoredCromatolisFortifications::load_owned(
-                "world.map.cromatolis_v0_fortifications",
-            ) {
-                Ok(fortifications) => match fortifications.validate(sim.map_size_lg()) {
-                    Ok(()) => Some(fortifications),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "Could not validate Cromatolis authored fortifications; continuing \
-                             without them"
-                        );
-                        None
+            Some(
+                load_authored_cromatolis_layer(
+                    "fortifications",
+                    "world.map.cromatolis_v0_fortifications",
+                    |fortifications: &AuthoredCromatolisFortifications| {
+                        fortifications.validate(map_size_lg)
                     },
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not load Cromatolis authored fortifications; continuing without \
-                         them"
-                    );
-                    None
-                },
-            }
+                )
+                .unwrap_or_else(fatal_authored),
+            )
         } else {
             None
         };
         let mut ctx = GenCtx { sim, rng };
+        // XINDELER: in an authored region each site and each procedural
+        // connector draws from an RNG derived from its own stable identity
+        // instead of the shared stream (see `seeds`); every other world is
+        // unchanged. Same gate as every other RNG decoupling: one flag.
+        let seed_policy = seeds::CivSeedPolicy::new(
+            seed,
+            ctx.sim.chunks.first().is_some_and(seeds::uses_derived_rngs),
+        );
 
         // info!("starting cave generation");
         // this.generate_caves(&mut ctx);
@@ -2171,6 +2415,7 @@ impl Civs {
                 this.establish_authored_cromatolis_routes(&ctx, routes);
                 this.establish_procedural_cromatolis_route_connectors(
                     &mut ctx,
+                    seed,
                     CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS,
                     &[],
                 );
@@ -2181,6 +2426,7 @@ impl Civs {
                 // landmass the mainland pass never considers.
                 this.establish_procedural_cromatolis_route_connectors(
                     &mut ctx,
+                    seed,
                     CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS,
                     CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS,
                 );
@@ -2420,6 +2666,12 @@ impl Civs {
         // `this.sites` mutably, so this cannot be done inside it) and hand
         // them to the shoreline search as explicit keep-out regions.
         let naval_port_exclusions = authored_landmark_exclusions(&this.sites);
+        let settlement_layouts = authored_settlement_layouts
+            .as_ref()
+            .map(|(layouts, pins)| {
+                resolve_settlement_layouts(&this.sites, layouts, pins, &naval_port_exclusions)
+            })
+            .unwrap_or_default();
 
         // Place sites in world
         prof_span!(guard, "Place sites in world");
@@ -2433,7 +2685,7 @@ impl Civs {
                     e * sz as i32 + sz as i32 / 2
                 });
 
-            let mut rng = ctx.reseed().rng;
+            let mut rng = ctx.site_rng(seed_policy.site_seed(sim_site));
             let site = index.sites.insert({
                 let index_ref = IndexRef {
                     colors: &index.colors(),
@@ -2452,16 +2704,50 @@ impl Civs {
                             authored_maritime_routes.as_ref(),
                         )
                         .map(|class| NavalPortRequest::new(class, &naval_port_exclusions));
-                        WorldSite::generate_city(
-                            &Land::from_sim(ctx.sim),
-                            index_ref,
-                            &mut rng,
-                            wpos,
-                            size,
-                            calendar,
-                            &mut gen_meta,
-                            naval_port,
-                        )
+                        let layout = sim_site
+                            .authored
+                            .as_ref()
+                            .and_then(|authored| settlement_layouts.get(&authored.id));
+                        // XINDELER: an authored settlement whose layout
+                        // falls below its size band is re-drawn from
+                        // derived sub-seeds (see `seeds`); others are
+                        // untouched. Each attempt records its generation
+                        // statistics into its own scratch `SitesGenMeta`
+                        // and only the kept attempt's are merged, so a
+                        // discarded re-draw (with its own random town name)
+                        // never shows up in the stats. The random name
+                        // never reaches the world either: an authored
+                        // settlement is renamed to its authored name right
+                        // after this match (`authored_name`).
+                        let generate = |rng: &mut ChaChaRng| {
+                            let mut meta = SitesGenMeta::new(seed);
+                            let site = WorldSite::generate_city(
+                                &Land::from_sim(ctx.sim),
+                                index_ref,
+                                rng,
+                                wpos,
+                                size,
+                                calendar,
+                                &mut meta,
+                                naval_port,
+                                layout,
+                            );
+                            (site, meta)
+                        };
+                        let first = generate(&mut rng);
+                        let (site, meta) = seeds::keep_layout_within_band(
+                            first,
+                            seed_policy.layout_band(sim_site),
+                            |(site, _)| seeds::building_count(site),
+                            || seeds::site_seed_key(sim_site),
+                            |attempt| {
+                                generate(&mut ChaChaRng::from_seed(
+                                    seed_policy.layout_retry_seed(sim_site, attempt),
+                                ))
+                            },
+                        );
+                        gen_meta.absorb(meta);
+                        site
                     },
                     SiteKind::GliderCourse => WorldSite::generate_glider_course(
                         &Land::from_sim(ctx.sim),
@@ -2532,9 +2818,14 @@ impl Civs {
                         wpos,
                         &mut gen_meta,
                     ),
-                    SiteKind::Citadel => {
-                        WorldSite::generate_citadel(&Land::from_sim(ctx.sim), &mut rng, wpos)
-                    },
+                    // XINDELER: an authored landmark standing in as a
+                    // citadel may be held to its own footprint.
+                    SiteKind::Citadel => WorldSite::generate_citadel_within(
+                        &Land::from_sim(ctx.sim),
+                        &mut rng,
+                        wpos,
+                        sim_site.landmark_stand_in_radius(),
+                    ),
                     SiteKind::Bridge(a, b) => {
                         let mut bridge_site = WorldSite::generate_bridge(
                             &Land::from_sim(ctx.sim),
@@ -2671,7 +2962,9 @@ impl Civs {
                 } else {
                     generated_site
                 };
-                generated_site.with_authored_settlement(sim_site.is_authored_settlement())
+                generated_site
+                    .with_authored_settlement(sim_site.is_authored_settlement())
+                    .with_npc_count(sim_site.authored_npc_count())
             });
             sim_site.site_tmp = Some(site);
             let site_ref = &index.sites[site];
@@ -2737,7 +3030,8 @@ impl Civs {
             {
                 let distance_squared = s.origin.map(|e| e as i64).distance_squared(wpos);
                 s.economy_mut()
-                    .add_chunk(ctx.sim.get(chpos).unwrap(), distance_squared);
+                    // XINDELER: the chunk as the authored water sees it.
+                    .add_chunk(&ctx.sim.chunk_view(chpos).unwrap(), distance_squared);
             }
         });
         drop(guard);
@@ -3322,6 +3616,12 @@ impl Civs {
                 name: settlement.name.clone(),
                 category: settlement.category,
                 size: settlement.size,
+                target_buildings: settlement.target_buildings,
+                architectural_direction: resolve_architectural_direction(
+                    contract,
+                    settlement.category,
+                    settlement.size,
+                ),
                 population: settlement.population.clone(),
                 requires_capital_castle: settlement.requires_capital_castle,
                 start_eligible: settlement.start_eligible,
@@ -3502,7 +3802,7 @@ impl Civs {
     }
 
     /// Establishes logical travel edges for Cromatolis's authored maritime
-    /// trade routes (COW-24) as real `Track`s in
+    /// trade routes as real `Track`s in
     /// `self.tracks`/`self.track_map` -- exactly the same RTSim travel-edge
     /// mechanism `establish_authored_cromatolis_routes` above already uses
     /// for overland routes, deliberately not a parallel structure, and
@@ -3784,10 +4084,10 @@ impl Civs {
                     // authored chunks is the early return at the top of this
                     // function (`authored_cromatolis_v0`), which is therefore
                     // load-bearing: do not move or weaken it without guarding
-                    // here instead. See `COW-15`/`COW-2` -- that early return
-                    // also only holds while authored regions are map-global,
-                    // since it tests the *site's* chunk rather than each chunk
-                    // the path writes through.
+                    // here instead. See the authored-void and region-scoping work -- that early
+                    // return also only holds while authored regions are
+                    // map-global, since it tests the *site's* chunk rather than
+                    // each chunk the path writes through.
                     self.carve_track_into_terrain(ctx, &path);
 
                     // Take note of the track
@@ -3913,6 +4213,7 @@ impl Civs {
     fn establish_procedural_cromatolis_route_connectors(
         &mut self,
         ctx: &mut GenCtx<impl Rng>,
+        world_seed: u32,
         connector_target_ids: &[&str],
         seed_anchor_ids: &[&str],
     ) {
@@ -3973,7 +4274,11 @@ impl Civs {
                     let dist = self.sites.get(id).center.distance_squared(target_loc);
                     (id, dist)
                 })
-                .min_by_key(|&(_, dist)| dist);
+                // `connected` is a std `HashSet`, whose iteration order is
+                // randomised per instance: break distance ties on the stable
+                // site key so the chosen anchor (and with it the connector's
+                // path and RNG key) never depends on hasher state.
+                .min_by_key(|&(id, dist)| (dist, seeds::site_seed_key(self.sites.get(id))));
 
             let Some((anchor_site, _)) = nearest else {
                 warn!(
@@ -4005,7 +4310,15 @@ impl Civs {
                 continue;
             };
 
-            self.carve_track_into_terrain(ctx, &path);
+            // Carve with this connector's own RNG (keyed by its endpoints),
+            // never the shared stream: how many nodes this road has must not
+            // shift any other road's offsets or any site's seed. See `seeds`.
+            let road_rng = ChaChaRng::from_seed(seeds::road_seed(
+                world_seed,
+                &seeds::site_seed_key(self.sites.get(target_site)),
+                &seeds::site_seed_key(self.sites.get(anchor_site)),
+            ));
+            self.carve_track_into_terrain(&mut ctx.with_rng(road_rng), &path);
 
             // A direct single-hop connector (its two endpoints already
             // adjacent chunks) never enters `carve_track_into_terrain`'s
@@ -4261,7 +4574,11 @@ fn walk_in_all_dirs(
         let Some(b_chunk) = chunks[i] else { continue };
 
         let hill_cost = ((b_chunk.alt - a_chunk.alt).abs() / 5.0).powi(2);
-        let water_cost = (b_chunk.water_alt - b_chunk.alt + 8.0).clamped(0.0, 8.0) * 3.0; // Try not to path swamps / tidal areas
+        // XINDELER: authored-aware depth (authored water in regions).
+        let depth = sim
+            .chunk_water_depth(adjacents[i])
+            .unwrap_or(b_chunk.water_alt - b_chunk.alt);
+        let water_cost = (depth + 8.0).clamped(0.0, 8.0) * 3.0; // Try not to path swamps / tidal areas
         let wild_cost = if b_chunk.path.0.is_way() {
             0.0 // Traversing existing paths has no additional cost!
         } else {
@@ -4304,8 +4621,8 @@ fn walk_in_all_dirs(
 fn loc_suitable_for_walking(sim: &WorldSim, loc: Vec2<i32>) -> bool {
     if sim.get(loc).is_some() {
         NEIGHBORS.iter().all(|n| {
-            sim.get(loc + *n)
-                .is_some_and(|chunk| !chunk.river.near_water())
+            // XINDELER: authored-aware (authored regions).
+            sim.chunk_water(loc + *n).is_some_and(|w| !w.near_water)
         })
     } else {
         false
@@ -4366,14 +4683,19 @@ fn town_attributes_of_site(loc: Vec2<i32>, sim: &WorldSim) -> Option<TownSiteAtt
             for y in (-RESOURCE_RADIUS)..RESOURCE_RADIUS {
                 let check_loc = loc + Vec2::new(x, y).cpos_to_wpos();
                 sim.get(check_loc).map(|c| {
+                    // XINDELER: authored-aware water kinds (authored regions).
+                    let (is_river, is_lake, is_ocean) = sim.chunk_water(check_loc).map_or(
+                        (c.river.is_river(), c.river.is_lake(), c.river.is_ocean()),
+                        |w| (w.river, w.lake, w.ocean),
+                    );
                     if num::abs(chunk.alt - c.alt) < 200.0 {
-                        if c.river.is_river() {
+                        if is_river {
                             river_chunks += 1;
                         }
-                        if c.river.is_lake() {
+                        if is_lake {
                             lake_chunks += 1;
                         }
-                        if c.river.is_ocean() {
+                        if is_ocean {
                             ocean_chunks += 1;
                         }
                         if c.tree_density > 0.3 {
@@ -4394,7 +4716,7 @@ fn town_attributes_of_site(loc: Vec2<i32>, sim: &WorldSim) -> Option<TownSiteAtt
                                 }
                             }
                         }
-                        if !c.river.is_river() && !c.river.is_lake() && !c.river.is_ocean() {
+                        if !is_river && !is_lake && !is_ocean {
                             land_chunks += 1;
                         }
                     }
@@ -4502,8 +4824,8 @@ fn nearest_authored_settlement_location(
 fn authored_settlement_has_dry_buffer(location: Vec2<i32>, sim: &WorldSim) -> bool {
     (-1..=1).all(|dy| {
         (-1..=1).all(|dx| {
-            sim.get(location + Vec2::new(dx, dy))
-                .is_some_and(|chunk| !chunk.is_underwater())
+            sim.chunk_is_underwater(location + Vec2::new(dx, dy))
+                .is_some_and(|underwater| !underwater)
         })
     })
 }
@@ -4625,10 +4947,43 @@ impl Site {
             .map(|settlement| settlement.id.as_str())
     }
 
+    /// The authored settlement's own rtsim NPC count, if its data sets one
+    /// (`population.npc_count`). `None` for every procedural site and for an
+    /// authored settlement that keeps the plot-based default.
+    pub fn authored_npc_count(&self) -> Option<u32> {
+        self.authored
+            .as_ref()
+            .and_then(|settlement| settlement.population.npc_count)
+    }
+
+    /// The authored settlement's `(category, size)` contract keys (e.g.
+    /// `("city", "large")`), if this is an authored settlement.
+    pub(crate) fn authored_category_and_size(&self) -> Option<(&'static str, &'static str)> {
+        self.authored.as_ref().map(|settlement| {
+            (
+                settlement.category.contract_key(),
+                settlement.size.contract_key(),
+            )
+        })
+    }
+
+    /// How far (blocks) the generic generator standing in for this
+    /// authored landmark may build, when that is the landmark's own authored
+    /// footprint rather than the generator's natural size. Today: a harbour
+    /// (the Kalthis and Duren river ports), authored 26 blocks across but
+    /// standing in as a citadel that would otherwise build out to 150 and
+    /// take the neighbouring riverside wards. `None` for every other site,
+    /// which generates as before.
+    pub(crate) fn landmark_stand_in_radius(&self) -> Option<i32> {
+        let profile = self.authored_landmark.as_ref()?.profile.as_ref()?;
+        (profile.physical_template == AuthoredLandmarkPhysicalTemplate::Harbour)
+            .then_some(profile.footprint_radius)
+    }
+
     /// The authored name for this site, if it was established from an
     /// authored settlement or landmark pin rather than procedural
     /// generation.
-    fn authored_name(&self) -> Option<&str> {
+    pub(crate) fn authored_name(&self) -> Option<&str> {
         self.authored
             .as_ref()
             .map(|settlement| settlement.name.as_str())
@@ -4665,11 +5020,12 @@ impl fmt::Display for Site {
 impl SiteKind {
     pub fn is_suitable_loc(&self, loc: Vec2<i32>, sim: &WorldSim) -> bool {
         let on_land = || -> bool {
-            if let Some(chunk) = sim.get(loc) {
-                !chunk.river.is_ocean()
-                    && !chunk.river.is_lake()
-                    && !chunk.river.is_river()
-                    && !chunk.is_underwater()
+            // XINDELER: authored-aware water facts (authored regions).
+            if let Some((chunk, w)) = sim.get(loc).zip(sim.chunk_water(loc)) {
+                !w.ocean
+                    && !w.lake
+                    && !w.river
+                    && !w.underwater
                     && !matches!(
                         chunk.get_biome(),
                         common::terrain::BiomeKind::Lake | common::terrain::BiomeKind::Ocean
@@ -4678,6 +5034,8 @@ impl SiteKind {
                 false
             }
         };
+        // XINDELER: the chunk table by design: civ places sites on the
+        // natural map, never on the authored ground layer.
         let on_flat_terrain = || -> bool {
             sim.get_gradient_approx(loc)
                 .map(|grad| grad < 1.0)
@@ -4685,6 +5043,11 @@ impl SiteKind {
         };
 
         sim.get(loc).is_some_and(|chunk| {
+            // XINDELER: authored-aware water altitude (authored regions).
+            let water_alt = sim.chunk_water_alt(loc).unwrap_or(chunk.water_alt);
+            let near_water = sim
+                .chunk_water(loc)
+                .map_or(chunk.river.near_water(), |w| w.near_water);
             let suitable_for_town = || -> bool {
                 let attributes = town_attributes_of_site(loc, sim);
                 attributes.is_some_and(|attributes| {
@@ -4707,7 +5070,7 @@ impl SiteKind {
                 SiteKind::DwarvenMine => {
                     matches!(chunk.get_biome(), BiomeKind::Forest | BiomeKind::Desert)
                         && !chunk.near_cliffs()
-                        && !chunk.river.near_water()
+                        && !near_water
                         && on_flat_terrain()
                 },
                 SiteKind::Haniwa => {
@@ -4734,15 +5097,15 @@ impl SiteKind {
                 SiteKind::SavannahTown => {
                     matches!(chunk.get_biome(), BiomeKind::Savannah)
                         && !chunk.near_cliffs()
-                        && !chunk.river.near_water()
+                        && !near_water
                         && suitable_for_town()
                 },
                 SiteKind::CoastalTown => {
-                    (2.0..3.5).contains(&(chunk.water_alt - CONFIG.sea_level))
+                    (2.0..3.5).contains(&(water_alt - CONFIG.sea_level))
                         && suitable_for_town()
                 },
                 SiteKind::PirateHideout => {
-                    (0.5..3.5).contains(&(chunk.water_alt - CONFIG.sea_level))
+                    (0.5..3.5).contains(&(water_alt - CONFIG.sea_level))
                 },
                 SiteKind::Sahagin => {
                     matches!(chunk.get_biome(), BiomeKind::Ocean)
@@ -4751,20 +5114,20 @@ impl SiteKind {
                 SiteKind::JungleRuin => {
                     matches!(chunk.get_biome(), BiomeKind::Jungle)
                 },
-                SiteKind::RockCircle => !chunk.near_cliffs() && !chunk.river.near_water(),
+                SiteKind::RockCircle => !chunk.near_cliffs() && !near_water,
                 SiteKind::TrollCave => {
                     !chunk.near_cliffs()
                         && on_flat_terrain()
-                        && !chunk.river.near_water()
+                        && !near_water
                         && chunk.temp < 0.6
                 },
                 SiteKind::Camp => {
-                    !chunk.near_cliffs() && on_flat_terrain() && !chunk.river.near_water()
+                    !chunk.near_cliffs() && on_flat_terrain() && !near_water
                 },
                 SiteKind::DesertCity => {
                     (0.9..1.0).contains(&chunk.temp) && !chunk.near_cliffs() && suitable_for_town()
                         && on_land()
-                        && !chunk.river.near_water()
+                        && !near_water
                 },
                 SiteKind::ChapelSite => {
                     // Needs to be near the ocean surface, not just underwater
@@ -4779,17 +5142,17 @@ impl SiteKind {
                 SiteKind::Terracotta => {
                     (0.9..1.0).contains(&chunk.temp)
                         && on_land()
-                        && (chunk.water_alt - CONFIG.sea_level) > 50.0
+                        && (water_alt - CONFIG.sea_level) > 50.0
                         && on_flat_terrain()
-                        && !chunk.river.near_water()
+                        && !near_water
                         && !chunk.near_cliffs()
                 },
                 SiteKind::Myrmidon => {
                     (0.9..1.0).contains(&chunk.temp)
                         && on_land()
-                        && (chunk.water_alt - CONFIG.sea_level) > 50.0
+                        && (water_alt - CONFIG.sea_level) > 50.0
                         && on_flat_terrain()
-                        && !chunk.river.near_water()
+                        && !near_water
                         && !chunk.near_cliffs()
                 },
                 SiteKind::Cultist => on_land() && chunk.temp < 0.5 && chunk.near_cliffs(),
@@ -5025,8 +5388,9 @@ mod tests {
 
     fn synthetic_map_size() -> MapSizeLg { MapSizeLg::new(Vec2::new(10, 10)).unwrap() }
 
-    /// COW-19, measured against the installed `cromatolis_v0_routes.ron`: 49
-    /// tracks, under 20 distinct `route_path.*` names.
+    /// Road-network work, measured against the installed
+    /// `cromatolis_v0_routes.ron`: 49 tracks, under 20 distinct
+    /// `route_path.*` names.
     ///
     /// Upstream `xindeler-open-world` authors 21 route paths, not 20. The
     /// twenty-first, `route_path.leafhat_pathway`, exports no track of its own
@@ -5047,20 +5411,22 @@ mod tests {
     /// though the row total would stay plausible.
     const AUTHORED_CROMATOLIS_ROUTE_PATH_NAMES: usize = 20;
 
-    /// COW-24, measured against the installed
+    /// Maritime-route work, measured against the installed
     /// `cromatolis_v0_maritime_routes.ron`: 36 authored maritime routes
     /// total (rows in the RON, mirroring `AUTHORED_CROMATOLIS_ROUTES`'s
     /// naming).
     const AUTHORED_CROMATOLIS_MARITIME_ROUTES: usize = 36;
 
-    /// COW-24, measured: of the 36 authored maritime routes, 15 connect two
-    /// real settlements (`Site` to `Site`) and therefore register a real
-    /// `Track` via `establish_authored_cromatolis_maritime_routes`. The
-    /// remaining 21 have an `External` or `Waypoint` stop and are parsed and
+    /// Maritime-route work, measured: of the 36 authored maritime routes, 15
+    /// connect two real settlements (`Site` to `Site`) and therefore
+    /// register a real `Track` via
+    /// `establish_authored_cromatolis_maritime_routes`. The remaining 21
+    /// have an `External` or `Waypoint` stop and are parsed and
     /// retained but never become a `Track` edge.
     const AUTHORED_CROMATOLIS_MARITIME_SITE_TO_SITE_ROUTES: usize = 15;
 
-    /// COW-19, measured: the settlements **no** authored track reaches.
+    /// Road-network work, measured: the settlements **no** authored track
+    /// reaches.
     ///
     /// This is the list, not a count, on purpose. A rewire that connects one
     /// settlement and strands another keeps any count identical and passes
@@ -5113,8 +5479,8 @@ mod tests {
         "site.under_the_river",
     ];
 
-    /// COW-19: what the *installed* `cromatolis_v0_sites.ron` is attested to
-    /// contain, per class.
+    /// Road-network work: what the *installed* `cromatolis_v0_sites.ron` is
+    /// attested to contain, per class.
     ///
     /// `xindeler-open-world` authors 65 settlements and this repository now
     /// installs all 65: the settlement set is fully reconciled, so a count
@@ -5134,9 +5500,10 @@ mod tests {
     const AUTHORED_SETTLEMENTS_BY_CATEGORY: &[(AuthoredSettlementCategory, usize)] = &[
         (AuthoredSettlementCategory::Capital, 1),
         (AuthoredSettlementCategory::City, 7),
-        (AuthoredSettlementCategory::Town, 17),
-        (AuthoredSettlementCategory::Village, 20),
-        (AuthoredSettlementCategory::Hamlet, 5),
+        (AuthoredSettlementCategory::Town, 19),
+        (AuthoredSettlementCategory::Village, 18),
+        (AuthoredSettlementCategory::Aldea, 5),
+        (AuthoredSettlementCategory::Hamlet, 0),
         (AuthoredSettlementCategory::Inn, 7),
         (AuthoredSettlementCategory::Post, 8),
     ];
@@ -5151,6 +5518,123 @@ mod tests {
         }
         total
     };
+
+    // ---- Authored Cromatolis layers: a bad layer is a hard startup error ----
+
+    const SITES_SPECIFIER: &str = "world.map.cromatolis_v0_sites";
+
+    fn parse_failure_message(text: &str) -> String {
+        let err = AuthoredCromatolisSettlements::from_bytes(Cow::Borrowed(text.as_bytes()))
+            .expect_err("the test input must not parse");
+        authored_layer_load_failure("settlements", SITES_SPECIFIER, None, &err).to_string()
+    }
+
+    #[test]
+    fn authored_layer_error_for_malformed_ron_names_file_and_position() {
+        let message = parse_failure_message("(\n  schema: \"x\",\n  coordinate_space: ");
+        assert!(message.contains(SITES_SPECIFIER), "{message}");
+        assert!(
+            message.contains("assets/world/map/cromatolis_v0_sites.ron"),
+            "{message}"
+        );
+        assert!(message.contains("does not parse"), "{message}");
+        // RON's own error carries "line:column".
+        assert!(message.contains("3:"), "{message}");
+    }
+
+    #[test]
+    fn authored_layer_error_for_unknown_category_names_the_value() {
+        let real = include_str!("../../../assets/world/map/cromatolis_v0_sites.ron");
+        assert!(real.contains("category: Capital,"));
+        let message =
+            parse_failure_message(&real.replacen("category: Capital,", "category: Spaceport,", 1));
+        assert!(message.contains("Spaceport"), "{message}");
+        assert!(message.contains("does not parse"), "{message}");
+    }
+
+    #[test]
+    fn authored_layer_missing_file_is_an_error_naming_the_file() {
+        let err = load_authored_cromatolis_layer::<AuthoredCromatolisSettlements>(
+            "settlements",
+            "world.map.cromatolis_v0_no_such_sites",
+            |_| Ok(()),
+        )
+        .expect_err("a missing authored layer must not load");
+        let message = err.to_string();
+        assert!(message.contains("is missing"), "{message}");
+        assert!(
+            message.contains("assets/world/map/cromatolis_v0_no_such_sites.ron"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn authored_layer_validation_failure_names_file_and_reason() {
+        let err = load_authored_cromatolis_layer::<AuthoredCromatolisSettlements>(
+            "settlements",
+            SITES_SPECIFIER,
+            |_| Err("duplicate settlement id site.x".to_string()),
+        )
+        .expect_err("a failing validation must not load");
+        let message = err.to_string();
+        assert!(message.contains("failed validation"), "{message}");
+        assert!(
+            message.contains("duplicate settlement id site.x"),
+            "{message}"
+        );
+        assert!(
+            message.contains("assets/world/map/cromatolis_v0_sites.ron"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn authored_layer_valid_real_files_still_load() {
+        let map_size = synthetic_map_size();
+        let settlements = load_authored_cromatolis_layer(
+            "settlements",
+            SITES_SPECIFIER,
+            |s: &AuthoredCromatolisSettlements| s.validate(map_size),
+        )
+        .expect("the real settlements export must load");
+        let landmarks = load_authored_cromatolis_layer(
+            "landmarks",
+            "world.map.cromatolis_v0_landmarks",
+            |l: &AuthoredCromatolisLandmarks| l.validate(map_size),
+        )
+        .expect("the real landmarks export must load");
+        load_authored_cromatolis_layer(
+            "landmark profiles",
+            "world.map.cromatolis_v0_landmark_profiles",
+            |p: &AuthoredCromatolisLandmarkProfiles| p.validate(&landmarks),
+        )
+        .expect("the real landmark profiles export must load");
+        load_authored_cromatolis_layer(
+            "settlement template contract",
+            "world.map.cromatolis_v0_settlement_template_contract",
+            |c: &SettlementTemplateContract| c.validate(),
+        )
+        .expect("the real template contract must load");
+        load_authored_cromatolis_layer(
+            "route graph",
+            "world.map.cromatolis_v0_routes",
+            |r: &AuthoredCromatolisRouteGraph| r.validate(map_size),
+        )
+        .expect("the real route graph must load");
+        load_authored_cromatolis_layer(
+            "maritime route graph",
+            "world.map.cromatolis_v0_maritime_routes",
+            |r: &AuthoredCromatolisMaritimeRoutes| r.validate(map_size),
+        )
+        .expect("the real maritime route graph must load");
+        load_authored_cromatolis_layer(
+            "fortifications",
+            "world.map.cromatolis_v0_fortifications",
+            |f: &AuthoredCromatolisFortifications| f.validate(map_size),
+        )
+        .expect("the real fortifications must load");
+        assert!(!settlements.settlements.is_empty());
+    }
 
     #[test]
     fn cromatolis_authored_settlements_parse_and_validate_real_export_without_panicking() {
@@ -5192,6 +5676,7 @@ mod tests {
                 | AuthoredSettlementCategory::City
                 | AuthoredSettlementCategory::Town
                 | AuthoredSettlementCategory::Village
+                | AuthoredSettlementCategory::Aldea
                 | AuthoredSettlementCategory::Hamlet
                 | AuthoredSettlementCategory::Inn
                 | AuthoredSettlementCategory::Post => AUTHORED_SETTLEMENTS_BY_CATEGORY
@@ -5261,6 +5746,8 @@ mod tests {
                 name: settlement.name.clone(),
                 category: settlement.category,
                 size: settlement.size,
+                target_buildings: settlement.target_buildings,
+                architectural_direction: None,
                 population: settlement.population.clone(),
                 requires_capital_castle: settlement.requires_capital_castle,
                 start_eligible: settlement.start_eligible,
@@ -5309,6 +5796,8 @@ mod tests {
             name: kalthis.name.clone(),
             category: kalthis.category,
             size: kalthis.size,
+            target_buildings: kalthis.target_buildings,
+            architectural_direction: None,
             population: kalthis.population.clone(),
             requires_capital_castle: kalthis.requires_capital_castle,
             start_eligible: kalthis.start_eligible,
@@ -5332,8 +5821,8 @@ mod tests {
         site_id: String,
     }
 
-    /// COW-19: every `settlement_template_contract.ron` site override must name
-    /// a settlement this repository actually installs.
+    /// Road-network work: every `settlement_template_contract.ron` site
+    /// override must name a settlement this repository actually installs.
     ///
     /// An override pointing at an uninstalled settlement is dead configuration.
     /// It is inert today only because the loader above drops the field; the
@@ -5498,7 +5987,8 @@ mod tests {
         }
     }
 
-    /// COW-19: at most one authored route per *unordered pair* of settlements.
+    /// Road-network work: at most one authored route per *unordered pair* of
+    /// settlements.
     ///
     /// `establish_authored_cromatolis_routes` keeps its own `connected_pairs`
     /// set and `continue`s past a repeat with only a `debug!` line -- so a
@@ -5533,7 +6023,7 @@ mod tests {
         }
     }
 
-    // ---- Authored Cromatolis maritime routes (COW-24): loaders ----
+    // ---- Authored Cromatolis maritime routes: loaders ----
 
     #[test]
     fn cromatolis_authored_maritime_routes_parse_and_validate_real_export_without_panicking() {
@@ -5573,10 +6063,11 @@ mod tests {
         );
     }
 
-    /// COW-24: every maritime route's `Site(id)` stop currently resolves
-    /// against a real installed settlement. Unlike the land route graph's
-    /// equivalent test, `establish_authored_cromatolis_maritime_routes`
-    /// itself must NOT hard-fail if this ever stops being true (the maritime
+    /// Maritime-route work: every maritime route's `Site(id)` stop currently
+    /// resolves against a real installed settlement. Unlike the land route
+    /// graph's equivalent test,
+    /// `establish_authored_cromatolis_maritime_routes` itself must NOT
+    /// hard-fail if this ever stops being true (the maritime
     /// export is built independently upstream and can reference an id this
     /// engine's settlement set doesn't have yet -- it degrades to a `warn!`
     /// and skips just that route). This test still pins the current,
@@ -5607,7 +6098,7 @@ mod tests {
         }
     }
 
-    /// COW-24: at most one maritime route per *unordered pair* of
+    /// Maritime-route work: at most one maritime route per *unordered pair* of
     /// settlements, mirroring
     /// `cromatolis_authored_route_graph_has_no_duplicated_endpoint_pair`'s
     /// land-route coverage. `establish_authored_cromatolis_maritime_routes`
@@ -5640,11 +6131,11 @@ mod tests {
         }
     }
 
-    /// COW-24's real objective, pinned at the data level: `site.rios_port`
-    /// has an authored maritime stop to at least one mainland settlement
-    /// that already has its own authored land route (i.e. is not itself on
-    /// `CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD`). This is what
-    /// `establish_authored_cromatolis_maritime_routes` +
+    /// Maritime-route work real objective, pinned at the data level:
+    /// `site.rios_port` has an authored maritime stop to at least one
+    /// mainland settlement that already has its own authored land route
+    /// (i.e. is not itself on `CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD`).
+    /// This is what `establish_authored_cromatolis_maritime_routes` +
     /// `establish_procedural_cromatolis_route_connectors`'s mainland
     /// reachability test above rely on: a maritime `Track` alone is only
     /// useful if it lands on a settlement the mainland road network already
@@ -5806,7 +6297,7 @@ mod tests {
     /// be both a target (gets its own connector carved) and a seed anchor
     /// (is the thing other targets connect to) in the same pass.
     ///
-    /// Before COW-24 this checked membership against
+    /// Before the maritime-route work this checked membership against
     /// `CROMATOLIS_PROCEDURAL_CONNECTOR_TARGETS_STILL_UNRESOLVED` instead,
     /// since every island-pass member was, at the time, a mainland-pass
     /// failure by construction. That is no longer true for
@@ -5820,7 +6311,7 @@ mod tests {
     /// anchor. `site.itos_village`/`site.nugget_field_mines` are
     /// unaffected: no maritime stop reaches either of them, so the mainland
     /// pass still genuinely attempts and fails a direct `find_path` for
-    /// both, unchanged from before COW-24.
+    /// both, unchanged from before the maritime-route work.
     #[test]
     fn cromatolis_island_route_connector_lists_are_consistent_with_the_reviewed_connector_targets()
     {
@@ -5856,6 +6347,31 @@ mod tests {
         }
     }
 
+    /// Connector endpoints key each connector's RNG (`seeds::road_seed`) by
+    /// their stable site key. Both ends are drawn from authored
+    /// *settlements* only (`sites_by_authored_id` is built from
+    /// `Site::authored`), so every target and seed anchor must name a real
+    /// settlement: then each key is a distinct `settlement:<id>`, never a
+    /// landmark or an empty id two connectors could share.
+    #[test]
+    fn cromatolis_connector_endpoints_are_all_real_settlements() {
+        let settlements: HashSet<String> = real_settlements()
+            .settlements
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        for &id in CROMATOLIS_PROCEDURAL_ROUTE_CONNECTOR_TARGETS
+            .iter()
+            .chain(CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS)
+            .chain(CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS)
+        {
+            assert!(
+                settlements.contains(id),
+                "{id} is a connector endpoint but not an authored settlement"
+            );
+        }
+    }
+
     #[test]
     fn cromatolis_authored_bridges_parse_and_validate_real_export_without_panicking() {
         let bridges = real_bridges();
@@ -5886,8 +6402,8 @@ mod tests {
             .find(|bridge| bridge.id == "bridge.kalthis_duren")
             .expect("the named Kalthis-Duren crossing must be present in the real export");
 
-        // Trust the RON over any prior markdown draft (see this row's spec
-        // §3): the real export uses 17m width / 12m clearance.
+        // Trust the RON over any prior markdown draft: the real export uses 17m width /
+        // 12m clearance.
         assert_eq!(kalthis_duren.deck_width_m, 17.0);
         assert_eq!(kalthis_duren.deck_clearance_m, 12.0);
         assert!(matches!(
@@ -6013,7 +6529,7 @@ mod tests {
         assert_eq!(normalized.y, 1.0);
     }
 
-    // ---- `/cromatolis_goto` pixel-to-world conversion (COW-9) ----
+    // ---- `/cromatolis_goto` pixel-to-world conversion ----
 
     #[test]
     fn cromatolis_source_pixels_reads_real_fortifications_source_map() {
@@ -6278,6 +6794,7 @@ mod tests {
             AuthoredSettlementCategory::City,
             AuthoredSettlementCategory::Town,
             AuthoredSettlementCategory::Village,
+            AuthoredSettlementCategory::Aldea,
             AuthoredSettlementCategory::Hamlet,
             AuthoredSettlementCategory::Inn,
             AuthoredSettlementCategory::Post,
@@ -6320,6 +6837,8 @@ mod tests {
                 category: "inn".to_string(),
                 supported_sizes: vec!["minimal".to_string()],
                 xindeler_old_fallback: "some_future_bespoke_inn_generator".to_string(),
+                target_buildings: None,
+                architectural_direction: None,
             }],
         };
         let kind = resolve_settlement_site_kind(
@@ -6345,6 +6864,286 @@ mod tests {
         }
     }
 
+    // ---- Aldea ----
+
+    /// One settlement record, as the open-world export writes it.
+    fn settlement_ron(category: &str, size: &str, target: Option<&str>) -> String {
+        let target = target.map_or(String::new(), |t| format!("target_buildings: {t},"));
+        format!(
+            r#"(
+                schema: "xindeler_open_world.authored_settlements.v1",
+                coordinate_space: "normalized_map_xy_top_left_origin",
+                settlements: [
+                    (
+                        id: "site.test_capital",
+                        name: "Test Capital",
+                        category: Capital,
+                        size: VeryLarge,
+                        target_buildings: 650,
+                        population: (tag: Human, peoples: [Human]),
+                        center: (x: 0.5, y: 0.5),
+                        requires_capital_castle: true,
+                    ),
+                    (
+                        id: "site.test_settlement",
+                        name: "Test Settlement",
+                        category: {category},
+                        size: {size},
+                        {target}
+                        population: (tag: Human, peoples: [Human]),
+                        center: (x: 0.25, y: 0.25),
+                        requires_capital_castle: false,
+                    ),
+                ],
+            )"#
+        )
+    }
+
+    fn parse_settlements(text: &str) -> Result<AuthoredCromatolisSettlements, BoxedError> {
+        load_ron(text.as_bytes())
+    }
+
+    #[test]
+    fn aldea_category_parses_validates_and_maps_to_the_village_generator() {
+        let parsed = parse_settlements(&settlement_ron("Aldea", "Large", Some("25")))
+            .expect("an Aldea settlement must parse");
+        parsed
+            .validate(synthetic_map_size())
+            .expect("an Aldea settlement must validate");
+        let aldea = &parsed.settlements[1];
+        assert_eq!(aldea.category, AuthoredSettlementCategory::Aldea);
+        assert_eq!(aldea.size, AuthoredSettlementSize::Large);
+        assert_eq!(aldea.target_buildings, 25);
+
+        let category = AuthoredSettlementCategory::Aldea;
+        assert_eq!(category.contract_key(), "aldea");
+        // Generated exactly like a Villa until Aldea art exists.
+        assert_eq!(category.default_site_kind(), SiteKind::Refactor);
+        assert_eq!(
+            category.naval_port_class(),
+            AuthoredSettlementCategory::Village.naval_port_class()
+        );
+    }
+
+    #[test]
+    fn an_unknown_settlement_category_is_a_hard_error() {
+        // A category this engine does not know must fail the parse, never be
+        // skipped or mapped to a default (an authored layer that fails to
+        // load is a startup error, see `load_authored_cromatolis_layer`).
+        for unknown in ["Fortress", "aldea", "Caserio", ""] {
+            assert!(
+                parse_settlements(&settlement_ron(unknown, "Large", Some("25"))).is_err(),
+                "category {unknown:?} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn a_settlement_without_a_target_is_rejected_and_zero_fails_validation() {
+        assert!(
+            parse_settlements(&settlement_ron("Aldea", "Large", None)).is_err(),
+            "a stale export without target_buildings must not load"
+        );
+        let zero = parse_settlements(&settlement_ron("Aldea", "Large", Some("0")))
+            .expect("0 is well-formed");
+        let err = zero
+            .validate(synthetic_map_size())
+            .expect_err("a zero target must fail validation");
+        assert!(err.contains("site.test_settlement"), "{err}");
+    }
+
+    // ---- Per-settlement NPC count ----
+
+    #[test]
+    fn npc_count_is_optional_and_bounded() {
+        // Absent: the plot-count default, and every real export today.
+        let absent = parse_settlements(&settlement_ron("Town", "Small", Some("50")))
+            .expect("a settlement without npc_count must parse");
+        absent.validate(synthetic_map_size()).unwrap();
+        assert!(
+            absent
+                .settlements
+                .iter()
+                .all(|s| s.population.npc_count.is_none())
+        );
+        // Kalthis and Duren are set to 400 NPCs each (decided 2026-10-10);
+        // every other real settlement keeps the plot-count rule.
+        for s in &real_settlements().settlements {
+            let expected = matches!(s.id.as_str(), "site.kalthis" | "site.duren").then_some(400);
+            assert_eq!(s.population.npc_count, expected, "{}", s.id);
+        }
+
+        let with = |n: u32| {
+            settlement_ron("Town", "Small", Some("50")).replace(
+                "population: (tag: Human, peoples: [Human]),\n                        center: (x: 0.25",
+                &format!(
+                    "population: (tag: Human, peoples: [Human], npc_count: Some({n})),\n                        center: (x: 0.25"
+                ),
+            )
+        };
+        let set = parse_settlements(&with(40)).expect("npc_count must parse");
+        set.validate(synthetic_map_size()).unwrap();
+        assert_eq!(set.settlements[1].population.npc_count, Some(40));
+        // 0 is valid: a settlement that wants no NPCs of its own.
+        parse_settlements(&with(0))
+            .unwrap()
+            .validate(synthetic_map_size())
+            .unwrap();
+        let err = parse_settlements(&with(MAX_SETTLEMENT_NPC_COUNT + 1))
+            .unwrap()
+            .validate(synthetic_map_size())
+            .expect_err("an absurd npc_count must fail validation");
+        assert!(err.contains("site.test_settlement"), "{err}");
+    }
+
+    #[test]
+    fn the_real_aldea_sites_load_with_the_decided_size_and_target() {
+        let settlements = real_settlements();
+        let find = |id: &str| {
+            settlements
+                .settlements
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap_or_else(|| panic!("{id} must be authored"))
+        };
+        use AuthoredSettlementSize::{Large, Medium, Small};
+        for (id, size, target) in [
+            ("site.tenoxitlan", Large, 25),
+            ("site.malicious_haven.alice.zha_lloig_rhaz", Large, 25),
+            ("site.malicious_haven.elena.vhorr_azhal", Medium, 18),
+            ("site.malicious_haven.merid.gha_rrul_uth", Small, 12),
+            ("site.malicious_haven.susy.thlug_nyarr", Small, 12),
+        ] {
+            let site = find(id);
+            assert_eq!(site.category, AuthoredSettlementCategory::Aldea, "{id}");
+            assert_eq!(site.size, size, "{id}");
+            assert_eq!(site.target_buildings, target, "{id}");
+        }
+        // The other settlement-size corrections, by their decided
+        // (category, size, target).
+        use AuthoredSettlementCategory::{City, Town, Village};
+        for (id, category, size, target) in [
+            ("site.duren", City, AuthoredSettlementSize::VeryLarge, 650),
+            ("site.portland", Town, Large, 175),
+            ("site.rios_port", Town, Large, 175),
+            ("site.hita", Town, Large, 175),
+            ("site.kalitos", Town, Small, 85),
+            ("site.itos_village", Town, Medium, 75),
+            ("site.ravenfair", Village, Medium, 18),
+        ] {
+            let site = find(id);
+            assert_eq!(
+                (site.category, site.size, site.target_buildings),
+                (category, size, target),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_real_settlement_target_is_its_family_default_or_a_decided_override() {
+        let settlements = real_settlements();
+        let contract = real_settlement_template_contract();
+        // Per-settlement overrides (source of truth:
+        // `target_buildings` in xindeler-open-world's
+        // `authored_settlement_profiles.ron`); everything else must equal the
+        // type x size matrix default of the resolving family.
+        let overrides = [("site.kalitos", 85), ("site.itos_village", 75)];
+        for settlement in &settlements.settlements {
+            let family = find_settlement_template_family(
+                Some(&contract),
+                settlement.category,
+                settlement.size,
+            )
+            .unwrap_or_else(|| panic!("{} has no family", settlement.id));
+            let expected = overrides
+                .iter()
+                .find(|(id, _)| *id == settlement.id)
+                .map(|(_, target)| *target)
+                .or(family.target_buildings)
+                .unwrap_or_else(|| panic!("family {} has no target", family.id));
+            assert_eq!(
+                settlement.target_buildings, expected,
+                "{} ({}) target drifted from the contract",
+                settlement.id, family.id
+            );
+        }
+    }
+
+    #[test]
+    fn aldea_and_large_village_families_resolve_from_the_real_contract() {
+        let contract = real_settlement_template_contract();
+        contract
+            .validate()
+            .expect("the real contract must validate");
+        use AuthoredSettlementSize::{Large, Medium, Small};
+        for (size, id, target) in [
+            (Large, "aldea_large", 25),
+            (Medium, "aldea_medium", 18),
+            (Small, "aldea_small", 12),
+        ] {
+            let family = find_settlement_template_family(
+                Some(&contract),
+                AuthoredSettlementCategory::Aldea,
+                size,
+            )
+            .unwrap_or_else(|| panic!("no family for aldea {size:?}"));
+            assert_eq!(family.id, id);
+            assert_eq!(family.target_buildings, Some(target));
+            assert_eq!(
+                resolve_architectural_direction(
+                    Some(&contract),
+                    AuthoredSettlementCategory::Aldea,
+                    size
+                ),
+                Some(ArchitecturalDirection::IndigenousAldea)
+            );
+            assert_eq!(
+                resolve_settlement_site_kind(
+                    Some(&contract),
+                    AuthoredSettlementCategory::Aldea,
+                    size
+                ),
+                SiteKind::Refactor
+            );
+        }
+        let village_large = find_settlement_template_family(
+            Some(&contract),
+            AuthoredSettlementCategory::Village,
+            Large,
+        )
+        .expect("village_large must exist");
+        assert_eq!(village_large.id, "village_large");
+        assert_eq!(village_large.target_buildings, Some(25));
+        assert_eq!(village_large.architectural_direction, None);
+        // No family, or a contract that failed to load, names no direction.
+        assert_eq!(
+            resolve_architectural_direction(
+                Some(&contract),
+                AuthoredSettlementCategory::Village,
+                Large
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_architectural_direction(None, AuthoredSettlementCategory::Aldea, Large),
+            None
+        );
+    }
+
+    #[test]
+    fn a_family_naming_an_unknown_architectural_direction_fails_contract_validation() {
+        let mut contract = real_settlement_template_contract();
+        contract.template_families[0].architectural_direction = Some("martian_dome".to_string());
+        let err = contract
+            .validate()
+            .expect_err("an unknown direction is a hard error");
+        assert!(err.contains("martian_dome"), "{err}");
+        let mut contract = real_settlement_template_contract();
+        contract.template_families[0].target_buildings = Some(0);
+        assert!(contract.validate().is_err());
+    }
+
     // ---- Site helper methods ----
 
     #[test]
@@ -6360,10 +7159,13 @@ mod tests {
                     name: "Test".to_string(),
                     category: AuthoredSettlementCategory::Village,
                     size: AuthoredSettlementSize::Small,
+                    target_buildings: 12,
+                    architectural_direction: None,
                     population: AuthoredSettlementPopulation {
                         tag: AuthoredSettlementPopulationTag::Human,
                         peoples: vec![AuthoredSettlementPeople::Human],
                         future_peoples: Vec::new(),
+                        npc_count: None,
                     },
                     requires_capital_castle: false,
                     start_eligible,
@@ -6487,7 +7289,7 @@ mod tests {
             .sites()
             .filter(|site| site.authored_landmark.is_some())
             .count();
-        // COW-19 B3: pin the export against the reviewed attestation *first*,
+        // Attestation: pin the export against the reviewed attestation *first*,
         // then compare generation against the export. Comparing generation
         // straight to `real_settlements().len()` would pass trivially against a
         // truncated export -- generation places N, the file says N.
@@ -6617,7 +7419,7 @@ mod tests {
             .collect::<std::collections::HashMap<_, _>>();
 
         let routes = real_routes();
-        // COW-19 B4: pin the export before iterating it -- an export silently
+        // Attestation: pin the export before iterating it -- an export silently
         // truncated to a handful of routes would otherwise pass this loop
         // trivially.
         assert_eq!(routes.routes.len(), AUTHORED_CROMATOLIS_ROUTES);
@@ -6660,7 +7462,7 @@ mod tests {
 
     /// Real-data regression for the procedural Cromatolis route-connector
     /// pass (`Civs::establish_procedural_cromatolis_route_connectors`) and,
-    /// since COW-24, the authored maritime route pass
+    /// since the maritime-route work, the authored maritime route pass
     /// (`Civs::establish_authored_cromatolis_maritime_routes`): every
     /// installed settlement is reachable from the capital in the generated
     /// world -- an authored land route, a procedural connector, or an
@@ -6678,8 +7480,9 @@ mod tests {
     /// proves end-to-end reachability of the combined graph, not just that
     /// each mechanism ran. `site.rios_port` (and, transitively through the
     /// island connector pass, `site.itos_village`/`site.nugget_field_mines`)
-    /// is exactly the case COW-24 closes: it now resolves through this same
-    /// assertion instead of needing a dedicated carve-out.
+    /// is exactly the case the maritime-route work closes: it now resolves
+    /// through this same assertion instead of needing a dedicated
+    /// carve-out.
     #[test]
     #[ignore]
     fn civs_generate_makes_every_non_deliberately_roadless_settlement_reachable_from_the_capital() {
@@ -6793,11 +7596,11 @@ mod tests {
     /// `Civs::establish_procedural_cromatolis_route_connectors`
     /// (`CROMATOLIS_ISLAND_ROUTE_CONNECTOR_TARGETS` /
     /// `CROMATOLIS_ISLAND_ROUTE_CONNECTOR_SEED_ANCHORS`) combined with
-    /// COW-24's authored maritime route pass
+    /// Maritime-route work authored maritime route pass
     /// (`Civs::establish_authored_cromatolis_maritime_routes`): proves the
     /// full chain now holds end to end.
     ///
-    /// Before COW-24 this test (then named
+    /// Before the maritime-route work this test (then named
     /// `..._connects_the_rios_port_island_group_to_itself_but_not_the_mainland`)
     /// asserted the island group was internally connected but *not*
     /// reachable from the capital -- that half of the story is now false by
@@ -7282,12 +8085,13 @@ mod tests {
         assert_fraction_in("Gnarling", gnarling, 0.05..0.15);
         assert_fraction_in("ChapelSite", chapel_site, 0.00005..0.0006);
         assert_fraction_in("Adlet", adlet, 0.08..0.20);
-        // Re-baselined by COW-22 `C22-1c`. `Sahagin` is `BiomeKind::Ocean` at
-        // 40-45 m below sea level, and until that row every inland water body
-        // whose authored bed is painted below sea level reported `Ocean` --
-        // which is exactly where a 40-45 m depth band lives. 550 suitable
-        // chunks before, 285 after: the 265 that dropped out were the deep
-        // middles of lakes, not sea, and a sahuagin lair belongs in the latter.
+        // Re-baselined by the water-classification work. `Sahagin` is
+        // `BiomeKind::Ocean` at 40-45 m below sea level, and until that row
+        // every inland water body whose authored bed is painted below sea level
+        // reported `Ocean` -- which is exactly where a 40-45 m depth band
+        // lives. 550 suitable chunks before, 285 after: the 265 that dropped
+        // out were the deep middles of lakes, not sea, and a sahuagin lair
+        // belongs in the latter.
         assert_fraction_in("Sahagin", sahagin, 0.0002..0.003);
         assert_fraction_in("VampireCastle", vampire_castle, 0.00005..0.0005);
         assert_fraction_in("Cultist", cultist, 0.12..0.28);

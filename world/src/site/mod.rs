@@ -1,6 +1,7 @@
 pub mod economy;
 mod generation;
 pub mod genstat;
+pub mod layout;
 pub mod namegen;
 pub mod plot;
 mod shore;
@@ -310,6 +311,10 @@ pub struct Site {
     /// kind" -- see `rtsim::data::Site::generate`'s `good_or_evil`
     /// classifier for the motivating case.
     pub is_authored_settlement: bool,
+    /// The settlement's authored rtsim NPC count, when its data
+    /// sets one. `None` keeps rtsim's plot-count rule. Read by
+    /// `rtsim::generate::settlement_population`; generation never reads it.
+    pub npc_count: Option<u32>,
     /// The waterfront footprint claimed for this settlement's naval port, if
     /// one was placed: apron, deck, hinge, entrance tile and shore normal.
     ///
@@ -325,6 +330,12 @@ pub struct Site {
     /// same rectangles, since a plot is where every other structure keeps its
     /// footprint -- fold it in then rather than leaving both.
     pub naval_port: Option<ShorePlacement>,
+    /// The authored layout's footprint while `generate_city` runs for a
+    /// settlement that has one; `None` at every other time and for every
+    /// other site. Kept on the site rather than passed down because the
+    /// plot and plaza searches it restricts (`find_aabr`, `make_plaza`,
+    /// ...) are shared with every other town generator, which never set it.
+    footprint: Option<Box<layout::Footprint>>,
 }
 
 impl Site {
@@ -448,7 +459,16 @@ impl Site {
         self.plazas.iter().copied()
     }
 
-    pub fn create_plot(&mut self, plot: Plot) -> Id<Plot> { self.plots.insert(plot) }
+    pub fn create_plot(&mut self, plot: Plot) -> Id<Plot> {
+        // XINDELER: an authored footprint counts buildings toward its ward
+        // quotas (see `layout`).
+        if plot.is_building()
+            && let Some(footprint) = self.footprint.as_deref_mut()
+        {
+            footprint.note_building(plot.root_tile);
+        }
+        self.plots.insert(plot)
+    }
 
     pub fn blit_aabr(&mut self, aabr: Aabr<i32>, tile: Tile) {
         for y in 0..aabr.size().h {
@@ -486,8 +506,8 @@ impl Site {
                             let neighbor = (tile + *dir, *dir);
 
                             // Transition cost
-                            let alt_a = land.get_alt_approx(this.tile_center_wpos(tile));
-                            let alt_b = land.get_alt_approx(this.tile_center_wpos(neighbor.0));
+                            let alt_a = land.ground_alt_at(this.tile_center_wpos(tile));
+                            let alt_b = land.ground_alt_at(this.tile_center_wpos(neighbor.0));
                             let mut cost = 1.0
                                 + (alt_a - alt_b).abs() / TILE_SIZE as f32
                                 + (prev_dir != *dir) as i32 as f32;
@@ -554,7 +574,7 @@ impl Site {
                                 a: i.saturating_sub(1) as u16,
                                 b: (i + 1).min(path.len() - 1) as u16,
                                 w,
-                                alt: land.get_alt_approx(self.tile_center_wpos(tile))
+                                alt: land.ground_alt_at(self.tile_center_wpos(tile))
                                     // Clamp roads to an altitude that means they can always reach their destination with less than a 45 degree slope
                                     .clamp(
                                         src_alt - i as f32 * tile::TILE_SIZE as f32,
@@ -566,7 +586,7 @@ impl Site {
                                     ),//Lerp::lerp(alt_a, alt_b, i as f32 / path.len() as f32),
                             },
                             plot: old_tile.plot.or(Some(plot)),
-                            hard_alt: Some(land.get_alt_approx(self.tile_center_wpos(tile)) as i32),
+                            hard_alt: Some(land.ground_alt_at(self.tile_center_wpos(tile)) as i32),
                         });
                     }
                 }
@@ -580,28 +600,77 @@ impl Site {
         area_range: Range<u32>,
         min_dims: Extent2<u32>,
     ) -> Option<(Aabr<i32>, Vec2<i32>, Vec2<i32>, Option<i32>)> {
-        let ((aabr, (door_dir, hard_alt)), door_pos) =
+        self.find_aabr_in(search_pos, area_range, min_dims, layout::Zone::Built)
+    }
+
+    // XINDELER: authored settlement footprint hooks (see `layout`).
+    /// [`Self::find_aabr`], restricted to the tiles an authored footprint
+    /// allows for `zone` (no restriction without a footprint).
+    fn find_aabr_in(
+        &mut self,
+        search_pos: Vec2<i32>,
+        area_range: Range<u32>,
+        min_dims: Extent2<u32>,
+        zone: layout::Zone,
+    ) -> Option<(Aabr<i32>, Vec2<i32>, Vec2<i32>, Option<i32>)> {
+        let ((aabr, door_dir, hard_alt), door_pos) =
             self.tiles.find_near(search_pos, |center, _| {
-                let dir = CARDINALS
-                    .iter()
-                    .find(|dir| self.tiles.get(center + *dir).is_road())?;
-                let hard_alt = self.tiles.get(center + *dir).hard_alt.or(self
-                    .tiles
-                    .get(center + *dir)
-                    .plot
-                    .and_then(|plot| {
-                        if let PlotKind::Plaza(p) = self.plots.get(plot).kind() {
-                            Some(p.hard_alt.unwrap_or(p.alt))
-                        } else {
-                            None
-                        }
-                    }));
-                self.tiles
-                    .grow_aabr(center, area_range.clone(), min_dims)
-                    .ok()
-                    .zip(Some((*dir, hard_alt)))
+                self.plot_beside_road(center, &area_range, min_dims, zone)
             })?;
         Some((aabr, door_pos, door_dir, hard_alt))
+    }
+
+    /// A plot grown from `center` with its door onto the first adjacent road
+    /// tile (`find_aabr`'s test for one candidate tile): its bounds, door
+    /// direction and the door's ground altitude, if known.
+    fn plot_beside_road(
+        &self,
+        center: Vec2<i32>,
+        area_range: &Range<u32>,
+        min_dims: Extent2<u32>,
+        zone: layout::Zone,
+    ) -> Option<(Aabr<i32>, Vec2<i32>, Option<i32>)> {
+        let footprint = self.footprint.as_deref();
+        if let Some(footprint) = footprint
+            && (!footprint.allows(center, zone)
+                || (zone == layout::Zone::Built && footprint.ward_full(center)))
+        {
+            return None;
+        }
+        let dir = CARDINALS
+            .iter()
+            .find(|dir| self.tiles.get(center + *dir).is_road())?;
+        let hard_alt = self.tiles.get(center + *dir).hard_alt.or(self
+            .tiles
+            .get(center + *dir)
+            .plot
+            .and_then(|plot| {
+                if let PlotKind::Plaza(p) = self.plots.get(plot).kind() {
+                    Some(p.hard_alt.unwrap_or(p.alt))
+                } else {
+                    None
+                }
+            }));
+        match footprint {
+            None => self.tiles.grow_aabr(center, area_range.clone(), min_dims),
+            Some(footprint) => {
+                self.tiles
+                    .grow_aabr_within(center, area_range.clone(), min_dims, |tpos| {
+                        footprint.allows(tpos, zone)
+                    })
+            },
+        }
+        .ok()
+        // A building counts for the ward of its root tile (`note_building`),
+        // and every roadside building `generate_city` creates from this aabr
+        // uses `aabr.center()` as that root: steer by exactly that tile. The
+        // naval port (rooted at its hinge) and barns (rural zone) are never
+        // steered; a port whose hinge lies in a ward counts for it, which can
+        // overshoot that ward by one.
+        .filter(|aabr: &Aabr<i32>| {
+            zone != layout::Zone::Built || footprint.is_none_or(|f| !f.ward_full(aabr.center()))
+        })
+        .map(|aabr| (aabr, *dir, hard_alt))
     }
 
     pub fn find_roadside_aabr(
@@ -627,14 +696,56 @@ impl Site {
 
         let (aabr, door_pos, door_dir, hard_alt) =
             self.find_aabr(search_pos, area_range, min_dims)?;
+        Some((
+            aabr,
+            door_pos,
+            door_dir,
+            hard_alt.or(self.road_door_alt(door_pos, door_dir)),
+        ))
+    }
 
-        let alt = if let TileKind::Road { alt, .. } = &self.tiles.get(door_pos + door_dir).kind {
+    /// The altitude a door facing `door_dir` from `door_pos` takes from the
+    /// road it opens onto, if that is a road tile.
+    fn road_door_alt(&self, door_pos: Vec2<i32>, door_dir: Vec2<i32>) -> Option<i32> {
+        if let TileKind::Road { alt, .. } = &self.tiles.get(door_pos + door_dir).kind {
             Some(*alt as i32 - 1)
         } else {
             None
-        };
+        }
+    }
 
-        Some((aabr, door_pos, door_dir, hard_alt.or(alt)))
+    /// With an authored footprint, the deterministic counterpart of
+    /// [`Self::find_roadside_aabr`]: the first footprint tile, nearest the
+    /// anchor first, where a plot of this size fits beside a road. Draws no
+    /// random numbers. Always `None` without a footprint.
+    fn fill_roadside_aabr(
+        &mut self,
+        area_range: Range<u32>,
+        min_dims: Extent2<u32>,
+    ) -> Option<(Aabr<i32>, Vec2<i32>, Vec2<i32>, Option<i32>)> {
+        let footprint = self.footprint.as_deref()?;
+        if footprint.fill_exhausted(&area_range, min_dims) {
+            return None;
+        }
+        let found = footprint.ward_tiles().find_map(|door_pos| {
+            if !self.tiles.get(door_pos).is_empty() {
+                return None;
+            }
+            let (aabr, door_dir, hard_alt) =
+                self.plot_beside_road(door_pos, &area_range, min_dims, layout::Zone::Built)?;
+            Some((
+                aabr,
+                door_pos,
+                door_dir,
+                hard_alt.or(self.road_door_alt(door_pos, door_dir)),
+            ))
+        });
+        if found.is_none()
+            && let Some(footprint) = self.footprint.as_deref_mut()
+        {
+            footprint.note_fill_exhausted(&area_range, min_dims);
+        }
+        found
     }
 
     pub fn find_rural_aabr(
@@ -658,7 +769,12 @@ impl Site {
             (e * sz as f32 * 0.75 + 10.0).round() as i32
         });
 
-        self.find_aabr(search_center + search_offset, area_range, min_dims)
+        self.find_aabr_in(
+            search_center + search_offset,
+            area_range,
+            min_dims,
+            layout::Zone::Rural,
+        )
     }
 
     pub fn make_plaza_at(
@@ -670,7 +786,7 @@ impl Site {
         road_kind: plot::RoadKind,
     ) -> Option<Id<Plot>> {
         let tpos = tile_aabr.center();
-        let plaza_alt = land.get_alt_approx(self.tile_center_wpos(tpos)) as i32;
+        let plaza_alt = land.ground_alt_at(self.tile_center_wpos(tpos)) as i32;
 
         let plaza = self.create_plot(Plot {
             kind: PlotKind::Plaza(plot::Plaza::generate(
@@ -680,6 +796,9 @@ impl Site {
             tiles: aabr_tiles(tile_aabr).collect(),
         });
         self.plazas.push(plaza);
+        if let Some(footprint) = self.footprint.as_mut() {
+            footprint.note_plaza(tpos);
+        }
         self.blit_aabr(tile_aabr, Tile {
             kind: TileKind::Road {
                 a: 0,
@@ -762,8 +881,23 @@ impl Site {
                     max: center_tile + Vec2::broadcast(plaza_radius + 1),
                 })
                 .filter(|&aabr| {
-                    rng.random_range(0..48) > aabr.center().map(|e| e.abs()).reduce_max()
-                        && aabr_tiles(aabr).all(|tile| !self.tiles.get(tile).is_obstacle())
+                    // XINDELER: an authored footprint replaces the soft reach lottery
+                    // (a plaza is less likely the further it is from the
+                    // origin) with its own extent.
+                    let within_reach = match self.footprint.as_deref() {
+                        None => {
+                            rng.random_range(0..48) > aabr.center().map(|e| e.abs()).reduce_max()
+                        },
+                        // While steering, the network only grows into
+                        // wards still short of their quota.
+                        Some(footprint) => {
+                            !footprint.ward_full(aabr.center())
+                                && footprint.has_room_for_plaza(aabr, |tile| {
+                                    self.tiles.get(tile).is_empty()
+                                })
+                        },
+                    };
+                    within_reach && aabr_tiles(aabr).all(|tile| !self.tiles.get(tile).is_obstacle())
                 })
                 .filter(|&aabr| {
                     self.plazas.iter().all(|&p| {
@@ -784,14 +918,36 @@ impl Site {
                         dist_sqr > (plaza_dist * 0.85).powi(2)
                     })
                 })
+        })
+        .or_else(|| {
+            // XINDELER: with an authored footprint, a plaza the random walk could not
+            // place is placed deterministically on the network's frontier
+            // instead, so a city boxed in by water, hills and routes still
+            // grows through its footprint.
+            let tiles = &self.tiles;
+            let footprint = self.footprint.as_deref_mut()?;
+            if self.plazas.is_empty() {
+                footprint.initial_plaza(plaza_radius, |tpos| tiles.get(tpos).is_empty())
+            } else {
+                footprint
+                    .frontier_plaza(plaza_radius, plaza_dist, |tpos| tiles.get(tpos).is_empty())
+            }
         })?;
         generator_stats.success(site_name, GenStatPlotKind::Plaza);
         self.make_plaza_at(land, index, aabr, rng, road_kind)
     }
 
     pub fn demarcate_obstacles(&mut self, land: &Land) {
+        self.demarcate_obstacles_within(land, Self::OBSTACLE_SEARCH_RADIUS)
+    }
+
+    // XINDELER: the radius is a parameter so an authored footprint can reach
+    // past `OBSTACLE_SEARCH_RADIUS` (see `generate_city`).
+    /// [`Self::demarcate_obstacles`] over the tiles within `radius` of the
+    /// origin.
+    pub fn demarcate_obstacles_within(&mut self, land: &Land, radius: u32) {
         Spiral2d::new()
-            .take((Self::OBSTACLE_SEARCH_RADIUS * 2 + 1).pow(2) as usize)
+            .take((radius * 2 + 1).pow(2) as usize)
             .for_each(|tile| {
                 let wpos = self.tile_center_wpos(tile);
                 if let Some(kind) = Spiral2d::new()
@@ -826,7 +982,7 @@ impl Site {
                                     closest_pos: path_wpos,
                                     path,
                                 };
-                                tile.hard_alt = Some(land.get_alt_approx(path_wpos.as_()) as i32);
+                                tile.hard_alt = Some(land.ground_alt_at(path_wpos.as_()) as i32);
                             });
                     }
                 }
@@ -862,6 +1018,21 @@ impl Site {
         road_kind: plot::RoadKind,
     ) -> Option<Id<Plot>> {
         generator_stats.attempt(site_name, GenStatPlotKind::InitialPlaza);
+        // XINDELER: an authored footprint puts the main plaza by its anchor instead of
+        // nearest the origin: the clear patch nearest the anchor anywhere in
+        // the footprint.
+        if let Some(footprint) = self.footprint.as_deref() {
+            let tiles = &self.tiles;
+            return match footprint
+                .initial_plaza(plaza_radius as i32, |tpos| tiles.get(tpos).is_empty())
+            {
+                Some(aabr) => {
+                    generator_stats.success(site_name, GenStatPlotKind::InitialPlaza);
+                    self.make_plaza_at(land, index, aabr, rng, road_kind)
+                },
+                None => self.make_plaza(land, index, rng, generator_stats, site_name, road_kind),
+            };
+        }
         // Find all the suitable locations for a plaza.
         let mut plaza_locations = vec![];
         // Search over a spiral ring pattern
@@ -927,6 +1098,12 @@ impl Site {
     ) -> Option<Id<Plot>> {
         // The plaza radius can be 1, 2, or 3.
         let plaza_radius = rng.random_range(1..3);
+        // XINDELER: an authored footprint may fix it (the draw above still happens).
+        let plaza_radius = self
+            .footprint
+            .as_deref()
+            .and_then(|footprint| footprint.plaza_radius)
+            .unwrap_or(plaza_radius);
         // look for plaza locations within a ring with an outer dimension
         // of 24 tiles and an inner dimension that will offset the plaza from
         // the town center.
@@ -961,6 +1138,12 @@ impl Site {
     /// needed even though `kind` is also set.
     pub fn with_authored_settlement(mut self, is_authored_settlement: bool) -> Self {
         self.is_authored_settlement = is_authored_settlement;
+        self
+    }
+
+    /// Sets the settlement's authored rtsim NPC count (see `npc_count`).
+    pub fn with_npc_count(mut self, npc_count: Option<u32>) -> Self {
+        self.npc_count = npc_count;
         self
     }
 
@@ -1000,6 +1183,17 @@ impl Site {
     }
 
     pub fn generate_citadel(land: &Land, rng: &mut impl Rng, origin: Vec2<i32>) -> Self {
+        Self::generate_citadel_within(land, rng, origin, None)
+    }
+
+    // XINDELER: see `plot::Citadel::generate_with_radius`.
+    /// [`Self::generate_citadel`], built within `radius` blocks when given.
+    pub fn generate_citadel_within(
+        land: &Land,
+        rng: &mut impl Rng,
+        origin: Vec2<i32>,
+        radius: Option<i32>,
+    ) -> Self {
         let mut rng = reseed(rng);
         let mut site = Site {
             origin,
@@ -1007,7 +1201,15 @@ impl Site {
             ..Site::default()
         };
         site.demarcate_obstacles(land);
-        let citadel = plot::Citadel::generate(origin, land, &mut rng);
+        let citadel = match radius {
+            None => plot::Citadel::generate(origin, land, &mut rng),
+            Some(radius) => plot::Citadel::generate_with_radius(
+                origin,
+                land,
+                &mut rng,
+                plot::Citadel::whole_cells(radius),
+            ),
+        };
         site.name = Some(citadel.name().to_string());
         let size = citadel.radius() / tile::TILE_SIZE as i32;
         let aabr = Aabr {
@@ -1378,7 +1580,10 @@ impl Site {
         site
     }
 
-    // Size is 0..1
+    /// Size is 0..1. `layout` is an authored settlement layout (see
+    /// [`layout`]): where the city may build, where its main plaza goes and
+    /// how many buildings it must reach. `None` generates exactly as without
+    /// one.
     pub fn generate_city(
         land: &Land,
         index: IndexRef,
@@ -1388,6 +1593,7 @@ impl Site {
         calendar: Option<&Calendar>,
         generator_stats: &mut SitesGenMeta,
         naval_port: Option<NavalPortRequest<'_>>,
+        layout: Option<&layout::SettlementLayout>,
     ) -> Self {
         let mut rng = reseed(rng);
         let name = NameGen::location(&mut rng).generate_town();
@@ -1403,7 +1609,19 @@ impl Site {
         };
 
         // place the initial plaza
-        site.demarcate_obstacles(land);
+        // XINDELER: an authored footprint evaluates terrain out to its own
+        // extent ([`layout::SettlementLayout::domain_tiles`]), not just the
+        // fixed radius of an ordinary city.
+        site.footprint = layout.map(|layout| Box::new(layout::Footprint::new(layout, origin)));
+        match site
+            .footprint
+            .as_deref()
+            .map(layout::Footprint::domain_tiles)
+        {
+            None => site.demarcate_obstacles(land),
+            Some(domain) => site
+                .demarcate_obstacles_within(land, (domain + layout::DOMAIN_OBSTACLE_MARGIN) as u32),
+        }
         generator_stats.add(site.name(), GenStatSiteKind::City);
         site.make_initial_plaza_default(land, index, &mut rng, generator_stats, &name, road_kind);
 
@@ -1462,7 +1680,47 @@ impl Site {
         let mut taverns = 0;
         let mut airship_docks = 0;
 
-        for _ in 0..(size * 200.0) as i32 {
+        // XINDELER: the plot lottery is `size * 200` draws. With an authored
+        // footprint the draws go on until every ward has its building quota
+        // or the wards hold the settlement's total target, or
+        // `QUOTA_DRAWS_PER_BUILDING` draws per target building. While any
+        // ward is short, buildings are steered away from wards that already
+        // have their quota; when the wards stop growing for
+        // `QUOTA_STALL_DRAWS` draws (the short wards have no room left),
+        // steering stops so the total can still be reached, and a second
+        // stall ends the fill. Same RNG stream throughout: a quota run is the
+        // ordinary lottery, continued.
+        const QUOTA_STALL_DRAWS: usize = 256;
+        const QUOTA_DRAWS_PER_BUILDING: usize = 4;
+        let base_draws = (size * 200.0).max(0.0) as i32 as usize;
+        let max_draws = site.footprint.as_deref().map_or(base_draws, |footprint| {
+            base_draws.max(footprint.target_buildings() * QUOTA_DRAWS_PER_BUILDING)
+        });
+        // (buildings in the wards, the draw at which that count was first
+        // seen).
+        let mut quota_progress: Option<(usize, usize)> = None;
+        for draw in 0..max_draws {
+            if draw >= base_draws {
+                let Some(footprint) = site.footprint.as_deref_mut() else {
+                    break;
+                };
+                let in_wards = footprint.buildings_in_wards();
+                if footprint.quota_done() {
+                    break;
+                }
+                match quota_progress {
+                    Some((last, since)) if in_wards <= last => {
+                        if draw - since >= QUOTA_STALL_DRAWS {
+                            if !footprint.steering() {
+                                break;
+                            }
+                            footprint.stop_steering();
+                            quota_progress = Some((in_wards, draw));
+                        }
+                    },
+                    _ => quota_progress = Some((in_wards, draw)),
+                }
+            }
             match *build_chance.choose_seeded(rng.random()) {
                 // Workshop
                 n if (n == 5 && workshops < (size * 5.0) as i32) || workshops == 0 => {
@@ -1474,6 +1732,9 @@ impl Site {
                             4..(size + 1).pow(2),
                             Extent2::broadcast(size),
                         )
+                    })
+                    .or_else(|| {
+                        site.fill_roadside_aabr(4..(size + 1).pow(2), Extent2::broadcast(size))
                     }) {
                         let workshop = plot::Workshop::generate(
                             land,
@@ -1512,6 +1773,9 @@ impl Site {
                             4..(size + 1).pow(2),
                             Extent2::broadcast(size),
                         )
+                    })
+                    .or_else(|| {
+                        site.fill_roadside_aabr(4..(size + 1).pow(2), Extent2::broadcast(size))
                     }) {
                         let house = plot::House::generate(
                             land,
@@ -1732,7 +1996,9 @@ impl Site {
                     let size = 9u32;
                     if let Some((aabr, door_tile, door_dir, _)) = attempt(32, || {
                         site.find_roadside_aabr(&mut rng, 81..82, Extent2::broadcast(size))
-                    }) {
+                    })
+                    .or_else(|| site.fill_roadside_aabr(81..82, Extent2::broadcast(size)))
+                    {
                         let airship_dock = plot::AirshipDock::generate(
                             land,
                             index,
@@ -1769,6 +2035,9 @@ impl Site {
                             8..(size + 1).pow(2),
                             Extent2::broadcast(size),
                         )
+                    })
+                    .or_else(|| {
+                        site.fill_roadside_aabr(8..(size + 1).pow(2), Extent2::broadcast(size))
                     }) {
                         let tavern = plot::Tavern::generate(
                             land,
@@ -1806,6 +2075,7 @@ impl Site {
             }
         }
 
+        site.footprint = None;
         site
     }
 
@@ -1828,14 +2098,14 @@ impl Site {
 
         // Pick the starting downhill direction based on the average drop over
         // two chunks in the four cardinal directions
-        let origin_alt = land.get_alt_approx(origin);
+        let origin_alt = land.ground_alt_at(origin);
         let alt_drops: Vec<f32> = CARDINALS
             .iter()
             .map(|c| {
                 origin_alt
                     - 0.5
-                        * (land.get_alt_approx(origin + *c * TerrainChunkSize::RECT_SIZE.x as i32)
-                            + land.get_alt_approx(
+                        * (land.ground_alt_at(origin + *c * TerrainChunkSize::RECT_SIZE.x as i32)
+                            + land.ground_alt_at(
                                 origin + 2 * *c * TerrainChunkSize::RECT_SIZE.x as i32,
                             ))
             })
@@ -3604,17 +3874,16 @@ pub fn test_site() -> Site {
         None,
         &mut gen_meta,
         None,
+        None,
     )
 }
 
 fn wpos_is_hazard(land: &Land, wpos: Vec2<i32>) -> Option<HazardKind> {
-    if land
-        .get_chunk_wpos(wpos)
-        .is_none_or(|c| c.river.near_water())
-    {
+    // XINDELER: authored-aware (authored water regions).
+    if land.near_water_at(wpos).is_none_or(|near| near) {
         Some(HazardKind::Water)
     } else {
-        Some(land.get_gradient_approx(wpos))
+        Some(land.ground_gradient_at(wpos))
             .filter(|g| *g > 0.8)
             .map(|gradient| HazardKind::Hill { gradient })
     }
@@ -3648,7 +3917,7 @@ fn get_gradient_average(aabr: Aabr<i32>, land: &Land) -> f32 {
 
     for x_pos in (range_x_min..=range_x_max).step_by(chunk_size as usize) {
         for y_pos in (range_y_min..=range_y_max).step_by(chunk_size as usize) {
-            let gradient_at_pos = land.get_gradient_approx(Vec2::new(x_pos, y_pos));
+            let gradient_at_pos = land.ground_gradient_at(Vec2::new(x_pos, y_pos));
             gradient_sum += gradient_at_pos;
             gradient_sample_count += 1;
         }

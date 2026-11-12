@@ -1,0 +1,7 @@
+{
+  "message": "dry ground below sea level needs sea_fill: AuthoredOnly",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_water_0_0.bin": "8041350cbfd33c8bd7ee3b6b560b7d7686e77318d875677018e47106709e319f"
+  },
+  "verdict": "refuse"
+}

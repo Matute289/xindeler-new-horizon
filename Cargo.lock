@@ -11193,6 +11193,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "xindeler-terrain-probe"
+version = "0.21.0"
+dependencies = [
+ "clap",
+ "rayon",
+ "ron",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "signal-hook 0.4.4",
+ "strum",
+ "tokio",
+ "vek 0.17.2",
+ "xindeler-client",
+ "xindeler-common",
+ "xindeler-world",
+ "zstd",
+]
+
+[[package]]
 name = "xindeler-voxygen"
 version = "0.21.0"
 dependencies = [
@@ -11324,6 +11344,7 @@ dependencies = [
  "rstar",
  "rusqlite",
  "serde",
+ "sha2 0.11.0",
  "signal-hook 0.4.4",
  "strum",
  "svg_fmt",
@@ -11336,6 +11357,7 @@ dependencies = [
  "xindeler-common-dynlib",
  "xindeler-common-frontend",
  "xindeler-common-net",
+ "zstd",
 ]
 
 [[package]]

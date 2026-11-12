@@ -33,6 +33,11 @@ pub(crate) struct Rock {
 /// elsewhere would silently describe a different world the day someone tunes
 /// the density or adds a kind.
 pub(crate) fn rock_at(wpos: Vec2<i32>, seed: u32, col: &ColumnSample) -> Option<Rock> {
+    // XINDELER: no procedural boulder rooted in (or, per region, near)
+    // authored water.
+    if col.authored_procedural_suppressed() {
+        return None;
+    }
     let mut rng = ChaChaRng::from_seed(seed_expan::rng_state(seed));
 
     const BASE_ROCK_DENSITY: f64 = 0.15;

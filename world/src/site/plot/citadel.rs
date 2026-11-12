@@ -21,13 +21,30 @@ pub struct Citadel {
 
 impl Citadel {
     pub fn generate(wpos: Vec2<i32>, land: &Land, rng: &mut impl Rng) -> Self {
-        let alt = land.get_alt_approx(wpos) as i32;
+        Self::generate_with_radius(wpos, land, rng, 150)
+    }
+
+    // XINDELER: an authored landmark that only borrows the citadel as a
+    // stand-in builds within its own footprint (see
+    // `civ::Site::landmark_stand_in_radius`).
+    /// [`Self::generate`] with the given radius in blocks.
+    pub fn generate_with_radius(
+        wpos: Vec2<i32>,
+        land: &Land,
+        rng: &mut impl Rng,
+        radius: i32,
+    ) -> Self {
+        // The grid is built in whole cells: a radius under one cell would
+        // build nothing (the landmark caller rounds up with `whole_cells`).
+        debug_assert!(
+            radius >= CELL_SIZE,
+            "citadel radius {radius} under one cell"
+        );
+        let alt = land.ground_alt_at(wpos) as i32;
 
         let name = NameGen::location(rng).generate_town();
         let seed = rng.random();
         let origin = wpos.with_z(alt);
-
-        let radius = 150;
 
         let cell_radius = radius / CELL_SIZE;
         let mut grid = Grid::populate_from(Vec2::broadcast((cell_radius + 1) * 2), |pos| {
@@ -41,7 +58,7 @@ impl Citadel {
                 let level_height = 32.0;
                 Some(Cell {
                     alt: land
-                        .get_alt_approx(wpos + rpos * CELL_SIZE + CELL_SIZE / 2)
+                        .ground_alt_at(wpos + rpos * CELL_SIZE + CELL_SIZE / 2)
                         .add(height)
                         .div(level_height)
                         .floor()
@@ -78,6 +95,12 @@ impl Citadel {
             radius,
             grid,
         }
+    }
+
+    /// `radius` rounded up to whole cells, the smallest radius that builds
+    /// all of it (at least one cell).
+    pub fn whole_cells(radius: i32) -> i32 {
+        (radius.max(1) as u32).div_ceil(CELL_SIZE as u32) as i32 * CELL_SIZE
     }
 
     pub fn name(&self) -> &str { &self.name }
@@ -127,7 +150,7 @@ impl Structure for Citadel {
                     .clear();
 
                 let mut prim = painter.aabb(Aabb {
-                    min: wpos.with_z(land.get_alt_approx(wpos + CELL_SIZE / 2) as i32 - 32),
+                    min: wpos.with_z(land.ground_alt_at(wpos + CELL_SIZE / 2) as i32 - 32),
                     max: (wpos + CELL_SIZE).with_z(cell.alt),
                 });
 

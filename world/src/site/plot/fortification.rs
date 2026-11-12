@@ -87,8 +87,8 @@ impl Fortification {
             .map(|i| {
                 let a = get_point(i);
                 let b = get_point(i + 1);
-                let a_alt = land.get_alt_approx(a) as i32;
-                let b_alt = land.get_alt_approx(b) as i32;
+                let a_alt = land.ground_alt_at(a) as i32;
+                let b_alt = land.ground_alt_at(b) as i32;
 
                 // Merlon parapet for this sub-segment: reuses the same
                 // alternating-gap primitive `render_tower`'s
@@ -120,7 +120,7 @@ impl Fortification {
                 let clear_width = gate.clear_width.max(1);
                 let gate_height = gate.height.max(1);
                 let half_len = (clear_width / 2).max(1);
-                let alt = land.get_alt_approx(wpos) as i32;
+                let alt = land.ground_alt_at(wpos) as i32;
                 // Gate openings: an open gate clears a passable gap straight
                 // through the wall's thickness; a closed gate fills the same
                 // volume solid. That solid fill is the only physical

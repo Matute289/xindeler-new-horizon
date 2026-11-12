@@ -10,6 +10,8 @@
 #![cfg_attr(feature = "simd", feature(portable_simd))]
 
 mod all;
+pub mod authored_raster;
+#[cfg(test)] mod base_golden_tests;
 mod biome_profile;
 mod block;
 pub mod canvas;
@@ -93,6 +95,58 @@ lazy_static! {
 #[cfg(feature = "use-dyn-lib")]
 pub fn init() { lazy_static::initialize(&LIB); }
 
+#[cfg(test)]
+thread_local! {
+    /// Seed for the next `generate_chunk` calls' dynamic RNG on this thread,
+    /// so tests can compare whole chunks exactly (see
+    /// [`with_deterministic_dynamic_rng`]).
+    static TEST_DYNAMIC_RNG_SEED: std::cell::Cell<Option<[u8; 32]>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with chunk generation's dynamic RNG (chests, entities and the
+/// cave decorations that draw from it) seeded with `seed` on this thread.
+#[cfg(test)]
+pub(crate) fn with_deterministic_dynamic_rng<R>(seed: [u8; 32], f: impl FnOnce() -> R) -> R {
+    // Restores the previous seed even if `f` panics, so a failed test does
+    // not leave a seed behind on a reused test thread.
+    struct Restore(Option<[u8; 32]>);
+    impl Drop for Restore {
+        fn drop(&mut self) { TEST_DYNAMIC_RNG_SEED.with(|s| s.set(self.0)); }
+    }
+    let _restore = Restore(TEST_DYNAMIC_RNG_SEED.with(|s| s.replace(Some(seed))));
+    f()
+}
+
+/// The RNG of a structure's weighted block choice (`StructureBlock::Choice`
+/// in `block.rs`): the thread RNG in the game; in tests inside
+/// [`with_deterministic_dynamic_rng`], seeded from that seed and `pos`.
+#[cfg(not(test))]
+pub(crate) fn choice_rng(_pos: Vec3<i32>) -> rand::rngs::ThreadRng { rand::rng() }
+
+#[cfg(test)]
+pub(crate) fn choice_rng(pos: Vec3<i32>) -> ChaCha8Rng {
+    match TEST_DYNAMIC_RNG_SEED.with(|s| s.get()) {
+        Some(mut seed) => {
+            seed[8..12].copy_from_slice(&pos.x.to_le_bytes());
+            seed[12..16].copy_from_slice(&pos.y.to_le_bytes());
+            seed[16..20].copy_from_slice(&pos.z.to_le_bytes());
+            ChaCha8Rng::from_seed(seed)
+        },
+        None => ChaCha8Rng::from_seed(rand::rng().random()),
+    }
+}
+
+/// The seed of `generate_chunk`'s dynamic RNG: fresh entropy in the game;
+/// a fixed seed inside [`with_deterministic_dynamic_rng`] in tests.
+fn dynamic_rng_seed() -> [u8; 32] {
+    #[cfg(test)]
+    if let Some(seed) = TEST_DYNAMIC_RNG_SEED.with(|s| s.get()) {
+        return seed;
+    }
+    rand::rng().random()
+}
+
 #[derive(Debug)]
 pub enum Error {
     Other(String),
@@ -159,6 +213,13 @@ impl World {
                     report_stage(WorldGenerateStage::WorldCivGenerate(stage))
                 });
 
+            // XINDELER: an authored settlement on authored water is a data
+            // error (see `authored_raster::queries`).
+            if let Err(err) = authored_raster::queries::check_authored_sites(&sim, &civs) {
+                tracing::error!("{err}");
+                panic!("{err}");
+            }
+
             report_stage(WorldGenerateStage::EconomySimulation);
             sim2::simulate(&mut index, &mut sim);
 
@@ -169,7 +230,40 @@ impl World {
             // the first chunk that queries it. See `layer::authored_regions`.
             layer::authored_regions::warm(&index, &sim);
 
-            (Self { sim, civs }, IndexOwned::new(index))
+            let mut world = Self { sim, civs };
+            let index = IndexOwned::new(index);
+            // XINDELER: authored ground meeting natural water is checked once
+            // the column sampler is final (sites placed). See
+            // `authored_raster::queries::check_ground_seams`.
+            if let Err(err) = authored_raster::queries::check_ground_seams(
+                &world,
+                index.as_index_ref(),
+                calendar.as_ref(),
+            ) {
+                tracing::error!("{err}");
+                panic!("{err}");
+            }
+            // XINDELER: sites, authored voids and roads on authored ground
+            // (`authored_raster::post_civ`); the ground queries then answer
+            // the levelled height where listed sites level exact columns.
+            match authored_raster::post_civ::check_ground_consumers(
+                &world,
+                index.as_index_ref(),
+                layer::authored_regions::authored_voids(&index, &world.sim),
+                calendar.as_ref(),
+            ) {
+                Ok(report) => {
+                    world.sim.set_site_levelling(report.sites.levelled_columns);
+                    world
+                        .sim
+                        .set_site_ring_levelling(report.sites.levelled_ring_columns);
+                },
+                Err(err) => {
+                    tracing::error!("{err}");
+                    panic!("{err}")
+                },
+            }
+            (world, index)
         })
     }
 
@@ -213,19 +307,47 @@ impl World {
         let land = Land::from_sim(self.sim());
         threadpool.install(|| {
             WorldMapMsg {
-                pois: self
-                    .civs()
-                    .pois
-                    .iter()
-                    .map(|(_, poi)| world_msg::PoiInfo {
-                        name: poi.name.clone(),
-                        kind: match &poi.kind {
-                            civ::PoiKind::Peak(alt) => world_msg::PoiKind::Peak(*alt),
-                            civ::PoiKind::Biome(size) => world_msg::PoiKind::Lake(*size),
-                        },
-                        wpos: poi.loc * TerrainChunkSize::RECT_SIZE.map(|e| e as i32),
-                    })
-                    .collect(),
+                pois: {
+                    // Biome labels come from the natural biome table; keep
+                    // them off authored dry ground (moved to a wet chunk of
+                    // the same biome, or dropped when none is left).
+                    let label_config = common::terrain::map::MapConfig::orthographic(
+                        self.sim().map_size_lg(),
+                        0.0..=self.sim().max_height,
+                    );
+                    let biome_pois: Vec<_> = self
+                        .civs()
+                        .pois
+                        .iter()
+                        .filter(|(_, poi)| matches!(poi.kind, civ::PoiKind::Biome(_)))
+                        .map(|(id, poi)| (id, poi.loc))
+                        .collect();
+                    let label_chunks = self.sim().biome_label_chunks(&label_config, &biome_pois);
+                    let mut label_chunks = biome_pois
+                        .iter()
+                        .map(|&(id, _)| id)
+                        .zip(label_chunks)
+                        .collect::<std::collections::HashMap<_, _>>();
+                    self.civs()
+                        .pois
+                        .iter()
+                        .filter_map(|(id, poi)| {
+                            let (kind, loc) = match &poi.kind {
+                                civ::PoiKind::Peak(alt) => {
+                                    (world_msg::PoiKind::Peak(*alt), poi.loc)
+                                },
+                                civ::PoiKind::Biome(size) => {
+                                    (world_msg::PoiKind::Lake(*size), label_chunks.remove(&id)??)
+                                },
+                            };
+                            Some(world_msg::PoiInfo {
+                                name: poi.name.clone(),
+                                kind,
+                                wpos: loc * TerrainChunkSize::RECT_SIZE.map(|e| e as i32),
+                            })
+                        })
+                        .collect()
+                },
                 sites: self
                     .civs()
                     .sites
@@ -470,7 +592,25 @@ impl World {
             .and_then(|base_z| self.sim.get(chunk_pos).map(|sim_chunk| (base_z, sim_chunk))) */
             .get_base_z(chunk_pos)
         {
-            Some(base_z) => (base_z as i32, self.sim.get(chunk_pos).unwrap()),
+            // XINDELER: an authored bed or bank can lie far below every sim
+            // chunk's own base (a slot canyon cut into a plateau); blocks below
+            // `base_z` default to stone, so the base must reach below it or
+            // the air over the authored water would stay solid rock. Only the
+            // chunk's *own* authored cells count: a chunk writes only its own
+            // columns, so no neighbour apron is needed and every chunk without
+            // authored cells (all of them outside a region) keeps its floor.
+            Some(base_z) => (
+                match self
+                    .sim
+                    .authored_rasters
+                    .as_ref()
+                    .and_then(|rasters| rasters.floor_block(chunk_pos))
+                {
+                    Some(floor) => (base_z as i32).min(floor),
+                    None => base_z as i32,
+                },
+                self.sim.get(chunk_pos).unwrap(),
+            ),
             // Some((base_z, sim_chunk)) => (base_z as i32, sim_chunk),
             None => {
                 // NOTE: This is necessary in order to generate a handful of
@@ -549,13 +689,23 @@ impl World {
         };
         let sim_chunk: &SimChunk = &sim_chunk;
 
+        let chunk_water = self.sim.chunk_water(chunk_pos);
+        // The ground level the client compares itself with to detect being
+        // underground: follows authored lowered ground instead of the frozen
+        // sim height (identical to `sim_chunk.alt` for every other chunk).
+        let meta_alt = match self.sim.authored_rasters.as_ref() {
+            Some(rasters) => rasters.chunk_ground_alt(chunk_pos, sim_chunk.alt),
+            None => sim_chunk.alt,
+        };
         let meta = TerrainChunkMeta::new(
             sim_chunk.get_location_name(&index.sites, &self.civs.pois, chunk_center_wpos2d),
             sim_chunk.get_biome(),
-            sim_chunk.alt,
+            meta_alt,
             sim_chunk.tree_density,
-            sim_chunk.river.is_river(),
-            sim_chunk.river.near_water(),
+            // XINDELER: authored-aware (authored water regions); clients use
+            // these for ambience and weather.
+            chunk_water.map_or(sim_chunk.river.is_river(), |w| w.river),
+            chunk_water.map_or(sim_chunk.river.near_water(), |w| w.near_water),
             sim_chunk.river.velocity,
             sim_chunk.temp,
             sim_chunk.humidity,
@@ -598,8 +748,29 @@ impl World {
 
                 let (min_z, max_z) = z_cache.get_z_limits();
 
+                // The deep stone fill; the exposed wall of an authored dry
+                // pit is the column's own strata (`BlockGen`). Authored
+                // ground lowered below the sim's basement is strata all the
+                // way down, flagged or not (jittered only as deep as a wall
+                // can be seen, one constant stone colour below that).
+                let wall_from = if z_cache.sample.lowered_below_basement() {
+                    Some(base_z)
+                } else {
+                    z_cache
+                        .sample
+                        .exposed_wall_floor
+                        .map(|f| f.floor() as i32 + 1)
+                };
+                let strata =
+                    wall_from.map(|_| z_cache.sample.wall_strata(Vec2::new(x, y) + chunk_wpos2d));
                 (base_z..min_z as i32).for_each(|z| {
-                    let _ = chunk.set(Vec3::new(x, y, z), stone);
+                    let block = match (wall_from, &strata) {
+                        (Some(from), Some(strata)) if z >= from => {
+                            strata.block(Vec3::from(chunk_wpos2d) + Vec3::new(x, y, z))
+                        },
+                        _ => stone,
+                    };
+                    let _ = chunk.set(Vec3::new(x, y, z), block);
                 });
 
                 (min_z as i32..max_z as i32).for_each(|z| {
@@ -621,7 +792,7 @@ impl World {
         };
 
         // Only use for rng affecting dynamic elements like chests and entities!
-        let mut dynamic_rng = ChaCha8Rng::from_seed(rand::rng().random());
+        let mut dynamic_rng = ChaCha8Rng::from_seed(dynamic_rng_seed());
 
         // Apply layers (paths, caves, etc.)
         let mut canvas = Canvas {
@@ -1025,7 +1196,7 @@ impl World {
                     kind: model,
                     pos: (wpos2d - min_wpos)
                         .map(|e| e as i16)
-                        .with_z(self.sim().get_alt_approx(wpos2d).unwrap_or(0.0) as i16),
+                        .with_z(self.sim().ground_alt_at(wpos2d).unwrap_or(0.0) as i16),
                     flags: if column.snow_cover {
                         lod::InstFlags::SNOW_COVERED
                     } else {

@@ -1,0 +1,7 @@
+{
+  "message": "listed twice",
+  "payload_sha256": {
+    "cromatolis_v0_ar_fixture_ground_0_0.bin": "b4d7ef774bcb9fc7f94ef451d00fedd1ffa2a495f2154fa6d787937cc8716570"
+  },
+  "verdict": "refuse"
+}

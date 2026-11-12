@@ -37,7 +37,7 @@ impl DwarvenMine {
             name,
             bounds,
             origin: wpos - TILE_SIZE / 2,
-            alt: land.get_alt_approx(site.tile_center_wpos(wpos)) as i32,
+            alt: land.ground_alt_at(site.tile_center_wpos(wpos)) as i32,
         }
     }
 

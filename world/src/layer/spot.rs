@@ -365,11 +365,14 @@ impl SpotGenerate for Spot {
             .ceil() as u64
         {
             let pos = world_size.map(|e| (world.rng.random_range(0..e) & !0b11) as i32);
-            if let Some((_, chunk)) = world
+            // XINDELER: the predicates see the chunk through the authored
+            // water (`WorldSim::chunk_view`); outside every region it is the
+            // chunk itself.
+            let is_valid = world
                 .get_gradient_approx(pos)
-                .zip(world.get_mut(pos))
-                .filter(|(grad, chunk)| valid(*grad, chunk))
-            {
+                .zip(world.chunk_view(pos))
+                .is_some_and(|(grad, view)| valid(grad, &view));
+            if let Some(chunk) = world.get_mut(pos).filter(|_| is_valid) {
                 chunk.spot = Some(spot);
                 // `spawn: false` zeroes `tree_density`/`spawn_rate` outright,
                 // assuming they are seed-derived values nothing else cares
@@ -567,15 +570,18 @@ pub fn apply_spots_to(canvas: &mut Canvas, _dynamic_rng: &mut impl Rng) {
     let nearby_spots = canvas.nearby_spots().collect::<Vec<_>>();
 
     for (spot_wpos2d, spot, seed) in nearby_spots.iter().copied() {
-        let mut rng = ChaChaRng::from_seed(seed_expan::rng_state(seed));
-
-        let units = UnitChooser::new(seed).get(seed).into();
-
         let spot_config = spot_config(&spot);
+        let group = spot_config.base_structures.map(Structure::load_group);
+        let group = group.as_ref().map(|group| group.read());
+        let SpotDraw {
+            mut rng,
+            units,
+            structure,
+        } = spot_draw(seed, group.as_ref().map(|group| -> &[Structure] { group }));
+
         // Blit base structure
-        if let Some(base_structures) = spot_config.base_structures {
-            let structures = Structure::load_group(base_structures).read();
-            let structure = structures.choose(&mut rng).unwrap();
+        if group.is_some() {
+            let structure = structure.expect("a spot's structure group is never empty");
             let origin = spot_wpos2d.with_z(
                 canvas
                     .col_or_gen(spot_wpos2d)
@@ -617,6 +623,47 @@ pub fn apply_spots_to(canvas: &mut Canvas, _dynamic_rng: &mut impl Rng) {
     }
 }
 
+/// World position (the centre of the chunk) and placement seed of the spot
+/// that chunk `pos` may hold. This is the single definition used by
+/// `Canvas::nearby_spots` and by the footprint tooling, so both always agree.
+pub fn chunk_spot_placement(pos: Vec2<i32>) -> (Vec2<i32>, u32) {
+    let wpos = pos.map2(TerrainChunkSize::RECT_SIZE, |e, sz| {
+        e * sz as i32 + sz as i32 / 2
+    });
+    // TODO: Very dumb, not this.
+    let seed = pos.x as u32 | (pos.y as u32).wrapping_shl(16);
+    (wpos, seed ^ 0xA801D82E)
+}
+
+/// The random draws that decide how a spot is blitted. `apply_spots_to` and the
+/// footprint tooling both take them from here, so the draw order (rng seeding,
+/// rotation, then one structure choice) is defined exactly once.
+struct SpotDraw<'a> {
+    /// The spot's rng, positioned right after the structure choice (the entity
+    /// placement keeps drawing from it).
+    rng: ChaChaRng,
+    /// Rotation/mirroring of the blit.
+    units: Vec2<Vec2<i32>>,
+    /// The structure chosen from the spot's group, if it has one.
+    structure: Option<&'a Structure>,
+}
+
+fn spot_draw(seed: u32, group: Option<&[Structure]>) -> SpotDraw<'_> {
+    let mut rng = ChaChaRng::from_seed(seed_expan::rng_state(seed));
+    let units = UnitChooser::new(seed).get(seed).into();
+    let structure = group.and_then(|structures| structures.choose(&mut rng));
+    SpotDraw {
+        rng,
+        units,
+        structure,
+    }
+}
+
+#[cfg(any(test, feature = "tools"))]
+mod footprint;
+#[cfg(any(test, feature = "tools"))]
+pub use footprint::{HollowColumn, SpotFootprint, spot_footprint};
+
 pub fn is_valid(condition: &SpotCondition, g: f32, c: &SimChunk) -> bool {
     c.sites.is_empty()
         && match condition {
@@ -639,6 +686,7 @@ pub fn is_valid(condition: &SpotCondition, g: f32, c: &SimChunk) -> bool {
 }
 
 #[test]
+#[ignore = "needs LFS .vox assets"]
 fn test_spot_configs() {
     let all_spots = [
         Spot::DwarvenGrave,
@@ -678,16 +726,16 @@ fn test_spot_configs() {
     }
 }
 
-/// Full-world smoke test for COW-16 (the "no monsters outside settlements"
-/// bug report): confirms that enabling `spots: true` for Cromatolis in
-/// `assets/world/map/cromatolis_v0_procedural_layers.ron` actually places
-/// spot markers on the real generated map, that none of them land on a
-/// chunk claimed by a registered `Site` (settlements, landmarks, bridges and
-/// fortifications are all registered as `Site`s with a real footprint
-/// radius -- see `civ::Civs::establish_site`'s "Place sites in world" pass --
-/// so `is_valid`'s `c.sites.is_empty()` check is real collision protection,
-/// not just a procedural-world nicety), and that a healthy share of the
-/// placed spots are creature-cluster variants (a non-empty `entities` list
+/// Full-world smoke test for the spawn work (the "no monsters outside
+/// settlements" bug report): confirms that enabling `spots: true` for
+/// Cromatolis in `assets/world/map/cromatolis_v0_procedural_layers.ron`
+/// actually places spot markers on the real generated map, that none of them
+/// land on a chunk claimed by a registered `Site` (settlements, landmarks,
+/// bridges and fortifications are all registered as `Site`s with a real
+/// footprint radius -- see `civ::Civs::establish_site`'s "Place sites in world"
+/// pass -- so `is_valid`'s `c.sites.is_empty()` check is real collision
+/// protection, not just a procedural-world nicety), and that a healthy share of
+/// the placed spots are creature-cluster variants (a non-empty `entities` list
 /// in `spot_config`), not just structure-only decoration.
 ///
 /// Requires the real Cromatolis LFS assets pulled locally, same precedent as
@@ -760,7 +808,7 @@ mod cromatolis_real_world {
              `c.sites.is_empty()` guard in `is_valid` should make this structurally impossible"
         );
 
-        // Measured on the real map (COW-16): land=681560, spot=7630 (~1.12% of
+        // Measured on the real map: land=681560, spot=7630 (~1.12% of
         // land), creature_cluster=7075 (~92.7% of spots). Generous ranges
         // around the measured baseline: tight enough to catch a regression
         // back to `spots: false` (which would zero both), loose enough to

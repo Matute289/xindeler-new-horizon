@@ -210,6 +210,9 @@ pub struct SessionState {
     /// `Scene::transition_active`). Gates a fresh takeover from firing again
     /// too soon; `None` means none has ended yet this session.
     last_terrain_transition_end: Option<std::time::Instant>,
+    /// Unattended shot script executor, while one is active.
+    #[cfg(feature = "shot-script")]
+    shot_driver: Option<crate::shot_script::driver::SessionDriver>,
 }
 
 /// Represents an active game session (i.e., the one being played).
@@ -293,6 +296,8 @@ impl SessionState {
             lines: Default::default(),
             gizmos: Vec::new(),
             last_terrain_transition_end: None,
+            #[cfg(feature = "shot-script")]
+            shot_driver: crate::shot_script::driver::SessionDriver::from_active(),
         }
     }
 
@@ -674,6 +679,55 @@ impl SessionState {
             }
         }
         false
+    }
+}
+
+#[cfg(feature = "shot-script")]
+impl SessionState {
+    /// Apply a camera, HUD or screenshot change requested by the shot script.
+    fn apply_shot_effect(
+        &mut self,
+        effect: crate::shot_script::driver::SessionEffect,
+        global_state: &mut GlobalState,
+    ) {
+        use crate::shot_script::driver::SessionEffect;
+        match effect {
+            SessionEffect::Camera {
+                yaw_rad,
+                pitch_rad,
+                distance,
+            } => {
+                let cam = self.scene.camera_mut();
+                // Back to the player, snapping out of a free camera.
+                cam.set_mode(CameraMode::ThirdPerson);
+                cam.reset_focus();
+                cam.set_orientation_instant(Vec3::new(yaw_rad, pitch_rad, 0.0));
+                cam.set_distance(distance.max(camera::MIN_ZOOM));
+            },
+            SessionEffect::Viewpoint {
+                cam: pos,
+                yaw_rad,
+                pitch_rad,
+            } => {
+                let cam = self.scene.camera_mut();
+                cam.set_mode(CameraMode::Freefly);
+                cam.force_focus_pos(pos);
+                cam.set_orientation_instant(Vec3::new(yaw_rad, pitch_rad, 0.0));
+            },
+            SessionEffect::Minimap(show) => {
+                // A shot run does not save the settings (see
+                // `shot_script::login::persist_on_exit`); the original value
+                // is still remembered so `restore_settings` can put it back.
+                crate::shot_script::login::remember_minimap(
+                    global_state.settings.interface.minimap_show,
+                );
+                global_state.settings.interface.minimap_show = show;
+            },
+            SessionEffect::Hud(show) => self.hud.set_ui_visible(show),
+            SessionEffect::Screenshot { path, done } => {
+                global_state.window.take_screenshot_to(path, done);
+            },
+        }
     }
 }
 
@@ -2765,6 +2819,31 @@ impl PlayState for SessionState {
 
             // Clean things up after the tick.
             self.cleanup();
+
+            // Unattended shot script: run its current step; end the session
+            // once every step has finished.
+            #[cfg(feature = "shot-script")]
+            if let Some(driver) = &mut self.shot_driver {
+                let scene_state = crate::shot_script::driver::SceneState {
+                    camera_settled: self.scene.camera().is_settled(),
+                };
+                let resolution = global_state.window.renderer().resolution();
+                driver.note_window(
+                    [resolution.x, resolution.y],
+                    global_state.window.scale_factor(),
+                );
+                let (status, effect) = driver.tick(
+                    &mut self.client.borrow_mut(),
+                    self.scene.terrain(),
+                    scene_state,
+                );
+                if let Some(effect) = effect {
+                    self.apply_shot_effect(effect, global_state);
+                }
+                if status != crate::shot_script::driver::DriverStatus::Running {
+                    return PlayStateResult::Shutdown;
+                }
+            }
 
             PlayStateResult::Continue
         } else if client_registered && client_presence.is_none() {

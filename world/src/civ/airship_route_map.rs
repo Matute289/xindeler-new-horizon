@@ -3,7 +3,7 @@ use crate::{
     civ::airship_travel::{
         AirshipDockPlatform, AirshipRoute, AirshipSpawningLocation, Airships, DockNode,
     },
-    sim::{WorldSim, get_horizon_map, sample_pos, sample_wpos},
+    sim::{ChunkPresentation, WorldSim, get_horizon_map},
     util::{DHashMap, DHashSet},
 };
 use common::{
@@ -225,8 +225,7 @@ impl TinySkiaSpriteMap {
                                 sprite_meta.height,
                             ) && let Some(sprite) = packed_sprites.copy_region(sprite_frame)
                             {
-                                // sprite.set_transform(Transform::from_scale(1.
-                                // 0, -1.0));
+                                // sprite.set_transform(Transform::from_scale(1.0, -1.0));
                                 sprites.push(sprite);
                                 sprite_ids.insert(sprite_meta.id.clone(), sprites.len() - 1);
                             }
@@ -283,8 +282,47 @@ impl TinySkiaSpriteMap {
     }
 }
 
+/// The altitude each chunk casts into the horizon map, from `at(index)` =
+/// (presentation, basement altitude, table water altitude). Authored dry
+/// ground is not raised to the table water plane
+/// ([`ChunkPresentation::table_alt`]); elsewhere this is the old
+/// `basement.max(water_alt)`. Note the horizon reads `basement` while the
+/// relief of a dry chunk reads the column altitude, as before.
+fn horizon_altitudes(len: usize, at: impl Fn(usize) -> (ChunkPresentation, f32, f32)) -> Vec<f32> {
+    (0..len)
+        .map(|posi| {
+            let (presentation, basement, water_alt) = at(posi);
+            presentation.table_alt(basement, water_alt)
+        })
+        .collect()
+}
+
+/// [`horizon_altitudes`] for every chunk of a map of size `size`. The length is
+/// [`MapSizeLg::chunks_len`]: the product of the `u16` chunk counts of
+/// `chunks()` wraps to 0 for every power-of-two map of 256 x 256 chunks or
+/// more, which left the array empty and made the ray march index out of
+/// bounds.
+fn horizon_altitudes_for(
+    size: &MapSizeLg,
+    at: impl Fn(usize) -> (ChunkPresentation, f32, f32),
+) -> Vec<f32> {
+    horizon_altitudes(size.chunks_len(), at)
+}
+
 /// Creates a basic world map as a tiny_skia::Pixmap
 fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim) -> Option<Pixmap> {
+    let mut map_config = MapConfig::orthographic(*image_size, 0.0..=sampler.max_height);
+    // The ray march reads each chunk's altitude many times, so resolve the
+    // presentation once per chunk, not once per read.
+    let horizon_alts = horizon_altitudes_for(image_size, |posi| {
+        let chunk = uniform_idx_as_vec2(*image_size, posi);
+        let sample = sampler.get(chunk).unwrap();
+        (
+            sampler.chunk_presentation(&map_config, chunk),
+            sample.basement,
+            sample.water_alt,
+        )
+    });
     let horizons = get_horizon_map(
         *image_size,
         Aabr {
@@ -293,11 +331,7 @@ fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim)
         },
         CONFIG.sea_level,
         CONFIG.sea_level + sampler.max_height,
-        |posi| {
-            let sample = sampler.get(uniform_idx_as_vec2(*image_size, posi)).unwrap();
-
-            sample.basement.max(sample.water_alt)
-        },
+        |posi| horizon_alts[posi],
         |a| a,
         |h| h,
     )
@@ -313,7 +347,6 @@ fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim)
         index,
     };
 
-    let mut map_config = MapConfig::orthographic(*image_size, 0.0..=sampler.max_height);
     map_config.horizons = horizons.as_ref();
     map_config.is_shaded = true;
     map_config.is_stylized_topo = true;
@@ -327,14 +360,15 @@ fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim)
         let pixel_data = pixmap.data_mut();
         map_config.generate(
             |pos| {
-                let default_sample = sample_pos(&map_config, sampler, index_ref, None, pos);
+                let default_sample =
+                    sampler.presented_map_sample(&map_config, index_ref, None, pos);
                 let [r, g, b, _a] = map.rgba[pos].to_le_bytes();
                 MapSample {
                     rgb: Rgb::new(r, g, b),
                     ..default_sample
                 }
             },
-            |wpos| sample_wpos(&map_config, sampler, wpos),
+            |wpos| sampler.presented_table_wpos(&map_config, wpos),
             |pos, (r, g, b, a)| {
                 let pixel_index = (map_h - pos.y - 1) * stride + pos.x * tiny_skia::BYTES_PER_PIXEL;
                 pixel_data[pixel_index] = r;
@@ -395,10 +429,10 @@ fn dock_sites_triangulation_map(
         };
     }
 
-    // the triangles are triplets in a Vec<usize> so we need to iterate over
-    // them in groups of 3. The macros are used to convert the points from
-    // world blocks to map pixels and flip the y axis. map_triangles is a
-    // Vec of arrays of 3 Vec2s representing the 3 points of each triangle.
+    // the triangles are triplets in a Vec<usize> so we need to iterate over them in
+    // groups of 3. The macros are used to convert the points from world blocks
+    // to map pixels and flip the y axis. map_triangles is a Vec of arrays of 3
+    // Vec2s representing the 3 points of each triangle.
     let map_triangles = triangulation
         .triangles
         .chunks(3)
@@ -446,8 +480,8 @@ fn dock_sites_triangulation_map(
             let p1i32 = Vec2::new(p1.x as i32, p1.y as i32);
             let p2i32 = Vec2::new(p2.x as i32, p2.y as i32);
             if !lines_drawn.contains(&(p1i32, p2i32)) {
-                // calculate where the triangle edge intersects a circle of
-                // radius 10 around each point
+                // calculate where the triangle edge intersects a circle of radius 10 around
+                // each point
                 let dir = (p2 - p1).normalized();
                 let start_edge_center = p1 + dir * 10.0;
                 let end_edge_center = p2 - dir * 10.0;
@@ -558,8 +592,8 @@ fn dock_sites_optimized_tesselation_map(
                 if let Some(dp2) = map_points.get(*cpid)
                     && !lines_drawn.contains(&(dock_node.node_id, *cpid))
                 {
-                    // calculate where the line intersects a circle of radius 10
-                    // around each point
+                    // calculate where the line intersects a circle of radius 10 around
+                    // each point
                     let dir = (dp2 - dp1).normalized();
                     let ep1 = dp1 + dir * 10.0;
                     let ep2 = dp2 - dir * 10.0;
@@ -631,8 +665,8 @@ fn draw_airship_routes(
     pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
 
     // Red, Green, Blue, Yellow
-    // Segment lines are drawn in these colors in the order they are found in
-    // the segments vector (i.e. the outer segments vector).
+    // Segment lines are drawn in these colors in the order they are found in the
+    // segments vector (i.e. the outer segments vector).
     let segment_colors = [[255u8, 0u8, 0u8], [0u8, 255u8, 0u8], [6u8, 218u8, 253u8], [
         255u8, 255u8, 0u8,
     ]];
@@ -673,10 +707,10 @@ fn draw_airship_routes(
         }
     }
 
-    // The map is hard to read without an indication of which direction the
-    // lines are traversed and in which order, so we draw the route line
-    // numbers on the map with the line numbers drawn at the destination end
-    // of the line to orient the reader.
+    // The map is hard to read without an indication of which direction the lines
+    // are traversed and in which order, so we draw the route line numbers on
+    // the map with the line numbers drawn at the destination end of the line to
+    // orient the reader.
     let route_color_ids = ["RED", "GREEN", "BLUE", "YELLOW"];
     let digits_sprite_map = TinySkiaSpriteMap::new(
         "world.module.airship.airship_route_map_digits",
@@ -688,12 +722,10 @@ fn draw_airship_routes(
             |c: char| format!("{}_{}", route_color_ids[i % route_color_ids.len()], c);
 
         if route.legs.len() > 1 {
-            let mut leg_line_number = 1;
             let mut prev_leg = &route.legs[route.legs.len() - 1];
 
-            // The leg line numbers are drawn at the destination end of the
-            // line.
-            for route_leg in route.legs.iter() {
+            // The leg line numbers are drawn at the destination end of the line.
+            for (leg_line_number, route_leg) in (1..).zip(route.legs.iter()) {
                 // for j in 0..segment.len() - 1 {
                 let from_loc = loc_fn(&points[prev_leg.dest_index], &prev_leg.platform);
                 let to_loc = loc_fn(&points[route_leg.dest_index], &route_leg.platform);
@@ -701,18 +733,15 @@ fn draw_airship_routes(
                 let p2 = Vec2::new(to_loc.0, to_loc.1);
                 let dir = (p2 - p1).normalized();
 
-                // Turn the number into a string with leading zeros for single
-                // digit numbers.
+                // Turn the number into a string with leading zeros for single digit numbers.
                 let rln_str = format!("{:03}", leg_line_number);
 
-                // Draw the digits so they are aligned with the direction the
-                // segment line will be traversed. Y axis is
-                // inverted in the image.
+                // Draw the digits so they are aligned with the direction the segment line
+                // will be traversed. Y axis is inverted in the image.
                 let angle = Airships::angle_between_vectors_cw(dir, -Vec2::unit_y());
 
-                // Draw the digits 80% of the way along the segment line or one
-                // digit height away from the circle at the end
-                // of the segment line, whichever is greater.
+                // Draw the digits 80% of the way along the segment line or one digit height
+                // away from the circle at the end of the segment line, whichever is greater.
                 let p1p2dist = p1.distance(p2) - 20.0; // subtract the radius of the circles
                 let seg_num_offset = (p1p2dist * 0.20).max(digit_size.height());
                 let seg_num_center = p2 - dir * seg_num_offset;
@@ -727,7 +756,6 @@ fn draw_airship_routes(
                     id_formatter,
                 )?;
 
-                leg_line_number += 1;
                 prev_leg = route_leg;
             }
         }
@@ -976,4 +1004,46 @@ pub fn export_docknodes(
     pixmap
         .save_png(output_path)
         .map_err(|e| format!("Failed to save output image: {}", e))
+}
+
+#[cfg(test)]
+mod horizon_tests {
+    use super::*;
+
+    #[test]
+    fn horizon_altitudes_match_the_old_expression_without_a_ground_layer() {
+        let cases = [(5.0_f32, 9.0_f32), (12.0, 3.0), (7.0, 7.0), (-4.0, 0.0)];
+        let alts = horizon_altitudes(cases.len(), |i| {
+            (ChunkPresentation::TABLE, cases[i].0, cases[i].1)
+        });
+        for (alt, (basement, water_alt)) in alts.iter().zip(cases) {
+            assert_eq!(alt.to_bits(), basement.max(water_alt).to_bits());
+        }
+    }
+
+    #[test]
+    fn horizon_altitudes_cover_every_chunk_of_a_large_map() {
+        // 1024 x 1024 chunks (the Cromatolis map): 1 048 576 entries, not the
+        // `u16` product that wraps to 0.
+        let size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
+        let alts = horizon_altitudes_for(&size, |_| (ChunkPresentation::TABLE, 1.0, 2.0));
+        assert_eq!(alts.len(), 1 << 20);
+        assert_eq!(alts[(1 << 20) - 1], 2.0);
+    }
+
+    #[test]
+    fn horizon_altitudes_keep_the_authored_altitude_on_a_dry_chunk() {
+        let dry = ChunkPresentation {
+            authored_dry: true,
+            authored_fully_dry: false,
+        };
+        let alts = horizon_altitudes(2, |i| {
+            if i == 0 {
+                (dry, 5.0, 9.0)
+            } else {
+                (ChunkPresentation::TABLE, 5.0, 9.0)
+            }
+        });
+        assert_eq!(alts, vec![5.0, 9.0]);
+    }
 }

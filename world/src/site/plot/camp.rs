@@ -37,7 +37,7 @@ impl Camp {
         let temp = site_temp;
         Self {
             bounds,
-            alt: land.get_alt_approx(site.tile_center_wpos(tile_aabr.center())) as i32 + 2,
+            alt: land.ground_alt_at(site.tile_center_wpos(tile_aabr.center())) as i32 + 2,
             temp,
         }
     }
@@ -52,7 +52,7 @@ impl Structure for Camp {
 
     fn render_inner(&self, site: &Site, land: &Land, painter: &Painter) {
         let center = self.bounds.center();
-        let base = land.get_alt_approx(center) as i32;
+        let base = land.ground_alt_at(center) as i32;
         let mut rng = rand::rng();
         let model_pos = center.with_z(base);
         let temp = self.temp;
@@ -193,6 +193,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs LFS .vox assets"]
     fn authored_settlement_never_spawns_hostile_npcs_even_in_a_tropical_chunk() {
         let entities = render_camp(true, true);
         assert!(
@@ -209,6 +210,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs LFS .vox assets"]
     fn genuine_wild_camp_still_spawns_hostile_pirates_in_a_tropical_chunk() {
         let entities = render_camp(false, true);
         assert!(

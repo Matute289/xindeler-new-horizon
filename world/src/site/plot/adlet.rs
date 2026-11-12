@@ -100,9 +100,9 @@ impl AdletStronghold {
         // relative to entrance
         let angle = angle_samples
             .max_by_key(|theta| {
-                let entrance_height = land.get_alt_approx(entrance);
+                let entrance_height = land.ground_alt_at(entrance);
                 let height =
-                    |pos: Vec2<f32>| land.get_alt_approx(pos.as_() + entrance) - entrance_height;
+                    |pos: Vec2<f32>| land.ground_alt_at(pos.as_() + entrance) - entrance_height;
                 let (x, y) = (theta.cos(), theta.sin());
                 (40..=50)
                     .map(|r| {
@@ -126,8 +126,8 @@ impl AdletStronghold {
             + (Vec2::new(angle.cos(), angle.sin()) * (tunnel_length as f32 + cavern_radius as f32))
                 .as_();
 
-        let cavern_alt = (land.get_alt_approx(cavern_center) - cavern_radius as f32)
-            .min(land.get_alt_approx(entrance));
+        let cavern_alt = (land.ground_alt_at(cavern_center) - cavern_radius as f32)
+            .min(land.ground_alt_at(entrance));
 
         let mut outer_structures = Vec::<(AdletStructure, Vec2<i32>, Dir2)>::new();
 
@@ -160,11 +160,11 @@ impl AdletStronghold {
                     end: entrance - entrance_dir.to_vec2() * 100,
                 };
 
-                // Check that structure not in the water or too close to another
-                // structure
+                // Check that structure not in the water or too close to another structure
+                // XINDELER: authored-aware (authored water regions).
                 if land
-                    .get_chunk_wpos(structure_center.as_() + entrance)
-                    .is_some_and(|c| c.is_underwater())
+                    .chunk_water_wpos(structure_center.as_() + entrance)
+                    .is_some_and(|w| w.underwater)
                     || outer_structures.iter().any(|(kind, rpos, _dir)| {
                         structure_center.distance_squared(*rpos)
                             < structure_kind.required_separation(kind).pow(2)
@@ -210,8 +210,7 @@ impl AdletStronghold {
             if let Some(mut rpos) = attempt(25, || {
                 let rpos = {
                     let theta = rng.random_range(0.0..TAU);
-                    // sqrt biases radius away from center, leading to even
-                    // distribution in circle
+                    // sqrt biases radius away from center, leading to even distribution in circle
                     let radius = rng.random::<f32>().sqrt() * cavern_radius as f32;
                     Vec2::new(theta.cos() * radius, theta.sin() * radius).as_()
                 };
@@ -222,8 +221,7 @@ impl AdletStronghold {
                 cavern_structures.push((AdletStructure::SpeleothemCluster, rpos, Dir2::X));
                 let desired_adjacent_clusters = rng.random_range(1..5);
                 for _ in 0..desired_adjacent_clusters {
-                    // Choose a relative position adjacent to initial speleothem
-                    // cluster
+                    // Choose a relative position adjacent to initial speleothem cluster
                     let adj_rpos = {
                         let theta = rng.random_range(0.0..TAU);
                         let radius = rng.random_range(1.0..5.0);
@@ -240,12 +238,11 @@ impl AdletStronghold {
                             adj_rpos,
                             Dir2::X,
                         ));
-                        // Set new rpos to next cluster is adjacent to most
-                        // recently placed
+                        // Set new rpos to next cluster is adjacent to most recently placed
                         rpos = adj_rpos;
                     } else {
-                        // If any cluster ever fails to place, break loop and
-                        // stop creating cluster chain
+                        // If any cluster ever fails to place, break loop and stop creating cluster
+                        // chain
                         break;
                     }
                 }
@@ -266,8 +263,8 @@ impl AdletStronghold {
             attempt(100, || {
                 let rpos = {
                     let theta = rng.random_range(0.0..TAU);
-                    // If selecting a spot near the center failed, find a spot
-                    // anywhere in the cavern
+                    // If selecting a spot near the center failed, find a spot anywhere in the
+                    // cavern
                     let radius = rng.random::<f32>().sqrt() * cavern_radius as f32;
                     Vec2::new(theta.cos() * radius, theta.sin() * radius).as_()
                 };
@@ -293,8 +290,8 @@ impl AdletStronghold {
             attempt(100, || {
                 let rpos = {
                     let theta = rng.random_range(0.0..TAU);
-                    // If selecting a spot near the cavern edge failed, find a
-                    // spot anywhere in the cavern
+                    // If selecting a spot near the cavern edge failed, find a spot anywhere in the
+                    // cavern
                     let radius = rng.random::<f32>().sqrt() * cavern_radius as f32;
                     Vec2::new(theta.cos() * radius, theta.sin() * radius).as_()
                 };
@@ -343,8 +340,7 @@ impl AdletStronghold {
             if let Some((structure, rpos)) = attempt(45, || {
                 let rpos = {
                     let theta = rng.random_range(0.0..TAU);
-                    // sqrt biases radius away from center, leading to even
-                    // distribution in circle
+                    // sqrt biases radius away from center, leading to even distribution in circle
                     let radius = rng.random::<f32>().sqrt() * cavern_radius as f32 * 0.9;
                     Vec2::new(theta.cos() * radius, theta.sin() * radius).as_()
                 };
@@ -615,8 +611,8 @@ impl Structure for AdletStronghold {
             )
             .intersect(valid_entrance)
             .clear();
-        // Ensure there is a path to the cave if the above is weird (e.g. when
-        // it is at or near a 45 degrees angle)
+        // Ensure there is a path to the cave if the above is weird (e.g. when it is at
+        // or near a 45 degrees angle)
         painter
             .line(
                 tunnel_end.with_z(tunnel_end.z + 4.0),
@@ -676,7 +672,7 @@ impl Structure for AdletStronghold {
             .iter()
             .map(|(structure, rpos, dir)| {
                 let wpos = rpos + self.entrance;
-                (structure, wpos, land.get_alt_approx(wpos), dir)
+                (structure, wpos, land.ground_alt_at(wpos), dir)
             })
             .chain(self.cavern_structures.iter().map(|(structure, rpos, dir)| {
                 (structure, rpos + self.cavern_center, self.cavern_alt, dir)

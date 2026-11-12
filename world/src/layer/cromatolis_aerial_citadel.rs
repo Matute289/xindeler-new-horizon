@@ -1,4 +1,4 @@
-//! Authored Cromatolis "Aerial Citadel" -- a floating island ~5000 m above
+//! Authored Cromatolis "Aerial Citadel" -- a floating island ~4000 m above
 //! sea level: an ~800 m irregular island (an SDF composition of 4
 //! elliptical lobes), a 200 m snow-capped mountain steeper on its
 //! city-facing side, a castle embedded in the mountain base, a 25 m
@@ -1645,6 +1645,9 @@ mod tests {
     #[test]
     fn cromatolis_aerial_citadel_exposes_each_tower_geometric_world_center() {
         let config = test_config();
+        // Heights follow the authored altitude: they are fixed offsets from
+        // the deck, not absolute literals.
+        let deck = config.deck_z(CONFIG.sea_level as i32);
         assert_eq!(
             cromatolis_aerial_citadel_wall_tower_world_center(0),
             Some(Vec2::new(16_749, 16_384)),
@@ -1667,15 +1670,15 @@ mod tests {
         );
         assert_eq!(
             cromatolis_aerial_citadel_wall_tower_watch_deck_z(0),
-            Some(5_163),
+            Some(deck + 23),
         );
         assert_eq!(
             cromatolis_aerial_citadel_wall_tower_watch_deck_z(1),
-            Some(5_163),
+            Some(deck + 23),
         );
         assert_eq!(
             cromatolis_aerial_citadel_lower_pilot_platform_center(),
-            Some(Vec3::new(16_749, 16_384, 5_063)),
+            Some(Vec3::new(16_749, 16_384, deck - 77)),
         );
         assert_eq!(
             cromatolis_aerial_citadel_lower_tower_count(),

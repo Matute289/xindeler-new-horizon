@@ -113,6 +113,15 @@ pub struct Plot {
 }
 
 impl Plot {
+    /// Whether this plot counts as a building in a settlement's size: every
+    /// plot but plazas, roads, farm fields and bridges.
+    pub fn is_building(&self) -> bool {
+        !matches!(
+            self.kind,
+            PlotKind::Plaza(_) | PlotKind::Road(_) | PlotKind::FarmField(_) | PlotKind::Bridge(_)
+        )
+    }
+
     pub fn find_bounds(&self) -> Aabr<i32> {
         self.tiles
             .iter()
@@ -320,7 +329,7 @@ pub struct AirshipDockInfo<'plot> {
 }
 
 /// Which hull size a [`Berth`] or [`Anchorage`] is built for (spec §4.3's two
-/// berth classes, derived from the two merchant hulls COW-24 `[Q4]` confirmed
+/// berth classes, derived from the two merchant hulls confirmed
 /// -- `SailBoat` 12×32×6, `Galleon` 14×48×10, `common/src/comp/body/ship.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BerthClass {

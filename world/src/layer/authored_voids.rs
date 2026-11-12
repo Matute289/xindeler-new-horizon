@@ -135,8 +135,10 @@ pub(crate) const AUTHORED_VOID_MARGIN: f32 = 16.0;
 /// folded into the `Seal` dilation -- see [`VoidShape::margin`].
 pub(crate) const EDGE_SOFTNESS: f32 = 3.0;
 
-/// How far below the terrain surface an authored ceiling is always capped, so a
-/// shallow authored void can never punch a hole to the sky.
+/// The minimum rock cover kept between a carve and a surface whose top is
+/// fixed: an authored ceiling is always capped this far below the terrain, so
+/// a shallow authored void can never punch a hole to the sky, and a
+/// procedural tunnel stops this far below exact authored ground.
 ///
 /// Defined here and read by the carve sites for the same reason as
 /// [`EDGE_SOFTNESS`]. It is load-bearing for the index: the protected band is
@@ -401,6 +403,26 @@ pub(crate) fn chunk_voids_at<'a>(
 }
 
 impl ChunkVoids<'_> {
+    /// Calls `f(top, feature)` for every shape's authored top at this column
+    /// -- the ceiling of an air void, the surface of a liquid one -- as
+    /// authored, *before* the surface cap lowers it under shallow terrain,
+    /// with the index of the feature it belongs to
+    /// ([`AuthoredVoids::feature_name`]). What the authored ground layer's
+    /// exposure check compares with the patch over it. Allocation-free:
+    /// resolve the bucket once per chunk and call this per column.
+    pub(crate) fn for_each_authored_top(&self, wpos2d: Vec2<i32>, mut f: impl FnMut(f32, u16)) {
+        for &idx in self.shapes {
+            let shape = &self.voids.shapes[idx as usize];
+            // The cheap reject of `AuthoredVoids::carved_bands_at_column`.
+            if !aabr_contains(&dilated(&shape.aabr, 1), wpos2d) {
+                continue;
+            }
+            if let Some(band) = band_dilated_by(&shape.geom, 0.0, wpos2d, f32::INFINITY) {
+                f(*band.end(), shape.feature);
+            }
+        }
+    }
+
     /// Whether no authored shape can reach any column of this chunk. When
     /// true, [`Self::contact_at_column`] is guaranteed to return `None` and
     /// can be skipped entirely.
@@ -791,6 +813,10 @@ impl AuthoredVoids {
         inert.sort_unstable();
         inert
     }
+
+    /// The name of feature `index` (see
+    /// [`ChunkVoids::for_each_authored_top`]).
+    pub(crate) fn feature_name(&self, index: u16) -> &str { &self.features[index as usize] }
 
     /// [`Self::carved_bands_at_column`] paired with each shape's policy.
     #[cfg(test)]
@@ -1516,8 +1542,8 @@ fn wpos_to_cpos(wpos: Vec2<i32>) -> Vec2<i32> {
 // same reason that one does: the rectangle side of the question has to agree
 // with the carve exactly, and the two carve modules getting their own copies
 // of the `+ 0.5` column convention is precisely the drift that produced the
-// defect these replace (COW-23 §7.1 -- a corner-only test is blind to a shape
-// that lies entirely *inside* a chunk, touching no corner at all).
+// defect these replace (the cave-and-void work -- a corner-only test is blind
+// to a shape that lies entirely *inside* a chunk, touching no corner at all).
 //
 // Why the corner form was safe where it came from, and stopped being safe
 // here: `cave.rs::apply_caves_to` also tests the four corners, but it pads its

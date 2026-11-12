@@ -443,12 +443,12 @@ mod tests {
                 classes[0], classes[1], classes[2]
             );
 
-            // Locators for the in-client visual pass (COW-23 T28), which is
+            // Locators for the in-client visual pass, which is
             // the only part of this row a test cannot answer. Capped, and
             // ordered repaired-first within the probe's own lattice sweep
             // order, so the list is short, stable and copy-pasteable into a
             // `/goto`. Repaired rocks lead because R2's cut channel is the
-            // operation T28 exists to look at.
+            // operation that pass exists to look at.
             //
             // This counts rocks the analysis *classified* in an authored cave,
             // which is a subset of the `rocks intersecting an AUTHORED cave`
